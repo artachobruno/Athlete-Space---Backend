@@ -23,6 +23,7 @@ openai~=2.8
 litellm~=1.80
 pydantic-ai>=0.0.14
 tenacity>=8.3.0,<9.0.0
+langchain-openai>=0.1.7
 
 # -------------------------------------------------
 # Storage / Caching

@@ -1,0 +1,182 @@
+[project]
+name = "virtus-ai"
+version = "0.1.0"
+description = "Virtus AI - Performance Intelligence & Coaching System"
+requires-python = "<3.14,>=3.12"
+dependencies = [
+    # --- Core ---
+    "pydantic~=2.12.3",
+    "pydantic-settings~=2.6.0",
+    "pyyaml<7.0.0,>=6.0.1",
+
+    # --- API / Async ---
+    "fastapi[standard]<1.0.0,>=0.115.8",
+    "uvicorn<1.0.0,>=0.34.0",
+    "httpx>=0.27.0",
+    "aiohttp>=3.10.0",
+
+    # --- Auth / Integrations ---
+    "requests<3.0.0,>=2.28.1",
+    "oauthlib<4.0.0,>=3.2.2",
+
+    # --- LLM ---
+    "openai~=2.8",
+    "litellm~=1.80",
+    "tenacity<9.0.0,>=8.3.0",
+
+    # --- Storage / Caching ---
+    "redis~=7.0.1",
+    "cashews[diskcache,redis]<8.0.0,>=7.4.3",
+
+    # --- Observability / Logging ---
+    "loguru<1.0.0,>=0.7.3",
+    "python-json-logger<3.0.0,>=2.0.7",
+
+    # --- Math / Analysis (Training State) ---
+    "numpy>=2.0.0",
+    "scipy<2.0.0,>=1.9.3",
+
+    # --- Scheduling ---
+    "apscheduler>=3.11.0",
+]
+
+[dependency-groups]
+test = [
+    "pytest<9.0.0,>=8.3.4",
+    "pytest-asyncio<1.0.0,>=0.25.3",
+    "pytest-cov<7.0.0,>=6.0.0",
+    "pytest-mock<4.0.0,>=3.10.0",
+    "pytest-xdist[psutil]>=3.8.0",
+]
+
+dev = [
+    # --- Lint / Type / Format ---
+    "ruff>=0.14.0",
+    "pyright>=1.1.407",
+    "pre-commit<4.0.0,>=3.2.0",
+
+    # --- Profiling / Debug ---
+    "coverage<8.0.0,>=7.3.2",
+    "pyinstrument<5.0.0,>=4.7.3",
+    "yappi<2.0.0,>=1.6.10",
+    "snakeviz<3.0.0,>=2.2.0",
+
+    # --- Utilities ---
+    "typer<1.0.0,>=0.20.0",
+    "faker>=37,<38",
+]
+
+# -------------------------------------------------------------------
+# Ruff (lint + format)
+# -------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 140
+preview = true
+exclude = [
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # import sorting
+    "B",     # flake8-bugbear
+    "Q",     # enforce double quotes
+    "C",     # comprehensions
+    "D",     # docstrings
+    "UP",    # pyupgrade
+    "ARG",   # unused arguments
+    "ASYNC", # async correctness
+    "N",     # naming
+    "TRY",   # exception handling
+    "S",     # security (bandit subset)
+    "SIM",   # simplifications
+    "PERF",  # performance
+    "PL",    # pylint-derived
+    "RUF",   # ruff rules
+    "ERA",   # dead code
+    "PTH",   # pathlib
+    "DTZ",   # timezone awareness
+    "RET",   # return clarity
+]
+ignore = [
+    "PLR2004",  # allow magic numbers
+    "PLR0913",  # allow many params (DI-heavy)
+    "PLR0915",  # allow long functions
+    "TRY002",   # allow broad exceptions
+    "TRY003",
+    "SIM108",
+    "D10",
+    "D205",
+    "D401",
+]
+fixable = ["ALL"]
+pydocstyle = { convention = "google" }
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/*" = [
+    "D",
+    "S",
+    "PL",
+    "ARG",
+    "ERA",
+]
+"__init__.py" = ["D"]
+"__main__.py" = ["T201"]
+"**/*.ipynb" = ["ALL"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+
+# -------------------------------------------------------------------
+# Pyright (typing)
+# -------------------------------------------------------------------
+
+[tool.pyright]
+pythonVersion = "3.11"
+reportMissingImports = "none"
+typeCheckingMode = "standard"
+reportImportCycles = "error"
+reportMissingTypeStubs = false
+venvPath = "."
+venv = ".venv"
+exclude = [
+    "**/.venv",
+    "**/venv",
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/build",
+    "**/dist",
+]
+
+# -------------------------------------------------------------------
+# Build
+# -------------------------------------------------------------------
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# -------------------------------------------------------------------
+# CLI entry points (optional but recommended)
+# -------------------------------------------------------------------
+
+[project.scripts]
+virtus = "api.chat:app"
+virtus-daily = "api.daily_brief:run"
+virtus-ingest = "scripts.run_ingestion:main"
+virtus-state = "scripts.run_state:main"
+virtus-decisions = "scripts.run_decisions:main"

@@ -1,4 +1,4 @@
-# Virtus AI 🏃‍♂️🤖  
+# Virtus AI 🏃‍♂️🤖
 **Performance Intelligence & Coaching System**
 
 Virtus AI is an end-to-end endurance training intelligence platform that combines **objective training load analytics** with an **LLM-powered virtual coach**. It ingests real athlete data (Strava), models fatigue/fitness, and provides actionable coaching insights, session recommendations, and long-term planning via both dashboards and chat.
@@ -205,5 +205,3 @@ Private / Proprietary
 
 ## 👋 Author
 Built by **Aptus Initiatives**
-
-```

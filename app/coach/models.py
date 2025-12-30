@@ -36,5 +36,5 @@ class AthleteState(BaseModel):
     # Flags produced by rules engine
     flags: list[str]
 
-    # Confidence in upstream calculations (0–1)
+    # Confidence in upstream calculations (0-1)
     confidence: float

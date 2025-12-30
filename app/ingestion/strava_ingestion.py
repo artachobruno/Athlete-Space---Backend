@@ -26,7 +26,8 @@ def ingest_strava_activities(
         logger.debug(f"Mapping {len(raw_activities)} raw activities to domain records")
         records = [map_strava_activity(a) for a in raw_activities]
         logger.info(f"Ingestion complete: {len(records)} activities normalized")
-        return records
     except Exception as e:
         logger.error(f"Error during Strava ingestion: {e}")
         raise
+    else:
+        return records

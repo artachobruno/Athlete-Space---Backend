@@ -11,7 +11,6 @@ def build_athlete_state(
     atl: float,
     tsb: float,
     daily_load: list[float],
-    dates: list[str],
     days_to_race: int | None = None,
 ) -> AthleteState:
     """Build AthleteState from training load metrics.
@@ -21,7 +20,6 @@ def build_athlete_state(
         atl: Current Acute Training Load
         tsb: Current Training Stress Balance
         daily_load: List of daily training hours
-        dates: List of date strings (YYYY-MM-DD)
         days_to_race: Optional days until next race
 
     Returns:
@@ -32,7 +30,7 @@ def build_athlete_state(
     volatility = _calculate_volatility(daily_load)
 
     # Calculate days since rest (last day with < 0.5 hours)
-    days_since_rest = _calculate_days_since_rest(daily_load, dates)
+    days_since_rest = _calculate_days_since_rest(daily_load)
 
     # Calculate aggregates
     seven_day_volume = sum(daily_load[-7:]) if len(daily_load) >= 7 else sum(daily_load)
@@ -90,7 +88,7 @@ def _calculate_volatility(daily_load: list[float]) -> Literal["low", "medium", "
     return "medium"
 
 
-def _calculate_days_since_rest(daily_load: list[float], dates: list[str]) -> int:
+def _calculate_days_since_rest(daily_load: list[float]) -> int:
     """Calculate days since last rest day (< 0.5 hours)."""
     if not daily_load:
         return 0

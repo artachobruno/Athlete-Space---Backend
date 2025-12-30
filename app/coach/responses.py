@@ -16,7 +16,7 @@ class CoachAgentResponse(BaseModel):
     reliably consumed by the UI and tested programmatically.
     """
 
-    summary: str  # 1–2 sentence high-level assessment
+    summary: str  # 1-2 sentence high-level assessment
 
     insights: list[str]  # bullet-level observations (max 3)
 

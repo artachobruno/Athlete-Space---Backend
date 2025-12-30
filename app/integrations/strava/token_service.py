@@ -128,7 +128,7 @@ class TokenService:
             )
         except requests.HTTPError as e:
             # Check if it's a 400/401 (invalid refresh token)
-            if e.response is not None and e.response.status_code in (400, 401):
+            if e.response is not None and e.response.status_code in {400, 401}:
                 logger.warning(f"Invalid refresh token for athlete_id={athlete_id}, deleting auth record")
                 # User revoked access - delete auth record
                 self._session.delete(auth)
@@ -138,10 +138,23 @@ class TokenService:
             logger.error(f"Token refresh failed for athlete_id={athlete_id}: {e}")
             raise TokenRefreshError(f"Failed to refresh token for athlete_id={athlete_id}: {e}") from e
 
-        # Extract new tokens
-        new_refresh_token = token_data.get("refresh_token") or auth.refresh_token
-        new_expires_at = token_data["expires_at"]
-        new_access_token = token_data["access_token"]
+        # Explicitly extract and narrow Strava response types
+        refresh_token_raw = token_data.get("refresh_token")
+        expires_at_raw = token_data["expires_at"]
+        access_token_raw = token_data["access_token"]
+
+        if not isinstance(access_token_raw, str):
+            raise TokenRefreshError("Invalid access_token type from Strava")
+
+        if not isinstance(expires_at_raw, int):
+            raise TokenRefreshError("Invalid expires_at type from Strava")
+
+        if refresh_token_raw is not None and not isinstance(refresh_token_raw, str):
+            raise TokenRefreshError("Invalid refresh_token type from Strava")
+
+        new_refresh_token = refresh_token_raw or auth.refresh_token
+        new_expires_at = expires_at_raw
+        new_access_token = access_token_raw
 
         # CRITICAL: Rotate refresh token (overwrite stored token)
         logger.debug(f"Rotating refresh token for athlete_id={athlete_id}")

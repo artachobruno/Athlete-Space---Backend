@@ -26,15 +26,16 @@ def refresh_access_token(
             timeout=10,
         )
         resp.raise_for_status()
-        token_data = resp.json()
-        logger.info("Access token refreshed successfully")
-        return token_data
     except requests.HTTPError as e:
         logger.error(f"Token refresh failed: {e.response.status_code} - {e.response.text}")
         raise
     except Exception as e:
         logger.error(f"Unexpected error during token refresh: {e}")
         raise
+    else:
+        token_data = resp.json()
+        logger.info("Access token refreshed successfully")
+        return token_data
 
 
 def is_token_expired(expires_at: int) -> bool:

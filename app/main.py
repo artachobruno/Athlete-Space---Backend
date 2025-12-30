@@ -26,6 +26,11 @@ app.include_router(state_router)
 logger.info("FastAPI application initialized")
 
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log all HTTP requests."""

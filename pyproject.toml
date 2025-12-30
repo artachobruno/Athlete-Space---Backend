@@ -147,6 +147,7 @@ docstring-code-format = true
 
 [tool.pyright]
 pythonVersion = "3.11"
+pythonPlatform = "Darwin"
 reportMissingImports = "none"
 typeCheckingMode = "standard"
 reportImportCycles = "error"
@@ -180,3 +181,10 @@ virtus-daily = "api.daily_brief:run"
 virtus-ingest = "scripts.run_ingestion:main"
 virtus-state = "scripts.run_state:main"
 virtus-decisions = "scripts.run_decisions:main"
+
+# -------------------------------------------------------------------
+# pytest
+# -------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

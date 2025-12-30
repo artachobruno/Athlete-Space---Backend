@@ -1,5 +1,7 @@
-from pydantic import BaseModel
 from typing import Literal
+
+from pydantic import BaseModel
+
 
 class Decision(BaseModel):
     domain: Literal["training", "nutrition", "recovery"]

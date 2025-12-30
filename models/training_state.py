@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+import datetime as dt
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -8,11 +8,11 @@ from pydantic import BaseModel, Field
 
 class TrainingState(BaseModel):
     """Canonical, explainable snapshot of an athlete's training state.
-    This is the ONLY object agents are allowed to reason over.
+    Pure state only. NO LOGIC.
     """
 
     # --- Time context ---
-    date: date
+    date: dt.date
 
     # --- Load ---
     acute_load_7d: float = Field(..., ge=0)
@@ -39,5 +39,5 @@ class TrainingState(BaseModel):
         ]
     ] = Field(default_factory=list)
 
-    # --- Engine decision (authoritative) ---
+    # --- Engine decision ---
     recommended_intent: Literal["RECOVER", "MAINTAIN", "BUILD"]

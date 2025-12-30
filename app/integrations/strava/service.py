@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import TypeVar
+
 import httpx
 
 from app.integrations.strava.client import StravaClient
@@ -9,6 +12,8 @@ from app.integrations.strava.token_service import (
     get_access_token_for_athlete,
 )
 from app.state.db import get_session
+
+T = TypeVar("T")
 
 
 def get_strava_client(athlete_id: int) -> StravaClient:
@@ -41,10 +46,10 @@ def get_strava_client(athlete_id: int) -> StravaClient:
 
 def execute_with_token_retry(
     athlete_id: int,
-    operation,
+    operation: Callable[[StravaClient], T],
     *,
     max_retries: int = 1,
-) -> any:
+) -> T:
     """Execute an operation with automatic token refresh on 401 errors.
 
     If an operation fails with a 401 (expired token), this will:

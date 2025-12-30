@@ -216,7 +216,6 @@ async def get_coach_insights(days: int = 60, days_to_race: int | None = None):
         atl=atl_current,
         tsb=tsb_current,
         daily_load=[float(x) for x in daily_load_list],
-        dates=[str(x) for x in dates_list],
         days_to_race=days_to_race,
     )
 

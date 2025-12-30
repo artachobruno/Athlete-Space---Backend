@@ -5,6 +5,7 @@ import math
 from collections import defaultdict
 from collections.abc import Iterable
 from statistics import mean, stdev
+from typing import Literal
 
 from models.activity import ActivityRecord
 from models.training_state import TrainingState
@@ -100,7 +101,9 @@ def _activity_load(activity: ActivityRecord) -> float:
     return activity.duration_sec * 0.5
 
 
-def _load_trend(activities: list[ActivityRecord]) -> str:
+def _load_trend(
+    activities: list[ActivityRecord],
+) -> Literal["rising", "stable", "falling"]:
     if len(activities) < 4:
         return "stable"
 
@@ -146,7 +149,7 @@ def _intensity_distribution(activities: list[ActivityRecord]) -> dict[str, float
     return {k: round(v / total, 2) for k, v in zones.items()}
 
 
-def _recovery_status(tsb: float) -> str:
+def _recovery_status(tsb: float) -> Literal["under", "adequate", "over"]:
     if tsb < -20:
         return "over"
     if tsb > 20:
@@ -165,7 +168,10 @@ def _readiness_score(tsb: float, monotony: float) -> int:
     return max(0, min(100, int(score)))
 
 
-def _recommended_intent(tsb: float, flags: list[str]) -> str:
+def _recommended_intent(
+    tsb: float,
+    flags: list[str],
+) -> Literal["RECOVER", "MAINTAIN", "BUILD"]:
     if "OVERREACHING" in flags or "ACUTE_SPIKE" in flags:
         return "RECOVER"
     if tsb > 10:

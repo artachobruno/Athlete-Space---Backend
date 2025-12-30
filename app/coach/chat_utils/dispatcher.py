@@ -35,7 +35,6 @@ def dispatch_coach_chat(
         atl=training_data.atl,
         tsb=training_data.tsb,
         daily_load=training_data.daily_load,
-        dates=training_data.dates,
         days_to_race=days_to_race,
     )
 

@@ -36,6 +36,7 @@ def strava_callback(code: str):
         client_id=STRAVA_CLIENT_ID,
         client_secret=STRAVA_CLIENT_SECRET,
         code=code,
+        redirect_uri=STRAVA_REDIRECT_URI,
     )
     access_token = token_data["access_token"]
 

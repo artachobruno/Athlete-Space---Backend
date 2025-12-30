@@ -34,12 +34,15 @@ def chat_with_coach(req: CoachChatRequest):
         )
 
     # 2️⃣ Extract latest metrics
-    ctl = float(training_data["ctl"][-1])
-    atl = float(training_data["atl"][-1])
-    tsb = float(training_data["tsb"][-1])
+    ctl_series = list(training_data["ctl"])
+    atl_series = list(training_data["atl"])
+    tsb_series = list(training_data["tsb"])
+
+    ctl = float(ctl_series[-1])
+    atl = float(atl_series[-1])
+    tsb = float(tsb_series[-1])
 
     daily_load = [float(x) for x in training_data["daily_load"]]
-    dates = [str(x) for x in training_data["dates"]]
 
     # 3️⃣ Build canonical AthleteState
     athlete_state = build_athlete_state(
@@ -47,10 +50,9 @@ def chat_with_coach(req: CoachChatRequest):
         atl=atl,
         tsb=tsb,
         daily_load=daily_load,
-        dates=dates,
     )
 
     return coach_chat(
         message=req.message,
-        athlete_state=athlete_state,
+        state=athlete_state,
     )

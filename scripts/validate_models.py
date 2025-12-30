@@ -1,18 +1,31 @@
+from datetime import date, datetime
+
 from models.activity import ActivityRecord
 from models.decision import Decision
 from models.training_state import TrainingState
 
 ActivityRecord(
-    activity_id="1", source="strava", sport="run", start_time="2024-01-01T07:00:00", duration_sec=3600, distance_m=10000, elevation_m=150
+    activity_id="1",
+    source="strava",
+    sport="run",
+    start_time=datetime.fromisoformat("2024-01-01T07:00:00"),
+    duration_sec=3600,
+    distance_m=10000,
+    elevation_m=150,
+    avg_hr=150,
+    power=None,
 )
 
 TrainingState(
-    acute_load=120,
-    chronic_load=95,
-    load_trend="rising",
+    date=date.fromisoformat("2024-01-01"),
+    acute_load_7d=120.0,
+    chronic_load_28d=95.0,
+    training_stress_balance=25.0,
+    load_trend_7d="rising",
     monotony=1.4,
     recovery_status="adequate",
-    injury_risk_flag=False,
+    readiness_score=80,
+    recommended_intent="MAINTAIN",
     intensity_distribution={"easy": 0.7, "hard": 0.3},
 )
 

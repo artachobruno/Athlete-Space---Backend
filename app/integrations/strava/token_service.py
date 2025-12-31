@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import time
 from typing import NamedTuple
 
 import requests
@@ -182,55 +181,6 @@ class TokenService:
             logger.info(f"Tokens deleted for athlete_id={athlete_id}")
         else:
             logger.warning(f"No tokens found to delete for athlete_id={athlete_id}")
-
-
-def get_access_token_with_retry(
-    *,
-    athlete_id: int,
-    session: Session,
-    max_retries: int = 1,
-    retry_delay: float = 1.0,
-) -> TokenResult:
-    """Get access token with retry logic for network failures.
-
-    Implements exponential backoff for transient failures.
-    Does not retry on invalid refresh token errors.
-
-    Args:
-        athlete_id: Strava athlete ID
-        session: Database session
-        max_retries: Maximum number of retry attempts
-        retry_delay: Initial delay between retries (seconds)
-
-    Returns:
-        TokenResult with access token
-
-    Raises:
-        TokenNotFoundError: If no token record exists
-        TokenRefreshError: If all retries fail or token is invalid
-    """
-    service = TokenService(session)
-    last_error: Exception | None = None
-
-    for attempt in range(max_retries + 1):
-        try:
-            return service.get_access_token(athlete_id=athlete_id)
-        except TokenRefreshError as e:
-            # Don't retry invalid refresh tokens
-            if "invalid" in str(e).lower() or "revoked" in str(e).lower():
-                raise
-            last_error = e
-            if attempt < max_retries:
-                time.sleep(retry_delay * (2**attempt))
-        except Exception as e:
-            last_error = e
-            if attempt < max_retries:
-                time.sleep(retry_delay * (2**attempt))
-
-    if last_error:
-        raise TokenRefreshError(f"Failed to get access token after {max_retries + 1} attempts") from last_error
-
-    raise TokenRefreshError("Failed to get access token")
 
 
 def get_access_token_for_athlete(

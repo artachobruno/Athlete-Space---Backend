@@ -1,65 +1,93 @@
-from __future__ import annotations
+import time
+from datetime import datetime, timezone
+from typing import Any
 
 import altair as alt
 import pandas as pd
 import requests
-import streamlit as st
 from PIL import Image
 
+import streamlit as st
+
+st_any: Any = st
+
 BACKEND_URL = "http://localhost:8000"
+
+# Track API call timing
+if "api_call_times" not in st_any.session_state:
+    st_any.session_state.api_call_times = {
+        "status": [],
+        "overview": [],
+        "coach": [],
+    }
 
 # -------------------------------------------------
 # Session State
 # -------------------------------------------------
-if "last_sync_time" not in st.session_state:
-    st.session_state.last_sync_time = None
-if "sync_in_progress" not in st.session_state:
-    st.session_state.sync_in_progress = False
-if "selected_days" not in st.session_state:
-    st.session_state.selected_days = 60
-if "coach_chat" not in st.session_state:
-    st.session_state.coach_chat = []
-if "coach_input" not in st.session_state:
-    st.session_state.coach_input = ""
+if "last_sync_time" not in st_any.session_state:
+    st_any.session_state.last_sync_time = None
+if "sync_in_progress" not in st_any.session_state:
+    st_any.session_state.sync_in_progress = False
+if "selected_days" not in st_any.session_state:
+    st_any.session_state.selected_days = 60
+if "coach_chat" not in st_any.session_state:
+    st_any.session_state.coach_chat = []
+if "coach_input" not in st_any.session_state:
+    st_any.session_state.coach_input = ""
 
 
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
 def submit_coach_message() -> None:
-    user_text = st.session_state.coach_input.strip()
+    user_text = st_any.session_state.coach_input.strip()
     if not user_text:
         return
 
-    # append user message
-    st.session_state.coach_chat.append({"role": "user", "content": user_text})
+    st_any.session_state.coach_chat.append({"role": "user", "content": user_text})
 
-    # call backend LLM
-    with st.spinner("Virtus is thinking..."):
+    with st_any.spinner("Virtus is thinking..."):
         resp = requests.post(
             f"{BACKEND_URL}/coach/chat",
-            json={
-                "message": user_text,
-                "days": st.session_state.selected_days,
-            },
+            json={"message": user_text, "days": st_any.session_state.selected_days},
             timeout=20,
         ).json()
 
     reply = resp.get("reply") or resp.get("message") or resp.get("output") or "No response from coach."
 
-    st.session_state.coach_chat.append({
-        "role": "assistant",
-        "content": f"{reply}\n\n_(intent: {resp.get('intent', 'unknown')})_",
-    })
+    st_any.session_state.coach_chat.append({"role": "assistant", "content": reply})
 
-    # SAFE reset
-    st.session_state.coach_input = ""
+    st_any.session_state.coach_input = ""
+
+
+def send_quick_action(prompt: str) -> None:
+    st_any.session_state.coach_input = prompt
+    submit_coach_message()
+
+
+def coach_row(label: str, value: str) -> None:
+    st_any.markdown(
+        f"""
+        <div style="
+            display:flex;
+            justify-content:space-between;
+            padding:6px 0;
+            font-size:0.85rem;
+            color:#C9CDD6;
+            border-bottom:1px solid #1E2230;
+        ">
+            <span>{label}</span>
+            <strong style="color:#FFFFFF">{value}</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # -------------------------------------------------
 # Page config
 # -------------------------------------------------
-st.set_page_config(
+st_any.set_page_config(
     page_title="Virtus AI",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -68,15 +96,31 @@ st.set_page_config(
 # -------------------------------------------------
 # Styling
 # -------------------------------------------------
-st.markdown(
+st_any.markdown(
     """
     <style>
-    body { background-color: #0E1117; color: #FAFAFA; }
-    section[data-testid="stSidebar"] { background-color: #0B0F16; }
+    body { background-color:#0E1117; color:#FAFAFA; }
+    section[data-testid="stSidebar"] { background-color:#0B0F16; }
+
     div[data-testid="metric-container"] {
-        background-color: #161A23;
-        border-radius: 10px;
-        padding: 1rem;
+        background-color: transparent;
+        border: 1px solid #1E2230;
+        border-radius: 6px;
+        padding: 0.75rem;
+    }
+    div[data-testid="metric-label"] {
+        font-size: 0.75rem;
+        color: #9AA0AE;
+    }
+    div[data-testid="metric-value"] {
+        font-size: 1.4rem;
+        font-weight: 600;
+    }
+
+    button {
+        background-color:#0E1117 !important;
+        border:1px solid #1E2230 !important;
+        color:#C9CDD6 !important;
     }
     </style>
     """,
@@ -86,13 +130,13 @@ st.markdown(
 # -------------------------------------------------
 # Sidebar
 # -------------------------------------------------
-with st.sidebar:
-    st.image(Image.open("ui/assets/virtus_logo.png"), width=180)
-    st.markdown("### Virtus AI")
-    st.markdown("**Performance Intelligence**")
-    st.divider()
+with st_any.sidebar:
+    st_any.image(Image.open("ui/assets/virtus_logo.png"), width=180)
+    st_any.markdown("### Virtus AI")
+    st_any.caption("Performance Intelligence")
+    st_any.divider()
 
-    page = st.radio(
+    page = st_any.radio(
         "Navigation",
         ["Overview", "Training", "Calendar", "Coach", "Debug"],
         label_visibility="collapsed",
@@ -101,159 +145,192 @@ with st.sidebar:
 # -------------------------------------------------
 # Header
 # -------------------------------------------------
-left, right = st.columns([3, 1])
+left, right = st_any.columns([3, 1])
 
 with left:
-    st.markdown("## Athlete Overview")
+    st_any.markdown("## Athlete Overview")
 
     try:
-        status = requests.get(f"{BACKEND_URL}/strava/status", timeout=2).json()
-        connected = status.get("connected", False)
-        activity_count = status.get("activity_count", 0)
-    except Exception:
-        connected = False
-        activity_count = 0
+        call_time = time.time()
+        status = requests.get(f"{BACKEND_URL}/me/status", timeout=2).json()
+        elapsed = time.time() - call_time
 
-    if connected:
-        st.markdown(
-            f"<span style='color:#4FC3F7'>Connected • Strava ✓ • {activity_count} activities</span>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            "<span style='color:#EF5350'>Not Connected • Strava ✗</span>",
-            unsafe_allow_html=True,
-        )
+        # Track timing
+        st_any.session_state.api_call_times["status"].append(call_time)
+        if len(st_any.session_state.api_call_times["status"]) > 10:
+            st_any.session_state.api_call_times["status"].pop(0)
+
+        # Calculate refresh rate
+        now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+        if len(st_any.session_state.api_call_times["status"]) >= 2:
+            time_diff = st_any.session_state.api_call_times["status"][-1] - st_any.session_state.api_call_times["status"][-2]
+            print(f"[UI] /me/status called at {now_str} - elapsed: {elapsed:.3f}s - refresh_rate: {time_diff:.2f}s since last call")
+        else:
+            print(f"[UI] /me/status called at {now_str} - elapsed: {elapsed:.3f}s")
+
+        connected = status.get("connected", False)
+        sync_state = status.get("state", "unknown")
+        last_sync = status.get("last_sync")
+    except Exception as e:
+        now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+        print(f"[UI] /me/status ERROR at {now_str}: {e}")
+        connected = False
+        sync_state = "error"
+        last_sync = None
+
+    label = {
+        "ok": "Synced",
+        "syncing": "Syncing",
+        "stale": "Stale",
+        "error": "Error",
+    }.get(sync_state, sync_state)
+
+    st_any.caption(f"Strava · {'Connected' if connected else 'Not connected'} · {label}")
 
 with right:
-    sync_time = st.session_state.last_sync_time.strftime("%b %d, %H:%M") if st.session_state.last_sync_time else "Never"
-    st.markdown(
-        f"<div style='text-align:right; font-size:0.85rem; color:#A0A0A0;'>Last sync<br/>{sync_time}</div>",
-        unsafe_allow_html=True,
-    )
+    if last_sync:
+        from datetime import datetime
 
-st.divider()
+        sync_time = datetime.fromisoformat(last_sync.replace("Z", "+00:00")).strftime("%b %d, %H:%M")
+    else:
+        sync_time = "Never"
+
+    st_any.caption(f"Last sync · {sync_time}")
+
+st_any.divider()
 
 # -------------------------------------------------
 # Time Window
 # -------------------------------------------------
-selected_days = st.radio(
+st_any.session_state.selected_days = st_any.radio(
     "Time Window",
     [30, 60, 90],
-    index=[30, 60, 90].index(st.session_state.selected_days),
+    index=[30, 60, 90].index(st_any.session_state.selected_days),
     horizontal=True,
     label_visibility="collapsed",
 )
-st.session_state.selected_days = selected_days
 
 # -------------------------------------------------
-# Load Training Data
+# Load Data
 # -------------------------------------------------
-try:
-    resp = requests.get(
-        f"{BACKEND_URL}/state/training-load?days={selected_days}",
-        timeout=5,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-except requests.exceptions.RequestException as e:
-    st.error("Backend not reachable. Is the FastAPI server running on :8000?")
-    st.caption(str(e))
-    data = {
-        "dates": [],
-        "ctl": [],
-        "atl": [],
-        "tsb": [],
-        "daily_load": [],
-    }
+call_time = time.time()
+overview = requests.get(f"{BACKEND_URL}/me/overview", timeout=5).json()
+elapsed = time.time() - call_time
+
+# Track timing
+st_any.session_state.api_call_times["overview"].append(call_time)
+if len(st_any.session_state.api_call_times["overview"]) > 10:
+    st_any.session_state.api_call_times["overview"].pop(0)
+
+# Calculate refresh rate
+now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+if len(st_any.session_state.api_call_times["overview"]) >= 2:
+    time_diff = st_any.session_state.api_call_times["overview"][-1] - st_any.session_state.api_call_times["overview"][-2]
+    print(f"[UI] /me/overview called at {now_str} - elapsed: {elapsed:.3f}s - refresh_rate: {time_diff:.2f}s since last call")
+else:
+    print(f"[UI] /me/overview called at {now_str} - elapsed: {elapsed:.3f}s")
+
+metrics = overview.get("metrics", {})
+today = overview.get("today", {})
+data_quality_status = overview.get("data_quality", "insufficient")
 
 df = pd.DataFrame({
-    "date": pd.to_datetime(data["dates"]),
-    "CTL": data["ctl"],
-    "ATL": data["atl"],
-    "TSB": data["tsb"],
-    "daily_load": data["daily_load"],
+    "date": pd.to_datetime([d for d, _ in metrics.get("ctl", [])]),
+    "CTL": [v for _, v in metrics.get("ctl", [])],
+    "ATL": [v for _, v in metrics.get("atl", [])],
+    "TSB": [v for _, v in metrics.get("tsb", [])],
 })
 
 # -------------------------------------------------
-# KPI Cards
+# KPI
 # -------------------------------------------------
-tsb_today = round(df["TSB"].iloc[-1], 1) if len(df) else 0.0
-
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Readiness", "Good" if tsb_today > -5 else "Caution", f"{tsb_today:+}")
-k2.metric("7-day Load", f"{df['daily_load'].tail(7).sum():.1f} h")
-k3.metric("7-day Volume", f"{df['daily_load'].tail(7).sum():.1f} h")
-k4.metric("Recovery", "On Track" if tsb_today > -10 else "At Risk")
+k1, k2, k3, k4 = st_any.columns(4)
+k1.metric("CTL", f"{today.get('ctl', 0):.1f}")
+k2.metric("ATL", f"{today.get('atl', 0):.1f}")
+k3.metric("TSB", f"{today.get('tsb', 0):.1f}")
+k4.metric("Data", data_quality_status)
 
 # -------------------------------------------------
 # Layout
 # -------------------------------------------------
-main, side = st.columns([2, 1])
+main, side = st_any.columns([2, 1])
 
-# =============================
-# MAIN CHART
-# =============================
 with main:
     chart = (
         alt.Chart(df)
         .transform_fold(["CTL", "ATL", "TSB"], as_=["metric", "value"])
         .mark_line(strokeWidth=2)
         .encode(
-            x="date:T",
-            y="value:Q",
+            x=alt.X("date:T", axis=alt.Axis(grid=False)),
+            y=alt.Y("value:Q", axis=alt.Axis(grid=True, gridColor="#1E2230")),
             color=alt.Color(
                 "metric:N",
                 scale=alt.Scale(
                     domain=["CTL", "ATL", "TSB"],
-                    range=["#4FC3F7", "#EF5350", "#66BB6A"],
+                    range=["#5B8DEF", "#9AA0AE", "#7A869A"],
                 ),
+                legend=alt.Legend(title=None),
             ),
         )
         .properties(height=300)
     )
-    st.altair_chart(chart, use_container_width=True)
+    st_any.altair_chart(chart, use_container_width=True)
 
-# =============================
-# COACH PANEL + CHAT
-# =============================
+# -------------------------------------------------
+# Coach Panel
+# -------------------------------------------------
 with side:
-    st.markdown("### Virtus Coach")
+    st_any.markdown("### Virtus Coach")
+    st_any.caption("Adaptive performance guidance")
 
-    # --- Snapshot ---
-    try:
-        snap_resp = requests.get(
-            f"{BACKEND_URL}/state/coach?days={selected_days}",
-            timeout=10,
-        )
-        snap_resp.raise_for_status()
-        snapshot = snap_resp.json()
+    call_time = time.time()
+    snap = requests.get(f"{BACKEND_URL}/state/coach", timeout=10).json()
+    elapsed = time.time() - call_time
 
-        st.markdown(f"**{snapshot.get('summary', 'No summary available')}**")
-        for i in snapshot.get("insights", []):
-            st.markdown(f"- {i}")
+    # Track timing
+    st_any.session_state.api_call_times["coach"].append(call_time)
+    if len(st_any.session_state.api_call_times["coach"]) > 10:
+        st_any.session_state.api_call_times["coach"].pop(0)
 
-    except requests.exceptions.RequestException as e:
-        st.warning("Coach snapshot unavailable (backend offline).")
-        st.caption(str(e))
+    # Calculate refresh rate
+    now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+    if len(st_any.session_state.api_call_times["coach"]) >= 2:
+        time_diff = st_any.session_state.api_call_times["coach"][-1] - st_any.session_state.api_call_times["coach"][-2]
+        print(f"[UI] /state/coach called at {now_str} - elapsed: {elapsed:.3f}s - refresh_rate: {time_diff:.2f}s since last call")
+    else:
+        print(f"[UI] /state/coach called at {now_str} - elapsed: {elapsed:.3f}s")
 
-    st.divider()
-    st.markdown("#### Ask the Coach")
+    insights = snap.get("insights", [])
+    recommendations = snap.get("recommendations", [])
 
-    # --- Chat history ---
-    for msg in st.session_state.coach_chat:
+    coach_row("State", insights[0] if insights else "No insights available")
+    coach_row("Risk", snap.get("risk_level", "unknown").upper())
+    coach_row("Focus", recommendations[0] if recommendations else "No recommendations")
+
+    st_any.divider()
+
+    qa1, qa2, qa3 = st_any.columns(3)
+    with qa1:
+        st_any.button("Today's session", on_click=send_quick_action, args=("What session should I do today?",))
+    with qa2:
+        st_any.button("Fatigue check", on_click=send_quick_action, args=("Am I accumulating fatigue or adapting well?",))
+    with qa3:
+        st_any.button("Adjust week", on_click=send_quick_action, args=("How should I adjust my training this week?",))
+
+    st_any.divider()
+
+    for msg in st_any.session_state.coach_chat:
         speaker = "You" if msg["role"] == "user" else "Virtus"
-        st.markdown(f"**{speaker}:** {msg['content']}")
+        st_any.markdown(f"**{speaker}**  \n{msg['content']}")
 
-    # --- Input ---
-    st.text_input(
-        "Ask about training, fatigue, race prep, or planning",
+    st_any.text_input(
+        "Ask about training, fatigue, or race prep",
         key="coach_input",
         on_change=submit_coach_message,
     )
 
 # -------------------------------------------------
-# Placeholder routing
+# Routing placeholder
 # -------------------------------------------------
 if page != "Overview":
-    st.warning(f"{page} view coming next")
+    st_any.warning(f"{page} view coming next")

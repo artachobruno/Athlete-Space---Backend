@@ -49,3 +49,5 @@ pandas>=2.0.0
 # Scheduling
 # -------------------------------------------------
 apscheduler>=3.11.0
+celery>=5.4.0
+celery-types>=0.1.0

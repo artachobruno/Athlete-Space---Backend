@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 
+from app.ingestion.strava_ingestion import ingest_strava_activities
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.core.settings import settings
-from app.ingestion.strava_ingestion import ingest_strava_activities
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.oauth import exchange_code_for_token
 

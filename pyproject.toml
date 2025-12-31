@@ -8,6 +8,8 @@ dependencies = [
     "pydantic~=2.12.3",
     "pydantic-settings~=2.6.0",
     "pyyaml<7.0.0,>=6.0.1",
+    "langchain>=0.1.16",
+    "langchain-core>=0.1.45",
 
     # --- API / Async ---
     "fastapi[standard]<1.0.0,>=0.115.8",
@@ -20,6 +22,7 @@ dependencies = [
     "litellm~=1.80",
     "pydantic-ai>=0.0.14",
     "tenacity<9.0.0,>=8.3.0",
+    "langchain-openai>=0.1.7",
 
     # --- Storage / Caching ---
     "redis~=7.0.1",
@@ -37,6 +40,8 @@ dependencies = [
 
     # --- Scheduling ---
     "apscheduler>=3.11.0",
+    "celery>=5.4.0",
+    "celery-types>=0.1.0",
 ]
 
 [dependency-groups]
@@ -147,12 +152,13 @@ docstring-code-format = true
 # -------------------------------------------------------------------
 
 [tool.pyright]
-pythonVersion = "3.11"
+pythonVersion = "3.12"
 pythonPlatform = "Darwin"
 reportMissingImports = "none"
 typeCheckingMode = "standard"
 reportImportCycles = "error"
 reportMissingTypeStubs = false
+reportFunctionMemberAccess = "none"
 venvPath = "."
 venv = ".venv"
 exclude = [

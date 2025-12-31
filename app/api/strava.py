@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.settings import settings
-from app.ingestion.save_activities import save_activity_records
-from app.ingestion.strava_ingestion import ingest_strava_activities
+from app.db import update_last_ingested_at
+from app.ingestion.save_activities import save_activity_record
+from app.ingestion.tasks import backfill_task, incremental_task
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.oauth import exchange_code_for_token
+from app.integrations.strava.schemas import map_strava_activity
 from app.integrations.strava.token_service import TokenService
+from app.metrics.daily_aggregation import aggregate_daily_training
 from app.state.db import get_session
 from app.state.models import Activity, StravaAuth
 
@@ -31,8 +35,9 @@ def strava_status():
             result = session.execute(select(StravaAuth)).first()
             if result:
                 auth = result[0]
-                # Check if activities exist
-                activity_count = session.query(Activity).count()
+                # Check if activities exist - use func.count to avoid id column dependency
+                result_count = session.execute(select(func.count(Activity.activity_id))).scalar()
+                activity_count = result_count if result_count is not None else 0
                 return {
                     "connected": True,
                     "athlete_id": auth.athlete_id,
@@ -44,40 +49,139 @@ def strava_status():
         return {"connected": False, "error": str(e), "activity_count": 0}
 
 
-@router.post("/strava/sync")
-def strava_sync():
-    """Manually sync activities from Strava for connected account."""
+@router.get("/strava/sync-progress")
+def strava_sync_progress():
+    """Get sync progress information including activity count and sync status."""
+    logger.debug("Sync progress check requested")
     try:
         with get_session() as session:
             result = session.execute(select(StravaAuth)).first()
             if not result:
+                logger.debug("Sync progress: No Strava auth found")
+                return {
+                    "connected": False,
+                    "activity_count": 0,
+                    "sync_in_progress": False,
+                    "progress_percentage": 0,
+                }
+
+            auth = result[0]
+            # Use func.count to avoid id column dependency
+            result_count = session.execute(select(func.count(Activity.activity_id))).scalar()
+            activity_count = result_count if result_count is not None else 0
+            backfill_done = getattr(auth, "backfill_done", False)
+            last_sync_at = auth.last_successful_sync_at if hasattr(auth, "last_successful_sync_at") else None
+
+            logger.debug(
+                f"Sync progress for athlete_id={auth.athlete_id}: "
+                f"activity_count={activity_count}, backfill_done={backfill_done}, "
+                f"last_sync_at={last_sync_at}"
+            )
+
+            # Determine if sync is in progress
+            # Check if backfill is not done or if last sync was recent
+            sync_in_progress = False
+            sync_reason = None
+            if hasattr(auth, "backfill_done") and not auth.backfill_done:
+                sync_in_progress = True
+                sync_reason = "backfill_not_done"
+            elif last_sync_at:
+                time_since_sync = time.time() - last_sync_at
+                # If last sync was less than 5 minutes ago, consider it in progress
+                if time_since_sync < 300:
+                    sync_in_progress = True
+                    sync_reason = f"recent_sync_{int(time_since_sync)}s_ago"
+
+            # Estimate progress based on activity count
+            # Rough estimate: 30 activities per day average, 14 days minimum = ~420 activities
+            # For full history, could be 1000+ activities
+            min_activities_needed = 14 * 2  # ~2 activities per day average
+            estimated_total = max(min_activities_needed, activity_count + 100)  # Conservative estimate
+            progress_percentage = min(100, int((activity_count / estimated_total) * 100)) if estimated_total > 0 else 0
+
+            logger.info(
+                f"Sync progress: athlete_id={auth.athlete_id}, "
+                f"activities={activity_count}, progress={progress_percentage}%, "
+                f"sync_in_progress={sync_in_progress}, reason={sync_reason}"
+            )
+
+            return {
+                "connected": True,
+                "athlete_id": auth.athlete_id,
+                "activity_count": activity_count,
+                "sync_in_progress": sync_in_progress,
+                "progress_percentage": progress_percentage,
+                "backfill_done": backfill_done,
+                "last_sync_at": last_sync_at,
+            }
+    except Exception as e:
+        logger.error(f"Error getting sync progress: {e}", exc_info=True)
+        return {
+            "connected": False,
+            "activity_count": 0,
+            "sync_in_progress": False,
+            "progress_percentage": 0,
+            "error": str(e),
+        }
+
+
+@router.post("/strava/sync")
+def strava_sync():
+    """Manually trigger async Strava sync."""
+    try:
+        logger.info("Manual Strava sync requested")
+        with get_session() as session:
+            result = session.execute(select(StravaAuth)).first()
+            if not result:
+                logger.warning("Strava sync requested but no Strava connection found")
+                return {"success": False, "error": "Strava not connected"}
+
+            auth = result[0]
+            logger.info(f"Found Strava auth for athlete_id={auth.athlete_id}")
+
+        # Enqueue async ingestion (safe, scalable)
+        logger.info(f"Enqueuing ingestion tasks for athlete_id={auth.athlete_id}")
+        incremental_result = incremental_task.delay(auth.athlete_id)
+        backfill_result = backfill_task.delay(auth.athlete_id)
+        logger.info(f"Ingestion tasks enqueued: incremental_task_id={incremental_result.id}, backfill_task_id={backfill_result.id}")
+    except Exception as e:
+        logger.error(f"Error triggering Strava sync: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+    else:
+        return {
+            "success": True,
+            "status": "enqueued",
+            "athlete_id": auth.athlete_id,
+            "message": "Ingestion tasks enqueued. Ensure Celery workers are running to process them.",
+        }
+
+
+@router.post("/strava/aggregate")
+def strava_aggregate():
+    """Manually trigger daily aggregation to update daily_training_summary."""
+    try:
+        logger.info("[API] Manual aggregation requested")
+        with get_session() as session:
+            result = session.execute(select(StravaAuth)).first()
+            if not result:
+                logger.warning("Aggregation requested but no Strava connection found")
                 return {"success": False, "error": "Strava not connected"}
 
             auth = result[0]
             athlete_id = auth.athlete_id
+            logger.info(f"[API] Triggering aggregation for athlete_id={athlete_id}")
 
-            # Get access token
-            token_service = TokenService(session)
-            token_result = token_service.get_access_token(athlete_id=athlete_id)
-
-            # Fetch and save activities
-            client = StravaClient(access_token=token_result.access_token)
-            records = ingest_strava_activities(
-                client=client,
-                since=dt.datetime.now(dt.UTC) - dt.timedelta(days=60),
-                until=dt.datetime.now(dt.UTC),
-            )
-
-            saved_count = save_activity_records(session, records)
-
-            return {
-                "success": True,
-                "fetched": len(records),
-                "saved": saved_count,
-            }
+        # Run aggregation synchronously (it's fast)
+        aggregate_daily_training(athlete_id)
     except Exception as e:
-        logger.error(f"Error syncing Strava activities: {e}")
+        logger.error(f"[API] Error triggering aggregation: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
+    else:
+        return {
+            "success": True,
+            "athlete_id": athlete_id,
+            "message": "Daily aggregation completed successfully",
+        }
 
 
 @router.get("/strava/connect")
@@ -95,6 +199,63 @@ def strava_connect():
     return RedirectResponse(url)
 
 
+def _perform_immediate_sync(access_token: str, athlete_id: int) -> int:
+    """Perform immediate synchronous activity sync.
+
+    Returns:
+        Number of activities synced
+    """
+    logger.info("Starting immediate activity ingestion")
+    activities_synced = 0
+
+    try:
+        client = StravaClient(access_token=access_token)
+        # Fetch last 30 days of activities for initial sync
+        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
+        activities = client.fetch_recent_activities(after=since, per_page=100)
+
+        if not activities:
+            logger.info("No activities found for immediate sync")
+            return 0
+
+        logger.info(f"Fetched {len(activities)} activities for immediate sync")
+
+        # Commit incrementally to make progress visible (each activity commits individually)
+        batch_size = 10  # Log progress every 10 activities
+        newest_ts = 0
+
+        for activity in activities:
+            try:
+                # Use individual session per activity for immediate visibility
+                with get_session() as session:
+                    record = map_strava_activity(activity)
+                    save_activity_record(session, record)
+                    activities_synced += 1
+                    newest_ts = max(newest_ts, int(activity.start_date.timestamp()))
+
+                    # Log progress every 10 activities
+                    if activities_synced % batch_size == 0:
+                        logger.info(
+                            f"Immediate sync progress: {activities_synced}/{len(activities)} "
+                            f"activities saved ({int(activities_synced / len(activities) * 100)}%)"
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to save activity {activity.id}: {e}")
+
+        # Update last_ingested_at after all activities are saved
+        if newest_ts > 0:
+            update_last_ingested_at(athlete_id, newest_ts)
+        else:
+            logger.warning("No activities to update last_ingested_at")
+
+        logger.info(f"Immediate sync completed: {activities_synced} activities saved")
+    except Exception as e:
+        logger.error(f"Immediate sync failed (non-fatal): {e}", exc_info=True)
+        return 0
+    else:
+        return activities_synced
+
+
 @router.get("/strava/callback", response_class=HTMLResponse)
 def strava_callback(code: str):
     """Handle Strava OAuth callback and persist tokens.
@@ -107,6 +268,8 @@ def strava_callback(code: str):
     Access tokens are never persisted - they are ephemeral.
     """
     logger.info("Strava OAuth callback received")
+    redirect_url = "http://localhost:8501"
+
     try:
         logger.debug("Exchanging authorization code for tokens")
         token_data = exchange_code_for_token(
@@ -135,41 +298,29 @@ def strava_callback(code: str):
             )
         logger.info("Tokens saved successfully")
 
-        # Use access token for immediate ingestion (it's ephemeral, not persisted)
-        logger.info("Starting activity ingestion")
-        client = StravaClient(access_token=access_token)
+        # Immediate synchronous ingestion using the access token we have
+        _perform_immediate_sync(access_token, athlete_id)
 
-        records = ingest_strava_activities(
-            client=client,
-            since=dt.datetime.now(dt.UTC) - dt.timedelta(days=14),
-            until=dt.datetime.now(dt.UTC),
-        )
+        # Also enqueue async tasks for background sync and backfill
+        logger.info("Enqueuing background ingestion tasks")
+        incremental_task.delay(athlete_id)
+        backfill_task.delay(athlete_id)
+        logger.info("Background ingestion tasks enqueued")
 
-        logger.info(f"Ingestion complete: {len(records)} activities fetched from Strava")
-
-        # Save activities to database
-        logger.info("Saving activities to database")
-        with get_session() as session:
-            saved_count = save_activity_records(session, records)
-        logger.info(f"Saved {saved_count} activities to database")
-
-        # Redirect back to Streamlit UI
-        redirect_url = "http://localhost:8501"
-        return f"""
-        <html>
-        <head>
-            <title>Strava Connected</title>
-            <meta http-equiv="refresh" content="3;url={redirect_url}">
-        </head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h2 style="color: #4FC3F7;">✓ Strava Connected Successfully!</h2>
-            <p>Ingested {len(records)} activities</p>
-            <p>Saved {saved_count} activities to database</p>
-            <p><small>Redirecting to Virtus AI...</small></p>
-            <p><a href="{redirect_url}">Click here if not redirected</a></p>
-        </body>
-        </html>
-        """
     except Exception as e:
-        logger.error(f"Error in Strava callback: {e}")
+        logger.error(f"Error in Strava callback: {e}", exc_info=True)
         raise
+
+    return f"""
+    <html>
+    <head>
+        <title>Strava Connected</title>
+        <meta http-equiv="refresh" content="3;url={redirect_url}">
+    </head>
+    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h2 style="color: #4FC3F7;">✓ Strava Connected Successfully!</h2>
+        <p><small>Redirecting to Virtus AI...</small></p>
+        <p><a href="{redirect_url}">Click here if not redirected</a></p>
+    </body>
+    </html>
+    """

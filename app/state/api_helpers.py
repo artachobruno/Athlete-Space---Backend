@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
+from app.metrics.training_load import calculate_ctl_atl_tsb
 from app.state.db import SessionLocal
 
 
@@ -15,18 +16,6 @@ class TrainingData:
     tsb: float
     daily_load: list[float]
     dates: list[str]
-
-
-def _ewma(values: list[float], tau: int) -> list[float]:
-    alpha = 1 - pow(2.71828, -1 / tau)
-    out: list[float] = []
-    prev = values[0] if values else 0.0
-
-    for v in values:
-        prev = alpha * v + (1 - alpha) * prev
-        out.append(round(prev, 2))
-
-    return out
 
 
 def get_training_data(days: int = 60) -> TrainingData:
@@ -56,14 +45,16 @@ def get_training_data(days: int = 60) -> TrainingData:
         dates = [str(r.day) for r in rows]
         daily_load = [float(r.hours) for r in rows]
 
-        ctl_series = _ewma(daily_load, tau=42)
-        atl_series = _ewma(daily_load, tau=7)
-        tsb_series = [c - a for c, a in zip(ctl_series, atl_series, strict=False)]
+        # Use canonical metrics computation
+        metrics = calculate_ctl_atl_tsb(daily_load)
+        ctl_series = metrics["ctl"]
+        atl_series = metrics["atl"]
+        tsb_series = metrics["tsb"]
 
         return TrainingData(
-            ctl=ctl_series[-1],
-            atl=atl_series[-1],
-            tsb=tsb_series[-1],
+            ctl=ctl_series[-1] if ctl_series else 0.0,
+            atl=atl_series[-1] if atl_series else 0.0,
+            tsb=tsb_series[-1] if tsb_series else 0.0,
             daily_load=daily_load,
             dates=dates,
         )

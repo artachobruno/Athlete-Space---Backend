@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -5,10 +6,12 @@ from fastapi import APIRouter, HTTPException
 from loguru import logger
 from sqlalchemy import text
 
-from app.coach.service import run_coach_agent
-from app.coach.state_builder import build_athlete_state
+from app.api.me import get_overview
+from app.coach.coach_service import get_coach_advice
 from app.core.settings import settings
-from app.state.db import SessionLocal
+from app.metrics.training_load import calculate_ctl_atl_tsb
+from app.state.db import SessionLocal, get_session
+from app.state.models import Activity
 
 router = APIRouter(prefix="/state", tags=["state"])
 
@@ -34,25 +37,6 @@ def _calculate_weekly_volume(dates: list[str], daily_load: list[float]) -> dict[
         rolling_avg.append(round(avg, 2))
 
     return {"volume": weekly_volume, "dates": weekly_dates, "rolling_avg": rolling_avg}
-
-
-def _calculate_training_load_metrics(daily_load: list[float]) -> dict[str, list[float]]:
-    """Calculate CTL, ATL, and TSB from daily load."""
-
-    def ewma(values, tau):
-        alpha = 1 - pow(2.71828, -1 / tau)
-        out = []
-        prev = values[0] if values else 0
-        for v in values:
-            prev = alpha * v + (1 - alpha) * prev
-            out.append(round(prev, 2))
-        return out
-
-    ctl = ewma(daily_load, tau=42)
-    atl = ewma(daily_load, tau=7)
-    tsb = [round(c - a, 2) for c, a in zip(ctl, atl, strict=False)]
-
-    return {"ctl": ctl, "atl": atl, "tsb": tsb}
 
 
 @router.get("/debug")
@@ -141,8 +125,8 @@ def training_load(days: int = 60, debug: bool = False):
         dates = [r.day for r in rows]
         daily_load = [r.hours for r in rows]
 
-        # Calculate training load metrics
-        metrics = _calculate_training_load_metrics(daily_load)
+        # Calculate training load metrics using canonical computation rules
+        metrics = calculate_ctl_atl_tsb(daily_load)
 
         # Calculate weekly volume for bar chart
         weekly_data = _calculate_weekly_volume(dates, daily_load)
@@ -172,66 +156,141 @@ def training_load(days: int = 60, debug: bool = False):
 
 
 @router.get("/coach")
-async def get_coach_insights(days: int = 60, days_to_race: int | None = None):
-    """Get coaching insights from the Coach Agent.
-
-    Args:
-        days: Number of days to look back (default: 60)
-        days_to_race: Optional days until next race
+async def get_coach_insights():
+    """Get coaching insights from the LLM Coach.
 
     Returns:
         CoachAgentResponse with insights, recommendations, and risk assessment
+
+    Rules:
+        - Coach output comes ONLY from LLM service
+        - Coach is gated by data quality
+        - No rule-based logic here
     """
-    logger.info(f"Coach insights requested: days={days}, days_to_race={days_to_race}")
+    request_time = time.time()
+    now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+    logger.info(f"[API] /state/coach endpoint called at {now_str}")
+    logger.info("Coach insights requested")
 
-    # Get training load data
-    training_data = training_load(days=days, debug=False)
-
-    if not training_data.get("dates") or not training_data.get("ctl"):
-        raise HTTPException(
-            status_code=404,
-            detail="Insufficient training data. Need at least some activities to generate insights.",
-        )
-
-    # Extract current metrics (most recent values) with explicit type narrowing
-    ctl_list = list(training_data.get("ctl", []))
-    atl_list = list(training_data.get("atl", []))
-    tsb_list = list(training_data.get("tsb", []))
-    daily_load_list = list(training_data.get("daily_load", []))
-    dates_list = list(training_data.get("dates", []))
-
-    if not ctl_list or not atl_list or not tsb_list:
-        raise HTTPException(
-            status_code=404,
-            detail="Insufficient training data. Need at least some activities to generate insights.",
-        )
-
-    ctl_current = float(ctl_list[-1])
-    atl_current = float(atl_list[-1])
-    tsb_current = float(tsb_list[-1])
-
-    # Build athlete state
-    athlete_state = build_athlete_state(
-        ctl=ctl_current,
-        atl=atl_current,
-        tsb=tsb_current,
-        daily_load=[float(x) for x in daily_load_list],
-        days_to_race=days_to_race,
-    )
-
-    # Run coach agent
+    # Get overview from /me/overview endpoint
     try:
-        coach_response = run_coach_agent(athlete_state)
-        logger.info(
-            "Coach Agent response generated",
-            risk_level=coach_response.risk_level,
-            intervention=coach_response.intervention,
-        )
-        return coach_response.model_dump()
-
+        overview = get_overview()
     except Exception as e:
-        logger.error(f"Error running Coach Agent: {e}")
+        logger.error(f"Error getting overview for coach: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get training overview: {e!s}",
+        ) from e
+
+    # Get coach advice from LLM service (gated by data quality)
+    try:
+        coach_response = get_coach_advice(overview)
+    except Exception as e:
+        logger.error(f"Error getting coach advice: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate coaching insights: {e!s}",
+        ) from e
+
+    elapsed = time.time() - request_time
+    logger.info(
+        f"Coach response generated: risk_level={coach_response.get('risk_level')}, "
+        f"intervention={coach_response.get('intervention')}, elapsed={elapsed:.3f}s"
+    )
+    return coach_response
+
+
+def _build_limited_data_message(data_quality: str, activity_count: int) -> dict:
+    """Build response message for limited data quality case.
+
+    Args:
+        data_quality: Data quality status
+        activity_count: Number of activities
+
+    Returns:
+        Response dictionary for limited data quality
+    """
+    message = (
+        "I have some of your training data, but there are gaps. I can provide "
+        "limited insights, but more consistent data will improve my recommendations."
+    )
+    return {
+        "summary": "Getting started with Virtus AI",
+        "insights": [message],
+        "recommendations": [
+            "Keep your Strava activities synced",
+            "Check back once you have 14+ days of training data",
+        ],
+        "risk_level": "unknown",
+        "intervention": False,
+        "follow_up_prompts": None,
+        "data_quality": data_quality,
+        "activity_count": activity_count,
+    }
+
+
+@router.get("/coach/initial")
+def get_initial_coach_message():
+    """Get initial coach message for new users or users with insufficient data.
+
+    Returns:
+        Initial welcome message and guidance for users who just connected Strava
+    """
+    logger.info("Initial coach message requested")
+
+    try:
+        overview = get_overview()
+        data_quality = overview.get("data_quality", "insufficient")
+        activity_count = 0
+
+        # Count activities
+        with get_session() as db:
+            activity_count = db.query(Activity).count()
+
+        # Determine message based on data quality and activity count
+        if data_quality == "ok":
+            # Data quality is ok - redirect to regular coach
+            return get_coach_insights()
+
+        if data_quality == "insufficient":
+            if activity_count == 0:
+                message = (
+                    "Welcome to Virtus AI! I'm syncing your Strava activities now. "
+                    "Once I have at least 14 days of training data, I'll be able to provide "
+                    "personalized coaching insights and recommendations."
+                )
+            elif activity_count < 10:
+                message = (
+                    f"Great! I've found {activity_count} activities. I'm still gathering your "
+                    "training history. Once I have at least 14 days of consistent data, I'll "
+                    "be able to analyze your training load and provide personalized guidance."
+                )
+            else:
+                message = (
+                    f"I'm analyzing your {activity_count} activities. I need a bit more data "
+                    "to provide accurate insights. Keep training, and check back in a few days!"
+                )
+            return {
+                "summary": "Getting started with Virtus AI",
+                "insights": [message],
+                "recommendations": [
+                    "Keep your Strava activities synced",
+                    "Check back once you have 14+ days of training data",
+                ],
+                "risk_level": "unknown",
+                "intervention": False,
+                "follow_up_prompts": None,
+                "data_quality": data_quality,
+                "activity_count": activity_count,
+            }
+
+        # Default case: Handle limited data quality (data_quality == "limited")
+        # This is the fallback case when data_quality is neither "ok" nor "insufficient"
+        return _build_limited_data_message(data_quality, activity_count)
+
+    except Exception as e:
+        logger.error(f"Error getting initial coach message: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get initial coach message: {e!s}",
         ) from e

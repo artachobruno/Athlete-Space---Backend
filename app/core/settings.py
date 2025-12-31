@@ -32,7 +32,9 @@ class Settings(BaseSettings):
         default_factory=get_database_url,
         validation_alias="DATABASE_URL",
     )
+    redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
+    user_ui_enabled: bool = Field(default=False, validation_alias="USER_UI_ENABLED")
 
     model_config = SettingsConfigDict(
         env_file=".env",

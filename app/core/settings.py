@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default="http://localhost:8000/strava/callback",
         validation_alias="STRAVA_REDIRECT_URI",
     )
+    frontend_url: str = Field(
+        default="http://localhost:8501",
+        validation_alias="FRONTEND_URL",
+    )
     database_url: str = Field(
         default_factory=get_database_url,
         validation_alias="DATABASE_URL",

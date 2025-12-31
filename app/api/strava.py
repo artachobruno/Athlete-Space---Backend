@@ -268,7 +268,7 @@ def strava_callback(code: str):
     Access tokens are never persisted - they are ephemeral.
     """
     logger.info("Strava OAuth callback received")
-    redirect_url = "http://localhost:8501"
+    redirect_url = settings.frontend_url
 
     try:
         logger.debug("Exchanging authorization code for tokens")

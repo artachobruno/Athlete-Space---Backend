@@ -5,7 +5,7 @@ from enum import StrEnum
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from app.core.settings import settings
 
@@ -62,7 +62,7 @@ Return JSON ONLY.
 _llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.0,
-    api_key=settings.openai_api_key,
+    api_key=SecretStr(settings.openai_api_key) if settings.openai_api_key else None,
 )
 
 

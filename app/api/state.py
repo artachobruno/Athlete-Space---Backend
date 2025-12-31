@@ -186,10 +186,10 @@ async def get_coach_insights():
     try:
         coach_response = get_coach_advice(overview)
     except Exception as e:
-        logger.error(f"Error getting coach advice: {e}")
+        logger.error(f"Error getting coach advice: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate coaching insights: {e!s}",
+            detail=f"Failed to generate coaching insights: {type(e).__name__}: {e!s}",
         ) from e
 
     elapsed = time.time() - request_time
@@ -221,7 +221,7 @@ def _build_limited_data_message(data_quality: str, activity_count: int) -> dict:
             "Keep your Strava activities synced",
             "Check back once you have 14+ days of training data",
         ],
-        "risk_level": "unknown",
+        "risk_level": "none",
         "intervention": False,
         "follow_up_prompts": None,
         "data_quality": data_quality,
@@ -277,7 +277,7 @@ def get_initial_coach_message():
                     "Keep your Strava activities synced",
                     "Check back once you have 14+ days of training data",
                 ],
-                "risk_level": "unknown",
+                "risk_level": "none",
                 "intervention": False,
                 "follow_up_prompts": None,
                 "data_quality": data_quality,

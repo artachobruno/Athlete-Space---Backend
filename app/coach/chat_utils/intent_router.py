@@ -7,6 +7,8 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from app.core.settings import settings
+
 
 # -------------------------------------------------
 # Allowed intents (STRICT)
@@ -60,6 +62,7 @@ Return JSON ONLY.
 _llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.0,
+    api_key=settings.openai_api_key,
 )
 
 

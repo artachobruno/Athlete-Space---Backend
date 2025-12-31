@@ -3,6 +3,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 from app.coach.intents import CoachIntent
+from app.core.settings import settings
 
 
 class IntentResult(BaseModel):
@@ -12,6 +13,7 @@ class IntentResult(BaseModel):
 _llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.0,
+    api_key=settings.openai_api_key,
 )
 
 

@@ -93,9 +93,10 @@ def _get_static_message(data_quality: str) -> dict:
 
     # Return in CoachAgentResponse format
     return {
-        "risk_level": "unknown",
-        "intervention": "none",
+        "summary": message,
+        "risk_level": "none",
+        "intervention": False,
         "insights": [message],
         "recommendations": [],
-        "follow_ups": [],
+        "follow_up_prompts": None,
     }

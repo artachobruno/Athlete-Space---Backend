@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -15,6 +16,7 @@ from app.api.me import router as me_router
 from app.api.state import router as state_router
 from app.api.strava import router as strava_router
 from app.core.logger import setup_logger
+from app.core.settings import settings
 from app.ingestion.scheduler import ingestion_tick
 from app.state.db import engine
 from app.state.models import Base
@@ -22,6 +24,14 @@ from scripts.migrate_daily_summary import migrate_daily_summary
 
 # Initialize logger
 setup_logger(level="INFO")
+
+# Set OPENAI_API_KEY from settings if not already set in environment
+# This ensures pydantic_ai and other libraries can find it
+if settings.openai_api_key and not os.getenv("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+    logger.info("Set OPENAI_API_KEY from settings")
+elif not settings.openai_api_key:
+    logger.warning("OPENAI_API_KEY is not set. Coach features may not work.")
 
 # Ensure database tables exist
 logger.info("Ensuring database tables exist")

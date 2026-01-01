@@ -29,7 +29,7 @@ def _raise_missing_athlete_id_error() -> NoReturn:
     raise HTTPException(status_code=500, detail="athlete_id is missing")
 
 
-def _get_current_user_data() -> dict[str, int | str | None]:
+def get_current_user_data() -> dict[str, int | str | None]:
     """Get current user data from StravaAuth record.
 
     Returns:
@@ -229,7 +229,7 @@ def get_status():
         now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
         logger.info(f"[API] /me/status endpoint called at {now_str}")
         logger.debug("Status check requested")
-        user_data = _get_current_user_data()
+        user_data = get_current_user_data()
         athlete_id = user_data.get("athlete_id")
         logger.debug(
             f"User data retrieved: athlete_id={athlete_id}, "
@@ -301,7 +301,7 @@ def get_overview():
         request_time = time.time()
         now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
         logger.info(f"[API] /me/overview endpoint called at {now_str}")
-        user_data = _get_current_user_data()
+        user_data = get_current_user_data()
 
         last_sync = None
         last_sync_at = user_data.get("last_successful_sync_at")
@@ -316,7 +316,8 @@ def get_overview():
 
         # Check if we have activities but no daily rows - trigger aggregation if needed
         with get_session() as session:
-            result_count = session.execute(select(func.count(Activity.activity_id))).scalar()
+            # Count activities for this athlete
+            result_count = session.execute(select(func.count(Activity.activity_id)).where(Activity.athlete_id == athlete_id)).scalar()
             activity_count = result_count if result_count is not None else 0
             daily_rows = get_daily_rows(session, athlete_id, days=60)
 

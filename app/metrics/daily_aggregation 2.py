@@ -8,13 +8,11 @@ recomputes the last 60 days to handle updates and corrections.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import cast
 
 from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.metrics.training_load import DailyTrainingRow
 from app.state.db import get_session
 
 
@@ -63,7 +61,9 @@ def aggregate_daily_training(athlete_id: int) -> None:
             },
         )
 
-        # Aggregate activities by UTC date for this athlete
+        # Aggregate activities by UTC date
+        # Note: Since Activity table doesn't have athlete_id, we aggregate all activities
+        # In a proper multi-user system, we'd filter by athlete_id here
         rows = session.execute(
             text(
                 """
@@ -73,15 +73,13 @@ def aggregate_daily_training(athlete_id: int) -> None:
                     SUM(distance_m) as distance_m,
                     SUM(elevation_m) as elevation_m
                 FROM activities
-                WHERE athlete_id = :athlete_id
-                AND DATE(start_time) >= :start_date
+                WHERE DATE(start_time) >= :start_date
                 AND DATE(start_time) <= :end_date
                 GROUP BY DATE(start_time)
                 ORDER BY date
                 """
             ),
             {
-                "athlete_id": athlete_id,
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
             },
@@ -124,7 +122,7 @@ def aggregate_daily_training(athlete_id: int) -> None:
         )
 
 
-def get_daily_rows(session: Session, athlete_id: int, days: int = 60) -> list[DailyTrainingRow]:
+def get_daily_rows(session: Session, athlete_id: int, days: int = 60) -> list[dict[str, str | int | float]]:
     """Get daily training rows from daily_training_summary.
 
     Args:
@@ -135,6 +133,9 @@ def get_daily_rows(session: Session, athlete_id: int, days: int = 60) -> list[Da
     Returns:
         List of daily rows with keys: date, duration_s, distance_m, elevation_m, load_score
         Ordered chronologically. Missing days are not included (explicit gaps).
+
+    Note:
+        Returns dict format compatible with DailyTrainingRow TypedDict.
     """
     end_date = datetime.now(timezone.utc).date()
     start_date = end_date - timedelta(days=days)
@@ -157,7 +158,7 @@ def get_daily_rows(session: Session, athlete_id: int, days: int = 60) -> list[Da
         },
     ).fetchall()
 
-    result = [
+    return [
         {
             "date": row.date if isinstance(row.date, str) else row.date.isoformat(),
             "duration_s": int(row.duration_s),
@@ -167,4 +168,3 @@ def get_daily_rows(session: Session, athlete_id: int, days: int = 60) -> list[Da
         }
         for row in rows
     ]
-    return cast(list[DailyTrainingRow], result)

@@ -33,6 +33,7 @@ class FakeStravaClient(StravaClient):
 def test_strava_ingestion_maps_to_activity_records():
     records = ingest_strava_activities(
         client=FakeStravaClient(),
+        athlete_id=12345,
         since=dt.datetime(2025, 1, 1, tzinfo=dt.UTC),
         until=dt.datetime(2025, 1, 10, tzinfo=dt.UTC),
     )

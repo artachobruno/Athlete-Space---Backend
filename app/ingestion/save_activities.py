@@ -14,16 +14,16 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
 
     Args:
         session: Database session
-        record: ActivityRecord to save
+        record: ActivityRecord to save (must include athlete_id)
 
     Returns:
         Saved Activity model instance
     """
-    # Check if activity already exists
-    existing = session.query(Activity).filter_by(activity_id=record.activity_id).first()
+    # Check if activity already exists for this athlete
+    existing = session.query(Activity).filter_by(athlete_id=record.athlete_id, source=record.source, activity_id=record.activity_id).first()
 
     if existing:
-        logger.debug(f"Activity {record.activity_id} already exists, updating")
+        logger.debug(f"Activity {record.activity_id} already exists for athlete {record.athlete_id}, updating")
         # Update existing record
         existing.source = record.source
         existing.sport = record.sport
@@ -36,6 +36,7 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
 
     # Create new activity
     activity = Activity(
+        athlete_id=record.athlete_id,
         activity_id=record.activity_id,
         source=record.source,
         sport=record.sport,
@@ -46,7 +47,7 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
         avg_hr=record.avg_hr,
     )
     session.add(activity)
-    logger.debug(f"Added new activity: {record.activity_id}")
+    logger.debug(f"Added new activity: {record.activity_id} for athlete {record.athlete_id}")
     return activity
 
 

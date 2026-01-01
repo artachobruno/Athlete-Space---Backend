@@ -4,8 +4,18 @@ from integrations.strava.models import StravaActivity
 from models.activity import ActivityRecord
 
 
-def map_strava_activity(activity: StravaActivity) -> ActivityRecord:
+def map_strava_activity(activity: StravaActivity, athlete_id: int) -> ActivityRecord:
+    """Map Strava activity to ActivityRecord.
+
+    Args:
+        activity: Strava activity from API
+        athlete_id: Athlete ID for multi-user support
+
+    Returns:
+        ActivityRecord with athlete_id included
+    """
     return ActivityRecord(
+        athlete_id=athlete_id,
         activity_id=f"strava-{activity.id}",
         source="strava",
         sport=activity.type.lower(),

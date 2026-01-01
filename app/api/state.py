@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from loguru import logger
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
-from app.api.me import get_overview
+from app.api.me import get_current_user_data, get_overview
 from app.coach.coach_service import get_coach_advice
 from app.core.settings import settings
 from app.metrics.training_load import calculate_ctl_atl_tsb
@@ -47,7 +47,21 @@ def debug_info():
     try:
         # Check table exists
         logger.debug("Checking database tables")
-        tables = db.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        # Database-agnostic table listing
+        if "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower():
+            # PostgreSQL
+            tables = db.execute(
+                text(
+                    """
+                    SELECT table_name as name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    """
+                )
+            ).fetchall()
+        else:
+            # SQLite
+            tables = db.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
 
         # Check activity count
         logger.debug("Counting activities")
@@ -244,11 +258,26 @@ def get_initial_coach_message():
     try:
         overview = get_overview()
         data_quality = overview.get("data_quality", "insufficient")
-        activity_count = 0
 
-        # Count activities
-        with get_session() as db:
-            activity_count = db.query(Activity).count()
+        # Count activities for current athlete
+        activity_count = 0
+        try:
+            user_data = get_current_user_data()
+            athlete_id = user_data.get("athlete_id")
+            if athlete_id:
+                with get_session() as db:
+                    result_count = db.execute(select(func.count(Activity.activity_id)).where(Activity.athlete_id == athlete_id)).scalar()
+                    activity_count = result_count if result_count is not None else 0
+            else:
+                # Fallback: count all activities
+                with get_session() as db:
+                    result = db.execute(text("SELECT COUNT(*) FROM activities")).scalar()
+                    activity_count = result if result is not None else 0
+        except Exception:
+            # Fallback: count all activities
+            with get_session() as db:
+                result = db.execute(text("SELECT COUNT(*) FROM activities")).scalar()
+                activity_count = result if result is not None else 0
 
         # Determine message based on data quality and activity count
         if data_quality == "ok":

@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 
 class ActivityRecord(BaseModel):
+    athlete_id: int
     activity_id: str
     source: Literal["strava", "garmin"]
     sport: str

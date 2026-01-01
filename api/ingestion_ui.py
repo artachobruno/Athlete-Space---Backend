@@ -61,8 +61,11 @@ def ingest_strava(
             client_secret="",
         )
 
+        # For test UI, use placeholder athlete_id (0)
+        # In production, athlete_id should come from authenticated user
         records = ingest_strava_activities(
             client=client,
+            athlete_id=0,  # Placeholder for test endpoint
             since=dt.datetime.now(dt.UTC) - dt.timedelta(days=14),
             until=dt.datetime.now(dt.UTC),
         )

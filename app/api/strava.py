@@ -228,7 +228,7 @@ def _perform_immediate_sync(access_token: str, athlete_id: int) -> int:
             try:
                 # Use individual session per activity for immediate visibility
                 with get_session() as session:
-                    record = map_strava_activity(activity)
+                    record = map_strava_activity(activity, athlete_id=athlete_id)
                     save_activity_record(session, record)
                     activities_synced += 1
                     newest_ts = max(newest_ts, int(activity.start_date.timestamp()))

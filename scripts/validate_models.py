@@ -5,6 +5,7 @@ from models.decision import Decision
 from models.training_state import TrainingState
 
 ActivityRecord(
+    athlete_id=12345,
     activity_id="1",
     source="strava",
     sport="run",

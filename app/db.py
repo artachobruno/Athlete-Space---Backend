@@ -34,7 +34,7 @@ def store_activity(
         if raw and source == "strava":
             try:
                 strava_activity = StravaActivity(**raw)
-                record = map_strava_activity(strava_activity)
+                record = map_strava_activity(strava_activity, athlete_id=user_id)
                 save_activity_record(session, record)
                 logger.info(f"[DATA] Stored activity {activity_id} for user {user_id} (start_time={start_time})")
             except Exception as e:
@@ -44,9 +44,10 @@ def store_activity(
             # Fallback: create minimal activity record
             # Note: This is a simplified version - full implementation would
             # require more fields from the raw data
-            existing = session.query(Activity).filter_by(activity_id=activity_id, source=source).first()
+            existing = session.query(Activity).filter_by(athlete_id=user_id, activity_id=activity_id, source=source).first()
             if not existing:
                 activity = Activity(
+                    athlete_id=user_id,
                     activity_id=activity_id,
                     source=source,
                     sport="unknown",  # Would need to extract from raw data

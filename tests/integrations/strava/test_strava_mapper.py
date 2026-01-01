@@ -16,8 +16,9 @@ def test_strava_activity_mapping():
         average_watts=280,
     )
 
-    record = map_strava_activity(raw)
+    record = map_strava_activity(raw, athlete_id=12345)
 
+    assert record.athlete_id == 12345
     assert record.activity_id == "strava-123"
     assert record.source == "strava"
     assert record.sport == "run"

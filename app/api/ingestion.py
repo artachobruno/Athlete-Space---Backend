@@ -39,11 +39,13 @@ def strava_callback(code: str):
         redirect_uri=STRAVA_REDIRECT_URI,
     )
     access_token = token_data["access_token"]
+    athlete_id = token_data["athlete"]["id"]
 
     client = StravaClient(access_token=access_token)
 
     records = ingest_strava_activities(
         client=client,
+        athlete_id=athlete_id,
         since=dt.datetime.now(dt.UTC) - dt.timedelta(days=14),
         until=dt.datetime.now(dt.UTC),
     )

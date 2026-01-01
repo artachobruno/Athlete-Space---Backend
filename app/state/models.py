@@ -51,6 +51,7 @@ class Activity(Base):
 
     Canonical Fields (FROZEN):
     - id: Auto-incrementing primary key (internal use only)
+    - athlete_id: Athlete/user ID (integer, indexed for multi-user support)
     - activity_id: Unique identifier from source (e.g., "strava-12345")
     - source: Source system identifier (e.g., "strava", "garmin")
     - start_time: Activity start time in UTC (datetime, indexed)
@@ -64,13 +65,14 @@ class Activity(Base):
     - All timestamps are UTC (no timezone ambiguity)
     - UI never receives raw Strava/Garmin fields
     - Future sources (Garmin) must map cleanly to this schema
-    - Unique constraint: (source, activity_id) prevents duplicates
+    - Unique constraint: (athlete_id, source, activity_id) prevents duplicates per athlete
     """
 
     __tablename__ = "activities"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     activity_id: Mapped[str] = mapped_column(String, nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)
 
@@ -81,4 +83,4 @@ class Activity(Base):
     elevation_m: Mapped[float] = mapped_column(Float, nullable=False)
     avg_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    __table_args__ = (UniqueConstraint("source", "activity_id", name="uq_activity_source_activity_id"),)
+    __table_args__ = (UniqueConstraint("athlete_id", "source", "activity_id", name="uq_activity_athlete_source_id"),)

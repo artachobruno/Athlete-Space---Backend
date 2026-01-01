@@ -11,6 +11,8 @@ from loguru import logger
 from app.api.admin_activities import router as admin_activities_router
 from app.api.admin_ingestion_status import router as admin_ingestion_router
 from app.api.admin_retry import router as admin_retry_router
+from app.api.analytics import router as analytics_router
+from app.api.coach import router as coach_router
 from app.api.coach_chat import router as coach_chat_router
 from app.api.me import router as me_router
 from app.api.state import router as state_router
@@ -89,6 +91,8 @@ app = FastAPI(title="Virtus AI", lifespan=lifespan)
 app.include_router(admin_retry_router)
 app.include_router(admin_ingestion_router)
 app.include_router(admin_activities_router)
+app.include_router(analytics_router)
+app.include_router(coach_router)
 app.include_router(coach_chat_router)
 app.include_router(me_router)
 app.include_router(strava_router)

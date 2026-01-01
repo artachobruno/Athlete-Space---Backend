@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -84,3 +84,18 @@ class Activity(Base):
     avg_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (UniqueConstraint("athlete_id", "source", "activity_id", name="uq_activity_athlete_source_id"),)
+
+
+class CoachMessage(Base):
+    """Coach chat message history storage.
+
+    Stores conversation history between athletes and the AI coach.
+    """
+
+    __tablename__ = "coach_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String, nullable=False)  # "user" or "assistant"
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

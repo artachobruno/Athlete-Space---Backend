@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 from sqlalchemy import func, select
@@ -257,7 +257,7 @@ def _perform_immediate_sync(access_token: str, athlete_id: int) -> int:
 
 
 @router.get("/strava/callback", response_class=HTMLResponse)
-def strava_callback(code: str):
+def strava_callback(code: str, request: Request):
     """Handle Strava OAuth callback and persist tokens.
 
     After OAuth exchange, we persist only:
@@ -268,7 +268,29 @@ def strava_callback(code: str):
     Access tokens are never persisted - they are ephemeral.
     """
     logger.info("Strava OAuth callback received")
+
+    # Determine frontend URL from settings or infer from request
     redirect_url = settings.frontend_url
+
+    # If using default localhost, try to detect production URL from request
+    if redirect_url == "http://localhost:8501":
+        host = request.headers.get("host", "")
+        _scheme = request.url.scheme  # Gets 'http' or 'https' from the request URL
+
+        # Check if we're on Render (backend)
+        if "onrender.com" in host:
+            # If backend is on Render, assume frontend is also on Render
+            # For pace-ai, use the known frontend URL
+            if "pace-ai" in host:
+                redirect_url = "https://pace-ai.onrender.com"
+            else:
+                # Generic fallback: use https for Render
+                redirect_url = f"https://{host}"
+        elif host and not host.startswith("localhost"):
+            # For other production environments, use the request host with https
+            redirect_url = f"https://{host}"
+
+    logger.info(f"Redirecting to frontend: {redirect_url}")
 
     try:
         logger.debug("Exchanging authorization code for tokens")

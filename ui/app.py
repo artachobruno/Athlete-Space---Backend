@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -11,7 +12,8 @@ import streamlit as st
 
 st_any: Any = st
 
-BACKEND_URL = "http://localhost:8000"
+# Get backend URL from environment variable or use default
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 # Track API call timing
 if "api_call_times" not in st_any.session_state:

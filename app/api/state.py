@@ -175,6 +175,9 @@ async def get_coach_insights():
     # Get overview from /me/overview endpoint
     try:
         overview = get_overview()
+    except HTTPException:
+        # Re-raise HTTPException as-is (e.g., 404 for no Strava account)
+        raise
     except Exception as e:
         logger.error(f"Error getting overview for coach: {e}")
         raise HTTPException(

@@ -6,6 +6,7 @@ import time
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select
 
 from app.core.settings import settings
@@ -133,6 +134,7 @@ def strava_sync():
     """Manually trigger async Strava sync."""
     try:
         logger.info("Manual Strava sync requested")
+        athlete_id: int | None = None
         with get_session() as session:
             result = session.execute(select(StravaAuth)).first()
             if not result:
@@ -140,23 +142,47 @@ def strava_sync():
                 return {"success": False, "error": "Strava not connected"}
 
             auth = result[0]
-            logger.info(f"Found Strava auth for athlete_id={auth.athlete_id}")
+            # Extract athlete_id while session is still open
+            athlete_id = auth.athlete_id
+            logger.info(f"Found Strava auth for athlete_id={athlete_id}")
 
         # Enqueue async ingestion (safe, scalable)
-        logger.info(f"Enqueuing ingestion tasks for athlete_id={auth.athlete_id}")
-        incremental_result = incremental_task.delay(auth.athlete_id)
-        backfill_result = backfill_task.delay(auth.athlete_id)
-        logger.info(f"Ingestion tasks enqueued: incremental_task_id={incremental_result.id}, backfill_task_id={backfill_result.id}")
+        # Use extracted athlete_id instead of accessing auth object outside session
+        logger.info(f"Enqueuing ingestion tasks for athlete_id={athlete_id}")
+        try:
+            incremental_result = incremental_task.delay(athlete_id)
+            backfill_result = backfill_task.delay(athlete_id)
+            logger.info(f"Ingestion tasks enqueued: incremental_task_id={incremental_result.id}, backfill_task_id={backfill_result.id}")
+        except RedisConnectionError as e:
+            logger.error(
+                f"Redis connection failed while enqueuing tasks for athlete_id={athlete_id}: {e}. "
+                "Ensure Redis is running and REDIS_URL is configured correctly."
+            )
+            return {
+                "success": False,
+                "error": "Redis connection failed. Ensure Redis is running and REDIS_URL is configured correctly.",
+            }
+        except RuntimeError as e:
+            if "Retry limit exceeded" in str(e):
+                logger.error(
+                    f"Celery backend connection failed for athlete_id={athlete_id}: {e}. Celery application may need to be restarted."
+                )
+                return {
+                    "success": False,
+                    "error": "Celery backend connection failed. Celery application may need to be restarted.",
+                }
+            raise
+        else:
+            # Success response
+            return {
+                "success": True,
+                "status": "enqueued",
+                "athlete_id": athlete_id,
+                "message": "Ingestion tasks enqueued. Ensure Celery workers are running to process them.",
+            }
     except Exception as e:
         logger.error(f"Error triggering Strava sync: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
-    else:
-        return {
-            "success": True,
-            "status": "enqueued",
-            "athlete_id": auth.athlete_id,
-            "message": "Ingestion tasks enqueued. Ensure Celery workers are running to process them.",
-        }
 
 
 @router.post("/strava/aggregate")

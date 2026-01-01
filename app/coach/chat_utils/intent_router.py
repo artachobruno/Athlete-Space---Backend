@@ -19,6 +19,10 @@ class CoachIntent(StrEnum):
     EXPLAIN_STATE = "explain_state"
     PLAN_RACE = "plan_race"
     PLAN_SEASON = "plan_season"
+    PLAN_WEEK = "plan_week"
+    ADD_WORKOUT = "add_workout"
+    RUN_ANALYSIS = "run_analysis"
+    SHARE_REPORT = "share_report"
     UNSUPPORTED = "unsupported"
 
 
@@ -47,6 +51,10 @@ Allowed intents:
 - explain_state      → asking to explain current fitness, fatigue, or readiness
 - plan_race          → asking to plan training for a specific race
 - plan_season        → asking to plan a full season
+- plan_week          → asking for a weekly training plan
+- add_workout        → asking to add a specific workout to the plan
+- run_analysis       → asking for training analysis or insights
+- share_report       → asking to generate or share a training report
 - unsupported        → anything else
 
 Return JSON ONLY.

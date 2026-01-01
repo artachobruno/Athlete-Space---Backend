@@ -291,7 +291,7 @@ def _verify_strava_auth_saved(athlete_id: int) -> None:
 
 
 @router.get("/strava/callback", response_class=HTMLResponse)
-def strava_callback(code: str, request: Request):
+def strava_callback(code: str, request: Request, state: str | None = None):
     """Handle Strava OAuth callback and persist tokens.
 
     After OAuth exchange, we persist only:
@@ -303,7 +303,11 @@ def strava_callback(code: str, request: Request):
     """
     logger.info("Strava OAuth callback received")
     logger.info(f"Callback code received: {code[:10]}... (truncated for security)")
+    logger.info(f"Request URL: {request.url}")
     logger.info(f"Request host: {request.headers.get('host', 'unknown')}")
+    logger.info(f"Request path: {request.url.path}")
+    if state:
+        logger.debug(f"OAuth state parameter: {state}")
 
     # Determine frontend URL from settings or infer from request
     redirect_url = settings.frontend_url

@@ -3,6 +3,7 @@ from loguru import logger
 from app.coach.chat_utils.intent_router import CoachIntent, route_intent
 from app.coach.state_builder import build_athlete_state
 from app.coach.tools.adjust_load import adjust_training_load
+from app.coach.tools.cold_start import welcome_new_user
 from app.coach.tools.explain_state import explain_training_state
 from app.coach.tools.next_session import recommend_next_session
 from app.coach.tools.plan_race import plan_race_build
@@ -14,8 +15,37 @@ def dispatch_coach_chat(
     message: str,
     days: int,
     days_to_race: int | None,
+    history_empty: bool = False,
 ) -> tuple[str, str]:
-    """Route user message -> coaching tool -> response text."""
+    """Route user message -> coaching tool -> response text.
+
+    Args:
+        message: User's message to the coach
+        days: Number of days of training data to consider
+        days_to_race: Optional days until race
+        history_empty: If True, this is a cold start (first message).
+                      Will return welcome message instead of routing intent.
+    """
+    # Handle cold start - provide welcome message regardless of intent
+    if history_empty:
+        logger.info("Cold start detected - providing welcome message")
+        try:
+            training_data = get_training_data(days=days)
+            athlete_state = build_athlete_state(
+                ctl=training_data.ctl,
+                atl=training_data.atl,
+                tsb=training_data.tsb,
+                daily_load=training_data.daily_load,
+                days_to_race=days_to_race,
+            )
+            reply = welcome_new_user(athlete_state)
+        except RuntimeError:
+            # Even if we don't have training data, provide a welcome message
+            logger.warning("Cold start with no training data available")
+            reply = welcome_new_user(None)
+
+        return ("cold_start", reply)
+
     intent = route_intent(message)
 
     logger.info(f"Dispatching coach intent: {intent}")

@@ -15,7 +15,7 @@ if not settings.openai_api_key:
     llm = None
 else:
     llm = ChatOpenAI(
-        model="gpt-4o",
+        model="gpt-4o-mini",
         temperature=0.2,
         api_key=SecretStr(settings.openai_api_key),
     )

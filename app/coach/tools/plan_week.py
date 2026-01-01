@@ -1,3 +1,5 @@
+from loguru import logger
+
 from app.coach.models import AthleteState
 
 
@@ -10,6 +12,7 @@ def plan_week(state: AthleteState) -> str:
     Returns:
         A weekly training plan tailored to the athlete's current state.
     """
+    logger.info(f"Tool plan_week called (TSB={state.tsb:.1f}, load_trend={state.load_trend}, flags={state.flags})")
     tsb = state.tsb
     load_trend = state.load_trend
     flags = state.flags

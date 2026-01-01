@@ -1,8 +1,11 @@
+from loguru import logger
+
 from app.coach.models import AthleteState
 
 
 def adjust_training_load(state: AthleteState, message: str) -> str:
     """Adjust training load based on athlete feedback."""
+    logger.info(f"Tool adjust_training_load called (message_length={len(message)}, TSB={state.tsb:.1f})")
     tsb = state.tsb
 
     if "tired" in message.lower() or "fatigue" in message.lower():

@@ -1,3 +1,5 @@
+from loguru import logger
+
 from app.coach.models import AthleteState
 
 
@@ -115,6 +117,7 @@ def add_workout(state: AthleteState, workout_description: str) -> str:
     Returns:
         Confirmation and guidance on adding the workout to the plan.
     """
+    logger.info(f"Tool add_workout called (description_length={len(workout_description)}, TSB={state.tsb:.1f})")
     tsb = state.tsb
     workout_lower = workout_description.lower()
 

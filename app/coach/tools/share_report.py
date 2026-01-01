@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+from loguru import logger
+
 from app.coach.models import AthleteState
 
 
@@ -122,6 +124,7 @@ def share_report(state: AthleteState) -> str:
     Returns:
         A formatted, shareable training report.
     """
+    logger.info(f"Tool share_report called (CTL={state.ctl:.1f}, ATL={state.atl:.1f}, TSB={state.tsb:.1f})")
     report_date = datetime.now(timezone.utc).strftime("%B %d, %Y")
 
     report = [

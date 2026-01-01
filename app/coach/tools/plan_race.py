@@ -1,5 +1,9 @@
+from loguru import logger
+
+
 def plan_race_build(message: str) -> str:
     """Plan a race build from short to ultra distances."""
+    logger.info(f"Tool plan_race_build called (message_length={len(message)})")
     distance = message.lower()
 
     if "5k" in distance:

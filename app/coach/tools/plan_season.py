@@ -1,5 +1,9 @@
+from loguru import logger
+
+
 def plan_season() -> str:
     """High-level season planning."""
+    logger.info("Tool plan_season called")
     return (
         "📆 Season planning framework:\n\n"
         "1 Base Phase (8-12 weeks)\n"

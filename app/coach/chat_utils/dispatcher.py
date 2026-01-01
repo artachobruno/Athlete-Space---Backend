@@ -26,9 +26,11 @@ except ImportError:
 
 def _handle_cold_start(days: int, days_to_race: int | None) -> tuple[str, str]:
     """Handle cold start scenario - provide welcome message."""
-    logger.info("Cold start detected - providing welcome message")
+    logger.info(f"Cold start detected - providing welcome message (days={days}, days_to_race={days_to_race})")
     try:
+        logger.info("Fetching training data for cold start")
         training_data = get_training_data(days=days)
+        logger.info("Building athlete state for cold start")
         athlete_state = build_athlete_state(
             ctl=training_data.ctl,
             atl=training_data.atl,
@@ -36,6 +38,7 @@ def _handle_cold_start(days: int, days_to_race: int | None) -> tuple[str, str]:
             daily_load=training_data.daily_load,
             days_to_race=days_to_race,
         )
+        logger.info("Calling welcome_new_user tool")
         reply = welcome_new_user(athlete_state)
     except RuntimeError:
         # Even if we don't have training data, provide a welcome message
@@ -47,7 +50,9 @@ def _handle_cold_start(days: int, days_to_race: int | None) -> tuple[str, str]:
 
 def _get_athlete_state(days: int, days_to_race: int | None) -> tuple[str, str] | tuple[None, AthleteState]:
     """Get athlete state or return error response."""
+    logger.info(f"Getting athlete state (days={days}, days_to_race={days_to_race})")
     try:
+        logger.info("Fetching training data")
         training_data = get_training_data(days=days)
     except RuntimeError as e:
         logger.warning(f"No training data available: {e}")
@@ -61,6 +66,7 @@ def _get_athlete_state(days: int, days_to_race: int | None) -> tuple[str, str] |
             ),
         )
 
+    logger.info("Building athlete state from training data")
     athlete_state = build_athlete_state(
         ctl=training_data.ctl,
         atl=training_data.atl,
@@ -68,11 +74,13 @@ def _get_athlete_state(days: int, days_to_race: int | None) -> tuple[str, str] |
         daily_load=training_data.daily_load,
         days_to_race=days_to_race,
     )
+    logger.info(f"Athlete state built successfully (CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f})")
     return (None, athlete_state)
 
 
 def _route_to_tool(intent: CoachIntent, athlete_state: AthleteState, message: str) -> str:
     """Route intent to appropriate coaching tool."""
+    logger.info(f"Routing to tool: {intent.value}")
     tool_map: dict[CoachIntent, str] = {
         CoachIntent.NEXT_SESSION: recommend_next_session(athlete_state),
         CoachIntent.ADJUST_LOAD: adjust_training_load(athlete_state, message),
@@ -84,7 +92,9 @@ def _route_to_tool(intent: CoachIntent, athlete_state: AthleteState, message: st
         CoachIntent.RUN_ANALYSIS: run_analysis(athlete_state),
         CoachIntent.SHARE_REPORT: share_report(athlete_state),
     }
-    return tool_map.get(intent, "Unsupported request.")
+    result = tool_map.get(intent, "Unsupported request.")
+    logger.info(f"Tool {intent.value} completed successfully")
+    return result
 
 
 def dispatch_coach_chat(
@@ -105,22 +115,33 @@ def dispatch_coach_chat(
         use_orchestrator: If True, use the LangChain orchestrator (default: True).
                          Falls back to intent routing if orchestrator unavailable.
     """
+    logger.info(
+        f"Dispatching coach chat (message_length={len(message)}, days={days}, "
+        f"days_to_race={days_to_race}, history_empty={history_empty}, "
+        f"use_orchestrator={use_orchestrator})"
+    )
+
     # Handle cold start - provide welcome message regardless of intent
     if history_empty:
+        logger.info("Handling cold start scenario")
         return _handle_cold_start(days, days_to_race)
 
+    logger.info("Routing intent from user message")
     intent = route_intent(message)
     logger.info(f"Dispatching coach intent: {intent}")
 
     if intent == CoachIntent.UNSUPPORTED:
+        logger.info("Unsupported intent detected, returning default message")
         return (
             intent.value,
             "I can help with training plans, fatigue adjustments, race builds, or explaining your current fitness.",
         )
 
     # Build athlete state
+    logger.info("Building athlete state for tool routing")
     state_result = _get_athlete_state(days, days_to_race)
     if state_result[0] is not None:  # Error response
+        logger.warning(f"Failed to get athlete state: {state_result[0]}")
         return state_result  # type: ignore[return-value]
 
     # At this point, state_result[0] is None, so state_result[1] is AthleteState
@@ -130,7 +151,9 @@ def dispatch_coach_chat(
     if use_orchestrator and ORCHESTRATOR_AVAILABLE and run_orchestrator is not None:
         logger.info("Using orchestrator for coach chat")
         try:
+            logger.info(f"Calling orchestrator with message: {message[:100]}")
             reply = run_orchestrator(message, athlete_state)
+            logger.info("Orchestrator completed successfully")
         except Exception as e:
             logger.error(f"Orchestrator failed, falling back to intent routing: {e}")
             # Fall through to intent-based routing
@@ -138,5 +161,7 @@ def dispatch_coach_chat(
             return ("orchestrator", reply)
 
     # Route to appropriate tool
+    logger.info(f"Routing to tool via intent-based routing: {intent.value}")
     reply = _route_to_tool(intent, athlete_state, message)
+    logger.info(f"Dispatch completed successfully with intent: {intent.value}")
     return intent.value, reply

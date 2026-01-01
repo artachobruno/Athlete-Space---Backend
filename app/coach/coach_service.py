@@ -29,8 +29,11 @@ def get_coach_advice(overview_payload: dict) -> dict:
         - No hallucinations
         - No advice without data
     """
+    logger.info("Getting coach advice from overview payload")
+    logger.info("Building coach context")
     context = build_coach_context(overview_payload)
     data_quality = context["data_quality"]
+    logger.info(f"Data quality check: {data_quality}")
 
     # Gate LLM strictly by data quality
     if data_quality != "ok":
@@ -41,13 +44,16 @@ def get_coach_advice(overview_payload: dict) -> dict:
     logger.info("Coach calling LLM: data_quality=ok")
 
     # Build athlete state from context
+    logger.info("Extracting metrics from context")
     metrics = context["metrics"]
 
     # Build minimal daily_load for state_builder (it needs some data)
     # Use a simple pattern based on current metrics
     # Note: build_athlete_state will calculate load_trend internally from daily_load
+    logger.info("Building daily_load approximation")
     daily_load = [metrics["ctl_today"] / 7.0] * 14  # Approximate daily load
 
+    logger.info("Building athlete state for coach chain")
     athlete_state = build_athlete_state(
         ctl=metrics["ctl_today"],
         atl=metrics["atl_today"],
@@ -55,8 +61,10 @@ def get_coach_advice(overview_payload: dict) -> dict:
         daily_load=daily_load,
         days_to_race=None,
     )
+    logger.info(f"Athlete state built (CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f})")
 
     try:
+        logger.info("Calling run_coach_chain")
         coach_response = run_coach_chain(athlete_state)
         logger.info(
             "Coach LLM response generated",

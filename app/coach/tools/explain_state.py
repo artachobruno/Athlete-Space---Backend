@@ -1,8 +1,11 @@
+from loguru import logger
+
 from app.coach.models import AthleteState
 
 
 def explain_training_state(state: AthleteState) -> str:
     """Explain current fitness, fatigue, and readiness in plain language."""
+    logger.info(f"Tool explain_training_state called (CTL={state.ctl:.1f}, ATL={state.atl:.1f}, TSB={state.tsb:.1f})")
     explanation = [
         f"Current CTL (fitness): {state.ctl:.1f}",
         f"Current ATL (fatigue): {state.atl:.1f}",

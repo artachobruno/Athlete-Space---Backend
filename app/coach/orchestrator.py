@@ -73,53 +73,87 @@ else:
 
     def _recommend_next_session_wrapper() -> str:
         """Wrapper to get athlete state from context."""
+        logger.info("Orchestrator calling tool: recommend_next_session")
         if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
             return "Error: Athlete state not available"
-        return recommend_next_session(_current_athlete_state)
+        result = recommend_next_session(_current_athlete_state)
+        logger.info("Tool recommend_next_session completed")
+        return result
 
     def _adjust_load_wrapper(message: str) -> str:
         """Wrapper for adjust_load that includes athlete state."""
+        logger.info(f"Orchestrator calling tool: adjust_training_load (message_length={len(message)})")
         if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
             return "Error: Athlete state not available"
-        return adjust_training_load(_current_athlete_state, message)
+        result = adjust_training_load(_current_athlete_state, message)
+        logger.info("Tool adjust_training_load completed")
+        return result
 
     def _explain_state_wrapper() -> str:
         """Wrapper for explain_state."""
+        logger.info("Orchestrator calling tool: explain_training_state")
         if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
             return "Error: Athlete state not available"
-        return explain_training_state(_current_athlete_state)
+        result = explain_training_state(_current_athlete_state)
+        logger.info("Tool explain_training_state completed")
+        return result
 
     def _plan_week_wrapper() -> str:
         """Wrapper for plan_week."""
+        logger.info("Orchestrator calling tool: plan_week")
         if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
             return "Error: Athlete state not available"
-        return plan_week(_current_athlete_state)
+        result = plan_week(_current_athlete_state)
+        logger.info("Tool plan_week completed")
+        return result
 
     def _add_workout_wrapper(workout_description: str) -> str:
         """Wrapper for add_workout."""
+        logger.info(f"Orchestrator calling tool: add_workout (description_length={len(workout_description)})")
         if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
             return "Error: Athlete state not available"
-        return add_workout(_current_athlete_state, workout_description)
+        result = add_workout(_current_athlete_state, workout_description)
+        logger.info("Tool add_workout completed")
+        return result
 
     def _run_analysis_wrapper() -> str:
         """Wrapper for run_analysis."""
+        logger.info("Orchestrator calling tool: run_analysis")
         if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
             return "Error: Athlete state not available"
-        return run_analysis(_current_athlete_state)
+        result = run_analysis(_current_athlete_state)
+        logger.info("Tool run_analysis completed")
+        return result
 
     def _share_report_wrapper() -> str:
         """Wrapper for share_report."""
+        logger.info("Orchestrator calling tool: share_report")
         if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
             return "Error: Athlete state not available"
-        return share_report(_current_athlete_state)
+        result = share_report(_current_athlete_state)
+        logger.info("Tool share_report completed")
+        return result
 
     def _plan_race_wrapper(race_description: str) -> str:
         """Wrapper for plan_race."""
-        return plan_race_build(race_description)
+        logger.info(f"Orchestrator calling tool: plan_race (description_length={len(race_description)})")
+        result = plan_race_build(race_description)
+        logger.info("Tool plan_race completed")
+        return result
 
     def _plan_season_wrapper() -> str:
         """Wrapper for plan_season."""
-        return plan_season()
+        logger.info("Orchestrator calling tool: plan_season")
+        result = plan_season()
+        logger.info("Tool plan_season completed")
+        return result
 
     def _handle_open_question(question: str) -> str:
         """Handle general training questions using LLM knowledge.
@@ -128,6 +162,7 @@ else:
         specific coaching tool category, such as general training advice,
         technique questions, nutrition, or other open-ended inquiries.
         """
+        logger.info(f"Orchestrator calling tool: answer_general_question (question_length={len(question)})")
         error_message = (
             "I'm unable to answer general questions right now. "
             "Please try asking about your specific training state "
@@ -135,6 +170,7 @@ else:
         )
 
         if _llm is None or HumanMessage is None:
+            logger.warning("LLM not available for open question")
             return error_message
 
         # Build context with athlete state if available
@@ -165,14 +201,19 @@ Provide a helpful, knowledgeable answer. If the question relates to the athlete'
 Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice."""
 
         try:
+            logger.info("Invoking LLM for open question")
             response = _llm.invoke([HumanMessage(content=prompt_text)])
             if not hasattr(response, "content"):
+                logger.warning("LLM response missing content attribute")
                 return str(response)
             content = response.content
             if isinstance(content, str):
+                logger.info("Open question answered successfully")
                 return content
             if isinstance(content, list):
+                logger.info("Open question answered successfully (list content)")
                 return " ".join(str(item) for item in content if isinstance(item, str))
+            logger.info("Open question answered successfully (converted content)")
             return str(content)
         except Exception as e:
             logger.error(f"Error answering open question: {e}")
@@ -353,11 +394,15 @@ def run_orchestrator(user_message: str, athlete_state: AthleteState) -> str:
     # Note: Using module-level variable is necessary because LangChain tools
     # don't support context passing. This is a known limitation.
     global _current_athlete_state  # noqa: PLW0603
+    logger.info(
+        f"Setting athlete state in orchestrator (CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f})"
+    )
     _current_athlete_state = athlete_state
 
     try:
-        logger.info(f"Running orchestrator for message: {user_message[:100]}")
+        logger.info(f"Running orchestrator agent for message: {user_message[:100]}")
         result = _orchestrator_agent.invoke({"input": user_message})
+        logger.info("Orchestrator agent invocation completed")
 
         # Extract output from agent result
         output = result.get(
@@ -369,6 +414,8 @@ def run_orchestrator(user_message: str, athlete_state: AthleteState) -> str:
         logger.error(f"Error running orchestrator: {e}", exc_info=True)
         output = f"I encountered an error processing your request: {e!s}. Please try rephrasing or use a specific coaching tool."
     finally:
+        logger.info("Clearing athlete state from orchestrator")
         _current_athlete_state = None
 
+    logger.info(f"Orchestrator completed, output length: {len(output)}")
     return output

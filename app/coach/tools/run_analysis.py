@@ -1,3 +1,5 @@
+from loguru import logger
+
 from app.coach.models import AthleteState
 
 
@@ -186,6 +188,7 @@ def run_analysis(state: AthleteState) -> str:
     Returns:
         Detailed analysis of training state, trends, and insights.
     """
+    logger.info(f"Tool run_analysis called (CTL={state.ctl:.1f}, ATL={state.atl:.1f}, TSB={state.tsb:.1f}, flags={state.flags})")
     analysis_parts = [
         "📊 Training Analysis Report\n",
         "=" * 50 + "\n",

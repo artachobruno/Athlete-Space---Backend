@@ -1,8 +1,11 @@
+from loguru import logger
+
 from app.coach.models import AthleteState
 
 
 def recommend_next_session(state: AthleteState) -> str:
     """Recommend today's session based on fatigue and load balance."""
+    logger.info(f"Tool recommend_next_session called (TSB={state.tsb:.1f}, CTL={state.ctl:.1f})")
     tsb = state.tsb
 
     if tsb < -15:

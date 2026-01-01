@@ -1,7 +1,10 @@
+from loguru import logger
+
 from app.coach.models import AthleteState
 
 
 def generate_today_session(state: AthleteState) -> str:
+    logger.info(f"Tool generate_today_session called (TSB={state.tsb:.1f})")
     tsb = state.tsb
 
     if tsb < -15:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
 
@@ -12,17 +11,23 @@ from app.core.settings import settings
 
 
 def _validate_postgresql_driver() -> None:
-    """Validate PostgreSQL driver is installed when using PostgreSQL."""
+    """Validate PostgreSQL driver is installed when using PostgreSQL.
+
+    Must actually import psycopg2 (not just check spec) because SQLAlchemy
+    will try to import it when creating the engine.
+    """
     if "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower():
-        spec = importlib.util.find_spec("psycopg2")
-        if spec is None:
+        try:
+            import psycopg2  # type: ignore[reportMissingModuleSource]  # noqa: F401, PLC0415
+
+            logger.info("PostgreSQL driver (psycopg2) is available")
+        except ImportError as e:
             logger.error(
                 "⚠️ CRITICAL: PostgreSQL driver (psycopg2) is not installed!\n"
                 "Install it with: pip install psycopg2-binary\n"
                 "Or add 'psycopg2-binary>=2.9.9' to requirements.txt"
             )
-            raise ImportError("PostgreSQL driver required. Install with: pip install psycopg2-binary") from None
-        logger.info("PostgreSQL driver (psycopg2) is available")
+            raise ImportError("PostgreSQL driver required. Install with: pip install psycopg2-binary") from e
 
 
 def _test_database_connection() -> None:
@@ -44,10 +49,10 @@ def _test_database_connection() -> None:
 
 logger.info(f"Initializing database engine: {settings.database_url}")
 
-# Validate PostgreSQL driver if using PostgreSQL
+# Validate PostgreSQL driver BEFORE creating engine (SQLAlchemy imports psycopg2 on engine creation)
 _is_postgresql = "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower()
 if _is_postgresql:
-    _validate_postgresql_driver()
+    _validate_postgresql_driver()  # Must happen before create_engine() for PostgreSQL
     logger.info("Using PostgreSQL database (production-ready)")
 else:
     logger.warning("Using SQLite database (local development only)")

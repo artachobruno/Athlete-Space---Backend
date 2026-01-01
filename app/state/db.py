@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
 
+from fastapi import HTTPException
 from loguru import logger
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -88,14 +89,25 @@ with suppress(Exception):
 
 @contextmanager
 def get_session() -> Generator[Session, None, None]:
-    """Get database session context manager."""
+    """Get database session context manager.
+
+    Handles database errors vs HTTP exceptions separately:
+    - HTTPException: Re-raised without logging (expected API responses)
+    - Other exceptions: Logged as database errors and rolled back
+    """
     logger.debug("Creating new database session")
     session = SessionLocal()
     try:
         yield session
         session.commit()
         logger.debug("Database session committed")
+    except HTTPException:
+        # HTTPException is an expected API response, not a database error
+        # Re-raise without logging or rolling back (no DB transaction to rollback)
+        session.rollback()
+        raise
     except Exception as e:
+        # Actual database error - log and rollback
         logger.error(f"Database session error, rolling back: {e}")
         session.rollback()
         raise

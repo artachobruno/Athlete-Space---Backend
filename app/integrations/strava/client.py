@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 
 import httpx
+from loguru import logger
 
 from app.ingestion.quota_manager import quota_manager
 from app.integrations.strava.schemas import StravaActivity
@@ -34,6 +35,7 @@ class StravaClient:
 
         Incremental-safe.
         """
+        logger.info(f"[STRAVA_CLIENT] Fetching recent activities after {after.isoformat()} (per_page={per_page})")
         quota_manager.wait_for_slot()
 
         resp = httpx.get(
@@ -52,9 +54,12 @@ class StravaClient:
 
         payload = resp.json()
         if not payload:
+            logger.info("[STRAVA_CLIENT] No activities returned from API")
             return []
 
-        return [StravaActivity(**raw, raw=raw) for raw in payload]
+        activities = [StravaActivity(**raw, raw=raw) for raw in payload]
+        logger.info(f"[STRAVA_CLIENT] Fetched {len(activities)} activities from Strava API")
+        return activities
 
     def fetch_backfill_page(
         self,
@@ -66,6 +71,7 @@ class StravaClient:
 
         Pagination is controlled by the caller.
         """
+        logger.info(f"[STRAVA_CLIENT] Fetching backfill page {page} (per_page={per_page})")
         quota_manager.wait_for_slot()
 
         resp = httpx.get(
@@ -83,6 +89,9 @@ class StravaClient:
 
         payload = resp.json()
         if not payload:
+            logger.info(f"[STRAVA_CLIENT] No activities returned from backfill page {page}")
             return []
 
-        return [StravaActivity(**raw, raw=raw) for raw in payload]
+        activities = [StravaActivity(**raw, raw=raw) for raw in payload]
+        logger.info(f"[STRAVA_CLIENT] Fetched {len(activities)} activities from backfill page {page}")
+        return activities

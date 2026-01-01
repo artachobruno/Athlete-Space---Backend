@@ -41,7 +41,8 @@ def get_current_user_data() -> dict[str, int | str | None]:
     with get_session() as session:
         result = session.execute(select(StravaAuth)).first()
         if not result:
-            raise HTTPException(status_code=404, detail="No Strava account connected")
+            logger.warning("No Strava account connected - user needs to complete OAuth")
+            raise HTTPException(status_code=404, detail="No Strava account connected. Please complete OAuth at /strava/connect")
         user = result[0]
         # Extract all needed attributes while session is open
         return {

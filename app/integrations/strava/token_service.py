@@ -60,15 +60,15 @@ class TokenService:
         This is called after OAuth exchange or token refresh.
         Always overwrites existing tokens (token rotation).
         """
-        logger.debug(f"Saving tokens for athlete_id={athlete_id}")
+        logger.info(f"[TOKEN_SERVICE] Saving tokens for athlete_id={athlete_id}")
         auth = self._session.query(StravaAuth).filter_by(athlete_id=athlete_id).first()
 
         if auth:
-            logger.debug(f"Updating existing tokens for athlete_id={athlete_id}")
+            logger.info(f"[TOKEN_SERVICE] Updating existing tokens for athlete_id={athlete_id}")
             auth.refresh_token = refresh_token
             auth.expires_at = expires_at
         else:
-            logger.debug(f"Creating new token record for athlete_id={athlete_id}")
+            logger.info(f"[TOKEN_SERVICE] Creating new token record for athlete_id={athlete_id}")
             auth = StravaAuth(
                 athlete_id=athlete_id,
                 refresh_token=refresh_token,
@@ -77,7 +77,7 @@ class TokenService:
             self._session.add(auth)
 
         self._session.commit()
-        logger.info(f"Tokens saved successfully for athlete_id={athlete_id}")
+        logger.info(f"[TOKEN_SERVICE] Tokens saved successfully for athlete_id={athlete_id}")
 
     def get_access_token(
         self,
@@ -101,40 +101,44 @@ class TokenService:
             TokenNotFoundError: If no token record exists
             TokenRefreshError: If token refresh fails (e.g., invalid refresh token)
         """
-        logger.debug(f"Getting access token for athlete_id={athlete_id}")
+        logger.info(f"[TOKEN_SERVICE] Getting access token for athlete_id={athlete_id} (buffer_seconds={buffer_seconds})")
         auth = self._session.query(StravaAuth).filter_by(athlete_id=athlete_id).first()
 
         if not auth:
-            logger.error(f"No Strava auth found for athlete_id={athlete_id}")
+            logger.error(f"[TOKEN_SERVICE] No Strava auth found for athlete_id={athlete_id}")
             raise TokenNotFoundError(f"No Strava auth found for athlete_id={athlete_id}")
 
         # Check if token is expired or near expiry
         expiry_threshold = auth.expires_at - buffer_seconds
         current_time = int(dt.datetime.now(dt.timezone.utc).timestamp())
 
-        logger.debug(f"Token expiry check: expires_at={auth.expires_at}, current={current_time}, threshold={expiry_threshold}")
+        logger.info(
+            f"[TOKEN_SERVICE] Token expiry check: expires_at={auth.expires_at}, current={current_time}, threshold={expiry_threshold}"
+        )
 
         # Refresh token to get new access token
         # Since access tokens are not persisted, we refresh whenever we need one.
         # The expiry check ensures we refresh when expired/near expiry (per requirement).
         # If not expired, we still refresh to obtain the access token (Strava allows this).
         try:
-            logger.info(f"Refreshing access token for athlete_id={athlete_id}")
+            logger.info(f"[TOKEN_SERVICE] Refreshing access token for athlete_id={athlete_id}")
             token_data = refresh_access_token(
                 client_id=self._client_id,
                 client_secret=self._client_secret,
                 refresh_token=auth.refresh_token,
             )
+            logger.info(f"[TOKEN_SERVICE] Token refresh API call successful for athlete_id={athlete_id}")
         except requests.HTTPError as e:
             # Check if it's a 400/401 (invalid refresh token)
             if e.response is not None and e.response.status_code in {400, 401}:
-                logger.warning(f"Invalid refresh token for athlete_id={athlete_id}, deleting auth record")
+                logger.warning(f"[TOKEN_SERVICE] Invalid refresh token for athlete_id={athlete_id}, deleting auth record")
                 # User revoked access - delete auth record
                 self._session.delete(auth)
                 self._session.commit()
+                logger.info(f"[TOKEN_SERVICE] Deleted invalid auth record for athlete_id={athlete_id}")
                 raise TokenRefreshError(f"Refresh token invalid for athlete_id={athlete_id}. User must re-authorize.") from e
             # Network/Strava outage - don't delete token, just raise
-            logger.error(f"Token refresh failed for athlete_id={athlete_id}: {e}")
+            logger.error(f"[TOKEN_SERVICE] Token refresh failed for athlete_id={athlete_id}: {e}")
             raise TokenRefreshError(f"Failed to refresh token for athlete_id={athlete_id}: {e}") from e
 
         # Explicitly extract and narrow Strava response types
@@ -156,12 +160,12 @@ class TokenService:
         new_access_token = access_token_raw
 
         # CRITICAL: Rotate refresh token (overwrite stored token)
-        logger.debug(f"Rotating refresh token for athlete_id={athlete_id}")
+        logger.info(f"[TOKEN_SERVICE] Rotating refresh token for athlete_id={athlete_id}")
         auth.refresh_token = new_refresh_token
         auth.expires_at = new_expires_at
         self._session.commit()
 
-        logger.info(f"Access token refreshed successfully for athlete_id={athlete_id}")
+        logger.info(f"[TOKEN_SERVICE] Access token refreshed successfully for athlete_id={athlete_id}")
         return TokenResult(
             access_token=new_access_token,
             athlete_id=athlete_id,
@@ -204,6 +208,8 @@ def get_access_token_for_athlete(
         TokenNotFoundError: If no token record exists
         TokenRefreshError: If token refresh fails
     """
+    logger.info(f"[TOKEN_SERVICE] Getting access token for athlete_id={athlete_id}")
     service = TokenService(session)
     result = service.get_access_token(athlete_id=athlete_id)
+    logger.info(f"[TOKEN_SERVICE] Successfully obtained access token for athlete_id={athlete_id}")
     return result.access_token

@@ -30,6 +30,7 @@ router = APIRouter()
 @router.get("/strava/status")
 def strava_status():
     """Check if Strava is connected."""
+    logger.info("[API] /strava/status endpoint called")
     try:
         with get_session() as session:
             result = session.execute(select(StravaAuth)).first()
@@ -38,21 +39,23 @@ def strava_status():
                 # Check if activities exist - use func.count to avoid id column dependency
                 result_count = session.execute(select(func.count(Activity.activity_id))).scalar()
                 activity_count = result_count if result_count is not None else 0
+                logger.info(f"[API] Strava status: connected=True, athlete_id={auth.athlete_id}, activity_count={activity_count}")
                 return {
                     "connected": True,
                     "athlete_id": auth.athlete_id,
                     "activity_count": activity_count,
                 }
+            logger.info("[API] Strava status: connected=False, no auth found")
             return {"connected": False, "activity_count": 0}
     except Exception as e:
-        logger.error(f"Error checking Strava status: {e}")
+        logger.error(f"[API] Error checking Strava status: {e}")
         return {"connected": False, "error": str(e), "activity_count": 0}
 
 
 @router.get("/strava/sync-progress")
 def strava_sync_progress():
     """Get sync progress information including activity count and sync status."""
-    logger.debug("Sync progress check requested")
+    logger.info("[API] /strava/sync-progress endpoint called")
     try:
         with get_session() as session:
             result = session.execute(select(StravaAuth)).first()
@@ -186,7 +189,21 @@ def strava_aggregate():
 
 @router.get("/strava/connect")
 def strava_connect():
+    """Initiate Strava OAuth flow.
+
+    Redirects user to Strava authorization page. After approval, Strava will
+    redirect back to STRAVA_REDIRECT_URI (must be backend callback URL).
+    """
     logger.info("Strava OAuth connect initiated")
+    logger.info(f"Using redirect_uri: {STRAVA_REDIRECT_URI}")
+
+    # Validate redirect URI points to backend callback, not frontend
+    if "/strava/callback" not in STRAVA_REDIRECT_URI:
+        logger.warning(
+            f"STRAVA_REDIRECT_URI may be incorrect: {STRAVA_REDIRECT_URI}. "
+            "It should point to your backend callback URL (e.g., https://yourbackend.onrender.com/strava/callback)"
+        )
+
     url = (
         "https://www.strava.com/oauth/authorize"
         f"?client_id={STRAVA_CLIENT_ID}"
@@ -195,7 +212,8 @@ def strava_connect():
         "&scope=activity:read_all"
         "&approval_prompt=auto"
     )
-    logger.debug(f"Redirecting to Strava OAuth: {url[:50]}...")
+    logger.info("Redirecting to Strava OAuth (full URL logged at debug level)")
+    logger.debug(f"Full OAuth URL: {url}")
     return RedirectResponse(url)
 
 
@@ -268,6 +286,8 @@ def strava_callback(code: str, request: Request):
     Access tokens are never persisted - they are ephemeral.
     """
     logger.info("Strava OAuth callback received")
+    logger.info(f"Callback code received: {code[:10]}... (truncated for security)")
+    logger.info(f"Request host: {request.headers.get('host', 'unknown')}")
 
     # Determine frontend URL from settings or infer from request
     redirect_url = settings.frontend_url
@@ -288,7 +308,8 @@ def strava_callback(code: str, request: Request):
     logger.info(f"Redirecting to frontend: {redirect_url}")
 
     try:
-        logger.debug("Exchanging authorization code for tokens")
+        logger.info("Exchanging authorization code for tokens")
+        logger.debug(f"Using redirect_uri: {STRAVA_REDIRECT_URI}")
         token_data = exchange_code_for_token(
             client_id=STRAVA_CLIENT_ID,
             client_secret=STRAVA_CLIENT_SECRET,
@@ -302,10 +323,10 @@ def strava_callback(code: str, request: Request):
         expires_at = token_data["expires_at"]
         access_token = token_data["access_token"]
 
-        logger.info(f"OAuth successful for athlete_id={athlete_id}")
+        logger.info(f"[STRAVA] OAuth successful for athlete_id={athlete_id}")
 
         # Persist tokens (only refresh_token and expires_at, not access_token)
-        logger.debug("Saving tokens to database")
+        logger.info("[STRAVA] Saving tokens to database")
         with get_session() as session:
             token_service = TokenService(session)
             token_service.save_tokens(
@@ -313,20 +334,42 @@ def strava_callback(code: str, request: Request):
                 refresh_token=refresh_token,
                 expires_at=expires_at,
             )
-        logger.info("Tokens saved successfully")
+        logger.info("[STRAVA] Tokens saved successfully")
 
         # Immediate synchronous ingestion using the access token we have
-        _perform_immediate_sync(access_token, athlete_id)
+        logger.info("[STRAVA] Starting immediate activity sync")
+        activities_synced = _perform_immediate_sync(access_token, athlete_id)
+        logger.info(f"[STRAVA] Immediate sync completed: {activities_synced} activities imported")
 
         # Also enqueue async tasks for background sync and backfill
-        logger.info("Enqueuing background ingestion tasks")
+        logger.info("[STRAVA] Enqueuing background ingestion tasks")
         incremental_task.delay(athlete_id)
         backfill_task.delay(athlete_id)
-        logger.info("Background ingestion tasks enqueued")
+        logger.info("[STRAVA] Background ingestion tasks enqueued (backfill + incremental)")
 
     except Exception as e:
-        logger.error(f"Error in Strava callback: {e}", exc_info=True)
-        raise
+        logger.error(f"[STRAVA] Error in OAuth callback: {e}", exc_info=True)
+        logger.error(
+            f"[STRAVA] OAuth failed. Check: "
+            f"1) STRAVA_REDIRECT_URI={STRAVA_REDIRECT_URI} matches Strava app settings, "
+            f"2) STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET are correct, "
+            f"3) Redirect URI in Strava dashboard matches exactly"
+        )
+        # Return error page instead of raising to show user-friendly message
+        return f"""
+        <html>
+        <head>
+            <title>Strava Connection Failed</title>
+            <meta http-equiv="refresh" content="5;url={redirect_url}">
+        </head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h2 style="color: #FF5722;">✗ Strava Connection Failed</h2>
+            <p>Error: {e!s}</p>
+            <p><small>Check backend logs for details. Redirecting in 5 seconds...</small></p>
+            <p><a href="{redirect_url}">Return to app</a></p>
+        </body>
+        </html>
+        """
 
     return f"""
     <html>

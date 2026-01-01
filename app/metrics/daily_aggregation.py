@@ -47,6 +47,9 @@ def aggregate_daily_training(athlete_id: int) -> None:
         start_date = end_date - timedelta(days=60)
 
         # Delete existing rows for this athlete in the date range (idempotent)
+        logger.info(
+            f"[AGGREGATION] Deleting existing daily summary rows for athlete_id={athlete_id} (date range: {start_date} to {end_date})"
+        )
         session.execute(
             text(
                 """
@@ -62,8 +65,10 @@ def aggregate_daily_training(athlete_id: int) -> None:
                 "end_date": end_date.isoformat(),
             },
         )
+        logger.info(f"[AGGREGATION] Deleted existing rows for athlete_id={athlete_id}")
 
         # Aggregate activities by UTC date for this athlete
+        logger.info(f"[AGGREGATION] Aggregating activities for athlete_id={athlete_id} (date range: {start_date} to {end_date})")
         rows = session.execute(
             text(
                 """
@@ -86,6 +91,8 @@ def aggregate_daily_training(athlete_id: int) -> None:
                 "end_date": end_date.isoformat(),
             },
         ).fetchall()
+
+        logger.info(f"[AGGREGATION] Found {len(rows)} days with activities for athlete_id={athlete_id}")
 
         # Insert aggregated rows
         inserted_count = 0

@@ -23,7 +23,7 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
     existing = session.query(Activity).filter_by(athlete_id=record.athlete_id, source=record.source, activity_id=record.activity_id).first()
 
     if existing:
-        logger.debug(f"Activity {record.activity_id} already exists for athlete {record.athlete_id}, updating")
+        logger.info(f"[SAVE_ACTIVITIES] Activity {record.activity_id} already exists for athlete {record.athlete_id}, updating")
         # Update existing record
         existing.source = record.source
         existing.sport = record.sport
@@ -35,6 +35,7 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
         return existing
 
     # Create new activity
+    logger.info(f"[SAVE_ACTIVITIES] Creating new activity: {record.activity_id} for athlete {record.athlete_id}")
     activity = Activity(
         athlete_id=record.athlete_id,
         activity_id=record.activity_id,
@@ -47,7 +48,7 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
         avg_hr=record.avg_hr,
     )
     session.add(activity)
-    logger.debug(f"Added new activity: {record.activity_id} for athlete {record.athlete_id}")
+    logger.info(f"[SAVE_ACTIVITIES] Added new activity: {record.activity_id} for athlete {record.athlete_id}")
     return activity
 
 
@@ -62,10 +63,10 @@ def save_activity_records(session: Session, records: list[ActivityRecord]) -> in
         Number of activities saved (including updates)
     """
     if not records:
-        logger.debug("No activity records to save")
+        logger.info("[SAVE_ACTIVITIES] No activity records to save")
         return 0
 
-    logger.info(f"Saving {len(records)} activity records to database")
+    logger.info(f"[SAVE_ACTIVITIES] Saving {len(records)} activity records to database")
     saved_count = 0
 
     for record in records:
@@ -73,10 +74,10 @@ def save_activity_records(session: Session, records: list[ActivityRecord]) -> in
             save_activity_record(session, record)
             saved_count += 1
         except Exception as e:
-            logger.error(f"Error saving activity {record.activity_id}: {e}")
+            logger.error(f"[SAVE_ACTIVITIES] Error saving activity {record.activity_id}: {e}")
             # Continue with other activities even if one fails
             continue
 
     session.commit()
-    logger.info(f"Successfully saved {saved_count} activities to database")
+    logger.info(f"[SAVE_ACTIVITIES] Successfully saved {saved_count}/{len(records)} activities to database")
     return saved_count

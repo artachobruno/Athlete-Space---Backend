@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     strava_client_id: str = Field(default="", validation_alias="STRAVA_CLIENT_ID")
     strava_client_secret: str = Field(default="", validation_alias="STRAVA_CLIENT_SECRET")
     strava_redirect_uri: str = Field(
-        default="https://pace-ai.onrender.com",
+        default="http://localhost:8000/strava/callback",  # Default for local dev; MUST be set to backend URL in production
         validation_alias="STRAVA_REDIRECT_URI",
     )
     frontend_url: str = Field(

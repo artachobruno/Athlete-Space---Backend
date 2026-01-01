@@ -3,10 +3,9 @@ from __future__ import annotations
 import datetime as dt
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
-from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select
 
 from app.core.settings import settings
@@ -130,11 +129,10 @@ def strava_sync_progress():
 
 
 @router.post("/strava/sync")
-def strava_sync():
+def strava_sync(background_tasks: BackgroundTasks):
     """Manually trigger async Strava sync."""
     try:
         logger.info("Manual Strava sync requested")
-        athlete_id: int | None = None
         with get_session() as session:
             result = session.execute(select(StravaAuth)).first()
             if not result:
@@ -146,43 +144,21 @@ def strava_sync():
             athlete_id = auth.athlete_id
             logger.info(f"Found Strava auth for athlete_id={athlete_id}")
 
-        # Enqueue async ingestion (safe, scalable)
-        # Use extracted athlete_id instead of accessing auth object outside session
-        logger.info(f"Enqueuing ingestion tasks for athlete_id={athlete_id}")
-        try:
-            incremental_result = incremental_task.delay(athlete_id)
-            backfill_result = backfill_task.delay(athlete_id)
-            logger.info(f"Ingestion tasks enqueued: incremental_task_id={incremental_result.id}, backfill_task_id={backfill_result.id}")
-        except RedisConnectionError as e:
-            logger.error(
-                f"Redis connection failed while enqueuing tasks for athlete_id={athlete_id}: {e}. "
-                "Ensure Redis is running and REDIS_URL is configured correctly."
-            )
-            return {
-                "success": False,
-                "error": "Redis connection failed. Ensure Redis is running and REDIS_URL is configured correctly.",
-            }
-        except RuntimeError as e:
-            if "Retry limit exceeded" in str(e):
-                logger.error(
-                    f"Celery backend connection failed for athlete_id={athlete_id}: {e}. Celery application may need to be restarted."
-                )
-                return {
-                    "success": False,
-                    "error": "Celery backend connection failed. Celery application may need to be restarted.",
-                }
-            raise
-        else:
-            # Success response
-            return {
-                "success": True,
-                "status": "enqueued",
-                "athlete_id": athlete_id,
-                "message": "Ingestion tasks enqueued. Ensure Celery workers are running to process them.",
-            }
+        # Schedule background ingestion tasks
+        logger.info(f"Scheduling ingestion tasks for athlete_id={athlete_id}")
+        background_tasks.add_task(incremental_task, athlete_id)
+        background_tasks.add_task(backfill_task, athlete_id)
+        logger.info(f"Ingestion tasks scheduled for athlete_id={athlete_id}")
     except Exception as e:
         logger.error(f"Error triggering Strava sync: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
+    else:
+        return {
+            "success": True,
+            "status": "syncing",
+            "athlete_id": athlete_id,
+            "message": "Ingestion tasks scheduled to run in the background.",
+        }
 
 
 @router.post("/strava/aggregate")
@@ -317,7 +293,7 @@ def _verify_strava_auth_saved(athlete_id: int) -> None:
 
 
 @router.get("/strava/callback", response_class=HTMLResponse)
-def strava_callback(code: str, request: Request, state: str | None = None):
+def strava_callback(code: str, request: Request, background_tasks: BackgroundTasks, state: str | None = None):
     """Handle Strava OAuth callback and persist tokens.
 
     After OAuth exchange, we persist only:
@@ -390,11 +366,11 @@ def strava_callback(code: str, request: Request, state: str | None = None):
         activities_synced = _perform_immediate_sync(access_token, athlete_id)
         logger.info(f"[STRAVA] Immediate sync completed: {activities_synced} activities imported")
 
-        # Also enqueue async tasks for background sync and backfill
-        logger.info("[STRAVA] Enqueuing background ingestion tasks")
-        incremental_task.delay(athlete_id)
-        backfill_task.delay(athlete_id)
-        logger.info("[STRAVA] Background ingestion tasks enqueued (backfill + incremental)")
+        # Also schedule async tasks for background sync and backfill
+        logger.info("[STRAVA] Scheduling background ingestion tasks")
+        background_tasks.add_task(incremental_task, athlete_id)
+        background_tasks.add_task(backfill_task, athlete_id)
+        logger.info("[STRAVA] Background ingestion tasks scheduled (backfill + incremental)")
 
     except Exception as e:
         logger.error(f"[STRAVA] Error in OAuth callback: {e}", exc_info=True)

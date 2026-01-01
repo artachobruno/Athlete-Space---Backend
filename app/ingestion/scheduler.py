@@ -1,46 +1,38 @@
 import time
+from typing import TypedDict
 
-from celery.app.task import Task
 from loguru import logger
-from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.ingestion.tasks import backfill_task as _backfill_task
-from app.ingestion.tasks import incremental_task as _incremental_task
+from app.ingestion.tasks import backfill_task, incremental_task
 from app.models import StravaAuth
 from app.state.db import get_session
-
-# Properly typed references to Celery tasks
-incremental_task: Task = _incremental_task
-backfill_task: Task = _backfill_task
 
 STUCK_BACKFILL_SECONDS = 3 * 60 * 60  # 3 hours
 
 
-def _enqueue_incremental_tasks(user_data: list[dict[str, int | bool | None]]) -> None:
-    """Enqueue incremental tasks for all users."""
+class UserData(TypedDict):
+    athlete_id: int
+    backfill_done: bool
+    backfill_updated_at: int | None
+
+
+def _run_incremental_tasks(user_data: list[UserData]) -> None:
+    """Run incremental tasks for all users."""
     for user_info in user_data:
         athlete_id = user_info["athlete_id"]
         try:
-            logger.info(f"[SCHEDULER] Enqueuing incremental task for athlete_id={athlete_id}")
-            result = incremental_task.delay(athlete_id)
-            logger.info(f"[SCHEDULER] Incremental task enqueued: task_id={result.id} for athlete_id={athlete_id}")
-        except RedisConnectionError as e:
+            logger.info(f"[SCHEDULER] Running incremental task for athlete_id={athlete_id}")
+            incremental_task(athlete_id)
+            logger.info(f"[SCHEDULER] Incremental task completed for athlete_id={athlete_id}")
+        except Exception as e:
             logger.error(
-                f"[SCHEDULER] Redis connection failed while enqueuing incremental task for athlete_id={athlete_id}: {e}. "
-                "Ensure Redis is running and REDIS_URL is configured correctly."
+                f"[SCHEDULER] Incremental task failed for athlete_id={athlete_id}: {e}",
+                exc_info=True,
             )
-        except RuntimeError as e:
-            if "Retry limit exceeded" in str(e):
-                logger.error(
-                    f"[SCHEDULER] Celery backend connection failed for athlete_id={athlete_id}: {e}. "
-                    "Celery application may need to be restarted."
-                )
-            else:
-                raise
 
 
-def _enqueue_backfill_tasks(user_data: list[dict[str, int | bool | None]], now: int) -> None:
-    """Enqueue backfill tasks for users who need them."""
+def _run_backfill_tasks(user_data: list[UserData], now: int) -> None:
+    """Run backfill tasks for users who need them."""
     for user_info in user_data:
         athlete_id = user_info["athlete_id"]
         backfill_done = user_info["backfill_done"]
@@ -50,40 +42,32 @@ def _enqueue_backfill_tasks(user_data: list[dict[str, int | bool | None]], now: 
             # Auto-heal stuck backfills
             if backfill_updated_at and now - backfill_updated_at > STUCK_BACKFILL_SECONDS:
                 logger.warning(
-                    f"[SCHEDULER] Auto-requeuing stuck backfill for user={athlete_id} "
+                    f"[SCHEDULER] Auto-retrying stuck backfill for user={athlete_id} "
                     f"(last update: {(now - backfill_updated_at) // 60} min ago)"
                 )
             try:
-                logger.info(f"[SCHEDULER] Enqueuing backfill task for athlete_id={athlete_id}")
-                result = backfill_task.delay(athlete_id)
-                logger.info(f"[SCHEDULER] Backfill task enqueued: task_id={result.id} for athlete_id={athlete_id}")
-            except RedisConnectionError as e:
+                logger.info(f"[SCHEDULER] Running backfill task for athlete_id={athlete_id}")
+                backfill_task(athlete_id)
+                logger.info(f"[SCHEDULER] Backfill task completed for athlete_id={athlete_id}")
+            except Exception as e:
                 logger.error(
-                    f"[SCHEDULER] Redis connection failed while enqueuing backfill task for athlete_id={athlete_id}: {e}. "
-                    "Ensure Redis is running and REDIS_URL is configured correctly."
+                    f"[SCHEDULER] Backfill task failed for athlete_id={athlete_id}: {e}",
+                    exc_info=True,
                 )
-            except RuntimeError as e:
-                if "Retry limit exceeded" in str(e):
-                    logger.error(
-                        f"[SCHEDULER] Celery backend connection failed for athlete_id={athlete_id}: {e}. "
-                        "Celery application may need to be restarted."
-                    )
-                else:
-                    raise
         else:
             logger.debug(f"[SCHEDULER] Skipping backfill for athlete_id={athlete_id} (already done)")
 
 
 def ingestion_tick() -> None:
-    """Enqueue one ingestion cycle.
+    """Run one ingestion cycle.
 
     Rules:
-    - Incremental tasks always enqueued
-    - Backfill tasks only enqueued if needed
-    - Stuck backfills are auto-requeued
-    - Celery workers execute the work
+    - Incremental tasks always run
+    - Backfill tasks only run if needed
+    - Stuck backfills are auto-retried
+    - Tasks run synchronously in the scheduler thread
     """
-    logger.info("[SCHEDULER] Enqueuing Strava ingestion tasks")
+    logger.info("[SCHEDULER] Running Strava ingestion tasks")
 
     now = int(time.time())
 
@@ -97,19 +81,23 @@ def ingestion_tick() -> None:
         logger.info(f"[SCHEDULER] Found {len(users)} user(s) to sync")
 
         # Extract user data while session is open
-        user_data = [
-            {
-                "athlete_id": user.athlete_id,
-                "backfill_done": getattr(user, "backfill_done", False),
-                "backfill_updated_at": getattr(user, "backfill_updated_at", None),
-            }
-            for user in users
-        ]
+        user_data_list: list[UserData] = []
+        for user in users:
+            athlete_id: int = user.athlete_id
+            backfill_done_attr = getattr(user, "backfill_done", False)
+            backfill_done: bool = backfill_done_attr if isinstance(backfill_done_attr, bool) else False
+            backfill_updated_at: int | None = getattr(user, "backfill_updated_at", None)
+            user_data_list.append({
+                "athlete_id": athlete_id,
+                "backfill_done": backfill_done,
+                "backfill_updated_at": backfill_updated_at,
+            })
+        user_data = user_data_list
 
     # 1️⃣ Incrementals (cheap, priority)
-    _enqueue_incremental_tasks(user_data)
+    _run_incremental_tasks(user_data)
 
     # 2️⃣ Backfills (slow, background)
-    _enqueue_backfill_tasks(user_data, now)
+    _run_backfill_tasks(user_data, now)
 
-    logger.info(f"[SCHEDULER] Strava ingestion tasks enqueued for {len(users)} user(s)")
+    logger.info(f"[SCHEDULER] Strava ingestion tasks completed for {len(users)} user(s)")

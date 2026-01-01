@@ -41,8 +41,6 @@ dependencies = [
 
     # --- Scheduling ---
     "apscheduler>=3.11.0",
-    "celery>=5.4.0",
-    "celery-types>=0.1.0",
 ]
 
 [dependency-groups]

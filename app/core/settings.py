@@ -29,7 +29,7 @@ class Settings(BaseSettings):
         validation_alias="STRAVA_REDIRECT_URI",
     )
     frontend_url: str = Field(
-        default="http://localhost:8501",
+        default="http://localhost:8501",  # Default for local dev; overridden in production via detection or FRONTEND_URL env var
         validation_alias="FRONTEND_URL",
     )
     database_url: str = Field(

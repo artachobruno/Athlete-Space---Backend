@@ -275,17 +275,12 @@ def strava_callback(code: str, request: Request):
     # If using default localhost, try to detect production URL from request
     if redirect_url == "http://localhost:8501":
         host = request.headers.get("host", "")
-        _scheme = request.url.scheme  # Gets 'http' or 'https' from the request URL
 
-        # Check if we're on Render (backend)
+        # Check if we're on Render (any Render service)
         if "onrender.com" in host:
-            # If backend is on Render, assume frontend is also on Render
-            # For pace-ai, use the known frontend URL
-            if "pace-ai" in host:
-                redirect_url = "https://pace-ai.onrender.com"
-            else:
-                # Generic fallback: use https for Render
-                redirect_url = f"https://{host}"
+            # Default to pace-ai frontend when on Render
+            # This works even if backend is on a different Render service
+            redirect_url = "https://pace-ai.onrender.com"
         elif host and not host.startswith("localhost"):
             # For other production environments, use the request host with https
             redirect_url = f"https://{host}"

@@ -18,7 +18,7 @@ def dispatch_coach_chat(
     """Route user message -> coaching tool -> response text."""
     intent = route_intent(message)
 
-    logger.info("Dispatching coach intent", intent=intent)
+    logger.info(f"Dispatching coach intent: {intent}")
 
     if intent == CoachIntent.UNSUPPORTED:
         return (
@@ -29,7 +29,20 @@ def dispatch_coach_chat(
     # -------------------------------------------------
     # Build athlete state ONCE
     # -------------------------------------------------
-    training_data = get_training_data(days=days)
+    try:
+        training_data = get_training_data(days=days)
+    except RuntimeError as e:
+        logger.warning(f"No training data available: {e}")
+        return (
+            "insufficient_data",
+            (
+                "I don't have enough training data yet. "
+                "Please make sure your Strava account is connected and synced. "
+                "Once I have at least 14 days of training data, "
+                "I'll be able to provide personalized coaching insights."
+            ),
+        )
+
     athlete_state = build_athlete_state(
         ctl=training_data.ctl,
         atl=training_data.atl,

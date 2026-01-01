@@ -28,6 +28,7 @@ dependencies = [
     "redis~=7.0.1",
     "cashews[diskcache,redis]<8.0.0,>=7.4.3",
     "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.9",  # PostgreSQL driver (required for production)
 
     # --- Observability / Logging ---
     "loguru<1.0.0,>=0.7.3",

@@ -31,6 +31,7 @@ langchain-openai>=0.1.7
 redis~=7.0.1
 cashews[diskcache,redis]>=7.4.3,<8.0.0
 sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9  # PostgreSQL driver (required for production)
 
 # -------------------------------------------------
 # Observability / Logging

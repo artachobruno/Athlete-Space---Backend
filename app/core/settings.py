@@ -7,17 +7,36 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def get_database_url() -> str:
-    """Get database URL, using absolute path for SQLite to avoid path resolution issues."""
+    """Get database URL, using absolute path for SQLite to avoid path resolution issues.
+
+    ⚠️ WARNING: SQLite is NOT suitable for production deployments!
+    - Data will be LOST on container rebuilds or machine spin-downs
+    - Use PostgreSQL by setting DATABASE_URL environment variable
+    - See docs/DEPLOYMENT_DATA_PERSISTENCE.md for details
+    """
     db_url = os.getenv("DATABASE_URL", "")
     if db_url:
         logger.info(f"Using DATABASE_URL from environment: {db_url}")
+        # Warn if SQLite detected in production-like environment
+        is_production = bool(os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("DYNO"))
+        if db_url.startswith("sqlite://") and is_production:
+            logger.error(
+                "⚠️ CRITICAL: SQLite detected in production environment! "
+                "Data will be LOST on rebuilds. Use PostgreSQL instead. "
+                "Set DATABASE_URL to a PostgreSQL connection string."
+            )
         return db_url
 
-    # Use absolute path for SQLite
+    # Use absolute path for SQLite (LOCAL DEVELOPMENT ONLY)
     db_path = Path(__file__).parent.parent.parent / "virtus.db"
     abs_path = db_path.resolve()
     db_url = f"sqlite:///{abs_path}"
-    logger.info(f"Using default database path: {db_url}")
+    logger.warning(
+        f"⚠️ Using SQLite database (LOCAL DEV ONLY): {db_url}\n"
+        "⚠️ SQLite is NOT suitable for production - data will be LOST on rebuilds!\n"
+        "⚠️ Set DATABASE_URL environment variable to use PostgreSQL in production.\n"
+        "⚠️ See docs/DEPLOYMENT_DATA_PERSISTENCE.md for setup instructions."
+    )
     return db_url
 
 

@@ -9,7 +9,7 @@ router = APIRouter(prefix="/coach", tags=["coach"])
 
 @router.post("/chat", response_model=CoachChatResponse)
 async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
-    logger.info("Coach chat request", message=req.message)
+    logger.info(f"Coach chat request: {req.message}")
 
     intent, reply = dispatch_coach_chat(
         message=req.message,

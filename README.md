@@ -74,6 +74,8 @@ Streamlit UI (Chat + Viz)
 
 **Infra**
 - Render (deployment)
+- PostgreSQL (production database - REQUIRED)
+- Redis (Celery task queue)
 - Strava API
 - uvicorn
 

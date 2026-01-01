@@ -274,6 +274,22 @@ def _perform_immediate_sync(access_token: str, athlete_id: int) -> int:
         return activities_synced
 
 
+def _verify_strava_auth_saved(athlete_id: int) -> None:
+    """Verify that StravaAuth record was saved successfully.
+
+    Raises:
+        RuntimeError: If the record is not found after save
+    """
+    with get_session() as session:
+        result = session.execute(select(StravaAuth).where(StravaAuth.athlete_id == athlete_id)).first()
+        if result:
+            logger.info(f"[STRAVA] Verified: StravaAuth record exists for athlete_id={athlete_id}")
+        else:
+            error_msg = f"Failed to save Strava connection - record not found after commit for athlete_id={athlete_id}"
+            logger.error(f"[STRAVA] ERROR: {error_msg}")
+            raise RuntimeError(error_msg)
+
+
 @router.get("/strava/callback", response_class=HTMLResponse)
 def strava_callback(code: str, request: Request):
     """Handle Strava OAuth callback and persist tokens.
@@ -335,6 +351,9 @@ def strava_callback(code: str, request: Request):
                 expires_at=expires_at,
             )
         logger.info("[STRAVA] Tokens saved successfully")
+
+        # Verify the save was successful
+        _verify_strava_auth_saved(athlete_id)
 
         # Immediate synchronous ingestion using the access token we have
         logger.info("[STRAVA] Starting immediate activity sync")

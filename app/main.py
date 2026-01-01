@@ -89,9 +89,10 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Virtus AI", lifespan=lifespan)
 
 # Configure CORS
+cors_origins = [settings.frontend_url, "http://localhost:5173"]  # Frontend URL + local dev
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins like ["https://pace-ai.onrender.com"]
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

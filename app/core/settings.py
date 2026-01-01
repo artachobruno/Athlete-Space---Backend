@@ -47,6 +47,10 @@ class Settings(BaseSettings):
         default="http://localhost:8000/strava/callback",  # Default for local dev; MUST be set to backend URL in production
         validation_alias="STRAVA_REDIRECT_URI",
     )
+    backend_url: str = Field(
+        default="http://localhost:8000",  # Default for local dev; MUST be set to backend URL in production
+        validation_alias="BACKEND_URL",
+    )
     frontend_url: str = Field(
         default="http://localhost:8501",  # Default for local dev; overridden in production via detection or FRONTEND_URL env var
         validation_alias="FRONTEND_URL",

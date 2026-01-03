@@ -13,7 +13,7 @@ import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from loguru import logger
 from sqlalchemy import select
 
@@ -84,14 +84,15 @@ def _validate_oauth_state(state: str, user_id: str) -> bool:
 def strava_connect(user_id: str = Depends(get_current_user)):
     """Initiate Strava OAuth flow for authenticated user.
 
-    Requires authenticated user. Redirects to Strava authorization page.
+    Requires authenticated user. Returns OAuth URL for frontend to redirect.
     Includes CSRF-protected state parameter tied to user session.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
-        RedirectResponse to Strava OAuth URL
+        JSON response with redirect_url, oauth_url, and url fields containing
+        the Strava OAuth URL. Frontend should redirect to this URL.
     """
     logger.info(f"[STRAVA_OAUTH] Connect initiated for user_id={user_id}")
 
@@ -125,9 +126,11 @@ def strava_connect(user_id: str = Depends(get_current_user)):
         f"&state={state}"
     )
 
-    logger.info(f"[STRAVA_OAUTH] Redirecting user_id={user_id} to Strava OAuth")
+    logger.info(f"[STRAVA_OAUTH] OAuth URL generated for user_id={user_id}")
     logger.debug(f"[STRAVA_OAUTH] OAuth URL: {oauth_url[:100]}...")
-    return RedirectResponse(url=oauth_url)
+    # Return JSON instead of redirect to avoid CORS issues with Location header
+    # Frontend will handle the redirect
+    return {"redirect_url": oauth_url, "oauth_url": oauth_url, "url": oauth_url}
 
 
 @router.get("/callback", response_class=HTMLResponse)

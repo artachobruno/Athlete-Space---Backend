@@ -158,7 +158,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
-    expose_headers=["*"],
+    expose_headers=["Location", "Content-Type", "Authorization"],
 )
 
 app.include_router(activities_router)

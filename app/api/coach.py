@@ -5,6 +5,7 @@ from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.api.me import get_overview
 from app.api.schemas import (
     CoachAskRequest,
     CoachAskResponse,
@@ -16,6 +17,7 @@ from app.api.schemas import (
     CoachSummaryResponse,
 )
 from app.coach.chat_utils.dispatcher import dispatch_coach_chat
+from app.coach.coach_service import get_coach_advice
 from app.core.auth import get_current_user
 from app.state.db import get_session
 from app.state.models import CoachMessage, StravaAuth
@@ -130,238 +132,306 @@ def history(athlete_id: int = 23078584):
 
 
 # ============================================================================
-# Phase 1 Contract Endpoints (Mock Data)
+# Phase 1 Contract Endpoints (Real LLM Data)
 # ============================================================================
+# All endpoints now use real LLM calls via get_coach_advice and dispatch_coach_chat
+# No mock data or hardcoded responses
 
 
 @router.get("/summary", response_model=CoachSummaryResponse)
 def get_coach_summary(user_id: str = Depends(get_current_user)):
-    """Get high-level coaching summary.
+    """Get high-level coaching summary from real LLM.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
-        CoachSummaryResponse with training summary and focus
+        CoachSummaryResponse with training summary and focus from LLM
     """
     logger.info(f"[API] /coach/summary endpoint called for user_id={user_id}")
     now = datetime.now(timezone.utc)
 
-    return CoachSummaryResponse(
-        summary=(
-            "Your training has been consistent over the past 4 weeks with a good balance of "
-            "volume and intensity. TSB is positive, indicating adequate recovery."
-        ),
-        current_state=(
-            "Training load is well-managed with CTL at 65.5 and positive TSB of 7.3. Volume has been steady around 8-9 hours per week."
-        ),
-        next_focus=(
-            "Maintain current training volume while gradually increasing intensity in key sessions. "
-            "Focus on consistency over the next 2 weeks."
-        ),
-        last_updated=now.isoformat(),
-    )
+    try:
+        overview = get_overview()
+        coach_response = get_coach_advice(overview)
+
+        summary = coach_response.get("summary", "Training analysis in progress.")
+        insights = coach_response.get("insights", [])
+        recommendations = coach_response.get("recommendations", [])
+
+        current_state = insights[0] if insights else summary
+        next_focus = recommendations[0] if recommendations else "Continue monitoring your training load and recovery."
+
+        return CoachSummaryResponse(
+            summary=summary,
+            current_state=current_state,
+            next_focus=next_focus,
+            last_updated=now.isoformat(),
+        )
+    except Exception as e:
+        logger.error(f"Error getting coach summary: {e}", exc_info=True)
+        return CoachSummaryResponse(
+            summary="Unable to generate coaching summary at this time.",
+            current_state="Please ensure your Strava account is connected and synced.",
+            next_focus="Check back once you have sufficient training data.",
+            last_updated=now.isoformat(),
+        )
 
 
 @router.get("/observations", response_model=CoachObservationsResponse)
 def get_coach_observations(user_id: str = Depends(get_current_user)):
-    """Get coaching observations.
+    """Get coaching observations from real LLM.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
-        CoachObservationsResponse with list of observations
+        CoachObservationsResponse with list of observations from LLM
     """
     logger.info(f"[API] /coach/observations endpoint called for user_id={user_id}")
     now = datetime.now(timezone.utc)
 
-    # Use user_id hash to make observations user-specific
-    user_hash = hash(user_id) % 1000
-    base_volume = 8.5 + (user_hash % 3) / 10
-    base_zone2 = 42.0 + (user_hash % 5) - 2
-    base_tsb = 7.3 + (user_hash % 5) - 2
+    try:
+        overview = get_overview()
+        coach_response = get_coach_advice(overview)
 
-    observations = [
-        CoachObservation(
-            id=f"obs_{user_id[:8]}_1",
-            category="volume",
-            observation=(
-                f"Weekly volume has been consistent at {base_volume:.1f} hours "
-                f"over the past 4 weeks, which is appropriate for your current fitness level."
-            ),
-            timestamp=now.isoformat(),
-            related_metrics={"week_volume_hours": round(base_volume, 1), "avg_week_volume": round(base_volume - 0.2, 1)},
-        ),
-        CoachObservation(
-            id=f"obs_{user_id[:8]}_2",
-            category="intensity",
-            observation=(
-                f"Training distribution shows good balance with {base_zone2:.1f}% in Zone 2, "
-                f"but could benefit from more structured high-intensity work."
-            ),
-            timestamp=now.isoformat(),
-            related_metrics={"zone2_percentage": round(base_zone2, 1), "zone4_percentage": 6.0},
-        ),
-        CoachObservation(
-            id=f"obs_{user_id[:8]}_3",
-            category="recovery",
-            observation="TSB has remained positive, indicating good recovery management and appropriate training load progression.",
-            timestamp=now.isoformat(),
-            related_metrics={"tsb": round(base_tsb, 1), "tsb_7d_avg": round(base_tsb - 2.1, 1)},
-        ),
-    ]
+        insights = coach_response.get("insights", [])
+        today_metrics = overview.get("today", {})
 
-    return CoachObservationsResponse(
-        observations=observations,
-        total=len(observations),
-    )
+        observations = []
+        categories = ["volume", "intensity", "recovery", "consistency"]
+
+        for idx, insight in enumerate(insights[:3]):
+            category = categories[idx % len(categories)]
+            observation = CoachObservation(
+                id=f"obs_{user_id[:8]}_{idx + 1}",
+                category=category,
+                observation=insight,
+                timestamp=now.isoformat(),
+                related_metrics={
+                    "ctl": today_metrics.get("ctl", 0.0),
+                    "atl": today_metrics.get("atl", 0.0),
+                    "tsb": today_metrics.get("tsb", 0.0),
+                },
+            )
+            observations.append(observation)
+
+        if not observations:
+            observations.append(
+                CoachObservation(
+                    id=f"obs_{user_id[:8]}_1",
+                    category="general",
+                    observation=coach_response.get("summary", "Training analysis in progress."),
+                    timestamp=now.isoformat(),
+                    related_metrics={},
+                )
+            )
+
+        return CoachObservationsResponse(
+            observations=observations,
+            total=len(observations),
+        )
+    except Exception as e:
+        logger.error(f"Error getting coach observations: {e}", exc_info=True)
+        return CoachObservationsResponse(
+            observations=[],
+            total=0,
+        )
 
 
 @router.get("/recommendations", response_model=CoachRecommendationsResponse)
 def get_coach_recommendations(user_id: str = Depends(get_current_user)):
-    """Get coaching recommendations.
+    """Get coaching recommendations from real LLM.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
-        CoachRecommendationsResponse with list of recommendations
+        CoachRecommendationsResponse with list of recommendations from LLM
     """
     logger.info(f"[API] /coach/recommendations endpoint called for user_id={user_id}")
     now = datetime.now(timezone.utc)
 
-    # Use user_id prefix to make recommendations user-specific
-    user_prefix = user_id[:8]
+    try:
+        overview = get_overview()
+        coach_response = get_coach_advice(overview)
 
-    recommendations = [
-        CoachRecommendation(
-            id=f"rec_{user_prefix}_1",
-            priority="medium",
-            category="intensity",
-            recommendation=(
-                "Add one structured high-intensity session per week (intervals or tempo) to improve Zone 4 distribution from 6% to 10-15%."
-            ),
-            rationale=(
-                "Current intensity distribution is heavily weighted toward Zone 2. "
-                "Adding structured intensity will improve performance adaptations while maintaining volume."
-            ),
-            timestamp=now.isoformat(),
-        ),
-        CoachRecommendation(
-            id=f"rec_{user_prefix}_2",
-            priority="low",
-            category="volume",
-            recommendation=("Maintain current weekly volume of 8-9 hours over the next 2 weeks before considering increases."),
-            rationale=(
-                "Volume has been consistent and TSB is positive. "
-                "Maintaining current volume allows for continued adaptation without increased injury risk."
-            ),
-            timestamp=now.isoformat(),
-        ),
-        CoachRecommendation(
-            id=f"rec_{user_prefix}_3",
-            priority="high",
-            category="recovery",
-            recommendation=("Continue monitoring TSB weekly. If TSB drops below -10, reduce volume by 20% for one week."),
-            rationale=("Recovery is currently good, but proactive management prevents overreaching and maintains long-term progress."),
-            timestamp=now.isoformat(),
-        ),
-    ]
+        recommendations_list = coach_response.get("recommendations", [])
+        risk_level = coach_response.get("risk_level", "none")
+        intervention = coach_response.get("intervention", False)
 
-    return CoachRecommendationsResponse(
-        recommendations=recommendations,
-        total=len(recommendations),
-    )
+        user_prefix = user_id[:8]
+        recommendations = []
+
+        categories = ["intensity", "volume", "recovery", "structure"]
+        priority_map = {
+            "high": "high",
+            "medium": "medium",
+            "low": "low",
+            "none": "low",
+        }
+        priority = priority_map.get(risk_level, "medium")
+
+        for idx, rec_text in enumerate(recommendations_list[:3]):
+            category = categories[idx % len(categories)]
+            recommendation = CoachRecommendation(
+                id=f"rec_{user_prefix}_{idx + 1}",
+                priority=priority if intervention else "medium",
+                category=category,
+                recommendation=rec_text,
+                rationale=coach_response.get("summary", "Based on current training state analysis."),
+                timestamp=now.isoformat(),
+            )
+            recommendations.append(recommendation)
+
+        if not recommendations:
+            recommendations.append(
+                CoachRecommendation(
+                    id=f"rec_{user_prefix}_1",
+                    priority="low",
+                    category="general",
+                    recommendation="Continue monitoring your training load and recovery.",
+                    rationale="Maintain consistency in your training routine.",
+                    timestamp=now.isoformat(),
+                )
+            )
+
+        return CoachRecommendationsResponse(
+            recommendations=recommendations,
+            total=len(recommendations),
+        )
+    except Exception as e:
+        logger.error(f"Error getting coach recommendations: {e}", exc_info=True)
+        return CoachRecommendationsResponse(
+            recommendations=[],
+            total=0,
+        )
 
 
 @router.get("/confidence", response_model=CoachConfidenceResponse)
 def get_coach_confidence(user_id: str = Depends(get_current_user)):
-    """Get confidence scores for coach outputs.
+    """Get confidence scores for coach outputs based on real data quality.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
-        CoachConfidenceResponse with confidence metrics
+        CoachConfidenceResponse with confidence metrics calculated from data quality
     """
     logger.info(f"[API] /coach/confidence endpoint called for user_id={user_id}")
     now = datetime.now(timezone.utc)
 
-    return CoachConfidenceResponse(
-        overall=0.82,
-        data_quality=0.85,
-        recommendations=0.78,
-        observations=0.85,
-        factors=[
-            "14+ days of training data available",
-            "Consistent data collection",
-            "Good coverage of activity types",
-            "Limited high-intensity data (affects intensity recommendations)",
-        ],
-        last_updated=now.isoformat(),
-    )
+    try:
+        overview = get_overview()
+        data_quality = overview.get("data_quality", "insufficient")
+
+        data_quality_scores = {
+            "ok": 0.90,
+            "limited": 0.65,
+            "insufficient": 0.30,
+        }
+
+        data_quality_score = data_quality_scores.get(data_quality, 0.30)
+
+        factors = []
+
+        if data_quality == "ok":
+            factors.extend([
+                "14+ days of training data available",
+                "Consistent data collection",
+                "Good coverage of activity types",
+            ])
+            overall = 0.85
+            recommendations = 0.80
+            observations = 0.85
+        elif data_quality == "limited":
+            factors.extend([
+                "Some training data available but with gaps",
+                "Limited data consistency",
+                "May affect recommendation accuracy",
+            ])
+            overall = 0.65
+            recommendations = 0.60
+            observations = 0.65
+        else:
+            factors.extend([
+                "Insufficient training data (<14 days)",
+                "Cannot provide reliable recommendations",
+                "Need more consistent data collection",
+            ])
+            overall = 0.30
+            recommendations = 0.25
+            observations = 0.30
+
+        return CoachConfidenceResponse(
+            overall=overall,
+            data_quality=data_quality_score,
+            recommendations=recommendations,
+            observations=observations,
+            factors=factors,
+            last_updated=now.isoformat(),
+        )
+    except Exception as e:
+        logger.error(f"Error getting coach confidence: {e}", exc_info=True)
+        return CoachConfidenceResponse(
+            overall=0.30,
+            data_quality=0.30,
+            recommendations=0.25,
+            observations=0.30,
+            factors=["Unable to assess data quality"],
+            last_updated=now.isoformat(),
+        )
 
 
 @router.post("/ask", response_model=CoachAskResponse)
 def ask_coach_endpoint(request: CoachAskRequest, user_id: str = Depends(get_current_user)):
-    """Ask the coach a question.
+    """Ask the coach a question using real LLM.
 
     Args:
         request: CoachAskRequest with message and optional context
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
-        CoachAskResponse with coach's reply
+        CoachAskResponse with coach's reply from LLM
     """
     logger.info(f"[API] /coach/ask endpoint called for user_id={user_id}: message={request.message}")
     now = datetime.now(timezone.utc)
 
-    # Mock response based on message content (simple keyword matching)
-    message_lower = request.message.lower()
-    if "tsb" in message_lower or "recovery" in message_lower:
-        reply = (
-            "Your current TSB is 7.3, which is positive and indicates good recovery. "
-            "This suggests you're managing your training load well and not accumulating excessive fatigue."
-        )
-        intent = "recovery_question"
-        confidence = 0.85
-    elif "volume" in message_lower or "hours" in message_lower:
-        reply = (
-            "Your weekly training volume is currently around 8.5 hours, "
-            "which has been consistent over the past 4 weeks. "
-            "This volume appears appropriate for your current fitness level and goals."
-        )
-        intent = "volume_question"
-        confidence = 0.80
-    elif "intensity" in message_lower or "zones" in message_lower:
-        reply = (
-            "Your training distribution shows 42% in Zone 2, 30% in Zone 1, "
-            "22% in Zone 3, and 6% in Zone 4. "
-            "Consider adding more structured high-intensity work to improve performance adaptations."
-        )
-        intent = "intensity_question"
-        confidence = 0.75
-    elif "next" in message_lower or "should" in message_lower or "recommend" in message_lower:
-        reply = (
-            "Based on your current training state, I recommend maintaining your current volume "
-            "while gradually increasing structured high-intensity sessions. "
-            "Focus on consistency over the next 2 weeks."
-        )
-        intent = "recommendation_request"
-        confidence = 0.82
-    else:
-        reply = (
-            "Thank you for your question. Based on your training data, "
-            "your current training load is well-managed with positive TSB indicating good recovery. "
-            "Continue maintaining consistency in your training."
-        )
-        intent = "general_question"
-        confidence = 0.70
+    try:
+        history_empty = _is_history_empty()
 
-    return CoachAskResponse(
-        reply=reply,
-        intent=intent,
-        confidence=confidence,
-        timestamp=now.isoformat(),
-    )
+        intent, reply = dispatch_coach_chat(
+            message=request.message,
+            days=60,
+            days_to_race=None,
+            history_empty=history_empty,
+        )
+
+        overview = get_overview()
+        data_quality = overview.get("data_quality", "insufficient")
+
+        confidence_scores = {
+            "ok": 0.85,
+            "limited": 0.65,
+            "insufficient": 0.40,
+        }
+        confidence = confidence_scores.get(data_quality, 0.40)
+
+        return CoachAskResponse(
+            reply=reply,
+            intent=intent,
+            confidence=confidence,
+            timestamp=now.isoformat(),
+        )
+    except Exception as e:
+        logger.error(f"Error in coach ask endpoint: {e}", exc_info=True)
+        return CoachAskResponse(
+            reply=(
+                "I encountered an error processing your question. "
+                "Please make sure your Strava account is connected and synced, "
+                "and try again."
+            ),
+            intent="error",
+            confidence=0.0,
+            timestamp=now.isoformat(),
+        )

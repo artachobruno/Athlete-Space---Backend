@@ -1,10 +1,20 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.api.schemas import (
+    CoachAskRequest,
+    CoachAskResponse,
+    CoachConfidenceResponse,
+    CoachObservation,
+    CoachObservationsResponse,
+    CoachRecommendation,
+    CoachRecommendationsResponse,
+    CoachSummaryResponse,
+)
 from app.coach.chat_utils.dispatcher import dispatch_coach_chat
 from app.state.db import get_session
 from app.state.models import CoachMessage, StravaAuth
@@ -116,3 +126,217 @@ def history(athlete_id: int = 23078584):
             }
             for m in msgs
         ]
+
+
+# ============================================================================
+# Phase 1 Contract Endpoints (Mock Data)
+# ============================================================================
+
+
+@router.get("/summary", response_model=CoachSummaryResponse)
+def get_coach_summary():
+    """Get high-level coaching summary.
+
+    Returns:
+        CoachSummaryResponse with training summary and focus
+    """
+    logger.info("[API] /coach/summary endpoint called")
+    now = datetime.now(timezone.utc)
+
+    return CoachSummaryResponse(
+        summary=(
+            "Your training has been consistent over the past 4 weeks with a good balance of "
+            "volume and intensity. TSB is positive, indicating adequate recovery."
+        ),
+        current_state=(
+            "Training load is well-managed with CTL at 65.5 and positive TSB of 7.3. Volume has been steady around 8-9 hours per week."
+        ),
+        next_focus=(
+            "Maintain current training volume while gradually increasing intensity in key sessions. "
+            "Focus on consistency over the next 2 weeks."
+        ),
+        last_updated=now.isoformat(),
+    )
+
+
+@router.get("/observations", response_model=CoachObservationsResponse)
+def get_coach_observations():
+    """Get coaching observations.
+
+    Returns:
+        CoachObservationsResponse with list of observations
+    """
+    logger.info("[API] /coach/observations endpoint called")
+    now = datetime.now(timezone.utc)
+
+    observations = [
+        CoachObservation(
+            id="obs_1",
+            category="volume",
+            observation=(
+                "Weekly volume has been consistent at 8-9 hours over the past 4 weeks, which is appropriate for your current fitness level."
+            ),
+            timestamp=now.isoformat(),
+            related_metrics={"week_volume_hours": 8.5, "avg_week_volume": 8.3},
+        ),
+        CoachObservation(
+            id="obs_2",
+            category="intensity",
+            observation=(
+                "Training distribution shows good balance with 42% in Zone 2, but could benefit from more structured high-intensity work."
+            ),
+            timestamp=now.isoformat(),
+            related_metrics={"zone2_percentage": 42.0, "zone4_percentage": 6.0},
+        ),
+        CoachObservation(
+            id="obs_3",
+            category="recovery",
+            observation="TSB has remained positive, indicating good recovery management and appropriate training load progression.",
+            timestamp=now.isoformat(),
+            related_metrics={"tsb": 7.3, "tsb_7d_avg": 5.2},
+        ),
+    ]
+
+    return CoachObservationsResponse(
+        observations=observations,
+        total=len(observations),
+    )
+
+
+@router.get("/recommendations", response_model=CoachRecommendationsResponse)
+def get_coach_recommendations():
+    """Get coaching recommendations.
+
+    Returns:
+        CoachRecommendationsResponse with list of recommendations
+    """
+    logger.info("[API] /coach/recommendations endpoint called")
+    now = datetime.now(timezone.utc)
+
+    recommendations = [
+        CoachRecommendation(
+            id="rec_1",
+            priority="medium",
+            category="intensity",
+            recommendation=(
+                "Add one structured high-intensity session per week (intervals or tempo) to improve Zone 4 distribution from 6% to 10-15%."
+            ),
+            rationale=(
+                "Current intensity distribution is heavily weighted toward Zone 2. "
+                "Adding structured intensity will improve performance adaptations while maintaining volume."
+            ),
+            timestamp=now.isoformat(),
+        ),
+        CoachRecommendation(
+            id="rec_2",
+            priority="low",
+            category="volume",
+            recommendation=("Maintain current weekly volume of 8-9 hours over the next 2 weeks before considering increases."),
+            rationale=(
+                "Volume has been consistent and TSB is positive. "
+                "Maintaining current volume allows for continued adaptation without increased injury risk."
+            ),
+            timestamp=now.isoformat(),
+        ),
+        CoachRecommendation(
+            id="rec_3",
+            priority="high",
+            category="recovery",
+            recommendation=("Continue monitoring TSB weekly. If TSB drops below -10, reduce volume by 20% for one week."),
+            rationale=("Recovery is currently good, but proactive management prevents overreaching and maintains long-term progress."),
+            timestamp=now.isoformat(),
+        ),
+    ]
+
+    return CoachRecommendationsResponse(
+        recommendations=recommendations,
+        total=len(recommendations),
+    )
+
+
+@router.get("/confidence", response_model=CoachConfidenceResponse)
+def get_coach_confidence():
+    """Get confidence scores for coach outputs.
+
+    Returns:
+        CoachConfidenceResponse with confidence metrics
+    """
+    logger.info("[API] /coach/confidence endpoint called")
+    now = datetime.now(timezone.utc)
+
+    return CoachConfidenceResponse(
+        overall=0.82,
+        data_quality=0.85,
+        recommendations=0.78,
+        observations=0.85,
+        factors=[
+            "14+ days of training data available",
+            "Consistent data collection",
+            "Good coverage of activity types",
+            "Limited high-intensity data (affects intensity recommendations)",
+        ],
+        last_updated=now.isoformat(),
+    )
+
+
+@router.post("/ask", response_model=CoachAskResponse)
+def ask_coach_endpoint(request: CoachAskRequest):
+    """Ask the coach a question.
+
+    Args:
+        request: CoachAskRequest with message and optional context
+
+    Returns:
+        CoachAskResponse with coach's reply
+    """
+    logger.info(f"[API] /coach/ask endpoint called: message={request.message}")
+    now = datetime.now(timezone.utc)
+
+    # Mock response based on message content (simple keyword matching)
+    message_lower = request.message.lower()
+    if "tsb" in message_lower or "recovery" in message_lower:
+        reply = (
+            "Your current TSB is 7.3, which is positive and indicates good recovery. "
+            "This suggests you're managing your training load well and not accumulating excessive fatigue."
+        )
+        intent = "recovery_question"
+        confidence = 0.85
+    elif "volume" in message_lower or "hours" in message_lower:
+        reply = (
+            "Your weekly training volume is currently around 8.5 hours, "
+            "which has been consistent over the past 4 weeks. "
+            "This volume appears appropriate for your current fitness level and goals."
+        )
+        intent = "volume_question"
+        confidence = 0.80
+    elif "intensity" in message_lower or "zones" in message_lower:
+        reply = (
+            "Your training distribution shows 42% in Zone 2, 30% in Zone 1, "
+            "22% in Zone 3, and 6% in Zone 4. "
+            "Consider adding more structured high-intensity work to improve performance adaptations."
+        )
+        intent = "intensity_question"
+        confidence = 0.75
+    elif "next" in message_lower or "should" in message_lower or "recommend" in message_lower:
+        reply = (
+            "Based on your current training state, I recommend maintaining your current volume "
+            "while gradually increasing structured high-intensity sessions. "
+            "Focus on consistency over the next 2 weeks."
+        )
+        intent = "recommendation_request"
+        confidence = 0.82
+    else:
+        reply = (
+            "Thank you for your question. Based on your training data, "
+            "your current training load is well-managed with positive TSB indicating good recovery. "
+            "Continue maintaining consistency in your training."
+        )
+        intent = "general_question"
+        confidence = 0.70
+
+    return CoachAskResponse(
+        reply=reply,
+        intent=intent,
+        confidence=confidence,
+        timestamp=now.isoformat(),
+    )

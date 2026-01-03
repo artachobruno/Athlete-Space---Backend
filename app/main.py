@@ -13,11 +13,13 @@ from app.api.admin_activities import router as admin_activities_router
 from app.api.admin_ingestion_status import router as admin_ingestion_router
 from app.api.admin_retry import router as admin_retry_router
 from app.api.analytics import router as analytics_router
+from app.api.calendar import router as calendar_router
 from app.api.coach import router as coach_router
 from app.api.coach_chat import router as coach_chat_router
 from app.api.me import router as me_router
 from app.api.state import router as state_router
 from app.api.strava import router as strava_router
+from app.api.training import router as training_router
 from app.core.logger import setup_logger
 from app.core.settings import settings
 from app.ingestion.scheduler import ingestion_tick
@@ -102,11 +104,13 @@ app.include_router(admin_retry_router)
 app.include_router(admin_ingestion_router)
 app.include_router(admin_activities_router)
 app.include_router(analytics_router)
+app.include_router(calendar_router)
 app.include_router(coach_router)
 app.include_router(coach_chat_router)
 app.include_router(me_router)
 app.include_router(strava_router)
 app.include_router(state_router)
+app.include_router(training_router)
 
 logger.info("FastAPI application initialized")
 

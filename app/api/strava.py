@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime as dt
 import time
 
 from fastapi import APIRouter, BackgroundTasks, Request
@@ -9,12 +8,8 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from app.core.settings import settings
-from app.db import update_last_ingested_at
-from app.ingestion.save_activities import save_activity_record
 from app.ingestion.tasks import backfill_task, incremental_task
-from app.integrations.strava.client import StravaClient
 from app.integrations.strava.oauth import exchange_code_for_token
-from app.integrations.strava.schemas import map_strava_activity
 from app.integrations.strava.token_service import TokenService
 from app.metrics.daily_aggregation import aggregate_daily_training
 from app.state.db import get_session
@@ -219,63 +214,6 @@ def strava_connect():
     return RedirectResponse(url)
 
 
-def _perform_immediate_sync(access_token: str, athlete_id: int) -> int:
-    """Perform immediate synchronous activity sync.
-
-    Returns:
-        Number of activities synced
-    """
-    logger.info("Starting immediate activity ingestion")
-    activities_synced = 0
-
-    try:
-        client = StravaClient(access_token=access_token)
-        # Fetch last 30 days of activities for initial sync
-        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
-        activities = client.fetch_recent_activities(after=since, per_page=100)
-
-        if not activities:
-            logger.info("No activities found for immediate sync")
-            return 0
-
-        logger.info(f"Fetched {len(activities)} activities for immediate sync")
-
-        # Commit incrementally to make progress visible (each activity commits individually)
-        batch_size = 10  # Log progress every 10 activities
-        newest_ts = 0
-
-        for activity in activities:
-            try:
-                # Use individual session per activity for immediate visibility
-                with get_session() as session:
-                    record = map_strava_activity(activity, athlete_id=athlete_id)
-                    save_activity_record(session, record)
-                    activities_synced += 1
-                    newest_ts = max(newest_ts, int(activity.start_date.timestamp()))
-
-                    # Log progress every 10 activities
-                    if activities_synced % batch_size == 0:
-                        logger.info(
-                            f"Immediate sync progress: {activities_synced}/{len(activities)} "
-                            f"activities saved ({int(activities_synced / len(activities) * 100)}%)"
-                        )
-            except Exception as e:
-                logger.warning(f"Failed to save activity {activity.id}: {e}")
-
-        # Update last_ingested_at after all activities are saved
-        if newest_ts > 0:
-            update_last_ingested_at(athlete_id, newest_ts)
-        else:
-            logger.warning("No activities to update last_ingested_at")
-
-        logger.info(f"Immediate sync completed: {activities_synced} activities saved")
-    except Exception as e:
-        logger.error(f"Immediate sync failed (non-fatal): {e}", exc_info=True)
-        return 0
-    else:
-        return activities_synced
-
-
 def _verify_strava_auth_saved(athlete_id: int) -> None:
     """Verify that StravaAuth record was saved successfully.
 
@@ -343,7 +281,7 @@ def strava_callback(code: str, request: Request, background_tasks: BackgroundTas
         athlete_id = token_data["athlete"]["id"]
         refresh_token = token_data["refresh_token"]
         expires_at = token_data["expires_at"]
-        access_token = token_data["access_token"]
+        _access_token = token_data["access_token"]
 
         logger.info(f"[STRAVA] OAuth successful for athlete_id={athlete_id}")
 
@@ -361,12 +299,9 @@ def strava_callback(code: str, request: Request, background_tasks: BackgroundTas
         # Verify the save was successful
         _verify_strava_auth_saved(athlete_id)
 
-        # Immediate synchronous ingestion using the access token we have
-        logger.info("[STRAVA] Starting immediate activity sync")
-        activities_synced = _perform_immediate_sync(access_token, athlete_id)
-        logger.info(f"[STRAVA] Immediate sync completed: {activities_synced} activities imported")
-
-        # Also schedule async tasks for background sync and backfill
+        # Schedule async tasks for background sync and backfill
+        # Note: Immediate sync removed - it requires user_id which this endpoint doesn't have.
+        # Background tasks will handle sync using the new ingestion system.
         logger.info("[STRAVA] Scheduling background ingestion tasks")
         background_tasks.add_task(incremental_task, athlete_id)
         background_tasks.add_task(backfill_task, athlete_id)

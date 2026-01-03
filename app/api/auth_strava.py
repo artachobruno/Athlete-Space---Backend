@@ -47,19 +47,18 @@ def _generate_oauth_state(user_id: str) -> str:
     return state
 
 
-def _validate_oauth_state(state: str, user_id: str) -> bool:
-    """Validate OAuth state token and ensure it matches the user.
+def _get_user_id_from_state(state: str) -> str | None:
+    """Extract user_id from OAuth state token.
 
     Args:
         state: OAuth state token from callback
-        user_id: Current authenticated user ID
 
     Returns:
-        True if state is valid and matches user, False otherwise
+        user_id if state is valid, None otherwise
     """
     if state not in _oauth_states:
         logger.warning(f"Invalid OAuth state: {state[:16]}... (not found)")
-        return False
+        return None
 
     stored_user_id, timestamp = _oauth_states[state]
     current_time = datetime.now(timezone.utc).timestamp()
@@ -68,14 +67,32 @@ def _validate_oauth_state(state: str, user_id: str) -> bool:
     if current_time - timestamp > 600:
         logger.warning(f"OAuth state expired: {state[:16]}...")
         del _oauth_states[state]
-        return False
-
-    if stored_user_id != user_id:
-        logger.warning(f"OAuth state user mismatch: state={state[:16]}..., stored_user={stored_user_id}, current_user={user_id}")
-        return False
+        return None
 
     # Clean up used state
     del _oauth_states[state]
+    logger.debug(f"Extracted user_id={stored_user_id} from OAuth state")
+    return stored_user_id
+
+
+def _validate_oauth_state(state: str, user_id: str) -> bool:
+    """Validate OAuth state token and ensure it matches the user.
+
+    Args:
+        state: OAuth state token from callback
+        user_id: Expected user ID
+
+    Returns:
+        True if state is valid and matches user, False otherwise
+    """
+    extracted_user_id = _get_user_id_from_state(state)
+    if extracted_user_id is None:
+        return False
+
+    if extracted_user_id != user_id:
+        logger.warning(f"OAuth state user mismatch: state={state[:16]}..., stored_user={extracted_user_id}, expected_user={user_id}")
+        return False
+
     logger.debug(f"Validated OAuth state for user_id={user_id}")
     return True
 
@@ -138,24 +155,21 @@ def strava_callback(
     code: str,
     state: str,
     request: Request,
-    user_id: str = Depends(get_current_user),
 ):
     """Handle Strava OAuth callback and store encrypted tokens.
 
-    Validates state (CSRF protection), exchanges code for tokens,
-    encrypts tokens, and stores them in strava_accounts table.
+    Validates state (CSRF protection), extracts user_id from state,
+    exchanges code for tokens, encrypts tokens, and stores them in strava_accounts table.
 
     Args:
         code: Authorization code from Strava
-        state: OAuth state token for CSRF protection
+        state: OAuth state token for CSRF protection (contains user_id)
         request: FastAPI request object
-        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         HTMLResponse with success/error message and redirect
     """
-    logger.info(f"[STRAVA_OAUTH] Callback received for user_id={user_id}")
-    logger.debug(f"[STRAVA_OAUTH] Callback code: {code[:10]}... (truncated)")
+    logger.info(f"[STRAVA_OAUTH] Callback received with state: {state[:16]}...")
 
     # Determine frontend URL for redirect
     redirect_url = settings.frontend_url
@@ -166,9 +180,10 @@ def strava_callback(
         elif host and not host.startswith("localhost"):
             redirect_url = f"https://{host}"
 
-    # Validate state (CSRF protection)
-    if not _validate_oauth_state(state, user_id):
-        logger.error(f"[STRAVA_OAUTH] Invalid or expired state for user_id={user_id}")
+    # Extract user_id from state (CSRF protection)
+    user_id = _get_user_id_from_state(state)
+    if not user_id:
+        logger.error(f"[STRAVA_OAUTH] Invalid or expired state: {state[:16]}...")
         return f"""
         <html>
         <head>
@@ -183,6 +198,9 @@ def strava_callback(
         </body>
         </html>
         """
+
+    logger.info(f"[STRAVA_OAUTH] Callback validated for user_id={user_id}")
+    logger.debug(f"[STRAVA_OAUTH] Callback code: {code[:10]}... (truncated)")
 
     try:
         # Exchange code for tokens

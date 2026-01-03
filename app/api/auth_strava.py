@@ -49,18 +49,20 @@ def _generate_oauth_state(user_id: str | None = None) -> str:
     return state
 
 
-def _get_user_id_from_state(state: str) -> str | None:
-    """Extract user_id from OAuth state token.
+def _validate_and_extract_state(state: str) -> tuple[bool, str | None]:
+    """Validate OAuth state and extract user_id.
 
     Args:
         state: OAuth state token from callback
 
     Returns:
-        user_id if state is valid and user was authenticated, None if state is valid but user was not authenticated
+        Tuple of (is_valid, user_id)
+        - is_valid: True if state is valid (not expired, exists)
+        - user_id: user_id if state is valid, None otherwise
     """
     if state not in _oauth_states:
         logger.warning(f"Invalid OAuth state: {state[:16]}... (not found)")
-        return None
+        return (False, None)
 
     stored_user_id, timestamp = _oauth_states[state]
     current_time = datetime.now(timezone.utc).timestamp()
@@ -69,12 +71,25 @@ def _get_user_id_from_state(state: str) -> str | None:
     if current_time - timestamp > 600:
         logger.warning(f"OAuth state expired: {state[:16]}...")
         del _oauth_states[state]
-        return None
+        return (False, None)
 
     # Clean up used state
     del _oauth_states[state]
     logger.debug(f"Extracted user_id={stored_user_id} from OAuth state")
-    return stored_user_id
+    return (True, stored_user_id)
+
+
+def _get_user_id_from_state(state: str) -> str | None:
+    """Extract user_id from OAuth state token (deprecated - use _validate_and_extract_state).
+
+    Args:
+        state: OAuth state token from callback
+
+    Returns:
+        user_id if state is valid and user was authenticated, None if state is valid but user was not authenticated
+    """
+    is_valid, user_id = _validate_and_extract_state(state)
+    return user_id if is_valid else None
 
 
 def _validate_oauth_state(state: str, user_id: str) -> bool:
@@ -198,8 +213,8 @@ def strava_callback(
 
     # Extract user_id from state (CSRF protection)
     # user_id can be None for unauthenticated users - we'll create user after OAuth
-    user_id = _get_user_id_from_state(state)
-    if user_id is None and state not in _oauth_states:
+    is_valid, user_id = _validate_and_extract_state(state)
+    if not is_valid:
         # State is invalid (not found or expired)
         logger.error(f"[STRAVA_OAUTH] Invalid or expired state: {state[:16]}...")
         return f"""

@@ -13,7 +13,7 @@ import requests
 from loguru import logger
 from sqlalchemy import select
 
-from app.core.encryption import EncryptionError, decrypt_token, encrypt_token
+from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
 from app.core.settings import settings
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
@@ -33,6 +33,105 @@ class RateLimitError(SyncError):
     """Raised when rate limit is hit."""
 
 
+def _decrypt_refresh_token(account: StravaAccount) -> str:
+    """Decrypt refresh token from account.
+
+    Args:
+        account: StravaAccount object
+
+    Returns:
+        Decrypted refresh token string
+
+    Raises:
+        TokenRefreshError: If decryption fails
+    """
+    try:
+        return decrypt_token(account.refresh_token)
+    except EncryptionKeyError as e:
+        logger.error(f"[SYNC] Encryption key mismatch for user_id={account.user_id}: {e}")
+        raise TokenRefreshError("Failed to decrypt token: ENCRYPTION_KEY not set or changed. User must re-authenticate with Strava.") from e
+    except EncryptionError as e:
+        logger.error(f"[SYNC] Failed to decrypt refresh token for user_id={account.user_id}: {e}")
+        raise TokenRefreshError(f"Failed to decrypt refresh token: {e}") from e
+
+
+def _refresh_token_with_strava(refresh_token: str, user_id: str) -> dict:
+    """Refresh access token with Strava API.
+
+    Args:
+        refresh_token: Decrypted refresh token
+        user_id: User ID for logging
+
+    Returns:
+        Token data dictionary from Strava
+
+    Raises:
+        TokenRefreshError: If refresh fails
+        RateLimitError: If rate limited
+    """
+    try:
+        return refresh_access_token(
+            client_id=settings.strava_client_id,
+            client_secret=settings.strava_client_secret,
+            refresh_token=refresh_token,
+        )
+    except requests.HTTPError as e:
+        if e.response is not None:
+            status_code = e.response.status_code
+            if status_code in {400, 401}:
+                logger.warning(f"[SYNC] Invalid refresh token for user_id={user_id}")
+                raise TokenRefreshError("Invalid refresh token. User must reconnect Strava.") from e
+            if status_code == 429:
+                logger.warning(f"[SYNC] Rate limited during token refresh for user_id={user_id}")
+                raise RateLimitError("Rate limited during token refresh") from e
+        logger.error(f"[SYNC] Token refresh failed for user_id={user_id}: {e}")
+        raise TokenRefreshError(f"Token refresh failed: {e}") from e
+
+
+def _validate_token_data(token_data: dict) -> tuple[str, str | None, int]:
+    """Validate and extract token data from Strava response.
+
+    Args:
+        token_data: Token data dictionary from Strava
+
+    Returns:
+        Tuple of (access_token, refresh_token, expires_at)
+
+    Raises:
+        TokenRefreshError: If validation fails
+    """
+    new_access_token = token_data.get("access_token")
+    new_refresh_token = token_data.get("refresh_token")
+    new_expires_at = token_data.get("expires_at")
+
+    if not isinstance(new_access_token, str):
+        raise TokenRefreshError("Invalid access_token type from Strava")
+
+    if not isinstance(new_expires_at, int):
+        raise TokenRefreshError("Invalid expires_at type from Strava")
+
+    return new_access_token, new_refresh_token, new_expires_at
+
+
+def _rotate_refresh_token(account: StravaAccount, new_refresh_token: str, new_expires_at: int, session) -> None:
+    """Update refresh token in account (token rotation).
+
+    Args:
+        account: StravaAccount object
+        new_refresh_token: New refresh token to store
+        new_expires_at: New expiration timestamp
+        session: Database session
+    """
+    try:
+        account.refresh_token = encrypt_token(new_refresh_token)
+        account.expires_at = new_expires_at
+        session.commit()
+        logger.info(f"[SYNC] Rotated refresh token for user_id={account.user_id}")
+    except EncryptionError as e:
+        logger.error(f"[SYNC] Failed to encrypt new refresh token: {e}")
+        # Continue with old refresh token - not critical
+
+
 def _get_access_token_from_account(account: StravaAccount, session) -> str:
     """Get valid access token from StravaAccount, refreshing if needed.
 
@@ -46,53 +145,12 @@ def _get_access_token_from_account(account: StravaAccount, session) -> str:
     Raises:
         TokenRefreshError: If token refresh fails
     """
-    # Decrypt refresh token
-    try:
-        refresh_token = decrypt_token(account.refresh_token)
-    except EncryptionError as e:
-        logger.error(f"[SYNC] Failed to decrypt refresh token for user_id={account.user_id}: {e}")
-        raise TokenRefreshError(f"Failed to decrypt refresh token: {e}") from e
+    refresh_token = _decrypt_refresh_token(account)
+    token_data = _refresh_token_with_strava(refresh_token, account.user_id)
+    new_access_token, new_refresh_token, new_expires_at = _validate_token_data(token_data)
 
-    # Refresh token to get new access token
-    try:
-        token_data = refresh_access_token(
-            client_id=settings.strava_client_id,
-            client_secret=settings.strava_client_secret,
-            refresh_token=refresh_token,
-        )
-    except requests.HTTPError as e:
-        if e.response is not None:
-            status_code = e.response.status_code
-            if status_code in {400, 401}:
-                logger.warning(f"[SYNC] Invalid refresh token for user_id={account.user_id}")
-                raise TokenRefreshError("Invalid refresh token. User must reconnect Strava.") from e
-            if status_code == 429:
-                logger.warning(f"[SYNC] Rate limited during token refresh for user_id={account.user_id}")
-                raise RateLimitError("Rate limited during token refresh") from e
-        logger.error(f"[SYNC] Token refresh failed for user_id={account.user_id}: {e}")
-        raise TokenRefreshError(f"Token refresh failed: {e}") from e
-
-    # Extract new tokens
-    new_access_token = token_data.get("access_token")
-    new_refresh_token = token_data.get("refresh_token")
-    new_expires_at = token_data.get("expires_at")
-
-    if not isinstance(new_access_token, str):
-        raise TokenRefreshError("Invalid access_token type from Strava")
-
-    if not isinstance(new_expires_at, int):
-        raise TokenRefreshError("Invalid expires_at type from Strava")
-
-    # Update refresh token if provided (token rotation)
     if new_refresh_token and isinstance(new_refresh_token, str):
-        try:
-            account.refresh_token = encrypt_token(new_refresh_token)
-            account.expires_at = new_expires_at
-            session.commit()
-            logger.info(f"[SYNC] Rotated refresh token for user_id={account.user_id}")
-        except EncryptionError as e:
-            logger.error(f"[SYNC] Failed to encrypt new refresh token: {e}")
-            # Continue with old refresh token - not critical
+        _rotate_refresh_token(account, new_refresh_token, new_expires_at, session)
 
     return new_access_token
 

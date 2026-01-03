@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from loguru import logger
 from sqlalchemy import select
 
-from app.core.auth import get_current_user
+from app.api.dependencies.auth import get_current_user_id
 from app.state.db import get_session
 from app.state.models import StravaAccount
 
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/integrations/strava", tags=["integrations", "strava"
 
 
 @router.get("/status")
-def strava_status(user_id: str = Depends(get_current_user)):
+def strava_status(user_id: str = Depends(get_current_user_id)):
     """Get Strava connection status for current user.
 
     Returns connection status, athlete_id, and last_sync_at.

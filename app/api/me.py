@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from sqlalchemy import func, select
 
-from app.core.auth import get_current_user
+from app.api.dependencies.auth import get_current_user_id
 from app.ingestion.sla import SYNC_SLA_SECONDS
 from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
 from app.metrics.data_quality import assess_data_quality
@@ -194,7 +194,7 @@ def _determine_sync_state(account: StravaAccount) -> str:
 
 
 @router.get("/status")
-def get_status(user_id: str = Depends(get_current_user)):
+def get_status(user_id: str = Depends(get_current_user_id)):
     """Get athlete sync status.
 
     Args:
@@ -298,7 +298,7 @@ def get_overview_data(user_id: str) -> dict:
 
 
 @router.get("/overview")
-def get_overview(user_id: str = Depends(get_current_user)):
+def get_overview(user_id: str = Depends(get_current_user_id)):
     """Get athlete training overview.
 
     Args:

@@ -17,7 +17,8 @@ from fastapi.responses import HTMLResponse
 from loguru import logger
 from sqlalchemy import select
 
-from app.core.auth import get_current_user
+from app.api.dependencies.auth import get_current_user_id
+from app.core.auth_jwt import create_access_token
 from app.core.encryption import EncryptionError, encrypt_token
 from app.core.settings import settings
 from app.integrations.strava.oauth import exchange_code_for_token
@@ -98,7 +99,7 @@ def _validate_oauth_state(state: str, user_id: str) -> bool:
 
 
 @router.get("")
-def strava_connect(user_id: str = Depends(get_current_user)):
+def strava_connect(user_id: str = Depends(get_current_user_id)):
     """Initiate Strava OAuth flow for authenticated user.
 
     Requires authenticated user. Returns OAuth URL for frontend to redirect.
@@ -259,6 +260,10 @@ def strava_callback(
             session.commit()
             logger.info(f"[STRAVA_OAUTH] Tokens stored successfully for user_id={user_id}")
 
+        # Issue JWT token for the user
+        jwt_token = create_access_token(user_id)
+        logger.info(f"[STRAVA_OAUTH] JWT token issued for user_id={user_id}")
+
         logger.info(f"[STRAVA_OAUTH] Strava connection completed for user_id={user_id}, athlete_id={athlete_id}")
 
     except HTTPException:
@@ -280,23 +285,32 @@ def strava_callback(
         </html>
         """
 
+    # Include JWT token in redirect URL for frontend to extract
+    redirect_with_token = f"{redirect_url}?token={jwt_token}&connected=true"
+
     return f"""
     <html>
     <head>
         <title>Strava Connected</title>
-        <meta http-equiv="refresh" content="3;url={redirect_url}">
+        <meta http-equiv="refresh" content="3;url={redirect_with_token}">
+        <script>
+            // Store token in localStorage for frontend
+            if (window.localStorage) {{
+                window.localStorage.setItem('auth_token', '{jwt_token}');
+            }}
+        </script>
     </head>
     <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
         <h2 style="color: #4FC3F7;">✓ Strava Connected Successfully!</h2>
         <p><small>Redirecting to Virtus AI...</small></p>
-        <p><a href="{redirect_url}">Click here if not redirected</a></p>
+        <p><a href="{redirect_with_token}">Click here if not redirected</a></p>
     </body>
     </html>
     """
 
 
 @router.post("/disconnect")
-def strava_disconnect(user_id: str = Depends(get_current_user)):
+def strava_disconnect(user_id: str = Depends(get_current_user_id)):
     """Disconnect user's Strava account.
 
     Deletes the strava_accounts row for the current user.

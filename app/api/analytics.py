@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from loguru import logger
 from sqlalchemy import text
 
-from app.core.auth import get_current_user
+from app.api.dependencies.auth import get_current_user_id
 from app.metrics.training_load import calculate_ctl_atl_tsb
 from app.state.db import SessionLocal
 
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
 @router.get("/metrics")
-def metrics(days: int = 60, user_id: str = Depends(get_current_user)):
+def metrics(days: int = 60, user_id: str = Depends(get_current_user_id)):
     """Get training metrics (CTL, ATL, TSB) with daily aggregations for charting.
 
     Args:

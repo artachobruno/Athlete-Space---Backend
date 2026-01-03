@@ -5,6 +5,7 @@ from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.api.dependencies.auth import get_current_user_id
 from app.api.me import get_overview
 from app.api.schemas import (
     CoachAskRequest,
@@ -18,7 +19,6 @@ from app.api.schemas import (
 )
 from app.coach.chat_utils.dispatcher import dispatch_coach_chat
 from app.coach.coach_service import get_coach_advice
-from app.core.auth import get_current_user
 from app.state.db import get_session
 from app.state.models import CoachMessage, StravaAuth
 
@@ -139,7 +139,7 @@ def history(athlete_id: int = 23078584):
 
 
 @router.get("/summary", response_model=CoachSummaryResponse)
-def get_coach_summary(user_id: str = Depends(get_current_user)):
+def get_coach_summary(user_id: str = Depends(get_current_user_id)):
     """Get high-level coaching summary from real LLM.
 
     Args:
@@ -179,7 +179,7 @@ def get_coach_summary(user_id: str = Depends(get_current_user)):
 
 
 @router.get("/observations", response_model=CoachObservationsResponse)
-def get_coach_observations(user_id: str = Depends(get_current_user)):
+def get_coach_observations(user_id: str = Depends(get_current_user_id)):
     """Get coaching observations from real LLM.
 
     Args:
@@ -240,7 +240,7 @@ def get_coach_observations(user_id: str = Depends(get_current_user)):
 
 
 @router.get("/recommendations", response_model=CoachRecommendationsResponse)
-def get_coach_recommendations(user_id: str = Depends(get_current_user)):
+def get_coach_recommendations(user_id: str = Depends(get_current_user_id)):
     """Get coaching recommendations from real LLM.
 
     Args:
@@ -309,7 +309,7 @@ def get_coach_recommendations(user_id: str = Depends(get_current_user)):
 
 
 @router.get("/confidence", response_model=CoachConfidenceResponse)
-def get_coach_confidence(user_id: str = Depends(get_current_user)):
+def get_coach_confidence(user_id: str = Depends(get_current_user_id)):
     """Get confidence scores for coach outputs based on real data quality.
 
     Args:
@@ -384,7 +384,7 @@ def get_coach_confidence(user_id: str = Depends(get_current_user)):
 
 
 @router.post("/ask", response_model=CoachAskResponse)
-def ask_coach_endpoint(request: CoachAskRequest, user_id: str = Depends(get_current_user)):
+def ask_coach_endpoint(request: CoachAskRequest, user_id: str = Depends(get_current_user_id)):
     """Ask the coach a question using real LLM.
 
     Args:

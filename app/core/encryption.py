@@ -8,12 +8,20 @@ from __future__ import annotations
 import base64
 import os
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from loguru import logger
 
 
 class EncryptionError(Exception):
     """Raised when encryption/decryption operations fail."""
+
+
+class EncryptionKeyError(EncryptionError):
+    """Raised when decryption fails due to wrong encryption key.
+
+    This typically occurs when ENCRYPTION_KEY is not set or changed,
+    causing tokens encrypted with a different key to fail decryption.
+    """
 
 
 def _get_encryption_key() -> bytes:
@@ -95,13 +103,25 @@ def decrypt_token(encrypted_token: str) -> str:
         Decrypted plain text token
 
     Raises:
-        EncryptionError: If decryption fails (e.g., invalid token or wrong key)
+        EncryptionKeyError: If decryption fails due to wrong encryption key
+        EncryptionError: If decryption fails for other reasons
     """
     try:
         cipher = _get_cipher()
         encrypted_bytes = base64.urlsafe_b64decode(encrypted_token.encode())
         decrypted = cipher.decrypt(encrypted_bytes)
         return decrypted.decode()
+    except InvalidToken as e:
+        error_msg = (
+            "Token decryption failed: Wrong encryption key. "
+            "This usually means ENCRYPTION_KEY environment variable is not set or has changed. "
+            "If ENCRYPTION_KEY is not set, a new key is generated on each startup, "
+            "which cannot decrypt tokens encrypted with previous keys. "
+            "Set ENCRYPTION_KEY to the key used to encrypt existing tokens, "
+            "or users will need to re-authenticate."
+        )
+        logger.error(error_msg)
+        raise EncryptionKeyError(error_msg) from e
     except Exception as e:
         logger.error(f"Token decryption failed: {e}")
         raise EncryptionError(f"Failed to decrypt token: {e}") from e

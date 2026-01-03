@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 from sqlalchemy import select
 
-from app.core.auth import get_current_user
-from app.core.encryption import EncryptionError, decrypt_token, encrypt_token
+from app.api.dependencies.auth import get_current_user_id
+from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
 from app.core.settings import settings
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
@@ -65,6 +65,12 @@ def _get_access_token_from_account(account: StravaAccount, session) -> str:
     try:
         # Decrypt refresh token
         refresh_token = decrypt_token(account.refresh_token)
+    except EncryptionKeyError as e:
+        logger.error(f"[INGESTION] Encryption key mismatch: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Token decryption failed: ENCRYPTION_KEY not set or changed. Please reconnect your Strava account.",
+        ) from e
     except EncryptionError as e:
         logger.error(f"[INGESTION] Failed to decrypt refresh token: {e}")
         raise HTTPException(
@@ -272,7 +278,7 @@ def _is_admin_or_dev(user_id: str) -> bool:
 @router.post("/ingest")
 def strava_ingest(
     since_days: int = 365,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
 ):
     """Trigger Strava activity ingestion (admin/dev only, manual recovery).
 

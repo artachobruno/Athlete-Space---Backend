@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 from sqlalchemy import select
 
+from app.api.dependencies.auth import get_current_user_id
 from app.api.schemas import (
     TrainingDistributionResponse,
     TrainingDistributionZone,
@@ -19,7 +20,6 @@ from app.api.schemas import (
     TrainingStateMetrics,
     TrainingStateResponse,
 )
-from app.core.auth import get_current_user
 from app.state.db import get_session
 from app.state.models import Activity, DailyTrainingLoad, WeeklyTrainingSummary
 
@@ -84,7 +84,7 @@ def _get_trend(ctl_values: list[float]) -> str:
 
 
 @router.get("/state", response_model=TrainingStateResponse)
-def get_training_state(user_id: str = Depends(get_current_user)):  # noqa: PLR0914
+def get_training_state(user_id: str = Depends(get_current_user_id)):  # noqa: PLR0914
     """Get current training state and metrics from computed data.
 
     Args:
@@ -173,7 +173,7 @@ def get_training_state(user_id: str = Depends(get_current_user)):  # noqa: PLR09
 
 @router.get("/distribution", response_model=TrainingDistributionResponse)
 def get_training_distribution(  # noqa: C901, PLR0912
-    period: str = "week", user_id: str = Depends(get_current_user)
+    period: str = "week", user_id: str = Depends(get_current_user_id)
 ):
     """Get training distribution across zones and activity types from real data.
 
@@ -279,7 +279,7 @@ def get_training_distribution(  # noqa: C901, PLR0912
 
 
 @router.get("/signals", response_model=TrainingSignalsResponse)
-def get_training_signals(user_id: str = Depends(get_current_user)):
+def get_training_signals(user_id: str = Depends(get_current_user_id)):
     """Get training signals and observations from computed metrics.
 
     Args:

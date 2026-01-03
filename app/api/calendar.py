@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 from loguru import logger
 from sqlalchemy import select
 
+from app.api.dependencies.auth import get_current_user_id
 from app.api.schemas import (
     CalendarSeasonResponse,
     CalendarSession,
@@ -18,7 +19,6 @@ from app.api.schemas import (
     CalendarTodayResponse,
     CalendarWeekResponse,
 )
-from app.core.auth import get_current_user
 from app.state.db import get_session
 from app.state.models import Activity
 
@@ -65,7 +65,7 @@ def _activity_to_session(activity: Activity) -> CalendarSession:
 
 
 @router.get("/season", response_model=CalendarSeasonResponse)
-def get_season(user_id: str = Depends(get_current_user)):
+def get_season(user_id: str = Depends(get_current_user_id)):
     """Get calendar data for the current season from real activities.
 
     Args:
@@ -105,7 +105,7 @@ def get_season(user_id: str = Depends(get_current_user)):
 
 
 @router.get("/week", response_model=CalendarWeekResponse)
-def get_week(user_id: str = Depends(get_current_user)):
+def get_week(user_id: str = Depends(get_current_user_id)):
     """Get calendar data for the current week from real activities.
 
     Args:
@@ -142,7 +142,7 @@ def get_week(user_id: str = Depends(get_current_user)):
 
 
 @router.get("/today", response_model=CalendarTodayResponse)
-def get_today(user_id: str = Depends(get_current_user)):
+def get_today(user_id: str = Depends(get_current_user_id)):
     """Get calendar data for today from real activities.
 
     Args:
@@ -177,7 +177,7 @@ def get_today(user_id: str = Depends(get_current_user)):
 
 
 @router.get("/sessions", response_model=CalendarSessionsResponse)
-def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_current_user)):
+def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_current_user_id)):
     """Get list of calendar sessions from real activities.
 
     Args:

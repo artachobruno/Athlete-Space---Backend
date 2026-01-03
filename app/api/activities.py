@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 from sqlalchemy import select
 
-from app.core.auth import get_current_user
+from app.api.dependencies.auth import get_current_user_id
 from app.state.db import get_session
 from app.state.models import Activity
 
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/activities", tags=["activities", "debug"])
 def get_activities(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
 ):
     """Get list of activities for current user (read-only, debug-only).
 
@@ -73,7 +73,7 @@ def get_activities(
 @router.get("/{activity_id}")
 def get_activity(
     activity_id: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
 ):
     """Get single activity by ID (read-only, debug-only).
 

@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from sqlalchemy import func, select, text
 
+from app.api.dependencies.auth import get_current_user_id
 from app.api.me import get_overview_data
 from app.coach.coach_service import get_coach_advice
-from app.core.auth import get_current_user
 from app.core.settings import settings
 from app.metrics.training_load import calculate_ctl_atl_tsb
 from app.state.db import SessionLocal, get_session
@@ -171,7 +171,7 @@ def training_load(days: int = 60, debug: bool = False):
 
 
 @router.get("/coach")
-async def get_coach_insights(user_id: str = Depends(get_current_user)):
+async def get_coach_insights(user_id: str = Depends(get_current_user_id)):
     """Get coaching insights from the LLM Coach.
 
     Returns:
@@ -248,7 +248,7 @@ def _build_limited_data_message(data_quality: str, activity_count: int) -> dict:
 
 
 @router.get("/coach/initial")
-def get_initial_coach_message(user_id: str = Depends(get_current_user)):
+def get_initial_coach_message(user_id: str = Depends(get_current_user_id)):
     """Get initial coach message for new users or users with insufficient data.
 
     Args:

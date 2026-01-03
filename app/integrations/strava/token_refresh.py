@@ -10,7 +10,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.encryption import EncryptionError, decrypt_token, encrypt_token
+from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
 from app.core.settings import settings
 from app.integrations.strava.tokens import refresh_access_token
 from app.state.models import StravaAccount
@@ -50,6 +50,9 @@ def refresh_user_tokens(session: Session, user_id: str) -> tuple[str, int]:
     try:
         refresh_token = decrypt_token(account_obj.refresh_token)
         logger.debug(f"[TOKEN_REFRESH] Decrypted refresh token for user_id={user_id}")
+    except EncryptionKeyError as e:
+        logger.error(f"[TOKEN_REFRESH] Encryption key mismatch for user_id={user_id}: {e}")
+        raise TokenRefreshError("Failed to decrypt token: ENCRYPTION_KEY not set or changed. User must re-authenticate.") from e
     except EncryptionError as e:
         logger.error(f"[TOKEN_REFRESH] Failed to decrypt refresh token: {e}")
         raise TokenRefreshError(f"Failed to decrypt refresh token: {e}") from e

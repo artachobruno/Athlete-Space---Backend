@@ -62,9 +62,10 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     user_ui_enabled: bool = Field(default=False, validation_alias="USER_UI_ENABLED")
-    clerk_secret_key: str = Field(default="", validation_alias="CLERK_SECRET_KEY")
-    clerk_publishable_key: str = Field(default="", validation_alias="CLERK_PUBLISHABLE_KEY")
     dev_user_id: str = Field(default="", validation_alias="DEV_USER_ID")
+    auth_secret_key: str = Field(default="", validation_alias="AUTH_SECRET_KEY")
+    auth_algorithm: str = Field(default="HS256", validation_alias="AUTH_ALGORITHM")
+    auth_token_expire_days: int = Field(default=30, validation_alias="AUTH_TOKEN_EXPIRE_DAYS")
     strava_webhook_verify_token: str = Field(default="", validation_alias="STRAVA_WEBHOOK_VERIFY_TOKEN")
     admin_user_ids: str = Field(default="", validation_alias="ADMIN_USER_IDS")  # Comma-separated list
 

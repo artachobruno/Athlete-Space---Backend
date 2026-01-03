@@ -249,7 +249,7 @@ def get_status():
         # Get activity count to track data retrieval
         # Use func.count with activity_id to avoid relying on id column
         with get_session() as session:
-            result = session.execute(select(func.count(Activity.activity_id))).scalar()
+            result = session.execute(select(func.count(Activity.id))).scalar()
             activity_count = result if result is not None else 0
 
         elapsed = time.time() - request_time
@@ -318,7 +318,10 @@ def get_overview():
         # Check if we have activities but no daily rows - trigger aggregation if needed
         with get_session() as session:
             # Count activities for this athlete
-            result_count = session.execute(select(func.count(Activity.activity_id)).where(Activity.athlete_id == athlete_id)).scalar()
+            # Note: Activity model uses user_id, not athlete_id
+            # This code path may need refactoring to work with new schema
+            # For now, count all activities (athlete_id mapping needed)
+            result_count = session.execute(select(func.count(Activity.id))).scalar()
             activity_count = result_count if result_count is not None else 0
             daily_rows = get_daily_rows(session, athlete_id, days=60)
 

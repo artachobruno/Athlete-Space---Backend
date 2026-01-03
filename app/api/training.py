@@ -1,13 +1,15 @@
-"""Training API endpoints - Phase 1: Mock data implementation.
+"""Training API endpoints with real data.
 
-These endpoints return mock data to establish the API contract before
-implementing real data logic.
+Step 6: Replaces mock data with real metrics from computed training load.
 """
 
-from datetime import datetime, timezone
+from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
+from sqlalchemy import select
 
 from app.api.schemas import (
     TrainingDistributionResponse,
@@ -18,13 +20,72 @@ from app.api.schemas import (
     TrainingStateResponse,
 )
 from app.core.auth import get_current_user
+from app.state.db import get_session
+from app.state.models import Activity, DailyTrainingLoad, WeeklyTrainingSummary
 
 router = APIRouter(prefix="/training", tags=["training"])
 
 
+def _get_current_metrics(user_id: str) -> dict[str, float]:
+    """Get current CTL, ATL, TSB for a user.
+
+    Args:
+        user_id: User ID
+
+    Returns:
+        Dictionary with ctl, atl, tsb values
+    """
+    with get_session() as session:
+        # Get most recent daily load record
+        today = datetime.now(tz=timezone.utc).date()
+        result = session.execute(
+            select(DailyTrainingLoad)
+            .where(
+                DailyTrainingLoad.user_id == user_id,
+                DailyTrainingLoad.date <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
+            )
+            .order_by(DailyTrainingLoad.date.desc())
+            .limit(1)
+        ).first()
+
+        if result:
+            daily_load = result[0]
+            return {
+                "ctl": daily_load.ctl,
+                "atl": daily_load.atl,
+                "tsb": daily_load.tsb,
+            }
+
+        # No metrics found - return zeros
+        return {"ctl": 0.0, "atl": 0.0, "tsb": 0.0}
+
+
+def _get_trend(ctl_values: list[float]) -> str:
+    """Determine trend from CTL values.
+
+    Args:
+        ctl_values: List of CTL values (most recent last)
+
+    Returns:
+        "increasing" | "stable" | "decreasing"
+    """
+    if len(ctl_values) < 7:
+        return "stable"
+
+    recent_avg = sum(ctl_values[-7:]) / len(ctl_values[-7:])
+    older_avg = sum(ctl_values[-14:-7]) / len(ctl_values[-14:-7]) if len(ctl_values) >= 14 else recent_avg
+
+    diff = recent_avg - older_avg
+    if diff > 2.0:
+        return "increasing"
+    if diff < -2.0:
+        return "decreasing"
+    return "stable"
+
+
 @router.get("/state", response_model=TrainingStateResponse)
-def get_training_state(user_id: str = Depends(get_current_user)):
-    """Get current training state and metrics.
+def get_training_state(user_id: str = Depends(get_current_user)):  # noqa: PLR0914
+    """Get current training state and metrics from computed data.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
@@ -32,33 +93,89 @@ def get_training_state(user_id: str = Depends(get_current_user)):
     Returns:
         TrainingStateResponse with current training state
     """
-    logger.info(f"[API] /training/state endpoint called for user_id={user_id}")
-    now = datetime.now(timezone.utc)
+    logger.info(f"[TRAINING] GET /training/state called for user_id={user_id}")
 
-    # Use user_id hash to make metrics user-specific
-    user_hash = hash(user_id) % 1000
-    base_ctl = 65.5 + (user_hash % 20) - 10
-    base_atl = 58.2 + (user_hash % 15) - 7
-    base_tsb = base_ctl - base_atl
+    # Get current metrics
+    current_metrics = _get_current_metrics(user_id)
+
+    # Get trend from recent CTL values
+    with get_session() as session:
+        recent_ctl = session.execute(
+            select(DailyTrainingLoad.ctl).where(DailyTrainingLoad.user_id == user_id).order_by(DailyTrainingLoad.date.desc()).limit(14)
+        ).all()
+        ctl_values = [r[0] for r in recent_ctl] if recent_ctl else [current_metrics["ctl"]]
+        trend = _get_trend(ctl_values)
+
+    # Get weekly volume and load
+    today = datetime.now(tz=timezone.utc).date()
+    days_since_monday = today.weekday()
+    week_start = today - timedelta(days=days_since_monday)
+
+    with get_session() as session:
+        # Get this week's summary
+        week_summary = session.execute(
+            select(WeeklyTrainingSummary).where(
+                WeeklyTrainingSummary.user_id == user_id,
+                WeeklyTrainingSummary.week_start == datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+            )
+        ).first()
+
+        week_volume_hours = 0.0
+        week_load = 0.0
+
+        if week_summary:
+            ws = week_summary[0]
+            week_volume_hours = ws.total_duration / 3600.0
+            # Week load = sum of daily load scores for the week
+            week_daily_loads = session.execute(
+                select(DailyTrainingLoad.load_score).where(
+                    DailyTrainingLoad.user_id == user_id,
+                    DailyTrainingLoad.date >= datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+                    DailyTrainingLoad.date <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
+                )
+            ).all()
+            week_load = sum(r[0] for r in week_daily_loads)
+
+        # Get this month's summary
+        month_start = today.replace(day=1)
+        month_activities = session.execute(
+            select(Activity).where(
+                Activity.user_id == user_id,
+                Activity.start_time >= datetime.combine(month_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+                Activity.start_time <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
+            )
+        ).all()
+
+        month_volume_hours = sum(a[0].duration_seconds for a in month_activities) / 3600.0
+        month_daily_loads = session.execute(
+            select(DailyTrainingLoad.load_score).where(
+                DailyTrainingLoad.user_id == user_id,
+                DailyTrainingLoad.date >= datetime.combine(month_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+                DailyTrainingLoad.date <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
+            )
+        ).all()
+        month_load = sum(r[0] for r in month_daily_loads)
 
     return TrainingStateResponse(
         current=TrainingStateMetrics(
-            ctl=round(base_ctl, 1),
-            atl=round(base_atl, 1),
-            tsb=round(base_tsb, 1),
-            trend="stable",
+            ctl=round(current_metrics["ctl"], 1),
+            atl=round(current_metrics["atl"], 1),
+            tsb=round(current_metrics["tsb"], 1),
+            trend=trend,
         ),
-        week_volume_hours=round(8.5 + (user_hash % 5) / 10, 1),
-        week_load=round(45.2 + (user_hash % 10) - 5, 1),
-        month_volume_hours=round(32.8 + (user_hash % 10) - 5, 1),
-        month_load=round(180.5 + (user_hash % 20) - 10, 1),
-        last_updated=now.isoformat(),
+        week_volume_hours=round(week_volume_hours, 1),
+        week_load=round(week_load, 1),
+        month_volume_hours=round(month_volume_hours, 1),
+        month_load=round(month_load, 1),
+        last_updated=datetime.now(timezone.utc).isoformat(),
     )
 
 
 @router.get("/distribution", response_model=TrainingDistributionResponse)
-def get_training_distribution(period: str = "week", user_id: str = Depends(get_current_user)):
-    """Get training distribution across zones and activity types.
+def get_training_distribution(  # noqa: C901, PLR0912
+    period: str = "week", user_id: str = Depends(get_current_user)
+):
+    """Get training distribution across zones and activity types from real data.
 
     Args:
         period: Time period: week | month | season (default: week)
@@ -67,42 +184,103 @@ def get_training_distribution(period: str = "week", user_id: str = Depends(get_c
     Returns:
         TrainingDistributionResponse with distribution data
     """
-    logger.info(f"[API] /training/distribution endpoint called for user_id={user_id}: period={period}")
+    logger.info(f"[TRAINING] GET /training/distribution called for user_id={user_id}, period={period}")
 
-    # Use user_id hash to make distribution user-specific
-    user_hash = hash(user_id) % 1000
+    today = datetime.now(tz=timezone.utc).date()
 
-    # Mock zone distribution (user-specific)
-    base_hours = [2.5, 3.5, 1.8, 0.5, 0.0]
-    zone_hours = [round(h + (user_hash % 3) / 10 - 0.1, 1) for h in base_hours]
-    total_zone_hours = sum(zone_hours)
-    zone_percentages = [round((h / total_zone_hours * 100) if total_zone_hours > 0 else 0, 1) for h in zone_hours]
+    # Determine date range
+    if period == "week":
+        days_since_monday = today.weekday()
+        start_date = today - timedelta(days=days_since_monday)
+        end_date = today
+    elif period == "month":
+        start_date = today.replace(day=1)
+        end_date = today
+    elif period == "season":
+        # Season = last 90 days
+        start_date = today - timedelta(days=90)
+        end_date = today
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid period: {period}. Must be 'week', 'month', or 'season'.",
+        )
 
-    zones = [
-        TrainingDistributionZone(zone="Zone 1", hours=zone_hours[0], percentage=zone_percentages[0]),
-        TrainingDistributionZone(zone="Zone 2", hours=zone_hours[1], percentage=zone_percentages[1]),
-        TrainingDistributionZone(zone="Zone 3", hours=zone_hours[2], percentage=zone_percentages[2]),
-        TrainingDistributionZone(zone="Zone 4", hours=zone_hours[3], percentage=zone_percentages[3]),
-        TrainingDistributionZone(zone="Zone 5", hours=zone_hours[4], percentage=zone_percentages[4]),
-    ]
+    with get_session() as session:
+        # Get activities in period
+        activities = session.execute(
+            select(Activity).where(
+                Activity.user_id == user_id,
+                Activity.start_time >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+                Activity.start_time <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc),
+            )
+        ).all()
 
-    # Mock activity type distribution (user-specific)
-    base_by_type = {"Run": 5.2, "Bike": 2.1, "Swim": 0.8, "Strength": 0.2}
-    by_type = {k: round(v + (user_hash % 3) / 10 - 0.1, 1) for k, v in base_by_type.items()}
+        activity_list = [a[0] for a in activities]
 
-    total_hours = sum(z.hours for z in zones)
+        # Calculate total hours
+        total_hours = sum(a.duration_seconds for a in activity_list) / 3600.0
 
-    return TrainingDistributionResponse(
-        period=period,
-        total_hours=total_hours,
-        zones=zones,
-        by_type=by_type,
-    )
+        # Simplified zone distribution (based on activity type and duration)
+        zone_hours = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+        for activity in activity_list:
+            duration_hours = activity.duration_seconds / 3600.0
+            activity_type = activity.type.lower()
+
+            # Simplified zone assignment based on activity characteristics
+            if activity_type in {"run", "trail run"}:
+                if duration_hours > 1.5:
+                    zone_hours[0] += duration_hours * 0.6
+                    zone_hours[1] += duration_hours * 0.4
+                elif duration_hours > 0.75:
+                    zone_hours[1] += duration_hours * 0.7
+                    zone_hours[2] += duration_hours * 0.3
+                else:
+                    zone_hours[2] += duration_hours * 0.5
+                    zone_hours[3] += duration_hours * 0.5
+            elif activity_type in {"ride", "virtualride"}:
+                if duration_hours > 2.0:
+                    zone_hours[0] += duration_hours * 0.5
+                    zone_hours[1] += duration_hours * 0.5
+                else:
+                    zone_hours[1] += duration_hours * 0.6
+                    zone_hours[2] += duration_hours * 0.4
+            else:
+                zone_hours[0] += duration_hours * 0.5
+                zone_hours[1] += duration_hours * 0.5
+
+        # Calculate percentages
+        zone_percentages = [round((h / total_hours * 100) if total_hours > 0 else 0, 1) for h in zone_hours]
+
+        zones = [
+            TrainingDistributionZone(zone="Zone 1", hours=round(zone_hours[0], 1), percentage=zone_percentages[0]),
+            TrainingDistributionZone(zone="Zone 2", hours=round(zone_hours[1], 1), percentage=zone_percentages[1]),
+            TrainingDistributionZone(zone="Zone 3", hours=round(zone_hours[2], 1), percentage=zone_percentages[2]),
+            TrainingDistributionZone(zone="Zone 4", hours=round(zone_hours[3], 1), percentage=zone_percentages[3]),
+            TrainingDistributionZone(zone="Zone 5", hours=round(zone_hours[4], 1), percentage=zone_percentages[4]),
+        ]
+
+        # Activity type distribution
+        by_type: dict[str, float] = {}
+        for activity in activity_list:
+            activity_type = activity.type
+            duration_hours = activity.duration_seconds / 3600.0
+            by_type[activity_type] = by_type.get(activity_type, 0.0) + duration_hours
+
+        by_type = {k: round(v, 1) for k, v in by_type.items()}
+
+        return TrainingDistributionResponse(
+            period=period,
+            total_hours=round(total_hours, 1),
+            zones=zones,
+            by_type=by_type,
+        )
 
 
 @router.get("/signals", response_model=TrainingSignalsResponse)
 def get_training_signals(user_id: str = Depends(get_current_user)):
-    """Get training signals and observations.
+    """Get training signals and observations from computed metrics.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
@@ -110,36 +288,104 @@ def get_training_signals(user_id: str = Depends(get_current_user)):
     Returns:
         TrainingSignalsResponse with active training signals
     """
-    logger.info(f"[API] /training/signals endpoint called for user_id={user_id}")
+    logger.info(f"[TRAINING] GET /training/signals called for user_id={user_id}")
+
     now = datetime.now(timezone.utc)
 
-    # Use user_id hash to make signals user-specific
-    user_hash = hash(user_id) % 1000
-    base_tsb = 7.3 + (user_hash % 5) - 2
-    base_atl = 58.2 + (user_hash % 10) - 5
-    base_ctl = 65.5 + (user_hash % 10) - 5
+    # Get current metrics
+    current_metrics = _get_current_metrics(user_id)
+    ctl = current_metrics["ctl"]
+    atl = current_metrics["atl"]
+    tsb = current_metrics["tsb"]
 
-    signals = [
-        TrainingSignal(
-            id=f"signal_{user_id[:8]}_1",
-            type="fatigue",
-            severity="low",
-            message="TSB is positive, indicating good recovery",
-            timestamp=now.isoformat(),
-            metrics={"tsb": round(base_tsb, 1), "atl": round(base_atl, 1)},
-        ),
-        TrainingSignal(
-            id=f"signal_{user_id[:8]}_2",
-            type="readiness",
-            severity="moderate",
-            message="CTL trending upward - maintain consistency",
-            timestamp=now.isoformat(),
-            metrics={"ctl": round(base_ctl, 1), "trend": 2.3},
-        ),
-    ]
+    signals: list[TrainingSignal] = []
+
+    # Signal 1: TSB-based recovery signal
+    if tsb > 5:
+        signals.append(
+            TrainingSignal(
+                id=f"signal_{user_id[:8]}_tsb_positive",
+                type="readiness",
+                severity="low",
+                message="TSB is positive, indicating good recovery and readiness for training",
+                timestamp=now.isoformat(),
+                metrics={"tsb": round(tsb, 1), "ctl": round(ctl, 1)},
+            )
+        )
+    elif tsb < -10:
+        signals.append(
+            TrainingSignal(
+                id=f"signal_{user_id[:8]}_tsb_negative",
+                type="fatigue",
+                severity="high",
+                message="TSB is very negative, indicating high fatigue. Consider recovery.",
+                timestamp=now.isoformat(),
+                metrics={"tsb": round(tsb, 1), "atl": round(atl, 1)},
+            )
+        )
+    elif tsb < -5:
+        signals.append(
+            TrainingSignal(
+                id=f"signal_{user_id[:8]}_tsb_moderate",
+                type="fatigue",
+                severity="moderate",
+                message="TSB is negative, indicating accumulated fatigue. Monitor recovery.",
+                timestamp=now.isoformat(),
+                metrics={"tsb": round(tsb, 1), "atl": round(atl, 1)},
+            )
+        )
+
+    # Signal 2: CTL trend
+    with get_session() as session:
+        recent_ctl = session.execute(
+            select(DailyTrainingLoad.ctl).where(DailyTrainingLoad.user_id == user_id).order_by(DailyTrainingLoad.date.desc()).limit(14)
+        ).all()
+        ctl_values = [r[0] for r in recent_ctl] if recent_ctl else []
+
+        if len(ctl_values) >= 7:
+            recent_avg = sum(ctl_values[:7]) / 7
+            older_avg = sum(ctl_values[7:14]) / 7 if len(ctl_values) >= 14 else recent_avg
+            trend_diff = recent_avg - older_avg
+
+            if trend_diff > 3:
+                signals.append(
+                    TrainingSignal(
+                        id=f"signal_{user_id[:8]}_ctl_rising",
+                        type="readiness",
+                        severity="moderate",
+                        message="CTL is trending upward - maintain consistency to build fitness",
+                        timestamp=now.isoformat(),
+                        metrics={"ctl": round(ctl, 1), "trend": round(trend_diff, 1)},
+                    )
+                )
+            elif trend_diff < -3:
+                signals.append(
+                    TrainingSignal(
+                        id=f"signal_{user_id[:8]}_ctl_falling",
+                        type="undertraining",
+                        severity="moderate",
+                        message="CTL is trending downward - consider increasing training load",
+                        timestamp=now.isoformat(),
+                        metrics={"ctl": round(ctl, 1), "trend": round(trend_diff, 1)},
+                    )
+                )
+
+    # Generate summary and recommendation
+    if not signals:
+        summary = "Training load is balanced. Continue current training volume and intensity."
+        recommendation = "Maintain current training plan."
+    elif tsb > 5:
+        summary = "Good recovery state with positive TSB. Ready for quality training."
+        recommendation = "Consider adding intensity work while maintaining recovery."
+    elif tsb < -10:
+        summary = "High fatigue detected. Recovery should be prioritized."
+        recommendation = "Reduce training load and focus on recovery activities."
+    else:
+        summary = "Training load is manageable but monitor fatigue levels."
+        recommendation = "Continue training with attention to recovery."
 
     return TrainingSignalsResponse(
         signals=signals,
-        summary="Training load is well-balanced with positive TSB indicating good recovery.",
-        recommendation="Continue current training volume and intensity.",
+        summary=summary,
+        recommendation=recommendation,
     )

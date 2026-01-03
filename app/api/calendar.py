@@ -1,13 +1,15 @@
-"""Calendar API endpoints - Phase 1: Mock data implementation.
+"""Calendar API endpoints with real activity data.
 
-These endpoints return mock data to establish the API contract before
-implementing real data logic.
+Step 6: Replaces mock data with real activities from database.
 """
+
+from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from loguru import logger
+from sqlalchemy import select
 
 from app.api.schemas import (
     CalendarSeasonResponse,
@@ -17,67 +19,54 @@ from app.api.schemas import (
     CalendarWeekResponse,
 )
 from app.core.auth import get_current_user
+from app.state.db import get_session
+from app.state.models import Activity
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
 
-def _generate_mock_sessions(start_date: datetime, count: int, user_id: str) -> list[CalendarSession]:
-    """Generate mock calendar sessions.
+def _activity_to_session(activity: Activity) -> CalendarSession:
+    """Convert Activity to CalendarSession.
 
     Args:
-        start_date: Starting date for sessions
-        count: Number of sessions to generate
-        user_id: User ID to make sessions user-specific
+        activity: Activity record
 
     Returns:
-        List of mock CalendarSession objects
+        CalendarSession object
     """
-    sessions = []
-    activity_types = ["Run", "Bike", "Swim", "Strength", "Yoga"]
-    intensities = ["easy", "moderate", "hard"]
-    statuses = ["planned", "completed", "skipped"]
-    titles = [
-        "Morning Run",
-        "Long Run",
-        "Interval Training",
-        "Recovery Run",
-        "Tempo Run",
-        "Base Ride",
-        "Swim Session",
-        "Strength Training",
-        "Yoga Flow",
-    ]
+    # Determine intensity based on duration
+    duration_hours = activity.duration_seconds / 3600.0
 
-    # Use user_id hash to make sessions deterministic per user
-    user_hash = hash(user_id) % 1000
+    if duration_hours > 1.5:
+        intensity = "easy"
+    elif duration_hours > 0.75:
+        intensity = "moderate"
+    else:
+        intensity = "hard"
 
-    current_date = start_date
-    for i in range(count):
-        session_date = current_date + timedelta(days=(i + user_hash) % 14)
-        sessions.append(
-            CalendarSession(
-                id=f"session_{user_id}_{i}",
-                date=session_date.strftime("%Y-%m-%d"),
-                time="07:00" if (i + user_hash) % 2 == 0 else "18:00",
-                type=activity_types[(i + user_hash) % len(activity_types)],
-                title=titles[(i + user_hash) % len(titles)],
-                duration_minutes=30 + ((i + user_hash) * 15) % 120,
-                distance_km=(
-                    5.0 + ((i + user_hash) * 2.5) % 25.0
-                    if activity_types[(i + user_hash) % len(activity_types)] in {"Run", "Bike"}
-                    else None
-                ),
-                intensity=intensities[(i + user_hash) % len(intensities)],
-                status=statuses[(i + user_hash) % len(statuses)],
-                notes=f"Mock session {i + 1} for user {user_id[:8]}" if i % 3 == 0 else None,
-            )
-        )
-    return sessions
+    # Format time
+    time_str = activity.start_time.strftime("%H:%M")
+
+    # Determine distance in km
+    distance_km = activity.distance_meters / 1000.0 if activity.distance_meters > 0 else None
+
+    return CalendarSession(
+        id=activity.id,
+        date=activity.start_time.strftime("%Y-%m-%d"),
+        time=time_str,
+        type=activity.type,
+        title=f"{activity.type} - {int(activity.duration_seconds / 60)}min",
+        duration_minutes=int(activity.duration_seconds / 60),
+        distance_km=round(distance_km, 2) if distance_km else None,
+        intensity=intensity,
+        status="completed",  # All activities from Strava are completed
+        notes=None,
+    )
 
 
 @router.get("/season", response_model=CalendarSeasonResponse)
 def get_season(user_id: str = Depends(get_current_user)):
-    """Get calendar data for the current season.
+    """Get calendar data for the current season from real activities.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
@@ -85,14 +74,25 @@ def get_season(user_id: str = Depends(get_current_user)):
     Returns:
         CalendarSeasonResponse with all sessions in the season
     """
-    logger.info(f"[API] /calendar/season endpoint called for user_id={user_id}")
+    logger.info(f"[CALENDAR] GET /calendar/season called for user_id={user_id}")
     now = datetime.now(timezone.utc)
     season_start = now - timedelta(days=90)
     season_end = now + timedelta(days=90)
 
-    sessions = _generate_mock_sessions(season_start, 45, user_id)
-    completed = sum(1 for s in sessions if s.status == "completed")
-    planned = sum(1 for s in sessions if s.status == "planned")
+    with get_session() as session:
+        activities = session.execute(
+            select(Activity)
+            .where(
+                Activity.user_id == user_id,
+                Activity.start_time >= season_start,
+                Activity.start_time <= season_end,
+            )
+            .order_by(Activity.start_time)
+        ).all()
+
+        sessions = [_activity_to_session(a[0]) for a in activities]
+        completed = len(sessions)  # All activities are completed
+        planned = 0  # No planned sessions yet
 
     return CalendarSeasonResponse(
         season_start=season_start.strftime("%Y-%m-%d"),
@@ -106,7 +106,7 @@ def get_season(user_id: str = Depends(get_current_user)):
 
 @router.get("/week", response_model=CalendarWeekResponse)
 def get_week(user_id: str = Depends(get_current_user)):
-    """Get calendar data for the current week.
+    """Get calendar data for the current week from real activities.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
@@ -114,27 +114,36 @@ def get_week(user_id: str = Depends(get_current_user)):
     Returns:
         CalendarWeekResponse with sessions for this week
     """
-    logger.info(f"[API] /calendar/week endpoint called for user_id={user_id}")
+    logger.info(f"[CALENDAR] GET /calendar/week called for user_id={user_id}")
     now = datetime.now(timezone.utc)
     # Get Monday of current week
     days_since_monday = now.weekday()
     monday = now - timedelta(days=days_since_monday)
     sunday = monday + timedelta(days=6)
 
-    sessions = _generate_mock_sessions(monday, 7, user_id)
-    # Filter to only sessions in the current week
-    week_sessions = [s for s in sessions if monday.strftime("%Y-%m-%d") <= s.date <= sunday.strftime("%Y-%m-%d")]
+    with get_session() as session:
+        activities = session.execute(
+            select(Activity)
+            .where(
+                Activity.user_id == user_id,
+                Activity.start_time >= monday,
+                Activity.start_time <= sunday,
+            )
+            .order_by(Activity.start_time)
+        ).all()
+
+        sessions = [_activity_to_session(a[0]) for a in activities]
 
     return CalendarWeekResponse(
         week_start=monday.strftime("%Y-%m-%d"),
         week_end=sunday.strftime("%Y-%m-%d"),
-        sessions=week_sessions,
+        sessions=sessions,
     )
 
 
 @router.get("/today", response_model=CalendarTodayResponse)
 def get_today(user_id: str = Depends(get_current_user)):
-    """Get calendar data for today.
+    """Get calendar data for today from real activities.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
@@ -142,23 +151,34 @@ def get_today(user_id: str = Depends(get_current_user)):
     Returns:
         CalendarTodayResponse with sessions for today
     """
-    logger.info(f"[API] /calendar/today endpoint called for user_id={user_id}")
+    logger.info(f"[CALENDAR] GET /calendar/today called for user_id={user_id}")
     today = datetime.now(timezone.utc)
+    today_start = today.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
     today_str = today.strftime("%Y-%m-%d")
 
-    sessions = _generate_mock_sessions(today, 3, user_id)
-    # Filter to only today's sessions
-    today_sessions = [s for s in sessions if s.date == today_str]
+    with get_session() as session:
+        activities = session.execute(
+            select(Activity)
+            .where(
+                Activity.user_id == user_id,
+                Activity.start_time >= today_start,
+                Activity.start_time <= today_end,
+            )
+            .order_by(Activity.start_time)
+        ).all()
+
+        sessions = [_activity_to_session(a[0]) for a in activities]
 
     return CalendarTodayResponse(
         date=today_str,
-        sessions=today_sessions,
+        sessions=sessions,
     )
 
 
 @router.get("/sessions", response_model=CalendarSessionsResponse)
 def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_current_user)):
-    """Get list of calendar sessions.
+    """Get list of calendar sessions from real activities.
 
     Args:
         limit: Maximum number of sessions to return (default: 50)
@@ -168,17 +188,21 @@ def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_cu
     Returns:
         CalendarSessionsResponse with list of sessions
     """
-    logger.info(f"[API] /calendar/sessions endpoint called for user_id={user_id}: limit={limit}, offset={offset}")
-    now = datetime.now(timezone.utc)
-    start_date = now - timedelta(days=30)
+    logger.info(f"[CALENDAR] GET /calendar/sessions called for user_id={user_id}: limit={limit}, offset={offset}")
 
-    sessions = _generate_mock_sessions(start_date, 30, user_id)
-    total = len(sessions)
+    with get_session() as session:
+        # Get total count
+        total_result = session.execute(select(Activity).where(Activity.user_id == user_id))
+        total = len(list(total_result))
 
-    # Apply pagination
-    paginated_sessions = sessions[offset : offset + limit]
+        # Get paginated activities
+        activities = session.execute(
+            select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time.desc()).limit(limit).offset(offset)
+        ).all()
+
+        sessions = [_activity_to_session(a[0]) for a in activities]
 
     return CalendarSessionsResponse(
-        sessions=paginated_sessions,
+        sessions=sessions,
         total=total,
     )

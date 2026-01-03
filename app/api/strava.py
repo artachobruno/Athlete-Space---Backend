@@ -37,7 +37,7 @@ def strava_status():
             if result:
                 auth = result[0]
                 # Check if activities exist - use func.count to avoid id column dependency
-                result_count = session.execute(select(func.count(Activity.activity_id))).scalar()
+                result_count = session.execute(select(func.count(Activity.id))).scalar()
                 activity_count = result_count if result_count is not None else 0
                 logger.info(f"[API] Strava status: connected=True, athlete_id={auth.athlete_id}, activity_count={activity_count}")
                 return {
@@ -70,7 +70,7 @@ def strava_sync_progress():
 
             auth = result[0]
             # Use func.count to avoid id column dependency
-            result_count = session.execute(select(func.count(Activity.activity_id))).scalar()
+            result_count = session.execute(select(func.count(Activity.id))).scalar()
             activity_count = result_count if result_count is not None else 0
             backfill_done = getattr(auth, "backfill_done", False)
             last_sync_at = auth.last_successful_sync_at if hasattr(auth, "last_successful_sync_at") else None

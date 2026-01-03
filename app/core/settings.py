@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     strava_client_id: str = Field(default="", validation_alias="STRAVA_CLIENT_ID")
     strava_client_secret: str = Field(default="", validation_alias="STRAVA_CLIENT_SECRET")
     strava_redirect_uri: str = Field(
-        default="http://localhost:8000/strava/callback",  # Default for local dev; MUST be set to backend URL in production
+        default="http://localhost:8000/auth/strava/callback",  # Default for local dev; MUST be set to backend URL in production
         validation_alias="STRAVA_REDIRECT_URI",
     )
     backend_url: str = Field(
@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     clerk_secret_key: str = Field(default="", validation_alias="CLERK_SECRET_KEY")
     clerk_publishable_key: str = Field(default="", validation_alias="CLERK_PUBLISHABLE_KEY")
     dev_user_id: str = Field(default="", validation_alias="DEV_USER_ID")
+    strava_webhook_verify_token: str = Field(default="", validation_alias="STRAVA_WEBHOOK_VERIFY_TOKEN")
+    admin_user_ids: str = Field(default="", validation_alias="ADMIN_USER_IDS")  # Comma-separated list
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -79,6 +81,14 @@ class Settings(BaseSettings):
                 "STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET environment variables are required. "
                 "Set them in .env file or environment variables."
             )
+        return value
+
+    @field_validator("strava_redirect_uri")
+    @classmethod
+    def validate_redirect_uri(cls, value: str) -> str:
+        """Validate that redirect URI points to /auth/strava/callback."""
+        if value and "/auth/strava/callback" not in value:
+            logger.warning(f"STRAVA_REDIRECT_URI should point to /auth/strava/callback, but got: {value}. This may cause OAuth failures.")
         return value
 
 

@@ -6,10 +6,10 @@ for FastAPI endpoints. Supports dev mode override via DEV_USER_ID.
 
 from __future__ import annotations
 
-from typing import Annotated, NoReturn
+from typing import NoReturn
 
 import jwt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 from loguru import logger
 from sqlalchemy import select
 
@@ -131,7 +131,7 @@ def _get_or_create_user(user_id: str) -> User:
             return new_user
 
 
-def get_current_user(request: Annotated[Request, Depends()]) -> str:
+def get_current_user(request: Request) -> str:
     """FastAPI dependency to get current authenticated user ID.
 
     This function:
@@ -141,7 +141,7 @@ def get_current_user(request: Annotated[Request, Depends()]) -> str:
     4. Returns user_id as string
 
     Args:
-        request: FastAPI request object (injected by Depends)
+        request: FastAPI request object (automatically injected by FastAPI)
 
     Returns:
         User ID as string (UUID format)

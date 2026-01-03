@@ -9,23 +9,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from loguru import logger
 
+from app.api.activities import router as activities_router
 from app.api.admin_activities import router as admin_activities_router
 from app.api.admin_ingestion_status import router as admin_ingestion_router
 from app.api.admin_retry import router as admin_retry_router
 from app.api.analytics import router as analytics_router
+from app.api.auth_strava import router as auth_strava_router
 from app.api.calendar import router as calendar_router
 from app.api.coach import router as coach_router
 from app.api.coach_chat import router as coach_chat_router
+from app.api.ingestion_strava import router as ingestion_strava_router
+from app.api.integrations_strava import router as integrations_strava_router
 from app.api.me import router as me_router
 from app.api.state import router as state_router
 from app.api.strava import router as strava_router
 from app.api.training import router as training_router
+from app.api.webhooks import router as webhooks_router
 from app.core.logger import setup_logger
 from app.core.settings import settings
-from app.ingestion.scheduler import ingestion_tick
+from app.ingestion.sync_scheduler import sync_tick
 from app.state.db import engine
 from app.state.models import Base
 from scripts.migrate_daily_summary import migrate_daily_summary
+from scripts.migrate_strava_accounts import migrate_strava_accounts
 
 # Initialize logger
 setup_logger(level="INFO")
@@ -47,6 +53,7 @@ logger.info("Database tables verified")
 logger.info("Running database migrations")
 try:
     migrate_daily_summary()
+    migrate_strava_accounts()
     logger.info("Database migrations completed successfully")
 except Exception as e:
     logger.error(f"Migration error (non-fatal): {e}", exc_info=True)
@@ -61,23 +68,23 @@ async def lifespan(_app: FastAPI):
     """
     # Start scheduler
     scheduler = BackgroundScheduler()
-    # Run ingestion every 5 minutes to continue backfill and get new activities
+    # Run background sync every 6 hours (Step 5: automated sync)
     scheduler.add_job(
-        ingestion_tick,
-        trigger=IntervalTrigger(minutes=5),
-        id="strava_ingestion",
-        name="Strava Ingestion Scheduler",
+        sync_tick,
+        trigger=IntervalTrigger(hours=6),
+        id="strava_background_sync",
+        name="Strava Background Sync",
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("[SCHEDULER] Started automatic ingestion scheduler (runs every 5 minutes)")
+    logger.info("[SCHEDULER] Started automatic background sync scheduler (runs every 6 hours)")
 
-    # Run initial ingestion tick
+    # Run initial sync tick
     try:
-        ingestion_tick()
-        logger.info("[SCHEDULER] Initial ingestion tick completed")
+        sync_tick()
+        logger.info("[SCHEDULER] Initial background sync tick completed")
     except Exception as e:
-        logger.error(f"[SCHEDULER] Initial ingestion tick failed: {e}", exc_info=True)
+        logger.error(f"[SCHEDULER] Initial background sync tick failed: {e}", exc_info=True)
 
     # Yield control to FastAPI (use await to satisfy async requirement)
     await asyncio.sleep(0)
@@ -100,17 +107,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(activities_router)
 app.include_router(admin_retry_router)
 app.include_router(admin_ingestion_router)
 app.include_router(admin_activities_router)
 app.include_router(analytics_router)
+app.include_router(auth_strava_router)
 app.include_router(calendar_router)
 app.include_router(coach_router)
 app.include_router(coach_chat_router)
+app.include_router(ingestion_strava_router)
+app.include_router(integrations_strava_router)
 app.include_router(me_router)
 app.include_router(strava_router)
 app.include_router(state_router)
 app.include_router(training_router)
+app.include_router(webhooks_router)
 
 logger.info("FastAPI application initialized")
 

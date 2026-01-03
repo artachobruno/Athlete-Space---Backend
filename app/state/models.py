@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -59,47 +60,47 @@ class StravaAuth(Base):
 
 
 class Activity(Base):
-    """Canonical activity records from various sources (Strava, Garmin, etc.).
+    """Strava activity records stored as immutable facts.
 
-    This is the FROZEN canonical schema. All activity data from any source
-    (Strava, Garmin, etc.) must map to these fields. UI never sees raw
-    source-specific fields.
+    Step 4: Historical activity ingestion from Strava.
+    Stores activities with full raw JSON for future processing.
 
-    Canonical Fields (FROZEN):
-    - id: Auto-incrementing primary key (internal use only)
-    - athlete_id: Athlete/user ID (integer, indexed for multi-user support)
-    - activity_id: Unique identifier from source (e.g., "strava-12345")
-    - source: Source system identifier (e.g., "strava", "garmin")
+    Schema:
+    - id: UUID primary key
+    - user_id: Foreign key to users.id (Clerk user ID)
+    - strava_activity_id: Strava's activity ID (string)
     - start_time: Activity start time in UTC (datetime, indexed)
-    - duration_s: Activity duration in seconds (integer)
-    - distance_m: Distance in meters (float)
-    - elevation_m: Elevation gain in meters (float)
-    - sport: Sport type (string, e.g., "run", "ride", "swim")
-    - avg_hr: Average heart rate in BPM (optional integer)
+    - type: Activity type (string, e.g., "Run", "Ride")
+    - duration_seconds: Activity duration in seconds (integer)
+    - distance_meters: Distance in meters (float)
+    - elevation_gain_meters: Elevation gain in meters (float)
+    - raw_json: Full raw JSON response from Strava API (JSONB)
+    - created_at: Record creation timestamp
 
     Constraints:
+    - Unique constraint: (user_id, strava_activity_id) prevents duplicates
     - All timestamps are UTC (no timezone ambiguity)
-    - UI never receives raw Strava/Garmin fields
-    - Future sources (Garmin) must map cleanly to this schema
-    - Unique constraint: (athlete_id, source, activity_id) prevents duplicates per athlete
+    - raw_json stores complete Strava response for future use
     """
 
     __tablename__ = "activities"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
 
-    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    activity_id: Mapped[str] = mapped_column(String, nullable=False)
-    source: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    strava_activity_id: Mapped[str] = mapped_column(String, nullable=False)
 
-    sport: Mapped[str] = mapped_column(String, nullable=False)
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    duration_s: Mapped[int] = mapped_column(Integer, nullable=False)
-    distance_m: Mapped[float] = mapped_column(Float, nullable=False)
-    elevation_m: Mapped[float] = mapped_column(Float, nullable=False)
-    avg_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    distance_meters: Mapped[float] = mapped_column(Float, nullable=False)
+    elevation_gain_meters: Mapped[float] = mapped_column(Float, nullable=False)
 
-    __table_args__ = (UniqueConstraint("athlete_id", "source", "activity_id", name="uq_activity_athlete_source_id"),)
+    raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (UniqueConstraint("user_id", "strava_activity_id", name="uq_activity_user_strava_id"),)
 
 
 class CoachMessage(Base):
@@ -115,3 +116,128 @@ class CoachMessage(Base):
     role: Mapped[str] = mapped_column(String, nullable=False)  # "user" or "assistant"
     content: Mapped[str] = mapped_column(Text, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class StravaAccount(Base):
+    """Strava OAuth account connection per user.
+
+    Stores encrypted OAuth tokens for each user's Strava connection.
+    Enforces one Strava account per user via unique constraint.
+
+    Fields:
+    - user_id: Foreign key to users.id
+    - athlete_id: Strava athlete ID (string)
+    - access_token: Encrypted access token (encrypted at rest)
+    - refresh_token: Encrypted refresh token (encrypted at rest)
+    - expires_at: Token expiration timestamp (Unix epoch seconds)
+    - last_sync_at: Last successful sync timestamp (nullable)
+    - created_at: Account creation timestamp
+    """
+
+    __tablename__ = "strava_accounts"
+
+    user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    athlete_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    access_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
+    refresh_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
+    expires_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_sync_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        # Enforce one Strava account per user
+        # Foreign key constraint handled at application level (SQLite compatibility)
+    )
+
+
+class DailyTrainingLoad(Base):
+    """Daily training load metrics (CTL, ATL, TSB).
+
+    Step 6: Derived metrics computed from activities.
+    Stores daily aggregated training load metrics.
+
+    Schema:
+    - user_id: Foreign key to users.id (Clerk user ID)
+    - date: Date (YYYY-MM-DD, indexed)
+    - ctl: Chronic Training Load (42-day EMA)
+    - atl: Acute Training Load (7-day EMA)
+    - tsb: Training Stress Balance (CTL - ATL)
+    - load_score: Daily training load score (computed from activities)
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
+
+    Constraints:
+    - Unique constraint: (user_id, date) prevents duplicates
+    - All dates are UTC (no timezone ambiguity)
+    - Metrics are recomputable from raw activities
+    """
+
+    __tablename__ = "daily_training_load"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    date: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    ctl: Mapped[float] = mapped_column(Float, nullable=False)
+    atl: Mapped[float] = mapped_column(Float, nullable=False)
+    tsb: Mapped[float] = mapped_column(Float, nullable=False)
+    load_score: Mapped[float] = mapped_column(Float, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_daily_load_user_date"),)
+
+
+class WeeklyTrainingSummary(Base):
+    """Weekly training summary metrics.
+
+    Step 6: Derived metrics computed from activities.
+    Stores weekly aggregated training metrics.
+
+    Schema:
+    - user_id: Foreign key to users.id (Clerk user ID)
+    - week_start: Week start date (Monday, YYYY-MM-DD, indexed)
+    - total_duration: Total training duration in seconds
+    - total_distance: Total distance in meters
+    - total_elevation: Total elevation gain in meters
+    - activity_count: Number of activities
+    - intensity_distribution: JSON field with zone distribution
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
+
+    Constraints:
+    - Unique constraint: (user_id, week_start) prevents duplicates
+    - All dates are UTC (no timezone ambiguity)
+    - Metrics are recomputable from raw activities
+    """
+
+    __tablename__ = "weekly_training_summary"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    week_start: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    total_duration: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_distance: Mapped[float] = mapped_column(Float, nullable=False)
+    total_elevation: Mapped[float] = mapped_column(Float, nullable=False)
+    activity_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    intensity_distribution: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (UniqueConstraint("user_id", "week_start", name="uq_weekly_summary_user_week"),)

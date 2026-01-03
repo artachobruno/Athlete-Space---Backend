@@ -95,3 +95,65 @@ class StravaClient:
         activities = [StravaActivity(**raw, raw=raw) for raw in payload]
         logger.info(f"[STRAVA_CLIENT] Fetched {len(activities)} activities from backfill page {page}")
         return activities
+
+    def get_activities(
+        self,
+        *,
+        after_ts: dt.datetime | None = None,
+        per_page: int = 200,
+    ) -> list[StravaActivity]:
+        """Fetch all activities with automatic pagination.
+
+        Fetches all activities from Strava API, handling pagination automatically.
+        Stops when an empty page is returned.
+
+        Args:
+            after_ts: Only fetch activities after this timestamp (optional)
+            per_page: Number of activities per page (max 200)
+
+        Returns:
+            List of all StravaActivity objects
+        """
+        logger.info(f"[STRAVA_CLIENT] Fetching activities (after_ts={after_ts}, per_page={per_page})")
+        all_activities = []
+        page = 1
+
+        while True:
+            logger.debug(f"[STRAVA_CLIENT] Fetching page {page}")
+            quota_manager.wait_for_slot()
+
+            params: dict[str, int | str] = {
+                "page": page,
+                "per_page": min(per_page, 200),  # Strava max is 200
+            }
+            if after_ts:
+                params["after"] = int(after_ts.timestamp())
+
+            resp = httpx.get(
+                f"{STRAVA_BASE_URL}/athlete/activities",
+                headers=self._headers(),
+                params=params,
+                timeout=15,
+            )
+
+            quota_manager.update_from_headers(dict(resp.headers))
+            resp.raise_for_status()
+
+            payload = resp.json()
+            if not payload:
+                logger.info(f"[STRAVA_CLIENT] No more activities (page {page} was empty)")
+                break
+
+            page_activities = [StravaActivity(**raw, raw=raw) for raw in payload]
+            all_activities.extend(page_activities)
+            logger.info(f"[STRAVA_CLIENT] Fetched {len(page_activities)} activities from page {page} (total: {len(all_activities)})")
+
+            # If we got fewer than per_page, we've reached the end
+            if len(page_activities) < per_page:
+                logger.info(f"[STRAVA_CLIENT] Reached end of activities (got {len(page_activities)} < {per_page})")
+                break
+
+            page += 1
+
+        logger.info(f"[STRAVA_CLIENT] Fetched {len(all_activities)} total activities")
+        return all_activities

@@ -31,6 +31,7 @@ from app.core.settings import settings
 from app.ingestion.sync_scheduler import sync_tick
 from app.state.db import engine
 from app.state.models import Base
+from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
@@ -60,6 +61,12 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_strava_accounts: {e}")
     logger.error(f"Migration failed: migrate_strava_accounts - {e}", exc_info=True)
+
+try:
+    migrate_activities_schema()
+except Exception as e:
+    migration_errors.append(f"migrate_activities_schema: {e}")
+    logger.error(f"Migration failed: migrate_activities_schema - {e}", exc_info=True)
 
 try:
     migrate_activities_user_id()

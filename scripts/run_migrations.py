@@ -11,6 +11,7 @@ import sys
 
 from loguru import logger
 
+from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
@@ -23,6 +24,7 @@ def run_all_migrations() -> None:
 
     migrations = [
         ("strava_accounts table", migrate_strava_accounts),
+        ("activities schema (add missing columns)", migrate_activities_schema),
         ("activities user_id column", migrate_activities_user_id),
         ("daily_summary tables", migrate_daily_summary),
         ("history cursor fields", migrate_history_cursor),

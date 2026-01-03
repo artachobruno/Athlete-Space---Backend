@@ -30,6 +30,7 @@ from app.core.settings import settings
 from app.ingestion.sync_scheduler import sync_tick
 from app.state.db import engine
 from app.state.models import Base
+from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
@@ -53,6 +54,7 @@ logger.info("Database tables verified")
 # Run migrations for derived tables
 logger.info("Running database migrations")
 try:
+    migrate_activities_user_id()
     migrate_daily_summary()
     migrate_strava_accounts()
     migrate_history_cursor()

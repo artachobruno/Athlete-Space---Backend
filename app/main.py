@@ -151,12 +151,13 @@ cors_origins = [
 ]
 # Remove duplicates and filter out empty strings
 cors_origins = list(set(filter(None, cors_origins)))
+logger.info(f"[CORS] Configured allowed origins: {cors_origins}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
     expose_headers=["*"],
 )
 

@@ -201,7 +201,7 @@ def root():
             <ul>
                 <li><a href="/docs">API Documentation (Swagger)</a></li>
                 <li><a href="/redoc">API Documentation (ReDoc)</a></li>
-                <li><a href="/strava/connect">Connect Strava</a></li>
+                <li><a href="/auth/strava">Connect Strava</a></li>
             </ul>
         </body>
     </html>

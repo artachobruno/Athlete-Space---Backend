@@ -16,6 +16,15 @@ def _is_postgresql() -> bool:
     return "postgresql" in str(engine.url).lower() or "postgres" in str(engine.url).lower()
 
 
+def _table_exists(conn) -> bool:
+    """Check if activities table exists."""
+    if _is_postgresql():
+        result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'activities'"))
+        return result.fetchone() is not None
+    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='activities'"))
+    return result.fetchone() is not None
+
+
 def _check_columns_exist(conn) -> tuple[bool, bool]:
     """Check if user_id and athlete_id columns exist.
 
@@ -127,7 +136,12 @@ def _make_user_id_not_null(conn) -> None:
 
 def migrate_activities_user_id() -> None:
     """Add user_id column to activities table and migrate existing data."""
-    with engine.connect() as conn:
+    with engine.begin() as conn:
+        # Check if table exists first
+        if not _table_exists(conn):
+            print("activities table does not exist. Skipping migration (table will be created by Base.metadata.create_all).")
+            return
+
         user_id_exists, athlete_id_exists = _check_columns_exist(conn)
 
         if user_id_exists:
@@ -135,30 +149,23 @@ def migrate_activities_user_id() -> None:
             return
 
         print("Adding user_id column to activities table...")
-        trans = conn.begin()
 
-        try:
-            _add_user_id_column(conn)
+        _add_user_id_column(conn)
 
-            print("Creating index on user_id...")
-            _create_user_id_index(conn)
+        print("Creating index on user_id...")
+        _create_user_id_index(conn)
 
-            if athlete_id_exists:
-                print("Mapping existing activities from athlete_id to user_id...")
-                _map_athlete_id_to_user_id(conn)
+        if athlete_id_exists:
+            print("Mapping existing activities from athlete_id to user_id...")
+            _map_athlete_id_to_user_id(conn)
 
-            print("Setting user_id for activities without athlete_id...")
-            _set_user_id_from_first_account(conn)
+        print("Setting user_id for activities without athlete_id...")
+        _set_user_id_from_first_account(conn)
 
-            print("Making user_id NOT NULL...")
-            _make_user_id_not_null(conn)
+        print("Making user_id NOT NULL...")
+        _make_user_id_not_null(conn)
 
-            trans.commit()
-            print("Migration complete: Added user_id column to activities table")
-        except Exception as e:
-            trans.rollback()
-            print(f"Migration failed: {e}")
-            raise
+        print("Migration complete: Added user_id column to activities table")
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ from app.ingestion.sync_scheduler import sync_tick
 from app.state.db import engine
 from app.state.models import Base
 from scripts.migrate_daily_summary import migrate_daily_summary
+from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 
 # Initialize logger
@@ -54,6 +55,7 @@ logger.info("Running database migrations")
 try:
     migrate_daily_summary()
     migrate_strava_accounts()
+    migrate_history_cursor()
     logger.info("Database migrations completed successfully")
 except Exception as e:
     logger.error(f"Migration error (non-fatal): {e}", exc_info=True)

@@ -23,20 +23,21 @@ from app.core.encryption import EncryptionError, encrypt_token
 from app.core.settings import settings
 from app.integrations.strava.oauth import exchange_code_for_token
 from app.state.db import get_session
-from app.state.models import StravaAccount
+from app.state.models import StravaAccount, User
 
 router = APIRouter(prefix="/auth/strava", tags=["auth", "strava"])
 
 # In-memory state storage for OAuth flow (CSRF protection)
 # In production, consider using Redis or database-backed storage
-_oauth_states: dict[str, tuple[str, float]] = {}  # state -> (user_id, timestamp)
+# state -> (user_id | None, timestamp) - user_id is None for unauthenticated users
+_oauth_states: dict[str, tuple[str | None, float]] = {}
 
 
-def _generate_oauth_state(user_id: str) -> str:
+def _generate_oauth_state(user_id: str | None = None) -> str:
     """Generate a secure OAuth state token tied to user session.
 
     Args:
-        user_id: Current authenticated user ID
+        user_id: Current authenticated user ID (None for unauthenticated users)
 
     Returns:
         Secure random state token
@@ -55,7 +56,7 @@ def _get_user_id_from_state(state: str) -> str | None:
         state: OAuth state token from callback
 
     Returns:
-        user_id if state is valid, None otherwise
+        user_id if state is valid and user was authenticated, None if state is valid but user was not authenticated
     """
     if state not in _oauth_states:
         logger.warning(f"Invalid OAuth state: {state[:16]}... (not found)")
@@ -99,20 +100,34 @@ def _validate_oauth_state(state: str, user_id: str) -> bool:
 
 
 @router.get("")
-def strava_connect(user_id: str = Depends(get_current_user_id)):
-    """Initiate Strava OAuth flow for authenticated user.
+def strava_connect(request: Request):
+    """Initiate Strava OAuth flow.
 
-    Requires authenticated user. Returns OAuth URL for frontend to redirect.
-    Includes CSRF-protected state parameter tied to user session.
+    Can be called with or without authentication. If authenticated, links Strava to existing user.
+    If not authenticated, creates new user after OAuth callback.
 
     Args:
-        user_id: Current authenticated user ID (from auth dependency)
+        request: FastAPI request object
 
     Returns:
         JSON response with redirect_url, oauth_url, and url fields containing
         the Strava OAuth URL. Frontend should redirect to this URL.
     """
-    logger.info(f"[STRAVA_OAUTH] Connect initiated for user_id={user_id}")
+    # Try to get user_id from auth header if present (optional)
+    user_id: str | None = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            from app.core.auth_jwt import decode_access_token
+            token = auth_header.replace("Bearer ", "").strip()
+            user_id = decode_access_token(token)
+            logger.info(f"[STRAVA_OAUTH] Connect initiated for authenticated user_id={user_id}")
+        except Exception:
+            # Invalid token - continue as unauthenticated
+            user_id = None
+            logger.info("[STRAVA_OAUTH] Connect initiated for unauthenticated user (will create user after OAuth)")
+    else:
+        logger.info("[STRAVA_OAUTH] Connect initiated for unauthenticated user (will create user after OAuth)")
 
     # Validate Strava credentials are configured
     if not settings.strava_client_id or not settings.strava_client_secret:
@@ -182,8 +197,10 @@ def strava_callback(
             redirect_url = f"https://{host}"
 
     # Extract user_id from state (CSRF protection)
+    # user_id can be None for unauthenticated users - we'll create user after OAuth
     user_id = _get_user_id_from_state(state)
-    if not user_id:
+    if user_id is None and state not in _oauth_states:
+        # State is invalid (not found or expired)
         logger.error(f"[STRAVA_OAUTH] Invalid or expired state: {state[:16]}...")
         return f"""
         <html>
@@ -200,7 +217,7 @@ def strava_callback(
         </html>
         """
 
-    logger.info(f"[STRAVA_OAUTH] Callback validated for user_id={user_id}")
+    logger.info(f"[STRAVA_OAUTH] Callback validated, user_id={user_id}")
     logger.debug(f"[STRAVA_OAUTH] Callback code: {code[:10]}... (truncated)")
 
     try:
@@ -218,6 +235,29 @@ def strava_callback(
         access_token = token_data["access_token"]
         refresh_token = token_data["refresh_token"]
         expires_at = token_data["expires_at"]
+
+        # If no user_id from state, check if account exists or create new user
+        with get_session() as session:
+            if user_id is None:
+                # Check if StravaAccount already exists for this athlete_id
+                existing_account = session.execute(
+                    select(StravaAccount).where(StravaAccount.athlete_id == athlete_id)
+                ).first()
+
+                if existing_account:
+                    # Account exists - use existing user_id
+                    user_id = existing_account[0].user_id
+                    logger.info(f"[STRAVA_OAUTH] Found existing account for athlete_id={athlete_id}, user_id={user_id}")
+                else:
+                    # Create new user - use athlete_id as base for user_id
+                    user_id = f"user_{athlete_id}"
+                    # Ensure user exists in users table
+                    user_result = session.execute(select(User).where(User.id == user_id)).first()
+                    if not user_result:
+                        new_user = User(id=user_id, email=None)
+                        session.add(new_user)
+                        session.commit()
+                        logger.info(f"[STRAVA_OAUTH] Created new user_id={user_id} for athlete_id={athlete_id}")
 
         logger.info(f"[STRAVA_OAUTH] OAuth successful for user_id={user_id}, athlete_id={athlete_id}")
 

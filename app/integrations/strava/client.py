@@ -100,20 +100,53 @@ class StravaClient:
         self,
         *,
         after_ts: dt.datetime | None = None,
+        before: int | None = None,
         per_page: int = 200,
     ) -> list[StravaActivity]:
-        """Fetch all activities with automatic pagination.
+        """Fetch activities from Strava API.
 
-        Fetches all activities from Strava API, handling pagination automatically.
-        Stops when an empty page is returned.
+        Behavior depends on parameters:
+        - If `before` is provided: Fetch ONE PAGE only (no pagination) - for history backfill
+        - If `after_ts` is provided: Fetch all pages with automatic pagination - for incremental sync
 
         Args:
-            after_ts: Only fetch activities after this timestamp (optional)
+            after_ts: Only fetch activities after this timestamp (optional, triggers pagination)
+            before: Unix timestamp - only fetch activities before this time (optional, single page only)
             per_page: Number of activities per page (max 200)
 
         Returns:
-            List of all StravaActivity objects
+            List of StravaActivity objects
         """
+        # If `before` is provided, fetch only one page (for history backfill)
+        if before is not None:
+            logger.info(f"[STRAVA_CLIENT] Fetching activities before={before} (per_page={per_page})")
+            quota_manager.wait_for_slot()
+
+            params: dict[str, int | str] = {
+                "per_page": min(per_page, 200),  # Strava max is 200
+                "before": before,
+            }
+
+            resp = httpx.get(
+                f"{STRAVA_BASE_URL}/athlete/activities",
+                headers=self._headers(),
+                params=params,
+                timeout=15,
+            )
+
+            quota_manager.update_from_headers(dict(resp.headers))
+            resp.raise_for_status()
+
+            payload = resp.json()
+            if not payload:
+                logger.info("[STRAVA_CLIENT] No activities returned from API")
+                return []
+
+            activities = [StravaActivity(**raw, raw=raw) for raw in payload]
+            logger.info(f"[STRAVA_CLIENT] Fetched {len(activities)} activities from Strava API")
+            return activities
+
+        # If `after_ts` is provided, fetch all pages with pagination (for incremental sync)
         logger.info(f"[STRAVA_CLIENT] Fetching activities (after_ts={after_ts}, per_page={per_page})")
         all_activities = []
         page = 1

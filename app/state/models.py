@@ -131,6 +131,8 @@ class StravaAccount(Base):
     - refresh_token: Encrypted refresh token (encrypted at rest)
     - expires_at: Token expiration timestamp (Unix epoch seconds)
     - last_sync_at: Last successful sync timestamp (nullable)
+    - oldest_synced_at: Earliest activity timestamp synced (Unix epoch seconds, nullable)
+    - full_history_synced: Whether full history backfill is complete (default: False)
     - created_at: Account creation timestamp
     """
 
@@ -142,6 +144,8 @@ class StravaAccount(Base):
     refresh_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
     expires_at: Mapped[int] = mapped_column(Integer, nullable=False)
     last_sync_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    oldest_synced_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    full_history_synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (

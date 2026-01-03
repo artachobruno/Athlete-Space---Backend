@@ -96,14 +96,11 @@ def _get_user_id_from_request(request: Request) -> str:
     return _verify_clerk_jwt(token)
 
 
-def _get_or_create_user(user_id: str) -> User:
+def _get_or_create_user(user_id: str) -> None:
     """Get or create user in database.
 
     Args:
         user_id: User ID from Clerk (string)
-
-    Returns:
-        User database record
 
     Raises:
         HTTPException: If user creation fails
@@ -112,7 +109,8 @@ def _get_or_create_user(user_id: str) -> User:
         # Try to get existing user
         result = session.execute(select(User).where(User.id == user_id)).first()
         if result:
-            return result[0]
+            # User exists, nothing to do
+            return
 
         # Create new user (idempotent - email will be None initially)
         try:
@@ -127,8 +125,6 @@ def _get_or_create_user(user_id: str) -> User:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create user: {e!s}",
             ) from e
-        else:
-            return new_user
 
 
 def get_current_user(request: Request) -> str:
@@ -152,7 +148,7 @@ def get_current_user(request: Request) -> str:
     # Extract and verify user ID from token
     clerk_user_id = _get_user_id_from_request(request)
 
-    # Get or create user in database
-    user = _get_or_create_user(clerk_user_id)
+    # Get or create user in database (returns user_id)
+    _get_or_create_user(clerk_user_id)
 
-    return user.id
+    return clerk_user_id

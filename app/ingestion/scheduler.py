@@ -3,9 +3,10 @@ from typing import TypedDict
 
 from loguru import logger
 
-from app.ingestion.tasks import backfill_task, incremental_task
+from app.ingestion.tasks import backfill_task, history_backfill_task, incremental_task
 from app.models import StravaAuth
 from app.state.db import get_session
+from app.state.models import StravaAccount
 
 STUCK_BACKFILL_SECONDS = 3 * 60 * 60  # 3 hours
 
@@ -58,6 +59,34 @@ def _run_backfill_tasks(user_data: list[UserData], now: int) -> None:
             logger.debug(f"[SCHEDULER] Skipping backfill for athlete_id={athlete_id} (already done)")
 
 
+def _run_history_backfill_tasks() -> None:
+    """Run history backfill tasks for StravaAccount users."""
+    with get_session() as session:
+        accounts = session.query(StravaAccount).all()
+
+        if not accounts:
+            logger.debug("[SCHEDULER] No StravaAccount users found for history backfill")
+            return
+
+        logger.info(f"[SCHEDULER] Found {len(accounts)} StravaAccount user(s) for history backfill")
+
+        for account in accounts:
+            user_id = account.user_id
+            if account.full_history_synced:
+                logger.debug(f"[SCHEDULER] Skipping history backfill for user_id={user_id} (already synced)")
+                continue
+
+            try:
+                logger.info(f"[SCHEDULER] Running history backfill for user_id={user_id}")
+                history_backfill_task(user_id)
+                logger.info(f"[SCHEDULER] History backfill completed for user_id={user_id}")
+            except Exception as e:
+                logger.error(
+                    f"[SCHEDULER] History backfill failed for user_id={user_id}: {e}",
+                    exc_info=True,
+                )
+
+
 def ingestion_tick() -> None:
     """Run one ingestion cycle.
 
@@ -101,3 +130,6 @@ def ingestion_tick() -> None:
     _run_backfill_tasks(user_data, now)
 
     logger.info(f"[SCHEDULER] Strava ingestion tasks completed for {len(users)} user(s)")
+
+    # 3️⃣ History backfill for StravaAccount users (new system)
+    _run_history_backfill_tasks()

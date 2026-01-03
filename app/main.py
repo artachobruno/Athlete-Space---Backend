@@ -20,6 +20,7 @@ from app.api.coach import router as coach_router
 from app.api.coach_chat import router as coach_chat_router
 from app.api.ingestion_strava import router as ingestion_strava_router
 from app.api.integrations_strava import router as integrations_strava_router
+from app.api.intelligence import router as intelligence_router
 from app.api.me import router as me_router
 from app.api.state import router as state_router
 from app.api.strava import router as strava_router
@@ -53,14 +54,39 @@ logger.info("Database tables verified")
 
 # Run migrations for derived tables
 logger.info("Running database migrations")
+migration_errors = []
+try:
+    migrate_strava_accounts()
+except Exception as e:
+    migration_errors.append(f"migrate_strava_accounts: {e}")
+    logger.error(f"Migration failed: migrate_strava_accounts - {e}", exc_info=True)
+
 try:
     migrate_activities_user_id()
-    migrate_daily_summary()
-    migrate_strava_accounts()
-    migrate_history_cursor()
-    logger.info("Database migrations completed successfully")
 except Exception as e:
-    logger.error(f"Migration error (non-fatal): {e}", exc_info=True)
+    migration_errors.append(f"migrate_activities_user_id: {e}")
+    logger.error(f"Migration failed: migrate_activities_user_id - {e}", exc_info=True)
+
+try:
+    migrate_daily_summary()
+except Exception as e:
+    migration_errors.append(f"migrate_daily_summary: {e}")
+    logger.error(f"Migration failed: migrate_daily_summary - {e}", exc_info=True)
+
+try:
+    migrate_history_cursor()
+except Exception as e:
+    migration_errors.append(f"migrate_history_cursor: {e}")
+    logger.error(f"Migration failed: migrate_history_cursor - {e}", exc_info=True)
+
+if migration_errors:
+    logger.error(
+        f"Some migrations failed ({len(migration_errors)} errors). "
+        "The application will continue, but database schema may be incomplete. "
+        "Run 'python scripts/run_migrations.py' manually to fix."
+    )
+else:
+    logger.info("Database migrations completed successfully")
 
 
 @asynccontextmanager
@@ -122,6 +148,7 @@ app.include_router(coach_router)
 app.include_router(coach_chat_router)
 app.include_router(ingestion_strava_router)
 app.include_router(integrations_strava_router)
+app.include_router(intelligence_router)
 app.include_router(me_router)
 app.include_router(strava_router)
 app.include_router(state_router)

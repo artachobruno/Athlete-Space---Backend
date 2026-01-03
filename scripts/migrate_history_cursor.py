@@ -14,9 +14,24 @@ from sqlalchemy import text
 from app.state.db import engine
 
 
+def _table_exists(conn) -> bool:
+    """Check if strava_accounts table exists."""
+    if "sqlite" in str(engine.url).lower():
+        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='strava_accounts'"))
+        return result.fetchone() is not None
+    # PostgreSQL
+    result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'strava_accounts'"))
+    return result.fetchone() is not None
+
+
 def migrate_history_cursor() -> None:
     """Add history cursor fields to strava_accounts table."""
     with engine.connect() as conn:
+        # Check if table exists first
+        if not _table_exists(conn):
+            print("strava_accounts table does not exist. Skipping migration (table will be created by migrate_strava_accounts).")
+            return
+
         # Check if columns already exist
         if "sqlite" in str(engine.url).lower():
             result = conn.execute(text("PRAGMA table_info(strava_accounts)"))
@@ -27,7 +42,8 @@ def migrate_history_cursor() -> None:
                 text("""
                     SELECT column_name
                     FROM information_schema.columns
-                    WHERE table_name = 'strava_accounts'
+                    WHERE table_schema = 'public'
+                    AND table_name = 'strava_accounts'
                 """)
             )
             columns = [row[0] for row in result.fetchall()]

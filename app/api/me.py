@@ -8,49 +8,40 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import NoReturn
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from sqlalchemy import func, select
 
+from app.core.auth import get_current_user
 from app.ingestion.sla import SYNC_SLA_SECONDS
 from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
 from app.metrics.data_quality import assess_data_quality
 from app.metrics.training_load import compute_training_load
 from app.state.db import get_session
-from app.state.models import Activity, StravaAuth
+from app.state.models import Activity, StravaAccount
 
 router = APIRouter(prefix="/me", tags=["me"])
 
 
-def _raise_missing_athlete_id_error() -> NoReturn:
-    """Raise HTTPException for missing athlete_id."""
-    raise HTTPException(status_code=500, detail="athlete_id is missing")
+def get_strava_account(user_id: str) -> StravaAccount:
+    """Get StravaAccount for current user.
 
-
-def get_current_user_data() -> dict[str, int | str | None]:
-    """Get current user data from StravaAuth record.
+    Args:
+        user_id: Current authenticated user ID
 
     Returns:
-        Dictionary with user data: athlete_id, last_error, backfill_done, last_successful_sync_at
+        StravaAccount instance
 
     Raises:
-        HTTPException: If no user is connected
+        HTTPException: If no Strava account is connected
     """
     with get_session() as session:
-        result = session.execute(select(StravaAuth)).first()
+        result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
         if not result:
-            logger.warning("No Strava account connected - user needs to complete OAuth")
-            raise HTTPException(status_code=404, detail="No Strava account connected. Please complete OAuth at /strava/connect")
-        user = result[0]
-        # Extract all needed attributes while session is open
-        return {
-            "athlete_id": user.athlete_id,
-            "last_error": user.last_error,
-            "backfill_done": getattr(user, "backfill_done", None),
-            "last_successful_sync_at": user.last_successful_sync_at,
-        }
+            logger.warning(f"No Strava account connected for user_id={user_id}")
+            raise HTTPException(status_code=404, detail="No Strava account connected. Please complete OAuth at /auth/strava")
+        return result[0]
 
 
 def _extract_today_metrics(metrics_result: dict[str, list[tuple[str, float]]]) -> dict[str, float]:
@@ -136,11 +127,11 @@ def _build_overview_response(
     }
 
 
-def _maybe_trigger_aggregation(athlete_id: int, activity_count: int, daily_rows: list) -> list:
+def _maybe_trigger_aggregation(user_id: str, activity_count: int, daily_rows: list) -> list:
     """Trigger aggregation if needed and return updated daily_rows.
 
     Args:
-        athlete_id: Athlete ID
+        user_id: Clerk user ID (string)
         activity_count: Number of activities in database
         daily_rows: Current daily rows list
 
@@ -148,113 +139,96 @@ def _maybe_trigger_aggregation(athlete_id: int, activity_count: int, daily_rows:
         Updated daily_rows list (may be re-fetched after aggregation)
     """
     if activity_count > 0 and len(daily_rows) == 0:
-        logger.info(
-            f"[API] /me/overview: Auto-triggering aggregation for athlete_id={athlete_id} (activities={activity_count}, daily_rows=0)"
-        )
+        logger.info(f"[API] /me/overview: Auto-triggering aggregation for user_id={user_id} (activities={activity_count}, daily_rows=0)")
         try:
-            aggregate_daily_training(athlete_id)
+            aggregate_daily_training(user_id)
             # Re-fetch daily rows after aggregation in a new session
             with get_session() as session:
-                daily_rows = get_daily_rows(session, athlete_id, days=60)
+                daily_rows = get_daily_rows(session, user_id, days=60)
             logger.info(f"[API] /me/overview: Aggregation completed, now have {len(daily_rows)} daily rows")
         except Exception as e:
             logger.error(
-                f"[API] /me/overview: Failed to auto-aggregate for athlete_id={athlete_id}: {e}",
+                f"[API] /me/overview: Failed to auto-aggregate for user_id={user_id}: {e}",
                 exc_info=True,
             )
     return daily_rows
 
 
-def _determine_sync_state(user_data: dict[str, int | str | None]) -> str:
-    """Determine sync state based on user's sync status.
+def _determine_sync_state(account: StravaAccount) -> str:
+    """Determine sync state based on StravaAccount sync status.
 
     States:
     - "ok": Last sync was successful and within SLA
-    - "syncing": Backfill is in progress (backfill_done == False)
-    - "stale": Last sync is beyond SLA threshold
-    - "error": Last sync had an error
+    - "syncing": Backfill is in progress (full_history_synced == False)
+    - "stale": Last sync is beyond SLA threshold or never happened
 
     Args:
-        user_data: Dictionary with user data
+        account: StravaAccount instance
 
     Returns:
-        Sync state string: "ok" | "syncing" | "stale" | "error"
+        Sync state string: "ok" | "syncing" | "stale"
     """
     now = int(time.time())
-    athlete_id = user_data.get("athlete_id", "unknown")
-
-    # Check for errors first
-    last_error = user_data.get("last_error")
-    if last_error:
-        logger.info(f"Sync state for athlete_id={athlete_id}: error (last_error={last_error})")
-        return "error"
 
     # Check if backfill is in progress
-    backfill_done = user_data.get("backfill_done", False)
-    if not backfill_done:
-        logger.info(f"Sync state for athlete_id={athlete_id}: syncing (backfill_done=False)")
+    if not account.full_history_synced:
+        logger.info(f"Sync state for user_id={account.user_id}: syncing (full_history_synced=False)")
         return "syncing"
 
     # Check if last sync exists and is within SLA
-    last_sync_at = user_data.get("last_successful_sync_at")
-    if last_sync_at:
-        age_seconds = now - int(last_sync_at)
+    if account.last_sync_at:
+        age_seconds = now - account.last_sync_at
         age_minutes = age_seconds // 60
         if age_seconds <= SYNC_SLA_SECONDS:
-            logger.info(f"Sync state for athlete_id={athlete_id}: ok (last_sync {age_minutes} minutes ago, within SLA)")
+            logger.info(f"Sync state for user_id={account.user_id}: ok (last_sync {age_minutes} minutes ago, within SLA)")
             return "ok"
         logger.info(
-            f"Sync state for athlete_id={athlete_id}: stale "
+            f"Sync state for user_id={account.user_id}: stale "
             f"(last_sync {age_minutes} minutes ago, beyond SLA of {SYNC_SLA_SECONDS // 60} minutes)"
         )
         return "stale"
 
     # No sync ever happened
-    logger.info(f"Sync state for athlete_id={athlete_id}: stale (no sync ever happened)")
+    logger.info(f"Sync state for user_id={account.user_id}: stale (no sync ever happened)")
     return "stale"
 
 
 @router.get("/status")
-def get_status():
+def get_status(user_id: str = Depends(get_current_user)):
     """Get athlete sync status.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         {
             "connected": bool,
             "last_sync": str | null,  # ISO 8601 timestamp or null
-            "state": "ok" | "syncing" | "stale" | "error"
+            "state": "ok" | "syncing" | "stale"
         }
     """
     try:
         request_time = time.time()
         now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
-        logger.info(f"[API] /me/status endpoint called at {now_str}")
-        logger.debug("Status check requested")
-        user_data = get_current_user_data()
-        athlete_id = user_data.get("athlete_id")
-        logger.debug(
-            f"User data retrieved: athlete_id={athlete_id}, "
-            f"backfill_done={user_data.get('backfill_done')}, "
-            f"last_sync_at={user_data.get('last_successful_sync_at')}, "
-            f"last_error={user_data.get('last_error')}"
-        )
+        logger.info(f"[API] /me/status endpoint called at {now_str} for user_id={user_id}")
 
-        state = _determine_sync_state(user_data)
+        # Get StravaAccount for user
+        account = get_strava_account(user_id)
+
+        state = _determine_sync_state(account)
 
         last_sync = None
-        last_sync_at = user_data.get("last_successful_sync_at")
-        if last_sync_at:
-            last_sync = datetime.fromtimestamp(int(last_sync_at), tz=timezone.utc).isoformat()
+        if account.last_sync_at:
+            last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat()
 
         # Get activity count to track data retrieval
-        # Use func.count with activity_id to avoid relying on id column
         with get_session() as session:
-            result = session.execute(select(func.count(Activity.id))).scalar()
+            result = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar()
             activity_count = result if result is not None else 0
 
         elapsed = time.time() - request_time
         logger.info(
-            f"Status response: athlete_id={athlete_id}, state={state}, "
+            f"Status response: user_id={user_id}, state={state}, "
             f"last_sync={last_sync}, activity_count={activity_count}, elapsed={elapsed:.3f}s"
         )
     except HTTPException:
@@ -270,9 +244,65 @@ def get_status():
         }
 
 
+def get_overview_data(user_id: str) -> dict:
+    """Get athlete training overview data (internal function).
+
+    Args:
+        user_id: Current authenticated user ID
+
+    Returns:
+        Overview response dictionary with connected, last_sync, data_quality, metrics, today
+
+    Raises:
+        HTTPException: If no Strava account is connected or on error
+    """
+    request_time = time.time()
+    now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+    logger.info(f"[API] /me/overview called at {now_str} for user_id={user_id}")
+
+    # Get StravaAccount for user
+    account = get_strava_account(user_id)
+
+    last_sync = None
+    if account.last_sync_at:
+        last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat()
+
+    # Check if we have activities but no daily rows - trigger aggregation if needed
+    with get_session() as session:
+        # Count activities for this user
+        result_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar()
+        activity_count = result_count if result_count is not None else 0
+        daily_rows = get_daily_rows(session, user_id, days=60)
+
+    # Auto-trigger aggregation if needed
+    daily_rows = _maybe_trigger_aggregation(user_id, activity_count, daily_rows)
+
+    # Log daily rows info for debugging
+    date_range_str = f"{daily_rows[0]['date']} to {daily_rows[-1]['date']}" if daily_rows else "none"
+    logger.info(f"[API] /me/overview: user_id={user_id}, daily_rows_count={len(daily_rows)}, date_range={date_range_str}")
+
+    # Assess data quality
+    data_quality_status = assess_data_quality(daily_rows)
+    logger.info(f"[API] /me/overview: data_quality={data_quality_status} (requires >=14 days, got {len(daily_rows)} days)")
+
+    # Compute training load metrics
+    metrics_result = compute_training_load(daily_rows)
+
+    # Extract today's values and 7-day TSB average
+    today_metrics = _extract_today_metrics(metrics_result)
+
+    elapsed = time.time() - request_time
+    logger.info(f"[API] /me/overview response: data_quality={data_quality_status}, elapsed={elapsed:.3f}s")
+
+    return _build_overview_response(last_sync, data_quality_status, metrics_result, today_metrics)
+
+
 @router.get("/overview")
-def get_overview():
+def get_overview(user_id: str = Depends(get_current_user)):
     """Get athlete training overview.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         {
@@ -299,54 +329,7 @@ def get_overview():
         - Uses derived data (daily_training_summary), not raw activities
     """
     try:
-        request_time = time.time()
-        now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
-        logger.info(f"[API] /me/overview endpoint called at {now_str}")
-        user_data = get_current_user_data()
-
-        last_sync = None
-        last_sync_at = user_data.get("last_successful_sync_at")
-        if last_sync_at:
-            last_sync = datetime.fromtimestamp(int(last_sync_at), tz=timezone.utc).isoformat()
-
-        # Get daily rows from derived table
-        athlete_id_raw = user_data["athlete_id"]
-        if athlete_id_raw is None:
-            _raise_missing_athlete_id_error()
-        athlete_id = int(athlete_id_raw)
-
-        # Check if we have activities but no daily rows - trigger aggregation if needed
-        with get_session() as session:
-            # Count activities for this athlete
-            # Note: Activity model uses user_id, not athlete_id
-            # This code path may need refactoring to work with new schema
-            # For now, count all activities (athlete_id mapping needed)
-            result_count = session.execute(select(func.count(Activity.id))).scalar()
-            activity_count = result_count if result_count is not None else 0
-            daily_rows = get_daily_rows(session, athlete_id, days=60)
-
-        # Auto-trigger aggregation if needed
-        daily_rows = _maybe_trigger_aggregation(athlete_id, activity_count, daily_rows)
-
-        # Log daily rows info for debugging
-        date_range_str = f"{daily_rows[0]['date']} to {daily_rows[-1]['date']}" if daily_rows else "none"
-        logger.info(f"[API] /me/overview: athlete_id={athlete_id}, daily_rows_count={len(daily_rows)}, date_range={date_range_str}")
-
-        # Assess data quality
-        data_quality_status = assess_data_quality(daily_rows)
-        logger.info(f"[API] /me/overview: data_quality={data_quality_status} (requires >=14 days, got {len(daily_rows)} days)")
-
-        # Compute training load metrics
-        metrics_result = compute_training_load(daily_rows)
-
-        # Extract today's values and 7-day TSB average
-        today_metrics = _extract_today_metrics(metrics_result)
-
-        elapsed = time.time() - request_time
-        logger.info(f"[API] /me/overview response: data_quality={data_quality_status}, elapsed={elapsed:.3f}s")
-
-        return _build_overview_response(last_sync, data_quality_status, metrics_result, today_metrics)
-
+        return get_overview_data(user_id)
     except HTTPException:
         raise
     except Exception as e:

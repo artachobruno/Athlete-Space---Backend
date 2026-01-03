@@ -18,7 +18,7 @@ from app.metrics.training_load import DailyTrainingRow
 from app.state.db import get_session
 
 
-def aggregate_daily_training(athlete_id: int) -> None:
+def aggregate_daily_training(user_id: str) -> None:
     """Aggregate activities into daily training summary.
 
     Reads from activities table, groups by UTC date, and writes to
@@ -32,53 +32,46 @@ def aggregate_daily_training(athlete_id: int) -> None:
     - Missing days = no row (explicit gaps)
 
     Args:
-        athlete_id: Athlete ID to aggregate for
-
-    Note:
-        Since Activity table doesn't have athlete_id, we currently
-        aggregate all activities. In a multi-user system, athlete_id
-        should be added to Activity table.
+        user_id: Clerk user ID (string) to aggregate for
     """
-    logger.info(f"[AGGREGATION] Starting daily aggregation for athlete_id={athlete_id}")
+    logger.info(f"[AGGREGATION] Starting daily aggregation for user_id={user_id}")
 
     with get_session() as session:
         # Calculate date range (last 60 days)
         end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=60)
 
-        # Delete existing rows for this athlete in the date range (idempotent)
-        logger.info(
-            f"[AGGREGATION] Deleting existing daily summary rows for athlete_id={athlete_id} (date range: {start_date} to {end_date})"
-        )
+        # Delete existing rows for this user in the date range (idempotent)
+        logger.info(f"[AGGREGATION] Deleting existing daily summary rows for user_id={user_id} (date range: {start_date} to {end_date})")
         session.execute(
             text(
                 """
                 DELETE FROM daily_training_summary
-                WHERE athlete_id = :athlete_id
+                WHERE user_id = :user_id
                 AND date >= :start_date
                 AND date <= :end_date
                 """
             ),
             {
-                "athlete_id": athlete_id,
+                "user_id": user_id,
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
             },
         )
-        logger.info(f"[AGGREGATION] Deleted existing rows for athlete_id={athlete_id}")
+        logger.info(f"[AGGREGATION] Deleted existing rows for user_id={user_id}")
 
-        # Aggregate activities by UTC date for this athlete
-        logger.info(f"[AGGREGATION] Aggregating activities for athlete_id={athlete_id} (date range: {start_date} to {end_date})")
+        # Aggregate activities by UTC date for this user
+        logger.info(f"[AGGREGATION] Aggregating activities for user_id={user_id} (date range: {start_date} to {end_date})")
         rows = session.execute(
             text(
                 """
                 SELECT
                     DATE(start_time) as date,
-                    SUM(duration_s) as duration_s,
-                    SUM(distance_m) as distance_m,
-                    SUM(elevation_m) as elevation_m
+                    SUM(duration_seconds) as duration_seconds,
+                    SUM(distance_meters) as distance_meters,
+                    SUM(elevation_gain_meters) as elevation_gain_meters
                 FROM activities
-                WHERE athlete_id = :athlete_id
+                WHERE user_id = :user_id
                 AND DATE(start_time) >= :start_date
                 AND DATE(start_time) <= :end_date
                 GROUP BY DATE(start_time)
@@ -86,39 +79,39 @@ def aggregate_daily_training(athlete_id: int) -> None:
                 """
             ),
             {
-                "athlete_id": athlete_id,
+                "user_id": user_id,
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
             },
         ).fetchall()
 
-        logger.info(f"[AGGREGATION] Found {len(rows)} days with activities for athlete_id={athlete_id}")
+        logger.info(f"[AGGREGATION] Found {len(rows)} days with activities for user_id={user_id}")
 
         # Insert aggregated rows
         inserted_count = 0
         for row in rows:
             date_str = row.date if isinstance(row.date, str) else row.date.isoformat()
-            duration_s = int(row.duration_s) if row.duration_s else 0
-            distance_m = float(row.distance_m) if row.distance_m else 0.0
-            elevation_m = float(row.elevation_m) if row.elevation_m else 0.0
+            duration_seconds = int(row.duration_seconds) if row.duration_seconds else 0
+            distance_meters = float(row.distance_meters) if row.distance_meters else 0.0
+            elevation_gain_meters = float(row.elevation_gain_meters) if row.elevation_gain_meters else 0.0
 
             # Calculate load_score (duration in hours for v1)
-            load_score = duration_s / 3600.0
+            load_score = duration_seconds / 3600.0
 
             session.execute(
                 text(
                     """
                     INSERT INTO daily_training_summary
-                    (athlete_id, date, duration_s, distance_m, elevation_m, load_score)
-                    VALUES (:athlete_id, :date, :duration_s, :distance_m, :elevation_m, :load_score)
+                    (user_id, date, duration_s, distance_m, elevation_m, load_score)
+                    VALUES (:user_id, :date, :duration_s, :distance_m, :elevation_m, :load_score)
                     """
                 ),
                 {
-                    "athlete_id": athlete_id,
+                    "user_id": user_id,
                     "date": date_str,
-                    "duration_s": duration_s,
-                    "distance_m": distance_m,
-                    "elevation_m": elevation_m,
+                    "duration_s": duration_seconds,
+                    "distance_m": distance_meters,
+                    "elevation_m": elevation_gain_meters,
                     "load_score": load_score,
                 },
             )
@@ -126,17 +119,17 @@ def aggregate_daily_training(athlete_id: int) -> None:
 
         session.commit()
         logger.info(
-            f"[AGGREGATION] Aggregated {inserted_count} days of training data for athlete_id={athlete_id} "
+            f"[AGGREGATION] Aggregated {inserted_count} days of training data for user_id={user_id} "
             f"(date range: {start_date} to {end_date})"
         )
 
 
-def get_daily_rows(session: Session, athlete_id: int, days: int = 60) -> list[DailyTrainingRow]:
+def get_daily_rows(session: Session, user_id: str, days: int = 60) -> list[DailyTrainingRow]:
     """Get daily training rows from daily_training_summary.
 
     Args:
         session: Database session
-        athlete_id: Athlete ID
+        user_id: Clerk user ID (string)
         days: Number of days to look back (default: 60)
 
     Returns:
@@ -151,14 +144,14 @@ def get_daily_rows(session: Session, athlete_id: int, days: int = 60) -> list[Da
             """
             SELECT date, duration_s, distance_m, elevation_m, load_score
             FROM daily_training_summary
-            WHERE athlete_id = :athlete_id
+            WHERE user_id = :user_id
             AND date >= :start_date
             AND date <= :end_date
             ORDER BY date
             """
         ),
         {
-            "athlete_id": athlete_id,
+            "user_id": user_id,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
         },

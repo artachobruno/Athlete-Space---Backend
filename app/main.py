@@ -81,6 +81,14 @@ except Exception as e:
     logger.error(f"Migration failed: migrate_daily_summary - {e}", exc_info=True)
 
 try:
+    from scripts.migrate_daily_summary_user_id import migrate_daily_summary_user_id
+
+    migrate_daily_summary_user_id()
+except Exception as e:
+    migration_errors.append(f"migrate_daily_summary_user_id: {e}")
+    logger.error(f"Migration failed: migrate_daily_summary_user_id - {e}", exc_info=True)
+
+try:
     migrate_history_cursor()
 except Exception as e:
     migration_errors.append(f"migrate_history_cursor: {e}")

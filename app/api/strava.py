@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from loguru import logger
 from sqlalchemy import func, select
 
 from app.core.settings import settings
 from app.ingestion.tasks import backfill_task, incremental_task
-from app.integrations.strava.oauth import exchange_code_for_token
-from app.integrations.strava.token_service import TokenService
 from app.metrics.daily_aggregation import aggregate_daily_training
 from app.state.db import get_session
 from app.state.models import Activity, StravaAuth
@@ -186,161 +183,25 @@ def strava_aggregate():
 
 @router.get("/strava/connect")
 def strava_connect():
-    """Initiate Strava OAuth flow.
+    """DEPRECATED: Use /auth/strava instead.
 
-    Redirects user to Strava authorization page. After approval, Strava will
-    redirect back to STRAVA_REDIRECT_URI (must be backend callback URL).
+    This endpoint is disabled. Use the authenticated endpoint at /auth/strava.
     """
-    logger.info("Strava OAuth connect initiated")
-    logger.info(f"Using redirect_uri: {STRAVA_REDIRECT_URI}")
-
-    # Validate redirect URI points to backend callback, not frontend
-    if "/strava/callback" not in STRAVA_REDIRECT_URI:
-        logger.warning(
-            f"STRAVA_REDIRECT_URI may be incorrect: {STRAVA_REDIRECT_URI}. "
-            "It should point to your backend callback URL (e.g., https://yourbackend.onrender.com/strava/callback)"
-        )
-
-    url = (
-        "https://www.strava.com/oauth/authorize"
-        f"?client_id={STRAVA_CLIENT_ID}"
-        "&response_type=code"
-        f"&redirect_uri={STRAVA_REDIRECT_URI}"
-        "&scope=activity:read_all"
-        "&approval_prompt=auto"
+    logger.error("[DEPRECATED] /strava/connect called - use /auth/strava instead")
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="This endpoint is deprecated. Use /auth/strava for OAuth connection.",
     )
-    logger.info("Redirecting to Strava OAuth (full URL logged at debug level)")
-    logger.debug(f"Full OAuth URL: {url}")
-    return RedirectResponse(url)
 
 
-def _verify_strava_auth_saved(athlete_id: int) -> None:
-    """Verify that StravaAuth record was saved successfully.
+@router.get("/strava/callback")
+def strava_callback():
+    """DEPRECATED: Use /auth/strava/callback instead.
 
-    Raises:
-        RuntimeError: If the record is not found after save
+    This endpoint is disabled. Use the authenticated endpoint at /auth/strava/callback.
     """
-    with get_session() as session:
-        result = session.execute(select(StravaAuth).where(StravaAuth.athlete_id == athlete_id)).first()
-        if result:
-            logger.info(f"[STRAVA] Verified: StravaAuth record exists for athlete_id={athlete_id}")
-        else:
-            error_msg = f"Failed to save Strava connection - record not found after commit for athlete_id={athlete_id}"
-            logger.error(f"[STRAVA] ERROR: {error_msg}")
-            raise RuntimeError(error_msg)
-
-
-@router.get("/strava/callback", response_class=HTMLResponse)
-def strava_callback(code: str, request: Request, background_tasks: BackgroundTasks, state: str | None = None):
-    """Handle Strava OAuth callback and persist tokens.
-
-    After OAuth exchange, we persist only:
-    - athlete_id (from athlete.id in response)
-    - refresh_token
-    - expires_at
-
-    Access tokens are never persisted - they are ephemeral.
-    """
-    logger.info("Strava OAuth callback received")
-    logger.info(f"Callback code received: {code[:10]}... (truncated for security)")
-    logger.info(f"Request URL: {request.url}")
-    logger.info(f"Request host: {request.headers.get('host', 'unknown')}")
-    logger.info(f"Request path: {request.url.path}")
-    if state:
-        logger.debug(f"OAuth state parameter: {state}")
-
-    # Determine frontend URL from settings or infer from request
-    redirect_url = settings.frontend_url
-
-    # If using default localhost, try to detect production URL from request
-    if redirect_url == "http://localhost:8501":
-        host = request.headers.get("host", "")
-
-        # Check if we're on Render (any Render service)
-        if "onrender.com" in host:
-            # Default to pace-ai frontend when on Render
-            # This works even if backend is on a different Render service
-            redirect_url = "https://pace-ai.onrender.com"
-        elif host and not host.startswith("localhost"):
-            # For other production environments, use the request host with https
-            redirect_url = f"https://{host}"
-
-    logger.info(f"Redirecting to frontend: {redirect_url}")
-
-    try:
-        logger.info("Exchanging authorization code for tokens")
-        logger.debug(f"Using redirect_uri: {STRAVA_REDIRECT_URI}")
-        token_data = exchange_code_for_token(
-            client_id=STRAVA_CLIENT_ID,
-            client_secret=STRAVA_CLIENT_SECRET,
-            code=code,
-            redirect_uri=STRAVA_REDIRECT_URI,
-        )
-
-        # Extract data from OAuth response
-        athlete_id = token_data["athlete"]["id"]
-        refresh_token = token_data["refresh_token"]
-        expires_at = token_data["expires_at"]
-        _access_token = token_data["access_token"]
-
-        logger.info(f"[STRAVA] OAuth successful for athlete_id={athlete_id}")
-
-        # Persist tokens (only refresh_token and expires_at, not access_token)
-        logger.info("[STRAVA] Saving tokens to database")
-        with get_session() as session:
-            token_service = TokenService(session)
-            token_service.save_tokens(
-                athlete_id=athlete_id,
-                refresh_token=refresh_token,
-                expires_at=expires_at,
-            )
-        logger.info("[STRAVA] Tokens saved successfully")
-
-        # Verify the save was successful
-        _verify_strava_auth_saved(athlete_id)
-
-        # Schedule async tasks for background sync and backfill
-        # Note: Immediate sync removed - it requires user_id which this endpoint doesn't have.
-        # Background tasks will handle sync using the new ingestion system.
-        logger.info("[STRAVA] Scheduling background ingestion tasks")
-        background_tasks.add_task(incremental_task, athlete_id)
-        background_tasks.add_task(backfill_task, athlete_id)
-        logger.info("[STRAVA] Background ingestion tasks scheduled (backfill + incremental)")
-
-    except Exception as e:
-        logger.error(f"[STRAVA] Error in OAuth callback: {e}", exc_info=True)
-        logger.error(
-            f"[STRAVA] OAuth failed. Check: "
-            f"1) STRAVA_REDIRECT_URI={STRAVA_REDIRECT_URI} matches Strava app settings, "
-            f"2) STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET are correct, "
-            f"3) Redirect URI in Strava dashboard matches exactly"
-        )
-        # Return error page instead of raising to show user-friendly message
-        return f"""
-        <html>
-        <head>
-            <title>Strava Connection Failed</title>
-            <meta http-equiv="refresh" content="5;url={redirect_url}">
-        </head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h2 style="color: #FF5722;">✗ Strava Connection Failed</h2>
-            <p>Error: {e!s}</p>
-            <p><small>Check backend logs for details. Redirecting in 5 seconds...</small></p>
-            <p><a href="{redirect_url}">Return to app</a></p>
-        </body>
-        </html>
-        """
-
-    return f"""
-    <html>
-    <head>
-        <title>Strava Connected</title>
-        <meta http-equiv="refresh" content="3;url={redirect_url}">
-    </head>
-    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-        <h2 style="color: #4FC3F7;">✓ Strava Connected Successfully!</h2>
-        <p><small>Redirecting to Virtus AI...</small></p>
-        <p><a href="{redirect_url}">Click here if not redirected</a></p>
-    </body>
-    </html>
-    """
+    logger.error("[DEPRECATED] /strava/callback called - use /auth/strava/callback instead")
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="This endpoint is deprecated. Use /auth/strava/callback for OAuth callback.",
+    )

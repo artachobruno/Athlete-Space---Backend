@@ -2,12 +2,13 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from sqlalchemy import func, select, text
 
-from app.api.me import get_current_user_data, get_overview
+from app.api.me import get_overview_data
 from app.coach.coach_service import get_coach_advice
+from app.core.auth import get_current_user
 from app.core.settings import settings
 from app.metrics.training_load import calculate_ctl_atl_tsb
 from app.state.db import SessionLocal, get_session
@@ -170,7 +171,7 @@ def training_load(days: int = 60, debug: bool = False):
 
 
 @router.get("/coach")
-async def get_coach_insights():
+async def get_coach_insights(user_id: str = Depends(get_current_user)):
     """Get coaching insights from the LLM Coach.
 
     Returns:
@@ -186,9 +187,9 @@ async def get_coach_insights():
     logger.info(f"[API] /state/coach endpoint called at {now_str}")
     logger.info("Coach insights requested")
 
-    # Get overview from /me/overview endpoint
+    # Get overview data for coach
     try:
-        overview = get_overview()
+        overview = get_overview_data(user_id)
     except HTTPException:
         # Re-raise HTTPException as-is (e.g., 404 for no Strava account)
         raise
@@ -247,34 +248,27 @@ def _build_limited_data_message(data_quality: str, activity_count: int) -> dict:
 
 
 @router.get("/coach/initial")
-def get_initial_coach_message():
+def get_initial_coach_message(user_id: str = Depends(get_current_user)):
     """Get initial coach message for new users or users with insufficient data.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         Initial welcome message and guidance for users who just connected Strava
     """
-    logger.info("Initial coach message requested")
+    logger.info(f"Initial coach message requested for user_id={user_id}")
 
     try:
-        overview = get_overview()
+        overview = get_overview_data(user_id)
         data_quality = overview.get("data_quality", "insufficient")
 
-        # Count activities for current athlete
+        # Count activities for current user
         activity_count = 0
         try:
-            user_data = get_current_user_data()
-            athlete_id = user_data.get("athlete_id")
-            if athlete_id:
-                with get_session() as db:
-                    # Note: This code path uses old athlete_id model - may need refactoring
-                    # For now, count all activities for the user
-                    result_count = db.execute(select(func.count(Activity.id))).scalar()
-                    activity_count = result_count if result_count is not None else 0
-            else:
-                # Fallback: count all activities
-                with get_session() as db:
-                    result = db.execute(text("SELECT COUNT(*) FROM activities")).scalar()
-                    activity_count = result if result is not None else 0
+            with get_session() as db:
+                result_count = db.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar()
+                activity_count = result_count if result_count is not None else 0
         except Exception:
             # Fallback: count all activities
             with get_session() as db:

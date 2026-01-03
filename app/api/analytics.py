@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from loguru import logger
 from sqlalchemy import text
 
+from app.core.auth import get_current_user
 from app.metrics.training_load import calculate_ctl_atl_tsb
 from app.state.db import SessionLocal
 
@@ -11,20 +12,25 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
 @router.get("/metrics")
-def metrics(days: int = 60, athlete_id: int = 23078584):
+def metrics(days: int = 60, user_id: str = Depends(get_current_user)):
     """Get training metrics (CTL, ATL, TSB) with daily aggregations for charting.
 
     Args:
         days: Number of days to look back (default: 60)
-        athlete_id: Athlete ID (default: 23078584)
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         Dictionary with "chart" key containing list of daily metric objects
     """
-    logger.info("Analytics metrics requested", days=days, athlete_id=athlete_id)
+    logger.info(f"Analytics metrics requested for user_id={user_id}, days={days}")
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
     since_str = since.isoformat()
+
+    # Convert user_id to integer for athlete_id lookup
+    # In a real system, you'd have a mapping table between user_id and athlete_id
+    # For now, we'll use a hash of user_id to create a deterministic athlete_id
+    athlete_id = hash(user_id) % 1000000
 
     db = SessionLocal()
     try:

@@ -10,6 +10,22 @@ class Base(DeclarativeBase):
     """Base class for all database models."""
 
 
+class User(Base):
+    """User table for authentication and user context.
+
+    Stores:
+    - id: UUID string (from Clerk user ID)
+    - email: User email (optional, can be updated later)
+    - created_at: Timestamp when user was created
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    email: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class StravaAuth(Base):
     """Strava OAuth token storage and ingestion state.
 

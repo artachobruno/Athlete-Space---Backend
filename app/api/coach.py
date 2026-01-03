@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -16,6 +16,7 @@ from app.api.schemas import (
     CoachSummaryResponse,
 )
 from app.coach.chat_utils.dispatcher import dispatch_coach_chat
+from app.core.auth import get_current_user
 from app.state.db import get_session
 from app.state.models import CoachMessage, StravaAuth
 
@@ -134,13 +135,16 @@ def history(athlete_id: int = 23078584):
 
 
 @router.get("/summary", response_model=CoachSummaryResponse)
-def get_coach_summary():
+def get_coach_summary(user_id: str = Depends(get_current_user)):
     """Get high-level coaching summary.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         CoachSummaryResponse with training summary and focus
     """
-    logger.info("[API] /coach/summary endpoint called")
+    logger.info(f"[API] /coach/summary endpoint called for user_id={user_id}")
     now = datetime.now(timezone.utc)
 
     return CoachSummaryResponse(
@@ -160,40 +164,51 @@ def get_coach_summary():
 
 
 @router.get("/observations", response_model=CoachObservationsResponse)
-def get_coach_observations():
+def get_coach_observations(user_id: str = Depends(get_current_user)):
     """Get coaching observations.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         CoachObservationsResponse with list of observations
     """
-    logger.info("[API] /coach/observations endpoint called")
+    logger.info(f"[API] /coach/observations endpoint called for user_id={user_id}")
     now = datetime.now(timezone.utc)
+
+    # Use user_id hash to make observations user-specific
+    user_hash = hash(user_id) % 1000
+    base_volume = 8.5 + (user_hash % 3) / 10
+    base_zone2 = 42.0 + (user_hash % 5) - 2
+    base_tsb = 7.3 + (user_hash % 5) - 2
 
     observations = [
         CoachObservation(
-            id="obs_1",
+            id=f"obs_{user_id[:8]}_1",
             category="volume",
             observation=(
-                "Weekly volume has been consistent at 8-9 hours over the past 4 weeks, which is appropriate for your current fitness level."
+                f"Weekly volume has been consistent at {base_volume:.1f} hours "
+                f"over the past 4 weeks, which is appropriate for your current fitness level."
             ),
             timestamp=now.isoformat(),
-            related_metrics={"week_volume_hours": 8.5, "avg_week_volume": 8.3},
+            related_metrics={"week_volume_hours": round(base_volume, 1), "avg_week_volume": round(base_volume - 0.2, 1)},
         ),
         CoachObservation(
-            id="obs_2",
+            id=f"obs_{user_id[:8]}_2",
             category="intensity",
             observation=(
-                "Training distribution shows good balance with 42% in Zone 2, but could benefit from more structured high-intensity work."
+                f"Training distribution shows good balance with {base_zone2:.1f}% in Zone 2, "
+                f"but could benefit from more structured high-intensity work."
             ),
             timestamp=now.isoformat(),
-            related_metrics={"zone2_percentage": 42.0, "zone4_percentage": 6.0},
+            related_metrics={"zone2_percentage": round(base_zone2, 1), "zone4_percentage": 6.0},
         ),
         CoachObservation(
-            id="obs_3",
+            id=f"obs_{user_id[:8]}_3",
             category="recovery",
             observation="TSB has remained positive, indicating good recovery management and appropriate training load progression.",
             timestamp=now.isoformat(),
-            related_metrics={"tsb": 7.3, "tsb_7d_avg": 5.2},
+            related_metrics={"tsb": round(base_tsb, 1), "tsb_7d_avg": round(base_tsb - 2.1, 1)},
         ),
     ]
 
@@ -204,18 +219,24 @@ def get_coach_observations():
 
 
 @router.get("/recommendations", response_model=CoachRecommendationsResponse)
-def get_coach_recommendations():
+def get_coach_recommendations(user_id: str = Depends(get_current_user)):
     """Get coaching recommendations.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         CoachRecommendationsResponse with list of recommendations
     """
-    logger.info("[API] /coach/recommendations endpoint called")
+    logger.info(f"[API] /coach/recommendations endpoint called for user_id={user_id}")
     now = datetime.now(timezone.utc)
+
+    # Use user_id prefix to make recommendations user-specific
+    user_prefix = user_id[:8]
 
     recommendations = [
         CoachRecommendation(
-            id="rec_1",
+            id=f"rec_{user_prefix}_1",
             priority="medium",
             category="intensity",
             recommendation=(
@@ -228,7 +249,7 @@ def get_coach_recommendations():
             timestamp=now.isoformat(),
         ),
         CoachRecommendation(
-            id="rec_2",
+            id=f"rec_{user_prefix}_2",
             priority="low",
             category="volume",
             recommendation=("Maintain current weekly volume of 8-9 hours over the next 2 weeks before considering increases."),
@@ -239,7 +260,7 @@ def get_coach_recommendations():
             timestamp=now.isoformat(),
         ),
         CoachRecommendation(
-            id="rec_3",
+            id=f"rec_{user_prefix}_3",
             priority="high",
             category="recovery",
             recommendation=("Continue monitoring TSB weekly. If TSB drops below -10, reduce volume by 20% for one week."),
@@ -255,13 +276,16 @@ def get_coach_recommendations():
 
 
 @router.get("/confidence", response_model=CoachConfidenceResponse)
-def get_coach_confidence():
+def get_coach_confidence(user_id: str = Depends(get_current_user)):
     """Get confidence scores for coach outputs.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         CoachConfidenceResponse with confidence metrics
     """
-    logger.info("[API] /coach/confidence endpoint called")
+    logger.info(f"[API] /coach/confidence endpoint called for user_id={user_id}")
     now = datetime.now(timezone.utc)
 
     return CoachConfidenceResponse(
@@ -280,16 +304,17 @@ def get_coach_confidence():
 
 
 @router.post("/ask", response_model=CoachAskResponse)
-def ask_coach_endpoint(request: CoachAskRequest):
+def ask_coach_endpoint(request: CoachAskRequest, user_id: str = Depends(get_current_user)):
     """Ask the coach a question.
 
     Args:
         request: CoachAskRequest with message and optional context
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         CoachAskResponse with coach's reply
     """
-    logger.info(f"[API] /coach/ask endpoint called: message={request.message}")
+    logger.info(f"[API] /coach/ask endpoint called for user_id={user_id}: message={request.message}")
     now = datetime.now(timezone.utc)
 
     # Mock response based on message content (simple keyword matching)

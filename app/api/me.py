@@ -36,6 +36,12 @@ def get_strava_account(user_id: str) -> StravaAccount:
     Raises:
         HTTPException: If no Strava account is connected
     """
+    # Validate user_id is actually a string, not a Depends object
+    if not isinstance(user_id, str):
+        error_msg = f"Invalid user_id type: {type(user_id)}. Expected str, got {type(user_id).__name__}"
+        logger.error(error_msg)
+        raise TypeError(error_msg)
+
     with get_session() as session:
         result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
         if not result:
@@ -259,6 +265,12 @@ def get_overview_data(user_id: str) -> dict:
     Raises:
         HTTPException: If no Strava account is connected or on error
     """
+    # Validate user_id is actually a string, not a Depends object
+    if not isinstance(user_id, str):
+        error_msg = f"Invalid user_id type: {type(user_id)}. Expected str, got {type(user_id).__name__}"
+        logger.error(error_msg)
+        raise TypeError(error_msg)
+
     request_time = time.time()
     now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
     logger.info(f"[API] /me/overview called at {now_str} for user_id={user_id}")

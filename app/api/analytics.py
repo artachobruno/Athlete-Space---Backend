@@ -27,11 +27,6 @@ def metrics(days: int = 60, user_id: str = Depends(get_current_user_id)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     since_str = since.isoformat()
 
-    # Convert user_id to integer for athlete_id lookup
-    # In a real system, you'd have a mapping table between user_id and athlete_id
-    # For now, we'll use a hash of user_id to create a deterministic athlete_id
-    athlete_id = hash(user_id) % 1000000
-
     db = SessionLocal()
     try:
         # Query daily aggregations
@@ -40,18 +35,18 @@ def metrics(days: int = 60, user_id: str = Depends(get_current_user_id)):
                 """
                 SELECT
                     date(start_time) as day,
-                    SUM(duration_s) / 60.0 as duration_min,
-                    SUM(distance_m) / 1000.0 as distance_km,
-                    AVG(avg_hr) as hr_avg,
-                    SUM(duration_s) / 3600.0 as hours
+                    SUM(duration_seconds) / 60.0 as duration_min,
+                    SUM(distance_meters) / 1000.0 as distance_km,
+                    AVG((raw_json->>'average_heartrate')::float) as hr_avg,
+                    SUM(duration_seconds) / 3600.0 as hours
                 FROM activities
                 WHERE start_time >= :since
-                  AND athlete_id = :athlete_id
+                  AND user_id = :user_id
                 GROUP BY day
                 ORDER BY day
                 """
             ),
-            {"since": since_str, "athlete_id": athlete_id},
+            {"since": since_str, "user_id": user_id},
         ).fetchall()
 
         if not rows:

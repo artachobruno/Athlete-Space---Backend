@@ -29,7 +29,7 @@ def get_training_data(days: int = 60) -> TrainingData:
                 """
                 SELECT
                     date(start_time) as day,
-                    SUM(duration_s) / 3600.0 as hours
+                    SUM(duration_seconds) / 3600.0 as hours
                 FROM activities
                 WHERE start_time >= :since
                 GROUP BY day

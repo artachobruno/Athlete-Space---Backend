@@ -77,6 +77,7 @@ class Activity(Base):
     - distance_meters: Distance in meters (float)
     - elevation_gain_meters: Elevation gain in meters (float)
     - raw_json: Full raw JSON response from Strava API (JSONB)
+    - streams_data: Time-series streams data from Strava (GPS, HR, power, cadence, etc.) (JSONB)
     - created_at: Record creation timestamp
 
     Constraints:
@@ -101,6 +102,7 @@ class Activity(Base):
     elevation_gain_meters: Mapped[float] = mapped_column(Float, nullable=False)
 
     raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    streams_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 

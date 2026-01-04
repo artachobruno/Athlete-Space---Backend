@@ -31,7 +31,12 @@ def _get_user_id_from_athlete_id(session: Session, athlete_id: int) -> str | Non
     return None
 
 
-def save_activity_record(session: Session, record: ActivityRecord, raw_json: dict | None = None) -> Activity:
+def save_activity_record(
+    session: Session,
+    record: ActivityRecord,
+    raw_json: dict | None = None,
+    streams_data: dict | None = None,
+) -> Activity:
     """Save a single ActivityRecord to the database.
 
     LEGACY: Maps from old ActivityRecord (athlete_id) to new Activity (user_id).
@@ -40,6 +45,7 @@ def save_activity_record(session: Session, record: ActivityRecord, raw_json: dic
         session: Database session
         record: ActivityRecord to save (must include athlete_id)
         raw_json: Full raw JSON data from Strava API (optional, stored as-is)
+        streams_data: Time-series streams data (GPS, HR, power, etc.) (optional)
 
     Returns:
         Saved Activity model instance
@@ -79,15 +85,31 @@ def save_activity_record(session: Session, record: ActivityRecord, raw_json: dic
     logger.debug(f"[SAVE_ACTIVITIES] Existing activity check result: {existing is not None}")
 
     if existing:
-        return _update_existing_activity(existing, record, raw_json, strava_id, user_id)
+        return _update_existing_activity(
+            existing=existing,
+            record=record,
+            raw_json=raw_json,
+            streams_data=streams_data,
+            strava_id=strava_id,
+            user_id=user_id,
+        )
 
-    return _create_new_activity(session, record, raw_json, strava_id, user_id)
+    return _create_new_activity(
+        session=session,
+        record=record,
+        raw_json=raw_json,
+        streams_data=streams_data,
+        strava_id=strava_id,
+        user_id=user_id,
+    )
 
 
 def _update_existing_activity(
+    *,
     existing: Activity,
     record: ActivityRecord,
     raw_json: dict | None,
+    streams_data: dict | None,
     strava_id: str,
     user_id: str,
 ) -> Activity:
@@ -104,6 +126,8 @@ def _update_existing_activity(
         if existing.raw_json is None:
             existing.raw_json = {}
         existing.raw_json["average_heartrate"] = record.avg_hr
+    if streams_data is not None:
+        existing.streams_data = streams_data
     return existing
 
 
@@ -132,9 +156,11 @@ def _prepare_raw_json(
 
 
 def _create_new_activity(
+    *,
     session: Session,
     record: ActivityRecord,
     raw_json: dict | None,
+    streams_data: dict | None,
     strava_id: str,
     user_id: str,
 ) -> Activity:
@@ -163,6 +189,7 @@ def _create_new_activity(
         distance_meters=record.distance_m,
         elevation_gain_meters=record.elevation_m,
         raw_json=prepared_raw_json,
+        streams_data=streams_data,
     )
     activity_id = getattr(activity, "id", None)
     logger.debug(

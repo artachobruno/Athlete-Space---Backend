@@ -252,6 +252,7 @@ def _save_activities_batch(session, activities: list, user_id: str, athlete_id: 
                 distance_meters=activity.distance,
                 elevation_gain_meters=activity.total_elevation_gain,
                 raw_json=raw_json,
+                streams_data=None,  # Streams can be fetched separately if needed
             )
             session.add(activity_obj)
             saved_count += 1

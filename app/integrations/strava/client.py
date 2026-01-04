@@ -190,3 +190,97 @@ class StravaClient:
 
         logger.info(f"[STRAVA_CLIENT] Fetched {len(all_activities)} total activities")
         return all_activities
+
+    def fetch_activity_streams(
+        self,
+        *,
+        activity_id: int,
+        stream_types: list[str] | None = None,
+    ) -> dict[str, list] | None:
+        """Fetch time-series streams data for an activity.
+
+        Args:
+            activity_id: Strava activity ID
+            stream_types: List of stream types to fetch. If None, fetches all available.
+                         Common types: time, latlng, distance, altitude, heartrate,
+                         cadence, watts, temp, velocity_smooth, grade_smooth
+
+        Returns:
+            Dictionary mapping stream type to list of values, or None if streams unavailable.
+            Example: {
+                "time": [0, 1, 2, ...],
+                "latlng": [[lat1, lng1], [lat2, lng2], ...],
+                "heartrate": [120, 125, 130, ...],
+                ...
+            }
+
+        Note:
+            - Streams may not be available for all activities
+            - Returns None if activity not found or streams unavailable
+            - Each stream type has the same length (one value per data point)
+        """
+        if stream_types is None:
+            # Default: fetch all commonly used streams
+            stream_types = [
+                "time",
+                "latlng",
+                "distance",
+                "altitude",
+                "heartrate",
+                "cadence",
+                "watts",
+                "temp",
+                "velocity_smooth",
+                "grade_smooth",
+            ]
+
+        logger.info(f"[STRAVA_CLIENT] Fetching streams for activity {activity_id} (types: {stream_types})")
+        quota_manager.wait_for_slot()
+
+        try:
+            resp = httpx.get(
+                f"{STRAVA_BASE_URL}/activities/{activity_id}/streams",
+                headers=self._headers(),
+                params={
+                    "keys": ",".join(stream_types),
+                    "key_by_type": "true",
+                },
+                timeout=15,
+            )
+
+            quota_manager.update_from_headers(dict(resp.headers))
+
+            if resp.status_code == 404:
+                logger.debug(f"[STRAVA_CLIENT] Activity {activity_id} not found or streams unavailable")
+                return None
+
+            resp.raise_for_status()
+
+            payload = resp.json()
+            if not payload:
+                logger.debug(f"[STRAVA_CLIENT] No streams data for activity {activity_id}")
+                return None
+
+            # Strava returns streams as a list of stream objects
+            # Convert to dict keyed by stream type for easier access
+            streams_dict: dict[str, list] = {}
+            for stream in payload:
+                stream_type = stream.get("type")
+                if stream_type:
+                    streams_dict[stream_type] = stream.get("data", [])
+
+            logger.info(
+                f"[STRAVA_CLIENT] Fetched streams for activity {activity_id}: "
+                f"{len(streams_dict)} types, {len(streams_dict.get('time', []))} data points"
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.debug(f"[STRAVA_CLIENT] Activity {activity_id} not found or streams unavailable")
+                return None
+            logger.error(f"[STRAVA_CLIENT] Error fetching streams for activity {activity_id}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[STRAVA_CLIENT] Unexpected error fetching streams for activity {activity_id}: {e}")
+            raise
+        else:
+            return streams_dict if streams_dict else None

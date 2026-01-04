@@ -4,23 +4,20 @@ This migration adds a JSON column to store time-series streams data from Strava
 (GPS coordinates, heart rate, power, cadence, speed, etc.) for activities.
 
 Usage:
+    From project root:
     python scripts/migrate_add_streams_data.py
+
+    Or as a module:
+    python -m scripts.migrate_add_streams_data
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from loguru import logger
+from sqlalchemy import text
 
-# Add project root to path so we can import from app
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-from loguru import logger  # noqa: E402
-from sqlalchemy import text  # noqa: E402
-
-from app.core.settings import settings  # noqa: E402
-from app.state.db import SessionLocal  # noqa: E402
+from app.core.settings import settings
+from app.state.db import SessionLocal
 
 
 def migrate_add_streams_data() -> None:

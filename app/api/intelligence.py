@@ -6,13 +6,17 @@ Never expose prompts or internal context.
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
+from sqlalchemy import select
 
+from app.api.dependencies.auth import get_current_user_id
 from app.coach.contracts import DailyDecisionResponse, SeasonPlanResponse, WeeklyIntentResponse
 from app.coach.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.intelligence.failures import IntelligenceFailureHandler
 from app.intelligence.store import IntentStore
+from app.state.db import get_session
+from app.state.models import StravaAccount
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
 
@@ -20,17 +24,43 @@ store = IntentStore()
 failure_handler = IntelligenceFailureHandler()
 
 
+def _get_athlete_id_from_user(user_id: str) -> int:
+    """Get athlete_id from user_id via StravaAccount.
+
+    Args:
+        user_id: Current authenticated user ID
+
+    Returns:
+        Athlete ID as integer
+
+    Raises:
+        HTTPException: If Strava account not found
+    """
+    with get_session() as session:
+        account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Strava account not connected",
+            )
+        return int(account[0].athlete_id)
+
+
 @router.get("/season", response_model=SeasonPlanResponse)
-def get_season_plan(athlete_id: int):
-    """Get the latest active season plan for an athlete.
+def get_season_plan(user_id: str = Depends(get_current_user_id)):
+    """Get the latest active season plan for the current user.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         Latest active SeasonPlan or 503 if unavailable
 
     Raises:
-        HTTPException: If plan not found or athlete_id invalid
+        HTTPException: If plan not found or Strava account not connected
     """
-    logger.info("Getting season plan", athlete_id=athlete_id)
+    athlete_id = _get_athlete_id_from_user(user_id)
+    logger.info(f"Getting season plan for user_id={user_id}, athlete_id={athlete_id}")
 
     plan_model = store.get_latest_season_plan(athlete_id, active_only=True)
 
@@ -71,26 +101,30 @@ def get_season_plan(athlete_id: int):
 
 
 @router.get("/week", response_model=WeeklyIntentResponse)
-def get_weekly_intent(athlete_id: int, week_start: date | None = None):
-    """Get the latest active weekly intent for an athlete.
+def get_weekly_intent(
+    user_id: str = Depends(get_current_user_id),
+    week_start: date | None = None,
+):
+    """Get the latest active weekly intent for the current user.
 
     Args:
-        athlete_id: Athlete ID
+        user_id: Current authenticated user ID (from auth dependency)
         week_start: Week start date (Monday). If None, uses current week.
 
     Returns:
         Latest active WeeklyIntent for the week or 503 if unavailable
 
     Raises:
-        HTTPException: If intent not found or athlete_id invalid
+        HTTPException: If intent not found or Strava account not connected
     """
+    athlete_id = _get_athlete_id_from_user(user_id)
     if week_start is None:
         # Get current week start (Monday)
         today = datetime.now(timezone.utc).date()
         days_since_monday = today.weekday()
         week_start = today - timedelta(days=days_since_monday)
 
-    logger.info("Getting weekly intent", athlete_id=athlete_id, week_start=week_start.isoformat())
+    logger.info(f"Getting weekly intent for user_id={user_id}, athlete_id={athlete_id}, week_start={week_start.isoformat()}")
 
     week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
     intent_model = store.get_latest_weekly_intent(athlete_id, week_start_dt, active_only=True)
@@ -133,23 +167,27 @@ def get_weekly_intent(athlete_id: int, week_start: date | None = None):
 
 
 @router.get("/today", response_model=DailyDecisionResponse)
-def get_daily_decision(athlete_id: int, decision_date: date | None = None):
-    """Get the latest active daily decision for an athlete.
+def get_daily_decision(
+    user_id: str = Depends(get_current_user_id),
+    decision_date: date | None = None,
+):
+    """Get the latest active daily decision for the current user.
 
     Args:
-        athlete_id: Athlete ID
+        user_id: Current authenticated user ID (from auth dependency)
         decision_date: Decision date. If None, uses today.
 
     Returns:
         Latest active DailyDecision for the date or 503 if unavailable
 
     Raises:
-        HTTPException: If decision not found or athlete_id invalid
+        HTTPException: If decision not found or Strava account not connected
     """
+    athlete_id = _get_athlete_id_from_user(user_id)
     if decision_date is None:
         decision_date = datetime.now(timezone.utc).date()
 
-    logger.info("Getting daily decision", athlete_id=athlete_id, decision_date=decision_date.isoformat())
+    logger.info(f"Getting daily decision for user_id={user_id}, athlete_id={athlete_id}, decision_date={decision_date.isoformat()}")
 
     decision_date_dt = datetime.combine(decision_date, datetime.min.time()).replace(tzinfo=timezone.utc)
     decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=True)

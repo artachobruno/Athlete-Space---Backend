@@ -23,4 +23,4 @@ def sync_tick() -> None:
             f"[SCHEDULER] Background sync complete: {result.get('successful', 0)}/{result.get('total_users', 0)} users synced successfully"
         )
     except Exception as e:
-        logger.error(f"[SCHEDULER] Background sync tick failed: {e}", exc_info=True)
+        logger.exception("[SCHEDULER] Background sync tick failed: {}", e)

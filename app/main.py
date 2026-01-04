@@ -139,7 +139,7 @@ async def lifespan(_app: FastAPI):
         sync_tick()
         logger.info("[SCHEDULER] Initial background sync tick completed")
     except Exception as e:
-        logger.error(f"[SCHEDULER] Initial background sync tick failed: {e}", exc_info=True)
+        logger.exception("[SCHEDULER] Initial background sync tick failed: {}", e)
 
     # Yield control to FastAPI (use await to satisfy async requirement)
     await asyncio.sleep(0)

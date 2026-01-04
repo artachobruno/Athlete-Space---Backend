@@ -74,9 +74,10 @@ Note: The athlete's training data is not yet available, but you can still provid
 
 User question: {question}
 
+CRITICAL: You MUST provide a helpful answer. Do NOT say "I don't have enough signal" or "I can't answer" - always provide value.
 Provide a helpful, knowledgeable answer about training, technique, or general endurance coaching.
 Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice.
-If the question requires personalized data (like current fitness or fatigue), explain that you'll be able to provide more specific guidance once their training data is synced."""
+If the question requires personalized data (like current fitness or fatigue), explain that you'll be able to provide more specific guidance once their training data is synced, but still provide general advice now."""
 
         logger.info("Invoking LLM for general question (no training data)")
         response = llm.invoke([HumanMessage(content=prompt_text)])
@@ -207,7 +208,9 @@ def dispatch_coach_chat(
     # Build athlete state
     logger.info("Building athlete state for tool routing")
     state_result = _get_athlete_state(days, days_to_race)
-    if state_result[0] is not None:  # Error response
+    has_training_data = state_result[0] is None
+    
+    if not has_training_data:  # Error response
         error_type = state_result[0]
         logger.warning(f"Failed to get athlete state: {error_type}")
         # If no training data, use LLM to answer general questions
@@ -228,6 +231,16 @@ def dispatch_coach_chat(
             logger.info(f"Calling LLM orchestrator with message: {message[:100]}")
             reply = run_orchestrator(message, athlete_state)
             logger.info(f"LLM orchestrator completed successfully, reply length: {len(reply)}")
+            
+            # Check if reply indicates insufficient data - if so, use general question handler
+            if reply and ("don't have enough signal" in reply.lower() or 
+                         "can't answer" in reply.lower() or 
+                         "not enough data" in reply.lower() or
+                         "insufficient" in reply.lower()):
+                logger.warning("Orchestrator returned insufficient data message, using general question handler")
+                reply = _answer_general_question_with_llm(message)
+                return ("general_question", reply)
+            
             return ("orchestrator", reply)
         except Exception as e:
             logger.error(f"LLM orchestrator failed, falling back to intent routing: {e}", exc_info=True)

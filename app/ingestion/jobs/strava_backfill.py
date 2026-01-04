@@ -27,7 +27,42 @@ def _process_activity(act, user, page: int) -> tuple[bool, bool]:
     Returns:
         Tuple of (success: bool, is_critical_error: bool)
     """
+    logger.debug(
+        f"[BACKFILL] Processing activity {act.id} for athlete_id={user.athlete_id}, page={page}"
+    )
+    
     try:
+        # Validate act.raw exists
+        logger.debug(
+            f"[BACKFILL] Validating activity {act.id}: has_raw={hasattr(act, 'raw')}, "
+            f"raw_is_none={getattr(act, 'raw', None) is None}"
+        )
+        
+        if not hasattr(act, 'raw') or act.raw is None:
+            logger.error(
+                f"[BACKFILL] Activity {act.id} missing raw data for athlete_id={user.athlete_id}"
+            )
+            return False, False
+        
+        raw_type = type(act.raw)
+        raw_is_dict = isinstance(act.raw, dict)
+        raw_keys = list(act.raw.keys()) if raw_is_dict else []
+        raw_has_id = 'id' in act.raw if raw_is_dict else False
+        
+        logger.debug(
+            f"[BACKFILL] Activity {act.id} raw data: type={raw_type}, is_dict={raw_is_dict}, "
+            f"has_id={raw_has_id}, keys_count={len(raw_keys)}, "
+            f"sample_keys={raw_keys[:10] if raw_keys else []}"
+        )
+        
+        if raw_has_id:
+            logger.debug(f"[BACKFILL] Activity {act.id} raw['id']: {act.raw.get('id')}, type: {type(act.raw.get('id'))}")
+        
+        logger.debug(
+            f"[BACKFILL] Calling store_activity for activity {act.id}: "
+            f"athlete_id={user.athlete_id}, start_date={act.start_date}"
+        )
+        
         store_activity(
             user_id=user.athlete_id,
             source="strava",
@@ -35,15 +70,25 @@ def _process_activity(act, user, page: int) -> tuple[bool, bool]:
             start_time=act.start_date,
             raw=act.raw,
         )
+        
+        logger.debug(f"[BACKFILL] store_activity completed successfully for activity {act.id}")
     except ValueError as e:
         logger.error(
             f"[BACKFILL] CRITICAL: Cannot save activity {act.id} for athlete_id={user.athlete_id}: {e}. "
             f"This usually means StravaAccount is missing. Check that StravaAccount exists with athlete_id={user.athlete_id}."
         )
         return False, True
+    except KeyError as e:
+        logger.error(
+            f"[BACKFILL] KeyError saving activity {act.id} for athlete_id={user.athlete_id}: {e}. "
+            f"Raw data type: {type(act.raw)}, has 'id': {'id' in act.raw if isinstance(act.raw, dict) else 'N/A'}",
+            exc_info=True,
+        )
+        return False, False
     except Exception as e:
         logger.error(
-            f"[BACKFILL] Failed to save activity {act.id} for athlete_id={user.athlete_id}: {e}",
+            f"[BACKFILL] Failed to save activity {act.id} for athlete_id={user.athlete_id}: {e}. "
+            f"Error type: {type(e).__name__}",
             exc_info=True,
         )
         return False, False

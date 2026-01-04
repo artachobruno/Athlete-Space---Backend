@@ -161,17 +161,19 @@ else:
         This tool should be used when the question doesn't fit into any
         specific coaching tool category, such as general training advice,
         technique questions, nutrition, or other open-ended inquiries.
+        
+        This tool ALWAYS provides an answer, even if training data is unavailable.
         """
         logger.info(f"Orchestrator calling tool: answer_general_question (question_length={len(question)})")
-        error_message = (
-            "I'm unable to answer general questions right now. "
-            "Please try asking about your specific training state "
-            "or use one of the coaching tools."
-        )
-
+        
         if _llm is None or HumanMessage is None:
-            logger.warning("LLM not available for open question")
-            return error_message
+            logger.warning("LLM not available for open question, providing fallback answer")
+            return (
+                "I'm here to help with your training! While I don't have your specific training data yet, "
+                "I can provide general training advice. Once you connect your Strava account and sync some activities, "
+                "I'll be able to give you personalized recommendations. Feel free to ask me about training principles, "
+                "technique, or general endurance coaching questions!"
+            )
 
         # Build context with athlete state if available
         context_parts = []
@@ -190,14 +192,27 @@ else:
 
         context = "\n".join(context_parts) if context_parts else ""
 
-        prompt_text = f"""You are Virtus Coach, an elite endurance training intelligence system.
+        if context:
+            prompt_text = f"""You are Virtus Coach, an elite endurance training intelligence system.
 You provide expert, personalized coaching advice based on training science.
 
 {context}
 
 User question: {question}
 
-Provide a helpful, knowledgeable answer. If the question relates to the athlete's current training state, reference it.
+Provide a helpful, knowledgeable answer. Reference the athlete's current training state when relevant.
+Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice."""
+        else:
+            prompt_text = f"""You are Virtus Coach, an elite endurance training intelligence system.
+You provide expert coaching advice based on training science.
+
+The athlete's training data is not yet available, but you can still provide valuable general training advice.
+
+User question: {question}
+
+IMPORTANT: You MUST provide a helpful answer. Do NOT say you don't have enough data or can't answer.
+Provide general training advice, principles, or guidance that is relevant to their question.
+If the question requires personalized data, explain that you'll be able to provide more specific guidance once their training data is synced, but still provide general advice now.
 Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice."""
 
         try:
@@ -335,17 +350,21 @@ You have access to various coaching tools that can:
 
 Your role is to understand what the athlete needs and use the appropriate tools to help them.
 
+CRITICAL RULES:
+- You MUST ALWAYS provide a helpful answer, even if training data is limited or unavailable
+- NEVER say "I don't have enough signal" or "I can't answer" - always provide value
+- If training data is unavailable, use answer_general_question to provide general training advice
+- If you can't use a specific tool due to missing data, still provide helpful general guidance
+- Be conversational, helpful, and always engage with the user's question
+
 Guidelines:
-- Always consider the athlete's current training state when making recommendations
+- Always consider the athlete's current training state when making recommendations (if available)
 - If multiple tools could be useful, use them in sequence
 - Be conversational and helpful
-- For general questions about training, technique, nutrition, or any "
-                "open-ended inquiries, use answer_general_question\n"
-                "- If the request is unclear, use explain_state or run_analysis "
-                "first to understand the situation better\n"
-                "- When answering open questions, you can combine tools "
-                "(e.g., first check their state with run_analysis, then answer "
-                "their question with context)
+- For general questions about training, technique, nutrition, or any open-ended inquiries, use answer_general_question
+- If the request is unclear, use explain_state or run_analysis first to understand the situation better (if data available)
+- When answering open questions, you can combine tools (e.g., first check their state with run_analysis, then answer their question with context)
+- If training data is not available, still provide helpful general training advice using answer_general_question
 
 Available tools are described below. Choose the most appropriate tool(s) for each request.
 """,

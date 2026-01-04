@@ -98,19 +98,42 @@ def get_session() -> Generator[Session, None, None]:
     logger.debug("Creating new database session")
     session = SessionLocal()
     try:
+        logger.debug(
+            f"Yielding session: dirty={len(session.dirty)}, new={len(session.new)}, "
+            f"deleted={len(session.deleted)}"
+        )
         yield session
+        
+        logger.debug(
+            f"Before commit: dirty={len(session.dirty)}, new={len(session.new)}, "
+            f"deleted={len(session.deleted)}"
+        )
+        
+        if session.dirty:
+            logger.debug(f"Session has {len(session.dirty)} dirty objects: {[str(obj) for obj in list(session.dirty)[:3]]}")
+        if session.new:
+            logger.debug(f"Session has {len(session.new)} new objects: {[str(obj) for obj in list(session.new)[:3]]}")
+        
+        logger.debug("Calling session.commit()")
         session.commit()
-        logger.debug("Database session committed")
+        logger.debug("Database session committed successfully")
     except HTTPException:
         # HTTPException is an expected API response, not a database error
         # Re-raise without logging or rolling back (no DB transaction to rollback)
+        logger.debug("HTTPException in session, rolling back")
         session.rollback()
         raise
     except Exception as e:
         # Actual database error - log and rollback
-        logger.error(f"Database session error, rolling back: {e}", exc_info=True)
+        logger.error(
+            f"Database session error during commit, rolling back: {e}. "
+            f"Error type: {type(e).__name__}, session state: "
+            f"dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}",
+            exc_info=True
+        )
         session.rollback()
         raise
     finally:
+        logger.debug("Closing database session")
         session.close()
         logger.debug("Database session closed")

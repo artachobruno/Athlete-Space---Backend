@@ -28,6 +28,10 @@ def store_activity(
         activity_id: Unique activity identifier
         start_time: Activity start time
         raw: Raw activity data (currently not stored in Activity model)
+
+    Raises:
+        ValueError: If athlete_id cannot be mapped to user_id (StravaAccount not found)
+        Exception: Other errors during activity storage
     """
     with get_session() as session:
         # Convert raw Strava activity to ActivityRecord if provided
@@ -36,29 +40,25 @@ def store_activity(
                 strava_activity = StravaActivity(**raw)
                 record = map_strava_activity(strava_activity, athlete_id=user_id)
                 save_activity_record(session, record)
-                logger.info(f"[DATA] Stored activity {activity_id} for user {user_id} (start_time={start_time})")
+                session.commit()
+                logger.info(f"[DATA] Stored activity {activity_id} for athlete_id={user_id} (start_time={start_time})")
+            except ValueError as e:
+                # ValueError from save_activity_record means StravaAccount lookup failed
+                logger.error(
+                    f"[DATA] Cannot store activity {activity_id} for athlete_id={user_id}: "
+                    f"StravaAccount not found. Error: {e}"
+                )
+                raise
             except Exception as e:
-                logger.error(f"[DATA] Error storing activity {activity_id} for user {user_id}: {e}")
+                logger.error(f"[DATA] Error storing activity {activity_id} for athlete_id={user_id}: {e}", exc_info=True)
                 raise
         else:
-            # Fallback: create minimal activity record
-            # Note: This is a simplified version - full implementation would
-            # require more fields from the raw data
-            existing = session.query(Activity).filter_by(athlete_id=user_id, activity_id=activity_id, source=source).first()
-            if not existing:
-                activity = Activity(
-                    athlete_id=user_id,
-                    activity_id=activity_id,
-                    source=source,
-                    sport="unknown",  # Would need to extract from raw data
-                    start_time=start_time,
-                    duration_s=0,  # Would need to extract from raw data
-                    distance_m=0.0,  # Would need to extract from raw data
-                    elevation_m=0.0,  # Would need to extract from raw data
-                    avg_hr=None,
-                )
-                session.add(activity)
-                logger.debug(f"Stored minimal activity {activity_id} for user {user_id}")
+            # Fallback path should not be used for Strava activities (raw data required)
+            logger.warning(
+                f"[DATA] Attempted to store activity {activity_id} without raw data. "
+                f"This fallback is not supported. Raw data is required for Strava activities."
+            )
+            raise ValueError(f"Cannot store activity {activity_id} without raw data. Raw Strava data is required.")
 
 
 def update_last_ingested_at(user_id: int, timestamp: int) -> None:

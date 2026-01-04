@@ -8,7 +8,7 @@ from app.ingestion.jobs.history_backfill import (
     TokenRefreshError,
     backfill_user_history,
 )
-from app.ingestion.jobs.strava_backfill import backfill_user
+from app.ingestion.jobs.strava_backfill import _check_activities_exist, backfill_user
 from app.ingestion.jobs.strava_incremental import incremental_sync_user
 from app.ingestion.locks import lock_manager
 from app.metrics.daily_aggregation import aggregate_daily_training
@@ -90,8 +90,18 @@ def backfill_task(athlete_id: int) -> None:
                 return
 
             if user.backfill_done:
-                logger.info(f"[INGESTION] Backfill already completed for athlete_id={athlete_id}, skipping")
-                return
+                # If backfill is marked as done but no activities exist, reset it
+                if not _check_activities_exist(athlete_id):
+                    logger.warning(
+                        f"[INGESTION] Backfill marked as done but no activities found for athlete_id={athlete_id}. "
+                        f"Resetting backfill_done to False."
+                    )
+                    user.backfill_done = False
+                    session.add(user)
+                    session.commit()
+                else:
+                    logger.info(f"[INGESTION] Backfill already completed for athlete_id={athlete_id}, skipping")
+                    return
 
             try:
                 logger.info(f"[INGESTION] Executing backfill sync for athlete_id={athlete_id}")

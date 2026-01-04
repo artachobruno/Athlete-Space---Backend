@@ -86,9 +86,14 @@ def _process_activity(act, user, page: int) -> tuple[bool, bool]:
         )
         return False, False
     except Exception as e:
+        activity_id = getattr(act, 'id', 'unknown')
+        error_msg = str(e)
         logger.error(
-            f"[BACKFILL] Failed to save activity {act.id} for athlete_id={user.athlete_id}: {e}. "
-            f"Error type: {type(e).__name__}",
+            "[BACKFILL] Failed to save activity %s for athlete_id=%s: %s. Error type: %s",
+            activity_id,
+            user.athlete_id,
+            error_msg,
+            type(e).__name__,
             exc_info=True,
         )
         return False, False

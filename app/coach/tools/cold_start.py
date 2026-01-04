@@ -7,27 +7,35 @@ from app.coach.models import AthleteState
 from app.core.settings import settings
 
 COLD_START_INSTRUCTIONS = """
-You are Virtus Coach — an elite endurance training intelligence system.
+You are AI Coach — an elite endurance training intelligence system.
 
-This is the first time you're speaking with this athlete. Your task is to:
-1. Introduce yourself warmly and professionally
-2. Briefly explain your role as their AI training coach
-3. Mention key capabilities (session recommendations, fatigue analysis, load adjustments, race planning)
-4. If athlete state data is available, provide a brief, personalized assessment
-5. Invite them to ask questions about their training
+This is the first time you're speaking with this athlete. Talk like a human coach having a casual conversation.
 
-Tone:
-- Warm but professional
-- Confident but approachable
-- Brief and focused (2-3 paragraphs max)
-- No metric definitions or technical jargon
+Rules:
+- Keep it SHORT: 1-2 sentences maximum, not paragraphs
+- Be conversational and natural, like a real person
+- If data is missing or limited, ASK QUESTIONS to understand their goals
+- Don't list all your capabilities — just be friendly and helpful
+- No formal introductions — just start chatting naturally
 
 If athlete state is provided:
-- Mention their current fitness, fatigue, and form state
-- Provide one brief insight based on their metrics
-- Keep it conversational, not clinical
+- Give ONE brief observation about their training state
+- Keep it casual and human-sounding
+- No metrics or technical terms — just natural language
 
-Return ONLY the welcome message text. Do not include any metadata or structure.
+If no athlete state is provided:
+- Ask them what they're training for or what they need help with
+- Don't explain what you can do — just be ready to help
+
+Examples:
+BAD: "Hello and welcome! I'm your Coach, your dedicated AI training coach
+here to support you on your endurance journey. My role is to help you..."
+
+GOOD: "Hey! I'm your Coach. I see your training looks solid — how can I help you today?"
+
+GOOD (no data): "Hi! What are you training for? I'd love to help you reach your goals."
+
+Return ONLY the message text. No metadata or structure. Keep it under 50 words.
 """
 
 if not settings.openai_api_key:
@@ -62,32 +70,30 @@ def welcome_new_user(state: AthleteState | None = None) -> str:
     """
     if _cold_start_chain is None or not settings.openai_api_key:
         logger.warning("LLM not available for cold start, using fallback message")
-        fallback = (
-            "Welcome! I'm your AI training coach. I'm here to help you optimize your training and performance.\n\n"
-            "I can help you with training session recommendations, fatigue analysis, load adjustments, "
-            "and planning your race builds. Feel free to ask me anything about your training!"
-        )
         if state is not None:
-            fallback += f"\n\nYour current metrics: CTL {state.ctl:.1f}, ATL {state.atl:.1f}, TSB {state.tsb:.1f}"
+            fallback = "Hey! I see your training looks good. What can I help you with today?"
+        else:
+            fallback = "Hi! What are you training for? I'd love to help you reach your goals."
         return fallback
 
     # Build context for the LLM
     if state is not None:
-        context = f"""Generate a warm welcome message for a new athlete.
+        context = f"""Generate a short, casual welcome message (1-2 sentences max).
 
-Athlete's current training state:
-- Fitness (CTL): {state.ctl:.1f}
-- Fatigue (ATL): {state.atl:.1f}
-- Form (TSB): {state.tsb:.1f}
-- Load trend: {state.load_trend}
+Athlete's training state:
+- Fitness level: {state.ctl:.1f}
+- Fatigue: {state.atl:.1f}
+- Form: {state.tsb:.1f}
+- Trend: {state.load_trend}
 - Flags: {", ".join(state.flags) if state.flags else "none"}
 
-Include a brief personalized insight based on these metrics."""
+Give ONE brief, natural observation about their training. Then ask how you can help.
+Keep it conversational, like a human coach would talk."""
     else:
         context = (
-            "Generate a warm welcome message for a new athlete. "
-            "Training data is not yet available, so focus on introducing yourself "
-            "and explaining how you can help once their data is synced."
+            "Generate a short, casual welcome message (1-2 sentences max). "
+            "No training data available yet. Ask them what they're training for or what they need help with. "
+            "Be conversational and natural — like a real person, not a formal introduction."
         )
 
     try:
@@ -107,13 +113,10 @@ Include a brief personalized insight based on these metrics."""
     except Exception as e:
         logger.error(f"Error generating cold start message: {e}", exc_info=True)
         # Fallback to a simple message if LLM fails
-        fallback = (
-            "Welcome! I'm your AI training coach. I'm here to help you optimize your training and performance.\n\n"
-            "I can help you with training session recommendations, fatigue analysis, load adjustments, "
-            "and planning your race builds. Feel free to ask me anything about your training!"
-        )
         if state is not None:
-            fallback += f"\n\nYour current metrics: CTL {state.ctl:.1f}, ATL {state.atl:.1f}, TSB {state.tsb:.1f}"
+            fallback = "Hey! I see your training looks good. What can I help you with today?"
+        else:
+            fallback = "Hi! What are you training for? I'd love to help you reach your goals."
         return fallback
     else:
         return message

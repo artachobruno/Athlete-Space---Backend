@@ -172,18 +172,17 @@ def save_activity_record(session: Session, record: ActivityRecord, raw_json: dic
             logger.debug(f"[SAVE_ACTIVITIES] raw_json['id'] = {activity.raw_json.get('id')}, type: {type(activity.raw_json.get('id'))}")
     
     logger.debug(f"[SAVE_ACTIVITIES] Adding activity to session: {strava_id}")
-    try:
-        session.add(activity)
-        logger.debug(f"[SAVE_ACTIVITIES] Activity added to session, session.dirty: {len(session.dirty)}, session.new: {len(session.new)}")
-        
-        # Verify activity is in session
-        if activity in session.new:
-            logger.debug(f"[SAVE_ACTIVITIES] Activity confirmed in session.new")
-        else:
-            logger.warning(f"[SAVE_ACTIVITIES] Activity NOT in session.new after add!")
-    except Exception as e:
-        logger.error(f"[SAVE_ACTIVITIES] Error adding activity to session: {e}", exc_info=True)
-        raise
+    session.add(activity)
+    logger.debug(f"[SAVE_ACTIVITIES] Activity added to session, session.dirty: {len(session.dirty)}, session.new: {len(session.new)}")
+    
+    # Verify activity is in session
+    if activity in session.new:
+        logger.debug(f"[SAVE_ACTIVITIES] Activity confirmed in session.new")
+    else:
+        logger.warning(f"[SAVE_ACTIVITIES] Activity NOT in session.new after add!")
+    
+    # Note: session.commit() is handled by the get_session() context manager
+    # The commit will happen when the context manager exits, and any errors will be raised then
     
     logger.info(f"[SAVE_ACTIVITIES] Added new activity: {strava_id} for user {user_id}")
     return activity

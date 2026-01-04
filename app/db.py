@@ -108,8 +108,20 @@ def store_activity(
                 )
                 raise
             except Exception as e:
+                error_msg = str(e)
+                # Check if this is a database schema mismatch error for the id column
+                if "invalid input syntax for type integer" in error_msg and "id" in error_msg.lower():
+                    logger.error(
+                        "[DATA] Database schema mismatch: activities.id column is integer but model expects UUID string. "
+                        "Please run migration script: scripts/migrate_activities_id_to_uuid.py",
+                        exc_info=True,
+                    )
+                    raise ValueError(
+                        "Database schema mismatch: activities.id column type does not match model. "
+                        "Run migration script: scripts/migrate_activities_id_to_uuid.py"
+                    ) from e
                 logger.error(
-                    f"[DATA] Error storing activity {activity_id} for athlete_id={user_id}: {e}. "
+                    f"[DATA] Error storing activity {activity_id} for athlete_id={user_id}: {error_msg}. "
                     f"Error type: {type(e).__name__}",
                     exc_info=True
                 )

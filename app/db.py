@@ -39,8 +39,9 @@ def store_activity(
             try:
                 strava_activity = StravaActivity(**raw)
                 record = map_strava_activity(strava_activity, athlete_id=user_id)
-                save_activity_record(session, record)
-                session.commit()
+                # Pass full raw data to save_activity_record for storage in raw_json
+                save_activity_record(session, record, raw_json=raw)
+                # Note: session.commit() is handled by get_session() context manager
                 logger.info(f"[DATA] Stored activity {activity_id} for athlete_id={user_id} (start_time={start_time})")
             except ValueError as e:
                 # ValueError from save_activity_record means StravaAccount lookup failed

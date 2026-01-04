@@ -33,7 +33,7 @@ def _get_user_id_from_athlete_id(session: Session, athlete_id: int) -> str | Non
     return None
 
 
-def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
+def save_activity_record(session: Session, record: ActivityRecord, raw_json: dict | None = None) -> Activity:
     """Save a single ActivityRecord to the database.
 
     LEGACY: Maps from old ActivityRecord (athlete_id) to new Activity (user_id).
@@ -41,6 +41,7 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
     Args:
         session: Database session
         record: ActivityRecord to save (must include athlete_id)
+        raw_json: Full raw JSON data from Strava API (optional, stored as-is)
 
     Returns:
         Saved Activity model instance
@@ -76,8 +77,11 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
         existing.duration_seconds = record.duration_sec
         existing.distance_meters = record.distance_m
         existing.elevation_gain_meters = record.elevation_m
-        # Store avg_hr in raw_json if available
-        if record.avg_hr is not None:
+        # Update raw_json if provided
+        if raw_json is not None:
+            existing.raw_json = raw_json
+        elif record.avg_hr is not None:
+            # Fallback: update raw_json with avg_hr if raw_json not provided
             if existing.raw_json is None:
                 existing.raw_json = {}
             existing.raw_json["average_heartrate"] = record.avg_hr
@@ -86,14 +90,16 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
     # Create new activity
     logger.info(f"[SAVE_ACTIVITIES] Creating new activity: {strava_id} for user {user_id}")
 
-    # Build raw_json from ActivityRecord
-    raw_json: dict | None = None
-    if record.avg_hr is not None or record.power is not None:
+    # Use provided raw_json, or build minimal dict if not provided (legacy fallback)
+    if raw_json is None:
         raw_json = {}
         if record.avg_hr is not None:
             raw_json["average_heartrate"] = record.avg_hr
         if record.power is not None:
             raw_json.update(record.power)
+        # If no data, set to None
+        if not raw_json:
+            raw_json = None
 
     activity = Activity(
         id=str(uuid.uuid4()),  # Explicitly generate UUID

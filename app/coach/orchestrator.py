@@ -391,12 +391,17 @@ Available tools are described below. Choose the most appropriate tool(s) for eac
         _orchestrator_agent = None
 
 
-def run_orchestrator(user_message: str, athlete_state: AthleteState) -> str:
+def run_orchestrator(
+    user_message: str,
+    athlete_state: AthleteState,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> str:
     """Run the orchestrator agent to handle user requests.
 
     Args:
         user_message: User's message/request to the coach
         athlete_state: Current athlete training state
+        conversation_history: List of previous messages with 'role' and 'content' keys
 
     Returns:
         Response from the orchestrator after tool execution
@@ -418,9 +423,27 @@ def run_orchestrator(user_message: str, athlete_state: AthleteState) -> str:
     )
     _current_athlete_state = athlete_state
 
+    # Build conversation context from history
+    conversation_context = ""
+    if conversation_history:
+        history_texts = []
+        for msg in conversation_history[-10:]:  # Limit to last 10 messages to avoid token limits
+            role_label = "User" if msg.get("role") == "user" else "Coach"
+            content = msg.get("content", "")
+            history_texts.append(f"{role_label}: {content}")
+        if history_texts:
+            conversation_context = "\n".join(history_texts)
+            logger.info(f"Including {len(history_texts)} messages from conversation history")
+
+    # Combine conversation history with current message
+    if conversation_context:
+        full_input = f"Previous conversation:\n{conversation_context}\n\nCurrent message: {user_message}"
+    else:
+        full_input = user_message
+
     try:
         logger.info(f"Running LLM orchestrator agent for message: {user_message[:100]}")
-        result = _orchestrator_agent.invoke({"input": user_message})
+        result = _orchestrator_agent.invoke({"input": full_input})
         logger.info("LLM orchestrator agent invocation completed")
 
         # Extract output from agent result

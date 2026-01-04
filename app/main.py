@@ -65,10 +65,12 @@ except Exception as e:
     logger.error(f"Migration failed: migrate_strava_accounts - {e}", exc_info=True)
 
 try:
+    logger.info("Running migration: activities id column (integer to UUID)")
     migrate_activities_id_to_uuid()
+    logger.info("✓ Migration completed: activities id column")
 except Exception as e:
     migration_errors.append(f"migrate_activities_id_to_uuid: {e}")
-    logger.error(f"Migration failed: migrate_activities_id_to_uuid - {e}", exc_info=True)
+    logger.error(f"✗ Migration failed: migrate_activities_id_to_uuid - {e}", exc_info=True)
 
 try:
     migrate_activities_schema()

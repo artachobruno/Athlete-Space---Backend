@@ -6,6 +6,7 @@ This migration:
 3. Generates UUIDs for existing records if needed
 """
 
+from loguru import logger
 from sqlalchemy import text
 
 from app.state.db import engine
@@ -57,17 +58,14 @@ def migrate_activities_id_to_uuid() -> None:
     """
     is_postgres = _is_postgresql()
     db_type = "PostgreSQL" if is_postgres else "SQLite"
-    print(f"Detected database type: {db_type}")
-    print(f"Database URL: {engine.url}")
+    logger.info(f"Detected database type: {db_type}")
+    logger.info(f"Database URL: {engine.url}")
     
     if not is_postgres:
-        print("\n⚠️  WARNING: You are running this migration against SQLite (local development).")
-        print("The production error is from PostgreSQL on Render.")
-        print("This migration should be run in production where the actual database is.")
-        print("\nTo run in production:")
-        print("1. SSH into your Render service or use Render's shell")
-        print("2. Run: python scripts/migrate_activities_id_to_uuid.py")
-        print("\nContinuing with local migration check...\n")
+        logger.warning("⚠️  WARNING: You are running this migration against SQLite (local development).")
+        logger.warning("The production error is from PostgreSQL on Render.")
+        logger.warning("This migration should be run in production where the actual database is.")
+        logger.warning("Continuing with local migration check...")
     
     with engine.begin() as conn:
         # Check if table exists
@@ -81,22 +79,22 @@ def migrate_activities_id_to_uuid() -> None:
             table_exists = result.fetchone() is not None
 
         if not table_exists:
-            print("activities table does not exist. Skipping migration.")
+            logger.info("activities table does not exist. Skipping migration (table will be created with correct schema).")
             return
 
         # Check current column type
         current_type = _get_column_type(conn, "id")
-        print(f"Current id column type: {current_type}")
+        logger.info(f"Current id column type: {current_type}")
 
         if current_type is None:
-            print("id column not found.")
+            logger.info("id column not found.")
             if not _table_has_data(conn):
-                print("Table exists but has no id column and no data.")
-                print("This is likely a new table that will be created with the correct schema.")
-                print("No migration needed - the table will be created with UUID id when first used.")
+                logger.info("Table exists but has no id column and no data.")
+                logger.info("This is likely a new table that will be created with the correct schema.")
+                logger.info("No migration needed - the table will be created with UUID id when first used.")
             else:
-                print("WARNING: Table has data but no id column found. This is unexpected.")
-                print("Please check the table schema manually.")
+                logger.warning("WARNING: Table has data but no id column found. This is unexpected.")
+                logger.warning("Please check the table schema manually.")
             return
 
         # Check if already migrated
@@ -106,47 +104,42 @@ def migrate_activities_id_to_uuid() -> None:
             is_string_type = current_type.upper() in ("TEXT", "VARCHAR")
 
         if is_string_type:
-            print("id column is already a string type. No migration needed.")
+            logger.info("id column is already a string type. No migration needed.")
             return
 
-        print("Migrating id column from integer to string (UUID)...")
+        logger.info("Migrating id column from integer to string (UUID)...")
 
         if _is_postgresql():
             # PostgreSQL migration
             has_data = _table_has_data(conn)
 
             if has_data:
-                print("Table has existing data. This migration requires manual intervention.")
-                print("Please backup your database before proceeding.")
-                print("\nTo complete the migration manually:")
-                print("1. Generate UUIDs for existing records")
-                print("2. Alter the column type to VARCHAR")
-                print("3. Update existing records with UUIDs")
-                print("\nExample SQL:")
-                print("""
--- Step 1: Add temporary UUID column
-ALTER TABLE activities ADD COLUMN id_new VARCHAR;
-
--- Step 2: Generate UUIDs for existing records
-UPDATE activities SET id_new = gen_random_uuid()::text;
-
--- Step 3: Drop old column and rename new one
-ALTER TABLE activities DROP CONSTRAINT activities_pkey;
-ALTER TABLE activities DROP COLUMN id;
-ALTER TABLE activities RENAME COLUMN id_new TO id;
-ALTER TABLE activities ALTER COLUMN id SET NOT NULL;
-ALTER TABLE activities ADD PRIMARY KEY (id);
-CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id);
-                """)
-                return
-
-            # No data, safe to alter directly
-            print("No existing data. Altering column type directly...")
-            conn.execute(text("ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_pkey"))
-            conn.execute(text("ALTER TABLE activities ALTER COLUMN id TYPE VARCHAR USING id::text"))
-            conn.execute(text("ALTER TABLE activities ADD PRIMARY KEY (id)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
-            print("Migration complete: id column is now VARCHAR (UUID).")
+                logger.info("Table has existing data. Migrating with data preservation...")
+                # Step 1: Add temporary UUID column
+                logger.info("Step 1: Adding temporary id_new column...")
+                conn.execute(text("ALTER TABLE activities ADD COLUMN IF NOT EXISTS id_new VARCHAR"))
+                
+                # Step 2: Generate UUIDs for existing records
+                logger.info("Step 2: Generating UUIDs for existing records...")
+                conn.execute(text("UPDATE activities SET id_new = gen_random_uuid()::text WHERE id_new IS NULL"))
+                
+                # Step 3: Drop old column and rename new one
+                logger.info("Step 3: Dropping old id column and renaming new one...")
+                conn.execute(text("ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_pkey"))
+                conn.execute(text("ALTER TABLE activities DROP COLUMN IF EXISTS id"))
+                conn.execute(text("ALTER TABLE activities RENAME COLUMN id_new TO id"))
+                conn.execute(text("ALTER TABLE activities ALTER COLUMN id SET NOT NULL"))
+                conn.execute(text("ALTER TABLE activities ADD PRIMARY KEY (id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
+                logger.info("Migration complete: id column is now VARCHAR (UUID) with existing data preserved.")
+            else:
+                # No data, safe to alter directly
+                logger.info("No existing data. Altering column type directly...")
+                conn.execute(text("ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_pkey"))
+                conn.execute(text("ALTER TABLE activities ALTER COLUMN id TYPE VARCHAR USING id::text"))
+                conn.execute(text("ALTER TABLE activities ADD PRIMARY KEY (id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
+                logger.info("Migration complete: id column is now VARCHAR (UUID).")
         else:
             # SQLite migration
             has_data = _table_has_data(conn)

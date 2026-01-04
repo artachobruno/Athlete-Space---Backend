@@ -125,16 +125,30 @@ def get_session() -> Generator[Session, None, None]:
         raise
     except KeyError as e:
         # KeyError during commit - this is unusual, log extensively
+        error_msg = str(e)
+        error_args_str = str(e.args)
         logger.error(
-            f"Database session KeyError during commit, rolling back: {e}. "
-            f"Error args: {e.args}, session state: "
-            f"dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}"
+            "Database session KeyError during commit, rolling back: %s. "
+            "Error args: %s, session state: dirty=%d, new=%d, deleted=%d",
+            error_msg,
+            error_args_str,
+            len(session.dirty),
+            len(session.new),
+            len(session.deleted),
         )
         if session.new:
             for obj in list(session.new)[:3]:
-                logger.error(f"New object in session: {type(obj).__name__}, id={getattr(obj, 'id', 'NO_ID')}, raw_json_type={type(getattr(obj, 'raw_json', None))}")
+                obj_id = getattr(obj, 'id', 'NO_ID')
+                raw_json_type = type(getattr(obj, 'raw_json', None))
+                logger.error(
+                    "New object in session: %s, id=%s, raw_json_type=%s",
+                    type(obj).__name__,
+                    obj_id,
+                    raw_json_type,
+                )
                 if hasattr(obj, 'raw_json') and isinstance(obj.raw_json, dict):
-                    logger.error(f"raw_json keys: {list(obj.raw_json.keys())[:20]}")
+                    raw_keys = list(obj.raw_json.keys())[:20]
+                    logger.error("raw_json keys: %s", raw_keys)
         logger.error("Full KeyError traceback:", exc_info=True)
         session.rollback()
         raise

@@ -177,6 +177,7 @@ def dispatch_coach_chat(
     days: int,
     days_to_race: int | None,
     history_empty: bool = False,
+    conversation_history: list[dict[str, str]] | None = None,
     use_orchestrator: bool = True,
 ) -> tuple[str, str]:
     """Route user message -> coaching tool -> response text.
@@ -187,13 +188,16 @@ def dispatch_coach_chat(
         days_to_race: Optional days until race
         history_empty: If True, this is a cold start (first message).
                       Will return welcome message instead of routing intent.
+        conversation_history: List of previous messages with 'role' and 'content' keys.
+                             Used to provide context to the LLM.
         use_orchestrator: If True, use the LangChain orchestrator (default: True).
                          Falls back to intent routing if orchestrator unavailable.
     """
+    history_count = len(conversation_history) if conversation_history else 0
     logger.info(
         f"Dispatching coach chat (message_length={len(message)}, days={days}, "
         f"days_to_race={days_to_race}, history_empty={history_empty}, "
-        f"use_orchestrator={use_orchestrator})"
+        f"history_count={history_count}, use_orchestrator={use_orchestrator})"
     )
 
     # Handle cold start - provide welcome message regardless of intent
@@ -228,8 +232,8 @@ def dispatch_coach_chat(
     if use_orchestrator and ORCHESTRATOR_AVAILABLE and run_orchestrator is not None:
         logger.info("Using LLM orchestrator for coach chat (LangChain agent with tools)")
         try:
-            logger.info(f"Calling LLM orchestrator with message: {message[:100]}")
-            reply = run_orchestrator(message, athlete_state)
+            logger.info(f"Calling LLM orchestrator with message: {message[:100]}, history_count={history_count}")
+            reply = run_orchestrator(message, athlete_state, conversation_history=conversation_history)
             logger.info(f"LLM orchestrator completed successfully, reply length: {len(reply)}")
             
             # Check if reply indicates insufficient data - if so, use general question handler

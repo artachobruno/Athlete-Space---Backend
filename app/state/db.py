@@ -108,7 +108,7 @@ def get_session() -> Generator[Session, None, None]:
         raise
     except Exception as e:
         # Actual database error - log and rollback
-        logger.error(f"Database session error, rolling back: {e}")
+        logger.error(f"Database session error, rolling back: {e}", exc_info=True)
         session.rollback()
         raise
     finally:

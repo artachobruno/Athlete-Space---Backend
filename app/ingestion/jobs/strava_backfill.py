@@ -16,7 +16,67 @@ MAX_PAGES_PER_RUN = 3
 PER_PAGE = 30
 
 
-def _check_activities_exist(athlete_id: int) -> bool:
+def _process_activity(act, user, page: int) -> tuple[bool, bool]:
+    """Process a single activity for backfill.
+
+    Args:
+        act: Strava activity object
+        user: StravaAuth user object
+        page: Current backfill page number
+
+    Returns:
+        Tuple of (success: bool, is_critical_error: bool)
+    """
+    try:
+        store_activity(
+            user_id=user.athlete_id,
+            source="strava",
+            activity_id=str(act.id),
+            start_time=act.start_date,
+            raw=act.raw,
+        )
+    except ValueError as e:
+        logger.error(
+            f"[BACKFILL] CRITICAL: Cannot save activity {act.id} for athlete_id={user.athlete_id}: {e}. "
+            f"This usually means StravaAccount is missing. Check that StravaAccount exists with athlete_id={user.athlete_id}."
+        )
+        return False, True
+    except Exception as e:
+        logger.error(
+            f"[BACKFILL] Failed to save activity {act.id} for athlete_id={user.athlete_id}: {e}",
+            exc_info=True,
+        )
+        return False, False
+    else:
+        logger.debug(f"[BACKFILL] Successfully saved activity {act.id} from page {page}")
+        return True, False
+
+
+def _handle_no_activities(page: int, total_saved: int, total_errors: int, athlete_id: int) -> None:
+    """Handle case when no activities are returned from API.
+
+    Args:
+        page: Current page number
+        total_saved: Total activities saved in this run
+        total_errors: Total errors encountered
+        athlete_id: Strava athlete ID
+    """
+    if total_saved > 0 or page == 1:
+        logger.info(
+            f"[BACKFILL] No more activities found at page {page}, marking backfill as done for athlete_id={athlete_id} "
+            f"(total_saved={total_saved})"
+        )
+        mark_backfill_done(athlete_id)
+    else:
+        logger.warning(
+            f"[BACKFILL] No activities found at page {page} but no activities were saved in this run. "
+            f"Total saved: {total_saved}, errors: {total_errors}. "
+            f"Not marking as done - will retry from page 1 next time."
+        )
+        update_backfill_page(athlete_id, 1)
+
+
+def check_activities_exist(athlete_id: int) -> bool:
     """Check if any activities exist for this athlete.
 
     Args:
@@ -49,7 +109,7 @@ def backfill_user(user):
 
     # Check if we should reset to page 1
     page = user.backfill_page or 1
-    if page > 1 and not _check_activities_exist(user.athlete_id):
+    if page > 1 and not check_activities_exist(user.athlete_id):
         logger.warning(
             f"[BACKFILL] Starting at page {page} but no activities exist for athlete_id={user.athlete_id}. "
             f"Resetting to page 1."
@@ -70,21 +130,7 @@ def backfill_user(user):
         )
 
         if not activities:
-            # Only mark as done if we've saved at least some activities, or if this is page 1 (user has no activities)
-            if total_saved > 0 or page == 1:
-                logger.info(
-                    f"[BACKFILL] No more activities found at page {page}, marking backfill as done for athlete_id={user.athlete_id} "
-                    f"(total_saved={total_saved})"
-                )
-                mark_backfill_done(user.athlete_id)
-            else:
-                logger.warning(
-                    f"[BACKFILL] No activities found at page {page} but no activities were saved in this run. "
-                    f"Total saved: {total_saved}, errors: {total_errors}. "
-                    f"Not marking as done - will retry from page 1 next time."
-                )
-                # Reset to page 1 for next run
-                update_backfill_page(user.athlete_id, 1)
+            _handle_no_activities(page, total_saved, total_errors, user.athlete_id)
             logger.info(f"[BACKFILL] Backfill completed for athlete_id={user.athlete_id}, total saved in this run: {total_saved}")
             return
 
@@ -95,37 +141,18 @@ def backfill_user(user):
 
         saved_count = 0
         for act in activities:
-            try:
-                store_activity(
-                    user_id=user.athlete_id,
-                    source="strava",
-                    activity_id=str(act.id),
-                    start_time=act.start_date,
-                    raw=act.raw,
-                )
+            success, is_critical = _process_activity(act, user, page)
+            if success:
                 saved_count += 1
                 total_saved += 1
-                logger.debug(f"[BACKFILL] Successfully saved activity {act.id} from page {page}")
-            except ValueError as e:
-                # ValueError means StravaAccount lookup failed - this is a critical error
-                logger.error(
-                    f"[BACKFILL] CRITICAL: Cannot save activity {act.id} for athlete_id={user.athlete_id}: {e}. "
-                    f"This usually means StravaAccount is missing. Check that StravaAccount exists with athlete_id={user.athlete_id}."
-                )
+            else:
                 total_errors += 1
-                # Don't continue if we can't map athlete_id to user_id
-                if total_errors >= 3:
+                if is_critical and total_errors >= 3:
                     logger.error(
                         f"[BACKFILL] Too many mapping errors ({total_errors}). Stopping backfill for athlete_id={user.athlete_id}. "
                         f"Please check that StravaAccount exists and athlete_id matches."
                     )
                     return
-            except Exception as e:
-                logger.error(
-                    f"[BACKFILL] Failed to save activity {act.id} for athlete_id={user.athlete_id}: {e}",
-                    exc_info=True,
-                )
-                total_errors += 1
 
         if activities and saved_count == 0:
             logger.error(
@@ -138,4 +165,7 @@ def backfill_user(user):
         page += 1
         update_backfill_page(user.athlete_id, page)
 
-    logger.info(f"[BACKFILL] Completed {MAX_PAGES_PER_RUN} pages for athlete_id={user.athlete_id}, total saved: {total_saved}, errors: {total_errors}")
+    logger.info(
+        f"[BACKFILL] Completed {MAX_PAGES_PER_RUN} pages for athlete_id={user.athlete_id}, "
+        f"total saved: {total_saved}, errors: {total_errors}"
+    )

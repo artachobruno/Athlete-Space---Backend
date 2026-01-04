@@ -6,6 +6,8 @@ The new ingestion system (ingestion_strava.py, background_sync.py) directly uses
 
 from __future__ import annotations
 
+import uuid
+
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -94,6 +96,7 @@ def save_activity_record(session: Session, record: ActivityRecord) -> Activity:
             raw_json.update(record.power)
 
     activity = Activity(
+        id=str(uuid.uuid4()),  # Explicitly generate UUID
         user_id=user_id,
         strava_activity_id=strava_id,
         start_time=record.start_time,

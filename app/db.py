@@ -10,7 +10,7 @@ from loguru import logger
 from app.ingestion.save_activities import save_activity_record
 from app.integrations.strava.schemas import StravaActivity, map_strava_activity
 from app.state.db import get_session
-from app.state.models import Activity, StravaAuth
+from app.state.models import StravaAuth
 
 
 def store_activity(

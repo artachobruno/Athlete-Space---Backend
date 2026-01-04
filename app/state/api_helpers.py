@@ -43,7 +43,7 @@ def get_training_data(days: int = 60) -> TrainingData:
             raise RuntimeError("No training data available")
 
         dates = [str(r.day) for r in rows]
-        daily_load = [float(r.hours) for r in rows]
+        daily_load = [float(r.hours) if r.hours is not None else 0.0 for r in rows]
 
         # Use canonical metrics computation
         metrics = calculate_ctl_atl_tsb(daily_load)

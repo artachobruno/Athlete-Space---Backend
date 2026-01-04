@@ -34,7 +34,9 @@ from app.state.db import engine
 from app.state.models import Base
 from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
+from scripts.migrate_activities_source_default import migrate_activities_source_default
 from scripts.migrate_activities_user_id import migrate_activities_user_id
+from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_drop_activity_id import migrate_drop_activity_id
 from scripts.migrate_history_cursor import migrate_history_cursor
@@ -92,6 +94,22 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_drop_activity_id: {e}")
     logger.error(f"✗ Migration failed: migrate_drop_activity_id - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: convert athlete_id to string")
+    migrate_athlete_id_to_string()
+    logger.info("✓ Migration completed: convert athlete_id to string")
+except Exception as e:
+    migration_errors.append(f"migrate_athlete_id_to_string: {e}")
+    logger.error(f"✗ Migration failed: migrate_athlete_id_to_string - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: set source column default")
+    migrate_activities_source_default()
+    logger.info("✓ Migration completed: set source column default")
+except Exception as e:
+    migration_errors.append(f"migrate_activities_source_default: {e}")
+    logger.error(f"✗ Migration failed: migrate_activities_source_default - {e}", exc_info=True)
 
 try:
     migrate_daily_summary()

@@ -68,8 +68,9 @@ class Activity(Base):
     Schema:
     - id: UUID primary key
     - user_id: Foreign key to users.id (Clerk user ID)
-    - athlete_id: Strava athlete ID (integer, indexed)
+    - athlete_id: Strava athlete ID (string, indexed)
     - strava_activity_id: Strava's activity ID (string)
+    - source: Activity source (string, default: "strava")
     - start_time: Activity start time in UTC (datetime, indexed)
     - type: Activity type (string, e.g., "Run", "Ride")
     - duration_seconds: Activity duration in seconds (integer)
@@ -89,8 +90,9 @@ class Activity(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
 
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    athlete_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     strava_activity_id: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False, server_default="strava", default="strava")
 
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     type: Mapped[str] = mapped_column(String, nullable=False)

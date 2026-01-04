@@ -251,8 +251,9 @@ def _sync_user_activities(  # noqa: C901, PLR0912
         # Create new activity record
         activity = Activity(
             user_id=user_id,
-            athlete_id=int(account.athlete_id),
+            athlete_id=account.athlete_id,
             strava_activity_id=strava_id,
+            source="strava",
             start_time=start_time,
             type=strava_activity.type,
             duration_seconds=strava_activity.elapsed_time,

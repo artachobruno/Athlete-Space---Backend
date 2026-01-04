@@ -154,8 +154,9 @@ def _create_new_activity(
     )
     activity = Activity(
         user_id=user_id,
-        athlete_id=record.athlete_id,
+        athlete_id=str(record.athlete_id),
         strava_activity_id=strava_id,
+        source=record.source,
         start_time=record.start_time,
         type=record.sport.capitalize(),
         duration_seconds=record.duration_sec,

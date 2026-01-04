@@ -41,7 +41,7 @@ def get_coach_advice(overview_payload: dict) -> dict:
         return _get_static_message(data_quality)
 
     # Data quality is ok - call LLM
-    logger.info("Coach calling LLM: data_quality=ok")
+    logger.info("Coach data quality OK - calling LLM via run_coach_chain")
 
     # Build athlete state from context
     logger.info("Extracting metrics from context")
@@ -53,7 +53,7 @@ def get_coach_advice(overview_payload: dict) -> dict:
     logger.info("Building daily_load approximation")
     daily_load = [metrics["ctl_today"] / 7.0] * 14  # Approximate daily load
 
-    logger.info("Building athlete state for coach chain")
+    logger.info("Building athlete state for LLM coach chain")
     athlete_state = build_athlete_state(
         ctl=metrics["ctl_today"],
         atl=metrics["atl_today"],
@@ -64,17 +64,18 @@ def get_coach_advice(overview_payload: dict) -> dict:
     logger.info(f"Athlete state built (CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f})")
 
     try:
-        logger.info("Calling run_coach_chain")
+        logger.info("Calling LLM coach chain (run_coach_chain)")
         coach_response = run_coach_chain(athlete_state)
         logger.info(
-            "Coach LLM response generated",
+            "LLM coach response generated successfully",
             risk_level=coach_response.risk_level,
             intervention=coach_response.intervention,
         )
         return coach_response.model_dump()
     except Exception as e:
-        logger.error(f"Error calling LLM coach: {e}", exc_info=True)
+        logger.error(f"Error calling LLM coach chain: {type(e).__name__}: {e}", exc_info=True)
         # Fallback to static message on LLM error
+        logger.warning("Falling back to static message due to LLM error")
         return _get_static_message("insufficient")
 
 

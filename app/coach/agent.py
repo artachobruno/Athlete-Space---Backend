@@ -50,7 +50,7 @@ def run_coach_chain(state: AthleteState) -> CoachAgentResponse:
             "Add: OPENAI_API_KEY=sk-your-key-here"
         )
 
-    logger.info("Running coach chain")
+    logger.info("Running LLM coach chain (ChatOpenAI with structured output)")
 
     try:
         result = coach_chain.invoke({
@@ -61,8 +61,8 @@ def run_coach_chain(state: AthleteState) -> CoachAgentResponse:
         # Re-raise ValueError (e.g., missing API key) as-is
         raise
     except Exception as e:
-        logger.error(f"Error in coach chain: {type(e).__name__}: {e}", exc_info=True)
+        logger.error(f"Error in LLM coach chain: {type(e).__name__}: {e}", exc_info=True)
         raise RuntimeError(f"Failed to generate coach advice: {type(e).__name__}: {e}") from e
     else:
-        logger.info("Coach chain completed successfully")
+        logger.info("LLM coach chain completed successfully")
         return result

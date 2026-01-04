@@ -58,36 +58,11 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
 
 
 # -----------------------------
-# Chat endpoint
+# Chat endpoint - DEPRECATED: Use /coach/chat from coach_chat router instead
+# This endpoint is kept for backward compatibility but coach_chat router takes precedence
 # -----------------------------
-@router.post("/chat")
-def chat_with_coach(req: CoachChatRequest):
-    logger.info(f"Coach chat request: {req.message}")
-
-    # Check if this is a cold start (empty history)
-    history_empty = _is_history_empty()
-
-    # Use dispatch_coach_chat which handles empty data gracefully
-    try:
-        intent, reply = dispatch_coach_chat(
-            message=req.message,
-            days=req.days,
-            days_to_race=None,
-            history_empty=history_empty,
-        )
-    except Exception as e:
-        logger.error(f"Error in coach chat: {e}", exc_info=True)
-        # Return a helpful message instead of raising 404
-        return {
-            "intent": "error",
-            "reply": (
-                "Sorry, I couldn't process your message. "
-                "Please make sure your Strava account is connected "
-                "and you have some training data synced."
-            ),
-        }
-    else:
-        return {"intent": intent, "reply": reply}
+# NOTE: The /coach/chat endpoint is now handled by app/api/coach_chat.py
+# This duplicate endpoint is effectively unused since coach_chat_router is registered after coach_router
 
 
 @router.post("/query")

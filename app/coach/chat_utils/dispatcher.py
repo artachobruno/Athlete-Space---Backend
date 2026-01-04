@@ -149,19 +149,18 @@ def dispatch_coach_chat(
 
     # Use orchestrator if requested and available
     if use_orchestrator and ORCHESTRATOR_AVAILABLE and run_orchestrator is not None:
-        logger.info("Using orchestrator for coach chat")
+        logger.info("Using LLM orchestrator for coach chat (LangChain agent with tools)")
         try:
-            logger.info(f"Calling orchestrator with message: {message[:100]}")
+            logger.info(f"Calling LLM orchestrator with message: {message[:100]}")
             reply = run_orchestrator(message, athlete_state)
-            logger.info("Orchestrator completed successfully")
-        except Exception as e:
-            logger.error(f"Orchestrator failed, falling back to intent routing: {e}")
-            # Fall through to intent-based routing
-        else:
+            logger.info(f"LLM orchestrator completed successfully, reply length: {len(reply)}")
             return ("orchestrator", reply)
+        except Exception as e:
+            logger.error(f"LLM orchestrator failed, falling back to intent routing: {e}", exc_info=True)
+            # Fall through to intent-based routing
 
-    # Route to appropriate tool
-    logger.info(f"Routing to tool via intent-based routing: {intent.value}")
+    # Route to appropriate tool (intent routing uses LLM, tools may be rule-based)
+    logger.info(f"Using intent routing with LLM (intent={intent.value})")
     reply = _route_to_tool(intent, athlete_state, message)
-    logger.info(f"Dispatch completed successfully with intent: {intent.value}")
+    logger.info(f"Dispatch completed successfully with intent: {intent.value}, reply length: {len(reply)}")
     return intent.value, reply

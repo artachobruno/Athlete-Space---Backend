@@ -400,16 +400,16 @@ def run_orchestrator(user_message: str, athlete_state: AthleteState) -> str:
     _current_athlete_state = athlete_state
 
     try:
-        logger.info(f"Running orchestrator agent for message: {user_message[:100]}")
+        logger.info(f"Running LLM orchestrator agent for message: {user_message[:100]}")
         result = _orchestrator_agent.invoke({"input": user_message})
-        logger.info("Orchestrator agent invocation completed")
+        logger.info("LLM orchestrator agent invocation completed")
 
         # Extract output from agent result
         output = result.get(
             "output",
             "I'm here to help with your training. Could you rephrase your question?",
         )
-        logger.info("Orchestrator completed successfully")
+        logger.info(f"LLM orchestrator completed successfully, output length: {len(output)}")
     except Exception as e:
         logger.error(f"Error running orchestrator: {e}", exc_info=True)
         output = f"I encountered an error processing your request: {e!s}. Please try rephrasing or use a specific coaching tool."

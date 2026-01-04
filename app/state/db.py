@@ -123,14 +123,32 @@ def get_session() -> Generator[Session, None, None]:
         logger.debug("HTTPException in session, rolling back")
         session.rollback()
         raise
+    except KeyError as e:
+        # KeyError during commit - this is unusual, log extensively
+        logger.error(
+            f"Database session KeyError during commit, rolling back: {e}. "
+            f"Error args: {e.args}, session state: "
+            f"dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}"
+        )
+        if session.new:
+            for obj in list(session.new)[:3]:
+                logger.error(f"New object in session: {type(obj).__name__}, id={getattr(obj, 'id', 'NO_ID')}, raw_json_type={type(getattr(obj, 'raw_json', None))}")
+                if hasattr(obj, 'raw_json') and isinstance(obj.raw_json, dict):
+                    logger.error(f"raw_json keys: {list(obj.raw_json.keys())[:20]}")
+        logger.error("Full KeyError traceback:", exc_info=True)
+        session.rollback()
+        raise
     except Exception as e:
         # Actual database error - log and rollback
         logger.error(
             f"Database session error during commit, rolling back: {e}. "
-            f"Error type: {type(e).__name__}, session state: "
-            f"dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}",
-            exc_info=True
+            f"Error type: {type(e).__name__}, Error args: {e.args}, session state: "
+            f"dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}"
         )
+        if session.new:
+            for obj in list(session.new)[:3]:
+                logger.error(f"New object in session: {type(obj).__name__}, id={getattr(obj, 'id', 'NO_ID')}")
+        logger.error("Full exception traceback:", exc_info=True)
         session.rollback()
         raise
     finally:

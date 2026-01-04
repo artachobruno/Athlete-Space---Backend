@@ -152,16 +152,38 @@ def save_activity_record(session: Session, record: ActivityRecord, raw_json: dic
         raw_json=raw_json,
     )
     
+    # Check if id was generated
+    activity_id = getattr(activity, 'id', None)
     logger.debug(
-        f"[SAVE_ACTIVITIES] Activity object created: id={activity.id}, "
-        f"user_id={activity.user_id}, strava_activity_id={activity.strava_activity_id}, "
+        f"[SAVE_ACTIVITIES] Activity object created: id={activity_id}, "
+        f"id_type={type(activity_id)}, user_id={activity.user_id}, "
+        f"strava_activity_id={activity.strava_activity_id}, "
         f"raw_json_present={activity.raw_json is not None}, "
         f"raw_json_type={type(activity.raw_json) if activity.raw_json else None}"
     )
     
+    if activity.raw_json and isinstance(activity.raw_json, dict):
+        raw_json_keys = list(activity.raw_json.keys())
+        logger.debug(
+            f"[SAVE_ACTIVITIES] raw_json has {len(raw_json_keys)} keys, "
+            f"has 'id': {'id' in raw_json_keys}, sample keys: {raw_json_keys[:10]}"
+        )
+        if 'id' in activity.raw_json:
+            logger.debug(f"[SAVE_ACTIVITIES] raw_json['id'] = {activity.raw_json.get('id')}, type: {type(activity.raw_json.get('id'))}")
+    
     logger.debug(f"[SAVE_ACTIVITIES] Adding activity to session: {strava_id}")
-    session.add(activity)
-    logger.debug(f"[SAVE_ACTIVITIES] Activity added to session, session.dirty: {len(session.dirty)}, session.new: {len(session.new)}")
+    try:
+        session.add(activity)
+        logger.debug(f"[SAVE_ACTIVITIES] Activity added to session, session.dirty: {len(session.dirty)}, session.new: {len(session.new)}")
+        
+        # Verify activity is in session
+        if activity in session.new:
+            logger.debug(f"[SAVE_ACTIVITIES] Activity confirmed in session.new")
+        else:
+            logger.warning(f"[SAVE_ACTIVITIES] Activity NOT in session.new after add!")
+    except Exception as e:
+        logger.error(f"[SAVE_ACTIVITIES] Error adding activity to session: {e}", exc_info=True)
+        raise
     
     logger.info(f"[SAVE_ACTIVITIES] Added new activity: {strava_id} for user {user_id}")
     return activity

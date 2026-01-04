@@ -94,14 +94,25 @@ def backfill_task(athlete_id: int) -> None:
                 if not _check_activities_exist(athlete_id):
                     logger.warning(
                         f"[INGESTION] Backfill marked as done but no activities found for athlete_id={athlete_id}. "
-                        f"Resetting backfill_done to False."
+                        f"Resetting backfill_done to False and backfill_page to 1."
                     )
                     user.backfill_done = False
+                    user.backfill_page = 1
                     session.add(user)
                     session.commit()
                 else:
                     logger.info(f"[INGESTION] Backfill already completed for athlete_id={athlete_id}, skipping")
                     return
+
+            # If no activities exist but we're at a high page number, reset to page 1
+            if not _check_activities_exist(athlete_id) and user.backfill_page and user.backfill_page > 1:
+                logger.warning(
+                    f"[INGESTION] No activities found but backfill_page={user.backfill_page} for athlete_id={athlete_id}. "
+                    f"Resetting backfill_page to 1."
+                )
+                user.backfill_page = 1
+                session.add(user)
+                session.commit()
 
             try:
                 logger.info(f"[INGESTION] Executing backfill sync for athlete_id={athlete_id}")

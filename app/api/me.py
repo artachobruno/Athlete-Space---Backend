@@ -31,7 +31,7 @@ def get_strava_account(user_id: str) -> StravaAccount:
         user_id: Current authenticated user ID
 
     Returns:
-        StravaAccount instance
+        StravaAccount instance (detached from session)
 
     Raises:
         HTTPException: If no Strava account is connected
@@ -41,7 +41,10 @@ def get_strava_account(user_id: str) -> StravaAccount:
         if not result:
             logger.warning(f"No Strava account connected for user_id={user_id}")
             raise HTTPException(status_code=404, detail="No Strava account connected. Please complete OAuth at /auth/strava")
-        return result[0]
+        account = result[0]
+        # Detach object from session so it can be used after session closes
+        session.expunge(account)
+        return account
 
 
 def _extract_today_metrics(metrics_result: dict[str, list[tuple[str, float]]]) -> dict[str, float]:

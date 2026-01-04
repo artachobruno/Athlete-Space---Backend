@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
-from app.api.me import get_overview
+from app.api.me import get_overview_data
 from app.api.schemas import (
     CoachAskRequest,
     CoachAskResponse,
@@ -152,7 +152,7 @@ def get_coach_summary(user_id: str = Depends(get_current_user_id)):
     now = datetime.now(timezone.utc)
 
     try:
-        overview = get_overview()
+        overview = get_overview_data(user_id)
         coach_response = get_coach_advice(overview)
 
         summary = coach_response.get("summary", "Training analysis in progress.")
@@ -192,7 +192,7 @@ def get_coach_observations(user_id: str = Depends(get_current_user_id)):
     now = datetime.now(timezone.utc)
 
     try:
-        overview = get_overview()
+        overview = get_overview_data(user_id)
         coach_response = get_coach_advice(overview)
 
         insights = coach_response.get("insights", [])
@@ -253,7 +253,7 @@ def get_coach_recommendations(user_id: str = Depends(get_current_user_id)):
     now = datetime.now(timezone.utc)
 
     try:
-        overview = get_overview()
+        overview = get_overview_data(user_id)
         coach_response = get_coach_advice(overview)
 
         recommendations_list = coach_response.get("recommendations", [])
@@ -322,7 +322,7 @@ def get_coach_confidence(user_id: str = Depends(get_current_user_id)):
     now = datetime.now(timezone.utc)
 
     try:
-        overview = get_overview()
+        overview = get_overview_data(user_id)
         data_quality = overview.get("data_quality", "insufficient")
 
         data_quality_scores = {
@@ -407,7 +407,7 @@ def ask_coach_endpoint(request: CoachAskRequest, user_id: str = Depends(get_curr
             history_empty=history_empty,
         )
 
-        overview = get_overview()
+        overview = get_overview_data(user_id)
         data_quality = overview.get("data_quality", "insufficient")
 
         confidence_scores = {

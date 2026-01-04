@@ -2,8 +2,12 @@ from fastapi import APIRouter
 from loguru import logger
 from sqlalchemy import select
 
-from app.coach.chat_utils.dispatcher import dispatch_coach_chat
 from app.coach.chat_utils.schemas import CoachChatRequest, CoachChatResponse
+from app.coach.orchestrator_agent import run_conversation
+from app.coach.orchestrator_deps import CoachDeps
+from app.coach.state_builder import build_athlete_state
+from app.coach.tools.cold_start import welcome_new_user
+from app.state.api_helpers import get_training_data
 from app.state.db import get_session
 from app.state.models import CoachMessage, StravaAuth
 
@@ -21,31 +25,6 @@ def _get_athlete_id() -> int | None:
         if not result:
             return None
         return result[0].athlete_id
-
-
-def _get_conversation_history(athlete_id: int, limit: int = 20) -> list[dict[str, str]]:
-    """Get conversation history for an athlete.
-
-    Args:
-        athlete_id: Strava athlete ID
-        limit: Maximum number of messages to retrieve (default: 20)
-
-    Returns:
-        List of messages with 'role' and 'content' keys, ordered by timestamp
-    """
-    with get_session() as db:
-        messages = (
-            db.query(CoachMessage)
-            .filter(CoachMessage.athlete_id == athlete_id)
-            .order_by(CoachMessage.timestamp.desc())
-            .limit(limit)
-            .all()
-        )
-        # Reverse to get chronological order (oldest first)
-        return [
-            {"role": msg.role, "content": msg.content}
-            for msg in reversed(messages)
-        ]
 
 
 def _is_history_empty(athlete_id: int | None = None) -> bool:
@@ -69,29 +48,72 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
 
 @router.post("/chat", response_model=CoachChatResponse)
 async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
+    """Handle coach chat request using orchestrator agent."""
     logger.info(f"Coach chat request: {req.message}")
 
     # Get athlete ID
     athlete_id = _get_athlete_id()
+    if athlete_id is None:
+        logger.warning("No athlete ID found, cannot process coach chat")
+        return CoachChatResponse(
+            intent="error",
+            reply="Please connect your Strava account first.",
+        )
 
     # Check if this is a cold start (empty history)
     history_empty = _is_history_empty(athlete_id)
 
-    # Get conversation history (limit to last 20 messages for context)
-    conversation_history = []
-    if not history_empty and athlete_id is not None:
-        conversation_history = _get_conversation_history(athlete_id, limit=20)
-        logger.info(f"Retrieved {len(conversation_history)} messages from conversation history")
+    # Handle cold start
+    if history_empty:
+        logger.info("Cold start detected - providing welcome message")
+        try:
+            training_data = get_training_data(days=req.days)
+            athlete_state = build_athlete_state(
+                ctl=training_data.ctl,
+                atl=training_data.atl,
+                tsb=training_data.tsb,
+                daily_load=training_data.daily_load,
+                days_to_race=req.days_to_race,
+            )
+            reply = welcome_new_user(athlete_state)
+        except RuntimeError:
+            logger.warning("Cold start with no training data available")
+            reply = welcome_new_user(None)
 
-    intent, reply = dispatch_coach_chat(
-        message=req.message,
+        return CoachChatResponse(
+            intent="cold_start",
+            reply=reply,
+        )
+
+    # Build athlete state
+    try:
+        training_data = get_training_data(days=req.days)
+        athlete_state = build_athlete_state(
+            ctl=training_data.ctl,
+            atl=training_data.atl,
+            tsb=training_data.tsb,
+            daily_load=training_data.daily_load,
+            days_to_race=req.days_to_race,
+        )
+    except RuntimeError:
+        logger.warning("No training data available for orchestrator")
+        athlete_state = None
+
+    # Create dependencies
+    deps = CoachDeps(
+        athlete_id=athlete_id,
+        athlete_state=athlete_state,
         days=req.days,
         days_to_race=req.days_to_race,
-        history_empty=history_empty,
-        conversation_history=conversation_history,
+    )
+
+    # Run orchestrator
+    result = await run_conversation(
+        user_input=req.message,
+        deps=deps,
     )
 
     return CoachChatResponse(
-        intent=intent,
-        reply=reply,
+        intent=result.intent,
+        reply=result.message,
     )

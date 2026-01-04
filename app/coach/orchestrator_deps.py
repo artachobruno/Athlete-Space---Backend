@@ -1,0 +1,20 @@
+"""Dependencies for the Coach Orchestrator Agent.
+
+Provides context and dependencies needed by the pydantic_ai agent.
+"""
+
+from pydantic import BaseModel
+
+from app.coach.models import AthleteState
+
+
+class CoachDeps(BaseModel):
+    """Dependencies for the Coach Orchestrator Agent.
+
+    Provides context that tools and the agent can access.
+    """
+
+    athlete_id: int
+    athlete_state: AthleteState | None = None
+    days: int = 60
+    days_to_race: int | None = None

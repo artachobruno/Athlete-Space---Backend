@@ -82,8 +82,9 @@ def route_intent(message: str) -> CoachIntent:
             result = IntentResult.model_validate(raw_result)
 
         logger.info(f"Intent routed to: {result.intent}")
-        return result.intent
     except Exception as e:
         logger.error(f"Error routing intent: {type(e).__name__}: {e}", exc_info=True)
         logger.warning("Falling back to FREE_CHAT intent due to error")
         return CoachIntent.FREE_CHAT
+    else:
+        return result.intent

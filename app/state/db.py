@@ -87,6 +87,45 @@ with suppress(Exception):
     _test_database_connection()
 
 
+def _handle_session_commit(session: Session) -> None:
+    """Handle session commit with logging."""
+    logger.debug(f"Before commit: dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}")
+    if session.dirty:
+        logger.debug(f"Session has {len(session.dirty)} dirty objects: {[str(obj) for obj in list(session.dirty)[:3]]}")
+    if session.new:
+        logger.debug(f"Session has {len(session.new)} new objects: {[str(obj) for obj in list(session.new)[:3]]}")
+    logger.debug("Calling session.commit()")
+    session.commit()
+    logger.debug("Database session committed successfully")
+
+
+def _log_keyerror_details(session: Session, error: KeyError) -> None:
+    """Log detailed information about KeyError during commit."""
+    error_msg = str(error)
+    error_args_str = str(error.args)
+    logger.error(
+        "Database session KeyError during commit, rolling back: %s. Error args: %s, session state: dirty=%d, new=%d, deleted=%d",
+        error_msg,
+        error_args_str,
+        len(session.dirty),
+        len(session.new),
+        len(session.deleted),
+    )
+    if session.new:
+        for obj in list(session.new)[:3]:
+            obj_id = getattr(obj, "id", "NO_ID")
+            raw_json_type = type(getattr(obj, "raw_json", None))
+            logger.error(
+                "New object in session: %s, id=%s, raw_json_type=%s",
+                type(obj).__name__,
+                obj_id,
+                raw_json_type,
+            )
+            if hasattr(obj, "raw_json") and isinstance(obj.raw_json, dict):
+                raw_keys = list(obj.raw_json.keys())[:20]
+                logger.error("raw_json keys: %s", raw_keys)
+
+
 @contextmanager
 def get_session() -> Generator[Session, None, None]:
     """Get database session context manager.
@@ -98,62 +137,19 @@ def get_session() -> Generator[Session, None, None]:
     logger.debug("Creating new database session")
     session = SessionLocal()
     try:
-        logger.debug(
-            f"Yielding session: dirty={len(session.dirty)}, new={len(session.new)}, "
-            f"deleted={len(session.deleted)}"
-        )
+        logger.debug(f"Yielding session: dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}")
         yield session
-        
-        logger.debug(
-            f"Before commit: dirty={len(session.dirty)}, new={len(session.new)}, "
-            f"deleted={len(session.deleted)}"
-        )
-        
-        if session.dirty:
-            logger.debug(f"Session has {len(session.dirty)} dirty objects: {[str(obj) for obj in list(session.dirty)[:3]]}")
-        if session.new:
-            logger.debug(f"Session has {len(session.new)} new objects: {[str(obj) for obj in list(session.new)[:3]]}")
-        
-        logger.debug("Calling session.commit()")
-        session.commit()
-        logger.debug("Database session committed successfully")
+        _handle_session_commit(session)
     except HTTPException:
-        # HTTPException is an expected API response, not a database error
-        # Re-raise without logging or rolling back (no DB transaction to rollback)
         logger.debug("HTTPException in session, rolling back")
         session.rollback()
         raise
     except KeyError as e:
-        # KeyError during commit - this is unusual, log extensively
-        error_msg = str(e)
-        error_args_str = str(e.args)
-        logger.error(
-            "Database session KeyError during commit, rolling back: %s. "
-            "Error args: %s, session state: dirty=%d, new=%d, deleted=%d",
-            error_msg,
-            error_args_str,
-            len(session.dirty),
-            len(session.new),
-            len(session.deleted),
-        )
-        if session.new:
-            for obj in list(session.new)[:3]:
-                obj_id = getattr(obj, 'id', 'NO_ID')
-                raw_json_type = type(getattr(obj, 'raw_json', None))
-                logger.error(
-                    "New object in session: %s, id=%s, raw_json_type=%s",
-                    type(obj).__name__,
-                    obj_id,
-                    raw_json_type,
-                )
-                if hasattr(obj, 'raw_json') and isinstance(obj.raw_json, dict):
-                    raw_keys = list(obj.raw_json.keys())[:20]
-                    logger.error("raw_json keys: %s", raw_keys)
+        _log_keyerror_details(session, e)
         logger.error("Full KeyError traceback:", exc_info=True)
         session.rollback()
         raise
     except Exception as e:
-        # Actual database error - log and rollback
         logger.error(
             f"Database session error during commit, rolling back: {e}. "
             f"Error type: {type(e).__name__}, Error args: {e.args}, session state: "

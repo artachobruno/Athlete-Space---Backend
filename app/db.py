@@ -13,6 +13,17 @@ from app.state.db import get_session
 from app.state.models import StravaAuth
 
 
+def _raise_type_error_for_raw_data(raw: dict | None) -> None:
+    """Raise TypeError for invalid raw data type."""
+    raise TypeError(f"Raw data must be a dict, got {type(raw)}")
+
+
+def _raise_missing_id_error(raw_keys: list[str]) -> None:
+    """Raise ValueError for missing 'id' field in raw data."""
+    error_msg = f"Raw data missing 'id' field. Keys: {raw_keys[:10]}"
+    raise ValueError(error_msg)
+
+
 def store_activity(
     user_id: int,
     source: str,
@@ -37,42 +48,34 @@ def store_activity(
         f"[DATA] store_activity called: activity_id={activity_id}, athlete_id={user_id}, "
         f"source={source}, raw_type={type(raw)}, raw_is_none={raw is None}"
     )
-    
+
     with get_session() as session:
         logger.debug(f"[DATA] Database session created for activity {activity_id}")
-        
+
         # Convert raw Strava activity to ActivityRecord if provided
         if raw and source == "strava":
             try:
                 # Validate raw data has required fields
-                logger.debug(
-                    f"[DATA] Validating raw data for activity {activity_id}: "
-                    f"type={type(raw)}, is_dict={isinstance(raw, dict)}"
-                )
-                
+                logger.debug(f"[DATA] Validating raw data for activity {activity_id}: type={type(raw)}, is_dict={isinstance(raw, dict)}")
+
                 if not isinstance(raw, dict):
-                    raise ValueError(f"Raw data must be a dict, got {type(raw)}")
-                
+                    _raise_type_error_for_raw_data(raw)
+
                 raw_keys = list(raw.keys()) if isinstance(raw, dict) else []
-                logger.debug(
-                    f"[DATA] Raw data keys for activity {activity_id}: {raw_keys[:20]} "
-                    f"(total: {len(raw_keys)})"
-                )
-                
+                logger.debug(f"[DATA] Raw data keys for activity {activity_id}: {raw_keys[:20]} (total: {len(raw_keys)})")
+
                 if "id" not in raw:
-                    raise ValueError(f"Raw data missing 'id' field. Keys: {raw_keys[:10]}")
-                
-                logger.debug(
-                    f"[DATA] Raw data 'id' field: {raw.get('id')}, type: {type(raw.get('id'))}"
-                )
-                
+                    _raise_missing_id_error(raw_keys)
+
+                logger.debug(f"[DATA] Raw data 'id' field: {raw.get('id')}, type: {type(raw.get('id'))}")
+
                 logger.debug(f"[DATA] Creating StravaActivity from raw data for activity {activity_id}")
                 strava_activity = StravaActivity(**raw)
                 logger.debug(
                     f"[DATA] StravaActivity created: id={strava_activity.id}, "
                     f"type={strava_activity.type}, raw_present={strava_activity.raw is not None}"
                 )
-                
+
                 logger.debug(f"[DATA] Mapping StravaActivity to ActivityRecord for activity {activity_id}")
                 record = map_strava_activity(strava_activity, athlete_id=user_id)
                 logger.debug(
@@ -80,7 +83,7 @@ def store_activity(
                     f"athlete_id={record.athlete_id}, sport={record.sport}, "
                     f"duration_sec={record.duration_sec}, distance_m={record.distance_m}"
                 )
-                
+
                 # Pass full raw data to save_activity_record for storage in raw_json
                 logger.debug(
                     f"[DATA] Calling save_activity_record with raw_json size: "
@@ -88,7 +91,7 @@ def store_activity(
                 )
                 save_activity_record(session, record, raw_json=raw)
                 logger.debug(f"[DATA] save_activity_record completed for activity {activity_id}")
-                
+
                 # Note: session.commit() is handled by get_session() context manager
                 logger.debug(f"[DATA] About to commit session for activity {activity_id}")
                 start_time_str = str(start_time) if start_time else "None"
@@ -100,17 +103,14 @@ def store_activity(
                 )
             except ValueError as e:
                 # ValueError from save_activity_record means StravaAccount lookup failed
-                logger.error(
-                    f"[DATA] Cannot store activity {activity_id} for athlete_id={user_id}: "
-                    f"StravaAccount not found. Error: {e}"
-                )
+                logger.error(f"[DATA] Cannot store activity {activity_id} for athlete_id={user_id}: StravaAccount not found. Error: {e}")
                 raise
             except KeyError as e:
                 # KeyError means missing required field in raw data
                 logger.error(
                     f"[DATA] KeyError storing activity {activity_id} for athlete_id={user_id}: {e}. "
                     f"Raw data keys: {list(raw.keys())[:20] if isinstance(raw, dict) else 'N/A'}",
-                    exc_info=True
+                    exc_info=True,
                 )
                 raise
             except Exception as e:
@@ -127,9 +127,8 @@ def store_activity(
                         "Run migration script: scripts/migrate_activities_id_to_uuid.py"
                     ) from e
                 logger.error(
-                    f"[DATA] Error storing activity {activity_id} for athlete_id={user_id}: {error_msg}. "
-                    f"Error type: {type(e).__name__}",
-                    exc_info=True
+                    f"[DATA] Error storing activity {activity_id} for athlete_id={user_id}: {error_msg}. Error type: {type(e).__name__}",
+                    exc_info=True,
                 )
                 raise
         else:

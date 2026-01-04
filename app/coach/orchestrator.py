@@ -161,11 +161,11 @@ else:
         This tool should be used when the question doesn't fit into any
         specific coaching tool category, such as general training advice,
         technique questions, nutrition, or other open-ended inquiries.
-        
+
         This tool ALWAYS provides an answer, even if training data is unavailable.
         """
         logger.info(f"Orchestrator calling tool: answer_general_question (question_length={len(question)})")
-        
+
         if _llm is None or HumanMessage is None:
             logger.warning("LLM not available for open question, providing fallback answer")
             return (
@@ -212,7 +212,8 @@ User question: {question}
 
 IMPORTANT: You MUST provide a helpful answer. Do NOT say you don't have enough data or can't answer.
 Provide general training advice, principles, or guidance that is relevant to their question.
-If the question requires personalized data, explain that you'll be able to provide more specific guidance once their training data is synced, but still provide general advice now.
+If the question requires personalized data, explain that you'll be able to provide more specific
+guidance once their training data is synced, but still provide general advice now.
 Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice."""
 
         try:
@@ -362,8 +363,10 @@ Guidelines:
 - If multiple tools could be useful, use them in sequence
 - Be conversational and helpful
 - For general questions about training, technique, nutrition, or any open-ended inquiries, use answer_general_question
-- If the request is unclear, use explain_state or run_analysis first to understand the situation better (if data available)
-- When answering open questions, you can combine tools (e.g., first check their state with run_analysis, then answer their question with context)
+- If the request is unclear, use explain_state or run_analysis first to understand the situation better
+  (if data available)
+- When answering open questions, you can combine tools (e.g., first check their state with run_analysis,
+  then answer their question with context)
 - If training data is not available, still provide helpful general training advice using answer_general_question
 
 Available tools are described below. Choose the most appropriate tool(s) for each request.

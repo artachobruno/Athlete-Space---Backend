@@ -49,9 +49,82 @@ def _table_has_data(conn) -> bool:
     return count > 0 if count is not None else False
 
 
+def _check_table_exists(conn) -> bool:
+    """Check if activities table exists."""
+    if _is_postgresql():
+        result = conn.execute(text("SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'activities')"))
+        return bool(result.scalar())
+    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='activities'"))
+    return result.fetchone() is not None
+
+
+def _is_string_type(current_type: str | None) -> bool:
+    """Check if current type is a string type."""
+    if current_type is None:
+        return False
+    if _is_postgresql():
+        return current_type in {"character varying", "varchar", "text", "uuid"}
+    return current_type.upper() in {"TEXT", "VARCHAR"}
+
+
+def _migrate_postgresql_with_data(conn) -> None:
+    """Migrate PostgreSQL table with existing data."""
+    logger.info("Table has existing data. Migrating with data preservation...")
+    logger.info("Step 1: Adding temporary id_new column...")
+    conn.execute(text("ALTER TABLE activities ADD COLUMN IF NOT EXISTS id_new VARCHAR"))
+    logger.info("Step 2: Generating UUIDs for existing records...")
+    conn.execute(text("UPDATE activities SET id_new = gen_random_uuid()::text WHERE id_new IS NULL"))
+    logger.info("Step 3: Dropping old id column and renaming new one...")
+    conn.execute(text("ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_pkey"))
+    conn.execute(text("ALTER TABLE activities DROP COLUMN IF EXISTS id"))
+    conn.execute(text("ALTER TABLE activities RENAME COLUMN id_new TO id"))
+    conn.execute(text("ALTER TABLE activities ALTER COLUMN id SET NOT NULL"))
+    conn.execute(text("ALTER TABLE activities ADD PRIMARY KEY (id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
+    logger.info("Migration complete: id column is now VARCHAR (UUID) with existing data preserved.")
+
+
+def _migrate_postgresql_no_data(conn) -> None:
+    """Migrate PostgreSQL table without data."""
+    logger.info("No existing data. Altering column type directly...")
+    conn.execute(text("ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_pkey"))
+    conn.execute(text("ALTER TABLE activities ALTER COLUMN id TYPE VARCHAR USING id::text"))
+    conn.execute(text("ALTER TABLE activities ADD PRIMARY KEY (id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
+    logger.info("Migration complete: id column is now VARCHAR (UUID).")
+
+
+def _migrate_sqlite_no_data(conn) -> None:
+    """Migrate SQLite table without data."""
+    print("No existing data. Recreating table with TEXT id...")
+    conn.execute(
+        text("""
+        CREATE TABLE activities_new (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            strava_activity_id TEXT NOT NULL,
+            start_time DATETIME NOT NULL,
+            type TEXT NOT NULL,
+            duration_seconds INTEGER NOT NULL,
+            distance_meters REAL NOT NULL,
+            elevation_gain_meters REAL NOT NULL,
+            raw_json JSON,
+            created_at DATETIME NOT NULL,
+            UNIQUE(user_id, strava_activity_id)
+        )
+    """)
+    )
+    conn.execute(text("DROP TABLE activities"))
+    conn.execute(text("ALTER TABLE activities_new RENAME TO activities"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_user_id ON activities (user_id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_start_time ON activities (start_time)"))
+    print("Migration complete: id column is now TEXT (UUID).")
+
+
 def migrate_activities_id_to_uuid() -> None:
     """Migrate activities.id column from integer to UUID string.
-    
+
     NOTE: This migration should be run in PRODUCTION where the actual database is.
     If running locally against SQLite, the table may not exist yet or may already
     have the correct schema.
@@ -60,34 +133,22 @@ def migrate_activities_id_to_uuid() -> None:
     db_type = "PostgreSQL" if is_postgres else "SQLite"
     logger.info(f"Detected database type: {db_type}")
     logger.info(f"Database URL: {engine.url}")
-    
+
     if not is_postgres:
         logger.warning("⚠️  WARNING: You are running this migration against SQLite (local development).")
         logger.warning("The production error is from PostgreSQL on Render.")
         logger.warning("This migration should be run in production where the actual database is.")
         logger.warning("Continuing with local migration check...")
-    
-    with engine.begin() as conn:
-        # Check if table exists
-        if _is_postgresql():
-            result = conn.execute(
-                text("SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'activities')")
-            )
-            table_exists = result.scalar()
-        else:
-            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='activities'"))
-            table_exists = result.fetchone() is not None
 
-        if not table_exists:
+    with engine.begin() as conn:
+        if not _check_table_exists(conn):
             logger.info("activities table does not exist. Skipping migration (table will be created with correct schema).")
             return
 
-        # Check current column type
         current_type = _get_column_type(conn, "id")
         logger.info(f"Current id column type: {current_type}")
 
         if current_type is None:
-            logger.info("id column not found.")
             if not _table_has_data(conn):
                 logger.info("Table exists but has no id column and no data.")
                 logger.info("This is likely a new table that will be created with the correct schema.")
@@ -97,54 +158,19 @@ def migrate_activities_id_to_uuid() -> None:
                 logger.warning("Please check the table schema manually.")
             return
 
-        # Check if already migrated
-        if _is_postgresql():
-            is_string_type = current_type in ("character varying", "varchar", "text", "uuid")
-        else:
-            is_string_type = current_type.upper() in ("TEXT", "VARCHAR")
-
-        if is_string_type:
+        if _is_string_type(current_type):
             logger.info("id column is already a string type. No migration needed.")
             return
 
         logger.info("Migrating id column from integer to string (UUID)...")
 
         if _is_postgresql():
-            # PostgreSQL migration
-            has_data = _table_has_data(conn)
-
-            if has_data:
-                logger.info("Table has existing data. Migrating with data preservation...")
-                # Step 1: Add temporary UUID column
-                logger.info("Step 1: Adding temporary id_new column...")
-                conn.execute(text("ALTER TABLE activities ADD COLUMN IF NOT EXISTS id_new VARCHAR"))
-                
-                # Step 2: Generate UUIDs for existing records
-                logger.info("Step 2: Generating UUIDs for existing records...")
-                conn.execute(text("UPDATE activities SET id_new = gen_random_uuid()::text WHERE id_new IS NULL"))
-                
-                # Step 3: Drop old column and rename new one
-                logger.info("Step 3: Dropping old id column and renaming new one...")
-                conn.execute(text("ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_pkey"))
-                conn.execute(text("ALTER TABLE activities DROP COLUMN IF EXISTS id"))
-                conn.execute(text("ALTER TABLE activities RENAME COLUMN id_new TO id"))
-                conn.execute(text("ALTER TABLE activities ALTER COLUMN id SET NOT NULL"))
-                conn.execute(text("ALTER TABLE activities ADD PRIMARY KEY (id)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
-                logger.info("Migration complete: id column is now VARCHAR (UUID) with existing data preserved.")
+            if _table_has_data(conn):
+                _migrate_postgresql_with_data(conn)
             else:
-                # No data, safe to alter directly
-                logger.info("No existing data. Altering column type directly...")
-                conn.execute(text("ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_pkey"))
-                conn.execute(text("ALTER TABLE activities ALTER COLUMN id TYPE VARCHAR USING id::text"))
-                conn.execute(text("ALTER TABLE activities ADD PRIMARY KEY (id)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
-                logger.info("Migration complete: id column is now VARCHAR (UUID).")
+                _migrate_postgresql_no_data(conn)
         else:
-            # SQLite migration
-            has_data = _table_has_data(conn)
-
-            if has_data:
+            if _table_has_data(conn):
                 print("Table has existing data. SQLite requires table recreation.")
                 print("Please backup your database before proceeding.")
                 print("\nSQLite migration steps:")
@@ -152,32 +178,8 @@ def migrate_activities_id_to_uuid() -> None:
                 print("2. Copy data with generated UUIDs")
                 print("3. Drop old table and rename new one")
                 return
-
-            # No data, safe to recreate table
-            print("No existing data. Recreating table with TEXT id...")
-            conn.execute(text("""
-                CREATE TABLE activities_new (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    strava_activity_id TEXT NOT NULL,
-                    start_time DATETIME NOT NULL,
-                    type TEXT NOT NULL,
-                    duration_seconds INTEGER NOT NULL,
-                    distance_meters REAL NOT NULL,
-                    elevation_gain_meters REAL NOT NULL,
-                    raw_json JSON,
-                    created_at DATETIME NOT NULL,
-                    UNIQUE(user_id, strava_activity_id)
-                )
-            """))
-            conn.execute(text("DROP TABLE activities"))
-            conn.execute(text("ALTER TABLE activities_new RENAME TO activities"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_id ON activities (id)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_user_id ON activities (user_id)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activities_start_time ON activities (start_time)"))
-            print("Migration complete: id column is now TEXT (UUID).")
+            _migrate_sqlite_no_data(conn)
 
 
 if __name__ == "__main__":
     migrate_activities_id_to_uuid()
-

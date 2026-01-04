@@ -27,42 +27,34 @@ def _process_activity(act, user, page: int) -> tuple[bool, bool]:
     Returns:
         Tuple of (success: bool, is_critical_error: bool)
     """
-    logger.debug(
-        f"[BACKFILL] Processing activity {act.id} for athlete_id={user.athlete_id}, page={page}"
-    )
-    
+    logger.debug(f"[BACKFILL] Processing activity {act.id} for athlete_id={user.athlete_id}, page={page}")
+
     try:
         # Validate act.raw exists
         logger.debug(
-            f"[BACKFILL] Validating activity {act.id}: has_raw={hasattr(act, 'raw')}, "
-            f"raw_is_none={getattr(act, 'raw', None) is None}"
+            f"[BACKFILL] Validating activity {act.id}: has_raw={hasattr(act, 'raw')}, raw_is_none={getattr(act, 'raw', None) is None}"
         )
-        
-        if not hasattr(act, 'raw') or act.raw is None:
-            logger.error(
-                f"[BACKFILL] Activity {act.id} missing raw data for athlete_id={user.athlete_id}"
-            )
+
+        if not hasattr(act, "raw") or act.raw is None:
+            logger.error(f"[BACKFILL] Activity {act.id} missing raw data for athlete_id={user.athlete_id}")
             return False, False
-        
+
         raw_type = type(act.raw)
         raw_is_dict = isinstance(act.raw, dict)
         raw_keys = list(act.raw.keys()) if raw_is_dict else []
-        raw_has_id = 'id' in act.raw if raw_is_dict else False
-        
+        raw_has_id = "id" in act.raw if raw_is_dict else False
+
         logger.debug(
             f"[BACKFILL] Activity {act.id} raw data: type={raw_type}, is_dict={raw_is_dict}, "
             f"has_id={raw_has_id}, keys_count={len(raw_keys)}, "
             f"sample_keys={raw_keys[:10] if raw_keys else []}"
         )
-        
+
         if raw_has_id:
             logger.debug(f"[BACKFILL] Activity {act.id} raw['id']: {act.raw.get('id')}, type: {type(act.raw.get('id'))}")
-        
-        logger.debug(
-            f"[BACKFILL] Calling store_activity for activity {act.id}: "
-            f"athlete_id={user.athlete_id}, start_date={act.start_date}"
-        )
-        
+
+        logger.debug(f"[BACKFILL] Calling store_activity for activity {act.id}: athlete_id={user.athlete_id}, start_date={act.start_date}")
+
         store_activity(
             user_id=user.athlete_id,
             source="strava",
@@ -70,7 +62,7 @@ def _process_activity(act, user, page: int) -> tuple[bool, bool]:
             start_time=act.start_date,
             raw=act.raw,
         )
-        
+
         logger.debug(f"[BACKFILL] store_activity completed successfully for activity {act.id}")
     except ValueError as e:
         logger.error(
@@ -86,7 +78,7 @@ def _process_activity(act, user, page: int) -> tuple[bool, bool]:
         )
         return False, False
     except Exception as e:
-        activity_id = getattr(act, 'id', 'unknown')
+        activity_id = getattr(act, "id", "unknown")
         error_msg = str(e)
         logger.error(
             "[BACKFILL] Failed to save activity %s for athlete_id=%s: %s. Error type: %s",
@@ -160,10 +152,7 @@ def backfill_user(user):
     # Check if we should reset to page 1
     page = user.backfill_page or 1
     if page > 1 and not check_activities_exist(user.athlete_id):
-        logger.warning(
-            f"[BACKFILL] Starting at page {page} but no activities exist for athlete_id={user.athlete_id}. "
-            f"Resetting to page 1."
-        )
+        logger.warning(f"[BACKFILL] Starting at page {page} but no activities exist for athlete_id={user.athlete_id}. Resetting to page 1.")
         page = 1
         update_backfill_page(user.athlete_id, 1)
 

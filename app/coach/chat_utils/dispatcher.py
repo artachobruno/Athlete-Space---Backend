@@ -77,22 +77,11 @@ User question: {question}
 CRITICAL: You MUST provide a helpful answer. Do NOT say "I don't have enough signal" or "I can't answer" - always provide value.
 Provide a helpful, knowledgeable answer about training, technique, or general endurance coaching.
 Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice.
-If the question requires personalized data (like current fitness or fatigue), explain that you'll be able to provide more specific guidance once their training data is synced, but still provide general advice now."""
+If the question requires personalized data (like current fitness or fatigue), explain that you'll be able to
+provide more specific guidance once their training data is synced, but still provide general advice now."""
 
         logger.info("Invoking LLM for general question (no training data)")
         response = llm.invoke([HumanMessage(content=prompt_text)])
-        if not hasattr(response, "content"):
-            logger.warning("LLM response missing content attribute")
-            return str(response)
-        content = response.content
-        if isinstance(content, str):
-            logger.info("General question answered successfully via LLM")
-            return content
-        if isinstance(content, list):
-            logger.info("General question answered successfully via LLM (list content)")
-            return " ".join(str(item) for item in content if isinstance(item, str))
-        logger.info("General question answered successfully via LLM (converted content)")
-        return str(content)
     except Exception as e:
         logger.error(f"Error answering general question with LLM: {e}", exc_info=True)
         return (
@@ -100,6 +89,22 @@ If the question requires personalized data (like current fitness or fatigue), ex
             "Please make sure your Strava account is connected and synced, "
             "or try rephrasing your question."
         )
+    else:
+        if not hasattr(response, "content"):
+            logger.warning("LLM response missing content attribute")
+            return str(response)
+
+        content = response.content
+        if isinstance(content, str):
+            content_str = content
+            logger.info("General question answered successfully via LLM")
+        elif isinstance(content, list):
+            content_str = " ".join(str(item) for item in content if isinstance(item, str))
+            logger.info("General question answered successfully via LLM (list content)")
+        else:
+            content_str = str(content)
+            logger.info("General question answered successfully via LLM (converted content)")
+        return content_str
 
 
 def _handle_cold_start(days: int, days_to_race: int | None) -> tuple[str, str]:
@@ -128,7 +133,7 @@ def _handle_cold_start(days: int, days_to_race: int | None) -> tuple[str, str]:
 
 def _get_athlete_state(days: int, days_to_race: int | None) -> tuple[str, str] | tuple[None, AthleteState]:
     """Get athlete state or return error response.
-    
+
     Returns:
         Tuple of (error_type, error_message) if error, or (None, AthleteState) if successful
     """
@@ -175,7 +180,8 @@ def _route_to_tool(intent: CoachIntent, athlete_state: AthleteState, message: st
 def dispatch_coach_chat(
     message: str,
     days: int,
-    days_to_race: int | None,
+    days_to_race: int | None = None,
+    *,
     history_empty: bool = False,
     conversation_history: list[dict[str, str]] | None = None,
     use_orchestrator: bool = True,
@@ -213,7 +219,7 @@ def dispatch_coach_chat(
     logger.info("Building athlete state for tool routing")
     state_result = _get_athlete_state(days, days_to_race)
     has_training_data = state_result[0] is None
-    
+
     if not has_training_data:  # Error response
         error_type = state_result[0]
         logger.warning(f"Failed to get athlete state: {error_type}")
@@ -235,19 +241,20 @@ def dispatch_coach_chat(
             logger.info(f"Calling LLM orchestrator with message: {message[:100]}, history_count={history_count}")
             reply = run_orchestrator(message, athlete_state, conversation_history=conversation_history)
             logger.info(f"LLM orchestrator completed successfully, reply length: {len(reply)}")
-            
+
             # Check if reply indicates insufficient data - if so, use general question handler
-            if reply and ("don't have enough signal" in reply.lower() or 
-                         "can't answer" in reply.lower() or 
-                         "not enough data" in reply.lower() or
-                         "insufficient" in reply.lower()):
+            insufficient_data_phrases = ("don't have enough signal", "can't answer", "not enough data", "insufficient")
+            if reply and any(phrase in reply.lower() for phrase in insufficient_data_phrases):
                 logger.warning("Orchestrator returned insufficient data message, using general question handler")
                 reply = _answer_general_question_with_llm(message)
-                return ("general_question", reply)
-            
-            return ("orchestrator", reply)
+                intent_result = ("general_question", reply)
+            else:
+                intent_result = ("orchestrator", reply)
         except Exception as e:
             logger.error(f"LLM orchestrator failed, falling back to intent routing: {e}", exc_info=True)
+            raise
+        else:
+            return intent_result
             # Fall through to intent-based routing
 
     # Route to appropriate tool (intent routing uses LLM, tools may be rule-based)

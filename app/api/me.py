@@ -115,11 +115,25 @@ def _build_overview_response(
     """
     if data_quality_status != "ok":
         metrics_data = {"ctl": [], "atl": [], "tsb": []}
+        # When data quality is insufficient, return zeros for today's metrics
+        # to avoid displaying misleading calculated values from insufficient data
+        today_values = {
+            "ctl": 0.0,
+            "atl": 0.0,
+            "tsb": 0.0,
+            "tsb_7d_avg": 0.0,
+        }
     else:
         metrics_data = {
             "ctl": metrics_result["ctl"],
             "atl": metrics_result["atl"],
             "tsb": metrics_result["tsb"],
+        }
+        today_values = {
+            "ctl": round(today_metrics["today_ctl"], 1),
+            "atl": round(today_metrics["today_atl"], 1),
+            "tsb": round(today_metrics["today_tsb"], 1),
+            "tsb_7d_avg": round(today_metrics["tsb_7d_avg"], 1),
         }
 
     return {
@@ -127,12 +141,7 @@ def _build_overview_response(
         "last_sync": last_sync,
         "data_quality": data_quality_status,
         "metrics": metrics_data,
-        "today": {
-            "ctl": round(today_metrics["today_ctl"], 1),
-            "atl": round(today_metrics["today_atl"], 1),
-            "tsb": round(today_metrics["today_tsb"], 1),
-            "tsb_7d_avg": round(today_metrics["tsb_7d_avg"], 1),
-        },
+        "today": today_values,
     }
 
 

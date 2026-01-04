@@ -223,13 +223,14 @@ def _build_raw_json(activity) -> dict | None:
     return None
 
 
-def _save_activities_batch(session, activities: list, user_id: str) -> int:
+def _save_activities_batch(session, activities: list, user_id: str, athlete_id: int) -> int:
     """Save activities to database (idempotent).
 
     Args:
         session: Database session
         activities: List of StravaActivity objects
         user_id: User ID
+        athlete_id: Strava athlete ID (integer)
 
     Returns:
         Number of activities saved
@@ -242,6 +243,7 @@ def _save_activities_batch(session, activities: list, user_id: str) -> int:
 
             activity_obj = Activity(
                 user_id=user_id,
+                athlete_id=athlete_id,
                 strava_activity_id=strava_id,
                 start_time=activity.start_date,
                 type=activity.type.capitalize(),
@@ -354,7 +356,7 @@ def backfill_user_history(user_id: str) -> None:
         logger.info(f"[HISTORY_BACKFILL] Fetched {len(activities)} activities for user_id={user_id}")
 
         # Save activities (idempotent - insert blindly, let DB enforce uniqueness)
-        saved_count = _save_activities_batch(session, activities, user_id)
+        saved_count = _save_activities_batch(session, activities, user_id, int(account.athlete_id))
         logger.info(f"[HISTORY_BACKFILL] Saved {saved_count}/{len(activities)} activities for user_id={user_id}")
 
         # Update cursor after successful batch

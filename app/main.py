@@ -36,6 +36,7 @@ from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_daily_summary import migrate_daily_summary
+from scripts.migrate_drop_activity_id import migrate_drop_activity_id
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 
@@ -83,6 +84,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_activities_user_id: {e}")
     logger.error(f"Migration failed: migrate_activities_user_id - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: drop obsolete activity_id column")
+    migrate_drop_activity_id()
+    logger.info("✓ Migration completed: drop activity_id column")
+except Exception as e:
+    migration_errors.append(f"migrate_drop_activity_id: {e}")
+    logger.error(f"✗ Migration failed: migrate_drop_activity_id - {e}", exc_info=True)
 
 try:
     migrate_daily_summary()

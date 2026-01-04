@@ -245,49 +245,103 @@ who understands context, anticipates needs, and guides athletes to optimal train
 async def recommend_next_session_tool(deps: CoachDeps) -> str:
     """Tool wrapper for recommend_next_session."""
     if deps.athlete_state is None:
-        return "Training data is not available. Please sync your Strava activities first."
+        return (
+            "I'd love to recommend today's session! To give you the best guidance, could you tell me:\n\n"
+            "• How are you feeling today? (tired, fresh, or somewhere in between?)\n"
+            "• What did you do yesterday? (rest day, easy run, or harder workout?)\n"
+            "• What's your goal for today? (easy recovery, moderate effort, or quality session?)\n\n"
+            "Once I know this, I can recommend the perfect session for you. "
+            "Also, syncing your Strava activities will help me provide even more personalized recommendations!"
+        )
     return await asyncio.to_thread(recommend_next_session, deps.athlete_state)
 
 
 async def add_workout_tool(workout_description: str, deps: CoachDeps) -> str:
     """Tool wrapper for add_workout."""
     if deps.athlete_state is None:
-        return "Training data is not available. Please sync your Strava activities first."
+        return (
+            "I'd love to help you add a workout! To give you the best guidance, could you tell me:\n\n"
+            "• How are you feeling today? (tired, fresh, or somewhere in between?)\n"
+            "• What type of workout are you thinking about? (easy run, tempo, intervals, etc.?)\n"
+            "• What's your goal for this session? (recovery, building fitness, or race prep?)\n\n"
+            "Based on your answers, I can help you plan the perfect workout. "
+            "Syncing your Strava activities will help me provide even more personalized recommendations!"
+        )
     return await asyncio.to_thread(add_workout, deps.athlete_state, workout_description)
 
 
 async def adjust_training_load_tool(user_feedback: str, deps: CoachDeps) -> str:
     """Tool wrapper for adjust_training_load."""
     if deps.athlete_state is None:
-        return "Training data is not available. Please sync your Strava activities first."
+        return (
+            "I'd like to help adjust your training load! To give you the best recommendations, could you tell me:\n\n"
+            "• How are you feeling? (tired, strong, or somewhere in between?)\n"
+            "• What's your current training volume? (hours per week or sessions per week?)\n"
+            "• What's your goal? (building fitness, maintaining, or recovering?)\n"
+            "• Any specific concerns? (overtraining, undertraining, or just fine-tuning?)\n\n"
+            "Based on your answers, I can suggest specific adjustments. "
+            "Syncing your Strava activities will help me provide even more precise recommendations!"
+        )
     return await asyncio.to_thread(adjust_training_load, deps.athlete_state, user_feedback)
 
 
 async def explain_training_state_tool(deps: CoachDeps) -> str:
     """Tool wrapper for explain_training_state."""
     if deps.athlete_state is None:
-        return "Training data is not available. Please sync your Strava activities first."
+        return (
+            "I'd love to explain your training state! To give you accurate insights, could you tell me:\n\n"
+            "• How consistent has your training been? (daily, a few times per week, or irregular?)\n"
+            "• What's your typical training volume? (hours per week?)\n"
+            "• How are you feeling? (energetic, tired, or somewhere in between?)\n"
+            "• What's your training goal right now? (building base, race prep, or maintaining?)\n\n"
+            "Based on your answers, I can explain your current state and provide guidance. "
+            "Syncing your Strava activities will help me provide even more detailed analysis!"
+        )
     return await asyncio.to_thread(explain_training_state, deps.athlete_state)
 
 
 async def run_analysis_tool(deps: CoachDeps) -> str:
     """Tool wrapper for run_analysis."""
     if deps.athlete_state is None:
-        return "Training data is not available. Please sync your Strava activities first."
+        return (
+            "I'd love to analyze your training! To provide comprehensive insights, could you tell me:\n\n"
+            "• How consistent has your training been? (daily, a few times per week, or irregular?)\n"
+            "• What's your typical training volume? (hours per week?)\n"
+            "• How are you feeling overall? (energetic, tired, or somewhere in between?)\n"
+            "• What's your training goal? (building base, race prep, or maintaining?)\n\n"
+            "Based on your answers, I can provide detailed analysis. "
+            "Syncing your Strava activities will help me provide even more comprehensive insights!"
+        )
     return await asyncio.to_thread(run_analysis, deps.athlete_state)
 
 
 async def share_report_tool(deps: CoachDeps) -> str:
     """Tool wrapper for share_report."""
     if deps.athlete_state is None:
-        return "Training data is not available. Please sync your Strava activities first."
+        return (
+            "I'd love to create a training report for you! To provide accurate insights, could you tell me:\n\n"
+            "• How consistent has your training been? (daily, a few times per week, or irregular?)\n"
+            "• What's your typical training volume? (hours per week?)\n"
+            "• How are you feeling overall? (energetic, tired, or somewhere in between?)\n"
+            "• What's your training goal? (building base, race prep, or maintaining?)\n\n"
+            "Based on your answers, I can create a helpful report. "
+            "Syncing your Strava activities will help me provide even more detailed reports!"
+        )
     return await asyncio.to_thread(share_report, deps.athlete_state)
 
 
 async def plan_week_tool(deps: CoachDeps) -> str:
     """Tool wrapper for plan_week."""
     if deps.athlete_state is None:
-        return "Training data is not available. Please sync your Strava activities first."
+        return (
+            "I'd love to help you plan your week! To create the best plan, could you tell me:\n\n"
+            "• What's your training goal this week? (building base, race prep, or maintaining?)\n"
+            "• How many days can you train? (which days of the week?)\n"
+            "• What's your current fitness level? (just starting, maintaining, or in peak shape?)\n"
+            "• Any constraints? (time limits, injury concerns, or other commitments?)\n\n"
+            "Based on your answers, I can create a personalized weekly plan. "
+            "Syncing your Strava activities will help me provide even more tailored recommendations!"
+        )
     return await asyncio.to_thread(plan_week, deps.athlete_state)
 
 

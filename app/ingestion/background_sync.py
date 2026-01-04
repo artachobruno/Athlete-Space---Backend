@@ -48,11 +48,11 @@ def _decrypt_refresh_token(account: StravaAccount) -> str:
     try:
         return decrypt_token(account.refresh_token)
     except EncryptionKeyError as e:
-        logger.error(f"[SYNC] Encryption key mismatch for user_id={account.user_id}: {e}")
+        logger.error(f"[SYNC] Encryption key mismatch for user_id={account.user_id}: {e!s}")
         raise TokenRefreshError("Failed to decrypt token: ENCRYPTION_KEY not set or changed. User must re-authenticate with Strava.") from e
     except EncryptionError as e:
-        logger.error(f"[SYNC] Failed to decrypt refresh token for user_id={account.user_id}: {e}")
-        raise TokenRefreshError(f"Failed to decrypt refresh token: {e}") from e
+        logger.error(f"[SYNC] Failed to decrypt refresh token for user_id={account.user_id}: {e!s}")
+        raise TokenRefreshError(f"Failed to decrypt refresh token: {e!s}") from e
 
 
 def _refresh_token_with_strava(refresh_token: str, user_id: str) -> dict:
@@ -84,8 +84,8 @@ def _refresh_token_with_strava(refresh_token: str, user_id: str) -> dict:
             if status_code == 429:
                 logger.warning(f"[SYNC] Rate limited during token refresh for user_id={user_id}")
                 raise RateLimitError("Rate limited during token refresh") from e
-        logger.error(f"[SYNC] Token refresh failed for user_id={user_id}: {e}")
-        raise TokenRefreshError(f"Token refresh failed: {e}") from e
+        logger.error(f"[SYNC] Token refresh failed for user_id={user_id}: {e!s}")
+        raise TokenRefreshError(f"Token refresh failed: {e!s}") from e
 
 
 def _validate_token_data(token_data: dict) -> tuple[str, str | None, int]:
@@ -128,7 +128,7 @@ def _rotate_refresh_token(account: StravaAccount, new_refresh_token: str, new_ex
         session.commit()
         logger.info(f"[SYNC] Rotated refresh token for user_id={account.user_id}")
     except EncryptionError as e:
-        logger.error(f"[SYNC] Failed to encrypt new refresh token: {e}")
+        logger.error(f"[SYNC] Failed to encrypt new refresh token: {e!s}")
         # Continue with old refresh token - not critical
 
 
@@ -180,8 +180,8 @@ def _sync_user_activities(  # noqa: C901, PLR0912
     except TokenRefreshError:
         raise
     except Exception as e:
-        logger.error(f"[SYNC] Failed to get access token for user_id={user_id}: {e}", exc_info=True)
-        raise TokenRefreshError(f"Failed to get access token: {e}") from e
+        logger.error(f"[SYNC] Failed to get access token for user_id={user_id}: {e!s}", exc_info=True)
+        raise TokenRefreshError(f"Failed to get access token: {e!s}") from e
 
     # Calculate date range (use last_sync_at if available, otherwise last 7 days)
     now = datetime.now(timezone.utc)
@@ -207,11 +207,11 @@ def _sync_user_activities(  # noqa: C901, PLR0912
         if e.response is not None and e.response.status_code == 429:
             logger.warning(f"[SYNC] Rate limited while fetching activities for user_id={user_id}")
             raise RateLimitError("Rate limited while fetching activities") from e
-        logger.error(f"[SYNC] Failed to fetch activities for user_id={user_id}: {e}", exc_info=True)
-        raise SyncError(f"Failed to fetch activities: {e}") from e
+        logger.error(f"[SYNC] Failed to fetch activities for user_id={user_id}: {e!s}", exc_info=True)
+        raise SyncError(f"Failed to fetch activities: {e!s}") from e
     except Exception as e:
-        logger.error(f"[SYNC] Unexpected error fetching activities for user_id={user_id}: {e}", exc_info=True)
-        raise SyncError(f"Unexpected error fetching activities: {e}") from e
+        logger.error(f"[SYNC] Unexpected error fetching activities for user_id={user_id}: {e!s}", exc_info=True)
+        raise SyncError(f"Unexpected error fetching activities: {e!s}") from e
 
     # Store activities in database (idempotent upsert)
     imported_count = 0
@@ -251,6 +251,7 @@ def _sync_user_activities(  # noqa: C901, PLR0912
         # Create new activity record
         activity = Activity(
             user_id=user_id,
+            athlete_id=int(account.athlete_id),
             strava_activity_id=strava_id,
             start_time=start_time,
             type=strava_activity.type,
@@ -281,7 +282,7 @@ def _sync_user_activities(  # noqa: C901, PLR0912
 
             trigger_recompute_on_new_activities(user_id)
         except Exception as e:
-            logger.error(f"[SYNC] Failed to trigger metrics recomputation: {e}", exc_info=True)
+            logger.error(f"[SYNC] Failed to trigger metrics recomputation: {e!s}", exc_info=True)
             # Don't fail the sync if metrics recomputation fails
 
     return {
@@ -333,30 +334,31 @@ def sync_user_activities(  # noqa: PLR0911
                 return {"error": "Rate limit exceeded", "user_id": user_id}
             except TokenRefreshError as e:
                 # Token error: don't retry
-                logger.error(f"[SYNC] Token refresh failed for user_id={user_id}: {e}")
+                logger.error(f"[SYNC] Token refresh failed for user_id={user_id}: {e!s}")
                 return {"error": "Token refresh failed. User must reconnect Strava.", "user_id": user_id}
             except SyncError as e:
                 # Other sync errors: retry with backoff
                 wait_seconds = 2**attempt * 5  # 5s, 10s, 20s
                 logger.warning(
-                    f"[SYNC] Sync error for user_id={user_id} on attempt {attempt + 1}: {e}, waiting {wait_seconds}s before retry"
+                    f"[SYNC] Sync error for user_id={user_id} on attempt {attempt + 1}: {e!s}, waiting {wait_seconds}s before retry"
                 )
                 if attempt < max_retries:
                     time.sleep(wait_seconds)
                     last_error = e
                     continue
-                logger.error(f"[SYNC] Sync failed for user_id={user_id} after {max_retries + 1} attempts: {e}")
-                return {"error": f"Sync failed: {e}", "user_id": user_id}
+                logger.error(f"[SYNC] Sync failed for user_id={user_id} after {max_retries + 1} attempts: {e!s}")
+                return {"error": f"Sync failed: {e!s}", "user_id": user_id}
             except Exception as e:
                 # Unexpected errors: log and return
-                logger.error(f"[SYNC] Unexpected error for user_id={user_id}: {e}", exc_info=True)
-                return {"error": f"Unexpected error: {e}", "user_id": user_id}
+                logger.error(f"[SYNC] Unexpected error for user_id={user_id}: {e!s}", exc_info=True)
+                return {"error": f"Unexpected error: {e!s}", "user_id": user_id}
             else:
                 # Success: return result
                 return result
 
         # Should not reach here, but handle it
-        return {"error": f"Sync failed after {max_retries + 1} attempts: {last_error}", "user_id": user_id}
+        error_msg = str(last_error) if last_error else "Unknown error"
+        return {"error": f"Sync failed after {max_retries + 1} attempts: {error_msg}", "user_id": user_id}
 
 
 def sync_all_users() -> dict[str, int | list[dict[str, int | str]]]:
@@ -385,8 +387,8 @@ def sync_all_users() -> dict[str, int | list[dict[str, int | str]]]:
                 result = sync_user_activities(user_id)
                 results.append(result)
             except Exception as e:
-                logger.error(f"[SYNC] Failed to sync user_id={user_id}: {e}", exc_info=True)
-                results.append({"error": f"Failed to sync: {e}", "user_id": user_id})
+                logger.error(f"[SYNC] Failed to sync user_id={user_id}: {e!s}", exc_info=True)
+                results.append({"error": f"Failed to sync: {e!s}", "user_id": user_id})
 
         successful = sum(1 for r in results if "error" not in r)
         logger.info(f"[SYNC] Sync complete: {successful}/{len(accounts)} users synced successfully")

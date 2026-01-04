@@ -39,6 +39,7 @@ from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_drop_activity_id import migrate_drop_activity_id
+from scripts.migrate_drop_obsolete_activity_columns import migrate_drop_obsolete_activity_columns
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 
@@ -94,6 +95,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_drop_activity_id: {e}")
     logger.error(f"✗ Migration failed: migrate_drop_activity_id - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: drop obsolete activity columns")
+    migrate_drop_obsolete_activity_columns()
+    logger.info("✓ Migration completed: drop obsolete activity columns")
+except Exception as e:
+    migration_errors.append(f"migrate_drop_obsolete_activity_columns: {e}")
+    logger.error(f"✗ Migration failed: migrate_drop_obsolete_activity_columns - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: convert athlete_id to string")

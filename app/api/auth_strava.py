@@ -13,7 +13,7 @@ import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 from sqlalchemy import select
 
@@ -191,6 +191,7 @@ def strava_callback(
 
     Validates state (CSRF protection), extracts user_id from state,
     exchanges code for tokens, encrypts tokens, and stores them in strava_accounts table.
+    On success, redirects to frontend with JWT token in URL query parameter.
 
     Args:
         code: Authorization code from Strava
@@ -198,7 +199,8 @@ def strava_callback(
         request: FastAPI request object
 
     Returns:
-        HTMLResponse with success/error message and redirect
+        RedirectResponse to frontend with token in URL on success,
+        HTMLResponse with error message on failure
     """
     logger.info(f"[STRAVA_OAUTH] Callback received with state: {state[:16]}...")
 
@@ -340,28 +342,10 @@ def strava_callback(
         </html>
         """
 
-    # Include JWT token in redirect URL for frontend to extract
-    redirect_with_token = f"{redirect_url}?token={jwt_token}&connected=true"
-
-    return f"""
-    <html>
-    <head>
-        <title>Strava Connected</title>
-        <meta http-equiv="refresh" content="3;url={redirect_with_token}">
-        <script>
-            // Store token in localStorage for frontend
-            if (window.localStorage) {{
-                window.localStorage.setItem('auth_token', '{jwt_token}');
-            }}
-        </script>
-    </head>
-    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-        <h2 style="color: #4FC3F7;">✓ Strava Connected Successfully!</h2>
-        <p><small>Redirecting to Virtus AI...</small></p>
-        <p><a href="{redirect_with_token}">Click here if not redirected</a></p>
-    </body>
-    </html>
-    """
+    # Redirect to frontend with JWT token in URL query parameter
+    redirect_with_token = f"{redirect_url}?token={jwt_token}"
+    logger.info(f"[STRAVA_OAUTH] Redirecting to frontend with token for user_id={user_id}")
+    return RedirectResponse(url=redirect_with_token)
 
 
 @router.post("/disconnect")

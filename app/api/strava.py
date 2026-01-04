@@ -10,7 +10,7 @@ from app.core.settings import settings
 from app.ingestion.tasks import backfill_task, incremental_task
 from app.metrics.daily_aggregation import aggregate_daily_training
 from app.state.db import get_session
-from app.state.models import Activity, StravaAuth
+from app.state.models import Activity, StravaAccount, StravaAuth
 
 STRAVA_CLIENT_ID = settings.strava_client_id
 STRAVA_CLIENT_SECRET = settings.strava_client_secret
@@ -110,7 +110,7 @@ def strava_sync_progress():
                 "last_sync_at": last_sync_at,
             }
     except Exception as e:
-        logger.error(f"Error getting sync progress: {e}", exc_info=True)
+        logger.exception("Error getting sync progress")
         return {
             "connected": False,
             "activity_count": 0,
@@ -142,7 +142,7 @@ def strava_sync(background_tasks: BackgroundTasks):
         background_tasks.add_task(backfill_task, athlete_id)
         logger.info(f"Ingestion tasks scheduled for athlete_id={athlete_id}")
     except Exception as e:
-        logger.error(f"Error triggering Strava sync: {e}", exc_info=True)
+        logger.exception("Error triggering Strava sync")
         return {"success": False, "error": str(e)}
     else:
         return {
@@ -168,10 +168,19 @@ def strava_aggregate():
             athlete_id = auth.athlete_id
             logger.info(f"[API] Triggering aggregation for athlete_id={athlete_id}")
 
+            # Get user_id from StravaAccount (athlete_id is int, need to convert to str for lookup)
+            account = session.query(StravaAccount).filter_by(athlete_id=str(athlete_id)).first()
+            if not account:
+                logger.warning(f"[API] No StravaAccount found for athlete_id={athlete_id}")
+                return {"success": False, "error": "Strava account not found"}
+
+            user_id = account.user_id
+            logger.info(f"[API] Found user_id={user_id} for athlete_id={athlete_id}")
+
         # Run aggregation synchronously (it's fast)
-        aggregate_daily_training(athlete_id)
+        aggregate_daily_training(user_id)
     except Exception as e:
-        logger.error(f"[API] Error triggering aggregation: {e}", exc_info=True)
+        logger.exception("[API] Error triggering aggregation")
         return {"success": False, "error": str(e)}
     else:
         return {

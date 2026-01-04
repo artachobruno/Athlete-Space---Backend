@@ -168,8 +168,8 @@ def get_coach_summary(user_id: str = Depends(get_current_user_id)):
             next_focus=next_focus,
             last_updated=now.isoformat(),
         )
-    except Exception as e:
-        logger.error(f"Error getting coach summary: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error getting coach summary")
         return CoachSummaryResponse(
             summary="Unable to generate coaching summary at this time.",
             current_state="Please ensure your Strava account is connected and synced.",

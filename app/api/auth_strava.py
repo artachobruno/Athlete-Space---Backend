@@ -18,7 +18,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
-from app.core.auth_jwt import create_access_token
+from app.core.auth_jwt import create_access_token, decode_access_token
 from app.core.encryption import EncryptionError, encrypt_token
 from app.core.settings import settings
 from app.integrations.strava.oauth import exchange_code_for_token
@@ -114,6 +114,120 @@ def _validate_oauth_state(state: str, user_id: str) -> bool:
     return True
 
 
+def _resolve_or_create_user_id(athlete_id: str, user_id: str | None) -> str:
+    """Resolve or create user_id for athlete.
+
+    Args:
+        athlete_id: Strava athlete ID
+        user_id: Existing user_id from state (None if unauthenticated)
+
+    Returns:
+        Resolved or created user_id
+    """
+    if user_id is not None:
+        return user_id
+
+    with get_session() as session:
+        existing_account = session.execute(
+            select(StravaAccount).where(StravaAccount.athlete_id == athlete_id)
+        ).first()
+
+        if existing_account:
+            resolved_user_id = existing_account[0].user_id
+            logger.info(f"[STRAVA_OAUTH] Found existing account for athlete_id={athlete_id}, user_id={resolved_user_id}")
+            return resolved_user_id
+
+        resolved_user_id = f"user_{athlete_id}"
+        user_result = session.execute(select(User).where(User.id == resolved_user_id)).first()
+        if not user_result:
+            new_user = User(id=resolved_user_id, email=None)
+            session.add(new_user)
+            session.commit()
+            logger.info(f"[STRAVA_OAUTH] Created new user_id={resolved_user_id} for athlete_id={athlete_id}")
+
+        return resolved_user_id
+
+
+def _encrypt_and_store_tokens(
+    user_id: str,
+    athlete_id: str,
+    access_token: str,
+    refresh_token: str,
+    expires_at: int,
+) -> None:
+    """Encrypt and store Strava tokens in database.
+
+    Args:
+        user_id: User ID
+        athlete_id: Strava athlete ID
+        access_token: Access token to encrypt
+        refresh_token: Refresh token to encrypt
+        expires_at: Token expiration timestamp
+    """
+    try:
+        encrypted_access_token = encrypt_token(access_token)
+        encrypted_refresh_token = encrypt_token(refresh_token)
+        logger.debug(f"[STRAVA_OAUTH] Tokens encrypted for user_id={user_id}")
+    except EncryptionError as e:
+        logger.error(f"[STRAVA_OAUTH] Token encryption failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to encrypt tokens",
+        ) from e
+
+    with get_session() as session:
+        existing = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+
+        if existing:
+            account = existing[0]
+            logger.info(f"[STRAVA_OAUTH] Updating existing Strava account for user_id={user_id}")
+            account.athlete_id = athlete_id
+            account.access_token = encrypted_access_token
+            account.refresh_token = encrypted_refresh_token
+            account.expires_at = expires_at
+        else:
+            logger.info(f"[STRAVA_OAUTH] Creating new Strava account for user_id={user_id}")
+            account = StravaAccount(
+                user_id=user_id,
+                athlete_id=athlete_id,
+                access_token=encrypted_access_token,
+                refresh_token=encrypted_refresh_token,
+                expires_at=expires_at,
+                last_sync_at=None,
+            )
+            session.add(account)
+
+        session.commit()
+        logger.info(f"[STRAVA_OAUTH] Tokens stored successfully for user_id={user_id}")
+
+
+def _create_error_html(redirect_url: str, error_msg: str = "") -> str:
+    """Create HTML error response for OAuth failures.
+
+    Args:
+        redirect_url: URL to redirect to
+        error_msg: Optional error message to display
+
+    Returns:
+        HTML string with error page
+    """
+    error_content = f"<p>Error: {error_msg}</p>" if error_msg else "<p>Invalid or expired authorization request. Please try again.</p>"
+    return f"""
+    <html>
+    <head>
+        <title>Strava Connection Failed</title>
+        <meta http-equiv="refresh" content="5;url={redirect_url}">
+    </head>
+    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h2 style="color: #FF5722;">✗ Strava Connection Failed</h2>
+        {error_content}
+        <p><small>Redirecting in 5 seconds...</small></p>
+        <p><a href="{redirect_url}">Return to app</a></p>
+    </body>
+    </html>
+    """
+
+
 @router.get("")
 def strava_connect(request: Request):
     """Initiate Strava OAuth flow.
@@ -133,7 +247,6 @@ def strava_connect(request: Request):
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         try:
-            from app.core.auth_jwt import decode_access_token
             token = auth_header.replace("Bearer ", "").strip()
             user_id = decode_access_token(token)
             logger.info(f"[STRAVA_OAUTH] Connect initiated for authenticated user_id={user_id}")
@@ -213,26 +326,10 @@ def strava_callback(
         elif host and not host.startswith("localhost"):
             redirect_url = f"https://{host}"
 
-    # Extract user_id from state (CSRF protection)
-    # user_id can be None for unauthenticated users - we'll create user after OAuth
     is_valid, user_id = _validate_and_extract_state(state)
     if not is_valid:
-        # State is invalid (not found or expired)
         logger.error(f"[STRAVA_OAUTH] Invalid or expired state: {state[:16]}...")
-        return f"""
-        <html>
-        <head>
-            <title>Strava Connection Failed</title>
-            <meta http-equiv="refresh" content="5;url={redirect_url}">
-        </head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h2 style="color: #FF5722;">✗ Strava Connection Failed</h2>
-            <p>Invalid or expired authorization request. Please try again.</p>
-            <p><small>Redirecting in 5 seconds...</small></p>
-            <p><a href="{redirect_url}">Return to app</a></p>
-        </body>
-        </html>
-        """
+        return _create_error_html(redirect_url)
 
     logger.info(f"[STRAVA_OAUTH] Callback validated, user_id={user_id}")
     logger.debug(f"[STRAVA_OAUTH] Callback code: {code[:10]}... (truncated)")
@@ -247,75 +344,15 @@ def strava_callback(
             redirect_uri=settings.strava_redirect_uri,
         )
 
-        # Extract token data
         athlete_id = str(token_data["athlete"]["id"])
         access_token = token_data["access_token"]
         refresh_token = token_data["refresh_token"]
         expires_at = token_data["expires_at"]
 
-        # If no user_id from state, check if account exists or create new user
-        with get_session() as session:
-            if user_id is None:
-                # Check if StravaAccount already exists for this athlete_id
-                existing_account = session.execute(
-                    select(StravaAccount).where(StravaAccount.athlete_id == athlete_id)
-                ).first()
-
-                if existing_account:
-                    # Account exists - use existing user_id
-                    user_id = existing_account[0].user_id
-                    logger.info(f"[STRAVA_OAUTH] Found existing account for athlete_id={athlete_id}, user_id={user_id}")
-                else:
-                    # Create new user - use athlete_id as base for user_id
-                    user_id = f"user_{athlete_id}"
-                    # Ensure user exists in users table
-                    user_result = session.execute(select(User).where(User.id == user_id)).first()
-                    if not user_result:
-                        new_user = User(id=user_id, email=None)
-                        session.add(new_user)
-                        session.commit()
-                        logger.info(f"[STRAVA_OAUTH] Created new user_id={user_id} for athlete_id={athlete_id}")
-
+        user_id = _resolve_or_create_user_id(athlete_id, user_id)
         logger.info(f"[STRAVA_OAUTH] OAuth successful for user_id={user_id}, athlete_id={athlete_id}")
 
-        # Encrypt tokens
-        try:
-            encrypted_access_token = encrypt_token(access_token)
-            encrypted_refresh_token = encrypt_token(refresh_token)
-            logger.debug(f"[STRAVA_OAUTH] Tokens encrypted for user_id={user_id}")
-        except EncryptionError as e:
-            logger.error(f"[STRAVA_OAUTH] Token encryption failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to encrypt tokens",
-            ) from e
-
-        # Store tokens in database (upsert)
-        with get_session() as session:
-            existing = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
-
-            if existing:
-                account = existing[0]
-                logger.info(f"[STRAVA_OAUTH] Updating existing Strava account for user_id={user_id}")
-                account.athlete_id = athlete_id
-                account.access_token = encrypted_access_token
-                account.refresh_token = encrypted_refresh_token
-                account.expires_at = expires_at
-                # Don't update last_sync_at on reconnect
-            else:
-                logger.info(f"[STRAVA_OAUTH] Creating new Strava account for user_id={user_id}")
-                account = StravaAccount(
-                    user_id=user_id,
-                    athlete_id=athlete_id,
-                    access_token=encrypted_access_token,
-                    refresh_token=encrypted_refresh_token,
-                    expires_at=expires_at,
-                    last_sync_at=None,
-                )
-                session.add(account)
-
-            session.commit()
-            logger.info(f"[STRAVA_OAUTH] Tokens stored successfully for user_id={user_id}")
+        _encrypt_and_store_tokens(user_id, athlete_id, access_token, refresh_token, expires_at)
 
         # Issue JWT token for the user
         jwt_token = create_access_token(user_id)
@@ -326,21 +363,8 @@ def strava_callback(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[STRAVA_OAUTH] Error in OAuth callback: {e}", exc_info=True)
-        return f"""
-        <html>
-        <head>
-            <title>Strava Connection Failed</title>
-            <meta http-equiv="refresh" content="5;url={redirect_url}">
-        </head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h2 style="color: #FF5722;">✗ Strava Connection Failed</h2>
-            <p>Error: {e!s}</p>
-            <p><small>Check backend logs for details. Redirecting in 5 seconds...</small></p>
-            <p><a href="{redirect_url}">Return to app</a></p>
-        </body>
-        </html>
-        """
+        logger.exception("[STRAVA_OAUTH] Error in OAuth callback")
+        return _create_error_html(redirect_url, str(e))
 
     # Redirect to frontend with JWT token in URL query parameter
     redirect_with_token = f"{redirect_url}?token={jwt_token}"

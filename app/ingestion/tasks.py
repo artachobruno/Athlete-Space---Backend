@@ -54,18 +54,20 @@ def incremental_task(athlete_id: int) -> None:
                 # Trigger daily aggregation after successful ingestion
                 # Do NOT block ingestion if aggregation fails
                 try:
-                    logger.debug(f"[INGESTION] Triggering daily aggregation for athlete_id={athlete_id}")
-                    aggregate_daily_training(user.athlete_id)
-                    logger.debug(f"[INGESTION] Daily aggregation completed for athlete_id={athlete_id}")
-                except Exception as agg_error:
-                    logger.error(
-                        f"[INGESTION] Aggregation failed for athlete_id={user.athlete_id}: {agg_error}",
-                        exc_info=True,
-                    )
+                    # Get user_id from StravaAccount (athlete_id is int, need to convert to str for lookup)
+                    account = session.query(StravaAccount).filter_by(athlete_id=str(athlete_id)).first()
+                    if account:
+                        logger.debug(f"[INGESTION] Triggering daily aggregation for athlete_id={athlete_id}, user_id={account.user_id}")
+                        aggregate_daily_training(account.user_id)
+                        logger.debug(f"[INGESTION] Daily aggregation completed for athlete_id={athlete_id}")
+                    else:
+                        logger.warning(f"[INGESTION] No StravaAccount found for athlete_id={athlete_id}, skipping aggregation")
+                except Exception:
+                    logger.exception(f"[INGESTION] Aggregation failed for athlete_id={athlete_id}")
                     # Continue - aggregation failure should not fail ingestion
             except Exception as e:
                 elapsed = time.time() - task_start
-                logger.error(f"[INGESTION] Incremental sync failed for athlete_id={athlete_id} after {elapsed:.2f}s: {e}", exc_info=True)
+                logger.exception(f"[INGESTION] Incremental sync failed for athlete_id={athlete_id} after {elapsed:.2f}s")
                 _record_error(session, user, e)
                 raise
 
@@ -102,7 +104,7 @@ def backfill_task(athlete_id: int) -> None:
                 logger.info(f"[INGESTION] Backfill sync completed successfully for athlete_id={athlete_id} in {elapsed:.2f}s")
             except Exception as e:
                 elapsed = time.time() - task_start
-                logger.error(f"[INGESTION] Backfill sync failed for athlete_id={athlete_id} after {elapsed:.2f}s: {e}", exc_info=True)
+                logger.exception(f"[INGESTION] Backfill sync failed for athlete_id={athlete_id} after {elapsed:.2f}s")
                 _record_error(session, user, e)
                 raise
 
@@ -144,14 +146,11 @@ def history_backfill_task(user_id: str) -> None:
                 elapsed = time.time() - task_start
                 logger.error(f"[INGESTION] History backfill token error for user_id={user_id} after {elapsed:.2f}s: {e}")
                 raise
-            except HistoryBackfillError as e:
+            except HistoryBackfillError:
                 elapsed = time.time() - task_start
-                logger.error(f"[INGESTION] History backfill failed for user_id={user_id} after {elapsed:.2f}s: {e}", exc_info=True)
+                logger.exception(f"[INGESTION] History backfill failed for user_id={user_id} after {elapsed:.2f}s")
                 raise
-            except Exception as e:
+            except Exception:
                 elapsed = time.time() - task_start
-                logger.error(
-                    f"[INGESTION] History backfill unexpected error for user_id={user_id} after {elapsed:.2f}s: {e}",
-                    exc_info=True,
-                )
+                logger.exception(f"[INGESTION] History backfill unexpected error for user_id={user_id} after {elapsed:.2f}s")
                 raise

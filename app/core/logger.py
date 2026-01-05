@@ -53,7 +53,3 @@ def setup_logger(
         )
 
     logger.info(f"Logger initialized with level={level}")
-
-
-# Initialize logger on import
-setup_logger(level="INFO")

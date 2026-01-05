@@ -68,6 +68,18 @@ class Settings(BaseSettings):
     auth_token_expire_days: int = Field(default=30, validation_alias="AUTH_TOKEN_EXPIRE_DAYS")
     strava_webhook_verify_token: str = Field(default="", validation_alias="STRAVA_WEBHOOK_VERIFY_TOKEN")
     admin_user_ids: str = Field(default="", validation_alias="ADMIN_USER_IDS")  # Comma-separated list
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        """Validate that log level is one of the standard logging levels."""
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        upper_value = value.upper()
+        if upper_value not in valid_levels:
+            logger.warning(f"Invalid LOG_LEVEL '{value}'. Valid levels are: {', '.join(valid_levels)}. Defaulting to INFO.")
+            return "INFO"
+        return upper_value
 
     model_config = SettingsConfigDict(
         env_file=".env",

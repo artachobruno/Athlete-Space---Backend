@@ -43,8 +43,8 @@ from scripts.migrate_drop_obsolete_activity_columns import migrate_drop_obsolete
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 
-# Initialize logger
-setup_logger(level="INFO")
+# Initialize logger with level from settings (defaults to INFO, can be overridden via LOG_LEVEL env var)
+setup_logger(level=settings.log_level)
 
 # Set OPENAI_API_KEY from settings if not already set in environment
 # This ensures pydantic_ai and other libraries can find it

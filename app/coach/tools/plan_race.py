@@ -60,8 +60,10 @@ def _extract_race_information(message: str) -> RaceInformation:
             "You are a race information extractor. Extract race details from user messages.\n\n"
             "Extract:\n"
             "- Race distance: 5K, 10K, Half Marathon, Marathon, or Ultra\n"
-            "- Race date: Convert to YYYY-MM-DD format. If year is missing, "
-            "assume current year ({current_date}) or next year if the date has already passed.\n"
+            "- Race date: Convert to YYYY-MM-DD format. "
+            "Handle formats like: MM/DD, MM/DD/YYYY, MM-DD, 'April 5', 'April 5 2026', etc. "
+            "For MM/DD format, interpret as month/day (e.g., '04/05' = April 5). "
+            "If year is missing, assume current year ({current_date}) or next year if the date has already passed.\n"
             '- Target time: Convert to HH:MM:SS format (e.g., "2:25" becomes "2:25:00", '
             '"2h30m" becomes "2:30:00", "2 hours 25 minutes" becomes "2:25:00")\n\n'
             "If information is not present or unclear, set the field to null.\n\n"

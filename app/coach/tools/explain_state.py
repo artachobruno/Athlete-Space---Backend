@@ -1,16 +1,26 @@
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
 from loguru import logger
+from pydantic import SecretStr
 
 from app.coach.models import AthleteState
+from app.core.settings import settings
 
 
 def explain_training_state(state: AthleteState) -> str:
-    """Explain current fitness, fatigue, and readiness in plain language."""
+    """Explain current fitness, fatigue, and readiness in plain language using LLM.
+
+    Args:
+        state: Current athlete training state
+
+    Returns:
+        Explanation string in plain language
+    """
     logger.info(
         f"Tool explain_training_state called (CTL={state.ctl:.1f}, ATL={state.atl:.1f}, "
         f"TSB={state.tsb:.1f}, confidence={state.confidence:.2f})"
     )
 
-    # Check confidence - ask clarifying questions with insufficient data
     if state.confidence < 0.1:
         return (
             "I'd love to explain your training state! To give you accurate insights, could you tell me:\n\n"
@@ -22,20 +32,64 @@ def explain_training_state(state: AthleteState) -> str:
             "Syncing your Strava activities will help me provide even more detailed analysis!"
         )
 
-    explanation = [
-        f"Current CTL (fitness): {state.ctl:.1f}",
-        f"Current ATL (fatigue): {state.atl:.1f}",
-        f"Training Stress Balance (TSB): {state.tsb:.1f}",
-        "",
-    ]
+    if not settings.openai_api_key:
+        logger.warning("OPENAI_API_KEY not set, cannot explain state with LLM")
+        return "I'd love to explain your training state! Please ensure OpenAI API key is configured for personalized explanations."
 
-    if state.tsb < -10:
-        explanation.append(
-            "You are carrying significant fatigue. Fitness is improving, but recovery needs attention to avoid overreaching."
+    try:
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.3,
+            api_key=SecretStr(settings.openai_api_key),
         )
-    elif state.tsb < 0:
-        explanation.append("You are in a productive training zone. Fatigue is present but manageable.")
-    else:
-        explanation.append("You are well recovered. This is a good window for harder sessions or racing.")
 
-    return "\n".join(explanation)
+        system_prompt = """You are Virtus Coach, an elite endurance training intelligence system.
+
+Your role is to explain the athlete's training state in plain, understandable language.
+
+Explain:
+- Current fitness level (CTL)
+- Current fatigue level (ATL)
+- Training Stress Balance (TSB) - what it means for them
+- Overall state and what they should know
+
+Use plain language. Avoid jargon. Be helpful and informative."""
+
+        athlete_state_str = (
+            f"Training State:\n"
+            f"- CTL (fitness): {state.ctl:.1f}\n"
+            f"- ATL (fatigue): {state.atl:.1f}\n"
+            f"- TSB (balance): {state.tsb:.1f}\n"
+            f"- Load trend: {state.load_trend}\n"
+            f"- Volatility: {state.volatility}\n"
+            f"- Days since rest: {state.days_since_rest}\n"
+            f"- 7-day volume: {state.seven_day_volume_hours:.1f} hours\n"
+            f"- 14-day volume: {state.fourteen_day_volume_hours:.1f} hours\n"
+        )
+
+        if state.flags:
+            athlete_state_str += f"- Flags: {', '.join(state.flags)}\n"
+
+        if state.days_to_race:
+            athlete_state_str += f"- Days to race: {state.days_to_race}\n"
+
+        user_prompt = f"{athlete_state_str}\nExplain this training state in plain language:"
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", user_prompt),
+        ])
+
+        chain = prompt | llm
+        result = chain.invoke({})
+
+        if hasattr(result, "content"):
+            content = result.content
+            if isinstance(content, str):
+                return content
+            return str(content)
+        return str(result)
+
+    except Exception as e:
+        logger.error(f"Error explaining training state with LLM: {e}", exc_info=True)
+        return "I encountered an error explaining your training state. Please try again."

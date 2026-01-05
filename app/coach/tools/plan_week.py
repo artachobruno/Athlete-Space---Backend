@@ -1,10 +1,14 @@
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
 from loguru import logger
+from pydantic import SecretStr
 
 from app.coach.models import AthleteState
+from app.core.settings import settings
 
 
 def plan_week(state: AthleteState) -> str:
-    """Generate a weekly training plan based on current state.
+    """Generate a weekly training plan based on current state using LLM.
 
     Args:
         state: Current athlete state with load metrics and trends.
@@ -13,80 +17,74 @@ def plan_week(state: AthleteState) -> str:
         A weekly training plan tailored to the athlete's current state.
     """
     logger.info(f"Tool plan_week called (TSB={state.tsb:.1f}, load_trend={state.load_trend}, flags={state.flags})")
-    tsb = state.tsb
-    load_trend = state.load_trend
-    flags = state.flags
 
-    # High fatigue - recovery week
-    if tsb < -12 or "OVERREACHING" in flags:
-        return (
-            "📅 Recovery Week Plan\n\n"
-            "Monday: Rest day\n"
-            "Tuesday: Easy 30-40 min aerobic (Z1-2)\n"
-            "Wednesday: Rest or easy 20-30 min\n"
-            "Thursday: Easy 45-60 min aerobic (Z1-2)\n"
-            "Friday: Rest day\n"
-            "Saturday: Easy 60-75 min aerobic with strides (4-6 x 20s)\n"
-            "Sunday: Easy 45-60 min aerobic\n\n"
-            "Total volume: 40-50% of normal week\n"
-            "Focus: Recovery, sleep, nutrition"
+    if not settings.openai_api_key:
+        logger.warning("OPENAI_API_KEY not set, cannot generate weekly plan with LLM")
+        return "I'd love to create a weekly plan! Please ensure OpenAI API key is configured for personalized training plans."
+
+    try:
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.3,
+            api_key=SecretStr(settings.openai_api_key),
         )
 
-    # Fresh and ready - build week
-    if tsb > 5 and load_trend == "stable":
-        return (
-            "📅 Build Week Plan\n\n"
-            "Monday: Rest or easy 30 min\n"
-            "Tuesday: Quality - Threshold intervals (3-4 x 8-10 min @ threshold)\n"
-            "Wednesday: Easy 60-75 min aerobic (Z2)\n"
-            "Thursday: Quality - VO₂max intervals (5-6 x 3-4 min @ 3K pace)\n"
-            "Friday: Easy 45 min recovery\n"
-            "Saturday: Long run 90-120 min (progressive if feeling good)\n"
-            "Sunday: Easy 60-90 min aerobic\n\n"
-            "Total: 2 quality sessions, 1 long run, ~12-15 hours\n"
-            "Focus: Controlled intensity, maintain volume"
+        system_prompt = """You are Virtus Coach, an elite endurance training intelligence system.
+
+Your role is to generate a weekly training plan based on the athlete's current training state.
+
+Create a 7-day plan (Monday through Sunday) that includes:
+- Specific sessions for each day
+- Session types (easy run, tempo, intervals, long run, rest, etc.)
+- Duration and intensity guidance
+- Total weekly volume estimate
+- Focus/goals for the week
+
+Consider:
+- Training Stress Balance (TSB): Negative values indicate fatigue (may need recovery),
+  positive values indicate freshness (good for quality work)
+- Load trends: rising, stable, or falling
+- Current training volume
+- Days since rest
+- Any risk flags
+
+Format the plan clearly with days of the week. Be specific and actionable. Provide a realistic, appropriate plan for their current state."""
+
+        athlete_state_str = (
+            f"Training State:\n"
+            f"- CTL (fitness): {state.ctl:.1f}\n"
+            f"- ATL (fatigue): {state.atl:.1f}\n"
+            f"- TSB (balance): {state.tsb:.1f}\n"
+            f"- Load trend: {state.load_trend}\n"
+            f"- Volatility: {state.volatility}\n"
+            f"- Days since rest: {state.days_since_rest}\n"
+            f"- 7-day volume: {state.seven_day_volume_hours:.1f} hours\n"
+            f"- 14-day volume: {state.fourteen_day_volume_hours:.1f} hours\n"
         )
 
-    # Moderate load - balanced week
-    if -8 <= tsb <= 5:
-        return (
-            "📅 Balanced Week Plan\n\n"
-            "Monday: Easy 45-60 min aerobic\n"
-            "Tuesday: Quality - Tempo run (20-30 min @ threshold)\n"
-            "Wednesday: Easy 60-75 min aerobic\n"
-            "Thursday: Easy 60-90 min aerobic\n"
-            "Friday: Rest or easy 30-40 min\n"
-            "Saturday: Long run 75-90 min steady\n"
-            "Sunday: Easy 60-75 min aerobic\n\n"
-            "Total: 1 quality session, 1 long run, ~10-12 hours\n"
-            "Focus: Maintain consistency, monitor fatigue"
-        )
+        if state.flags:
+            athlete_state_str += f"- Flags: {', '.join(state.flags)}\n"
 
-    # Falling load - need to rebuild
-    if load_trend == "falling" and tsb > 0:
-        return (
-            "📅 Rebuild Week Plan\n\n"
-            "Monday: Easy 60 min aerobic\n"
-            "Tuesday: Moderate - Tempo progression (15 min @ threshold)\n"
-            "Wednesday: Easy 60-75 min aerobic\n"
-            "Thursday: Easy 75-90 min aerobic\n"
-            "Friday: Rest or easy 30 min\n"
-            "Saturday: Long run 90-105 min steady\n"
-            "Sunday: Easy 75-90 min aerobic\n\n"
-            "Total: 1 moderate session, 1 long run, ~12-14 hours\n"
-            "Focus: Gradually increase volume, add intensity next week"
-        )
+        if state.days_to_race:
+            athlete_state_str += f"- Days to race: {state.days_to_race}\n"
 
-    # Default balanced plan
-    return (
-        "📅 Standard Week Plan\n\n"
-        "Monday: Easy 45-60 min\n"
-        "Tuesday: Quality session (threshold or intervals)\n"
-        "Wednesday: Easy 60-75 min\n"
-        "Thursday: Easy 60-90 min\n"
-        "Friday: Rest or easy 30-40 min\n"
-        "Saturday: Long run 75-90 min\n"
-        "Sunday: Easy 60-75 min\n\n"
-        "Total: 1-2 quality sessions, 1 long run\n"
-        "Adjust based on your weekly volume target and recovery needs."
-    )
+        user_prompt = f"{athlete_state_str}\n\nGenerate a weekly training plan:"
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", user_prompt),
+        ])
+
+        chain = prompt | llm
+        result = chain.invoke({})
+
+        if hasattr(result, "content"):
+            content = result.content
+            if isinstance(content, str):
+                return content
+            return str(content)
+        return str(result)
+
+    except Exception as e:
+        logger.error(f"Error generating weekly plan with LLM: {e}", exc_info=True)
+        return "I encountered an error generating the weekly plan. Please try again."

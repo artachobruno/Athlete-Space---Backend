@@ -103,40 +103,16 @@ def _calculate_days_since_rest(daily_load: list[float]) -> int:
 
 
 def _generate_flags(
-    ctl: float,
-    atl: float,
-    tsb: float,
-    daily_load: list[float],
-    load_trend: str,
+    _ctl: float,
+    _atl: float,
+    _tsb: float,
+    _daily_load: list[float],
+    _load_trend: str,
 ) -> list[str]:
-    """Generate contextual flags for the athlete state."""
-    flags = []
+    """Generate contextual flags for the athlete state.
 
-    # TSB-based flags
-    if tsb < -15:
-        flags.append("DEEP_FATIGUE")
-    elif tsb < -10:
-        flags.append("ELEVATED_FATIGUE")
-    elif tsb > 5:
-        flags.append("FRESH")
-
-    # Load divergence flags
-    if atl > ctl * 1.2:
-        flags.append("ACUTE_EXCEEDS_CHRONIC")
-    elif ctl > atl * 1.5:
-        flags.append("FITNESS_BUFFER")
-
-    # Trend flags
-    if load_trend == "rising" and tsb < -5:
-        flags.append("ACCUMULATING_FATIGUE")
-    elif load_trend == "falling" and tsb > 0:
-        flags.append("RECOVERY_WINDOW")
-
-    # Volume spike detection
-    if len(daily_load) >= 7:
-        recent_max = max(daily_load[-7:])
-        recent_avg = sum(daily_load[-7:]) / 7
-        if recent_max > recent_avg * 2.5:
-            flags.append("ACUTE_SPIKE")
-
-    return flags
+    Note: Flag generation is now handled by LLM-based coach tools.
+    This function returns an empty list to maintain API compatibility.
+    Parameters are prefixed with underscore to indicate they are unused.
+    """
+    return []

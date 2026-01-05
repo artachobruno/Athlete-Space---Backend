@@ -6,21 +6,6 @@ from app.coach.models import AthleteState
 from app.coach.tools.session_planner import save_planned_sessions
 
 
-def _check_fatigue_warning(tsb: float, workout_lower: str) -> str | None:
-    """Check if athlete is too fatigued for hard workouts."""
-    if tsb < -15 and any(keyword in workout_lower for keyword in ["interval", "speed", "tempo", "threshold", "hard", "fast"]):
-        return (
-            "⚠️ Fatigue Warning\n\n"
-            f"Your current TSB is {tsb:.1f}, indicating high fatigue.\n\n"
-            "I recommend:\n"
-            "- Postponing this hard workout until recovery improves\n"
-            "- Converting to an easy aerobic session instead\n"
-            "- Adding this workout in 2-3 days once TSB improves above -10\n\n"
-            "If you still want to proceed, keep intensity conservative and monitor recovery closely."
-        )
-    return None
-
-
 def _get_interval_workout_message(workout_lower: str) -> str | None:
     """Get specific interval workout message based on keywords."""
     if "vo2" in workout_lower or "5k" in workout_lower or "3k" in workout_lower:
@@ -212,16 +197,10 @@ def add_workout(
         Confirmation and guidance on adding the workout to the plan.
     """
     logger.info(f"Tool add_workout called (description_length={len(workout_description)}, TSB={state.tsb:.1f})")
-    tsb = state.tsb
     workout_lower = workout_description.lower()
 
-    # Check if athlete is too fatigued for hard workouts
-    fatigue_warning = _check_fatigue_warning(tsb, workout_lower)
-    if fatigue_warning:
-        return fatigue_warning
-
     # Parse workout type
-    recommendation = _parse_workout_type(workout_lower, tsb, workout_description)
+    recommendation = _parse_workout_type(workout_lower, state.tsb, workout_description)
 
     # Save to calendar if user_id and athlete_id provided
     if user_id and athlete_id:
@@ -264,11 +243,5 @@ def add_workout(
         except Exception as e:
             logger.error(f"Error saving workout to calendar: {e}", exc_info=True)
             recommendation += "\n\n⚠️ Note: Could not save to calendar, but the workout plan is ready!"
-
-    # Add context based on state
-    if tsb > 5:
-        recommendation += "\n\n💡 You're fresh - good time for quality work!"
-    elif tsb < -8:
-        recommendation += "\n\n⚠️ Monitor fatigue - consider reducing intensity if feeling tired."
 
     return recommendation

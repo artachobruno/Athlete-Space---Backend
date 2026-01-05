@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from sqlalchemy import func, select
 
@@ -356,7 +356,10 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
 
 
 @router.get("/overview/debug")
-def get_overview_debug(user_id: str = Depends(get_current_user_id), days: int = 7):
+def get_overview_debug(
+    user_id: str = Depends(get_current_user_id),
+    days: int = Query(default=7, ge=1, le=365, description="Number of days to look back"),
+):
     """Debug endpoint to visualize overview data directly in browser.
 
     Returns overview data with server timestamp for debugging frontend mismatches,
@@ -380,6 +383,7 @@ def get_overview_debug(user_id: str = Depends(get_current_user_id), days: int = 
 
     Access at: https://<your-render-url>/me/overview/debug
     """
+    logger.info(f"[API] /me/overview/debug endpoint called with days={days} (query parameter)")
     try:
         overview = get_overview_data(user_id, days=days)
         return {
@@ -394,7 +398,10 @@ def get_overview_debug(user_id: str = Depends(get_current_user_id), days: int = 
 
 
 @router.get("/overview")
-def get_overview(user_id: str = Depends(get_current_user_id), days: int = 7):
+def get_overview(
+    user_id: str = Depends(get_current_user_id),
+    days: int = Query(default=7, ge=1, le=365, description="Number of days to look back"),
+):
     """Get athlete training overview.
 
     Args:
@@ -426,6 +433,7 @@ def get_overview(user_id: str = Depends(get_current_user_id), days: int = 7):
         - UI should display "Limited data" badge when data_quality != "ok"
         - Uses derived data (daily_training_summary), not raw activities
     """
+    logger.info(f"[API] /me/overview endpoint called with days={days} (query parameter)")
     try:
         return get_overview_data(user_id, days=days)
     except HTTPException:

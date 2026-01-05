@@ -315,6 +315,43 @@ def get_overview_data(user_id: str) -> dict:
     return _build_overview_response(last_sync, data_quality_status, metrics_result, today_metrics)
 
 
+@router.get("/overview/debug")
+def get_overview_debug(user_id: str = Depends(get_current_user_id)):
+    """Debug endpoint to visualize overview data directly in browser.
+
+    Returns overview data with server timestamp for debugging frontend mismatches,
+    confirming CTL source, and comparing metrics vs today values.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        {
+            "server_time": str,  # ISO 8601 timestamp
+            "overview": {
+                "connected": bool,
+                "last_sync": str | null,
+                "data_quality": "ok" | "limited" | "insufficient",
+                "metrics": {...},
+                "today": {...}
+            }
+        }
+
+    Access at: https://<your-render-url>/me/overview/debug
+    """
+    try:
+        overview = get_overview_data(user_id)
+        return {
+            "server_time": datetime.now(timezone.utc).isoformat(),
+            "overview": overview,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting overview debug: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get overview debug: {e!s}") from e
+
+
 @router.get("/overview")
 def get_overview(user_id: str = Depends(get_current_user_id)):
     """Get athlete training overview.
@@ -354,40 +391,3 @@ def get_overview(user_id: str = Depends(get_current_user_id)):
     except Exception as e:
         logger.error(f"Error getting overview: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get overview: {e!s}") from e
-
-
-@router.get("/overview/debug")
-def get_overview_debug(user_id: str = Depends(get_current_user_id)):
-    """Debug endpoint to visualize overview data directly in browser.
-
-    Returns overview data with server timestamp for debugging frontend mismatches,
-    confirming CTL source, and comparing metrics vs today values.
-
-    Args:
-        user_id: Current authenticated user ID (from auth dependency)
-
-    Returns:
-        {
-            "server_time": str,  # ISO 8601 timestamp
-            "overview": {
-                "connected": bool,
-                "last_sync": str | null,
-                "data_quality": "ok" | "limited" | "insufficient",
-                "metrics": {...},
-                "today": {...}
-            }
-        }
-
-    Access at: https://<your-render-url>/me/overview/debug
-    """
-    try:
-        overview = get_overview_data(user_id)
-        return {
-            "server_time": datetime.now(timezone.utc).isoformat(),
-            "overview": overview,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting overview debug: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get overview debug: {e!s}") from e

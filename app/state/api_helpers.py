@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
-from app.metrics.training_load import calculate_ctl_atl_tsb
-from app.state.db import SessionLocal, get_session
-from app.state.models import StravaAccount
+from app.state.db import get_session
+from app.state.models import DailyTrainingLoad, StravaAccount
 
 
 @dataclass(slots=True)
@@ -36,60 +35,62 @@ def get_user_id_from_athlete_id(athlete_id: int) -> str | None:
 
 
 def get_training_data(user_id: str, days: int = 60) -> TrainingData:
-    """Fetch and compute training metrics for coach tools.
+    """Fetch training metrics from computed DailyTrainingLoad table.
+
+    Uses pre-computed DTL (Daily Training Load) values that are normalized
+    across all sports using the improved load computation model.
 
     Args:
-        user_id: Clerk user ID (string) to filter activities
+        user_id: Clerk user ID (string) to filter metrics
         days: Number of days to look back (default: 60)
 
     Returns:
-        TrainingData with CTL, ATL, TSB metrics
+        TrainingData with CTL, ATL, TSB metrics from computed DTL
 
     Raises:
         RuntimeError: If no training data is available
     """
-    db = SessionLocal()
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since_date = datetime.now(timezone.utc).date() - timedelta(days=days)
 
-    try:
-        rows = db.execute(
-            text(
-                """
-                SELECT
-                    date(start_time) as day,
-                    SUM(duration_seconds) / 3600.0 as hours
-                FROM activities
-                WHERE user_id = :user_id
-                AND start_time >= :since
-                GROUP BY day
-                ORDER BY day
-                """
-            ),
-            {
-                "user_id": user_id,
-                "since": since.isoformat(),
-            },
-        ).fetchall()
+    with get_session() as session:
+        # Query DailyTrainingLoad table (pre-computed metrics)
+        rows = session.execute(
+            select(DailyTrainingLoad)
+            .where(
+                DailyTrainingLoad.user_id == user_id,
+                DailyTrainingLoad.date >= datetime.combine(since_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+            )
+            .order_by(DailyTrainingLoad.date)
+        ).all()
 
         if not rows:
             raise RuntimeError("No training data available")
 
-        dates = [str(r.day) for r in rows]
-        daily_load = [float(r.hours) if r.hours is not None else 0.0 for r in rows]
+        # Extract data from pre-computed metrics
+        dates: list[str] = []
+        daily_load: list[float] = []
+        ctl_values: list[float] = []
+        atl_values: list[float] = []
+        tsb_values: list[float] = []
 
-        # Use canonical metrics computation
-        metrics = calculate_ctl_atl_tsb(daily_load)
-        ctl_series = metrics["ctl"]
-        atl_series = metrics["atl"]
-        tsb_series = metrics["tsb"]
+        for row in rows:
+            daily_load_record = row[0]
+            dates.append(daily_load_record.date.date().isoformat())
+            # Use pre-computed DTL (load_score) - normalized across all sports
+            daily_load.append(daily_load_record.load_score)
+            ctl_values.append(daily_load_record.ctl)
+            atl_values.append(daily_load_record.atl)
+            tsb_values.append(daily_load_record.tsb)
+
+        # Get most recent values
+        ctl = ctl_values[-1] if ctl_values else 0.0
+        atl = atl_values[-1] if atl_values else 0.0
+        tsb = tsb_values[-1] if tsb_values else 0.0
 
         return TrainingData(
-            ctl=ctl_series[-1] if ctl_series else 0.0,
-            atl=atl_series[-1] if atl_series else 0.0,
-            tsb=tsb_series[-1] if tsb_series else 0.0,
-            daily_load=daily_load,
+            ctl=ctl,
+            atl=atl,
+            tsb=tsb,
+            daily_load=daily_load,  # DTL values (normalized, not raw hours)
             dates=dates,
         )
-
-    finally:
-        db.close()

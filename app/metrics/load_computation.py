@@ -1,7 +1,16 @@
 """Load computation engine for training metrics.
 
-Step 6: Computes per-activity load and aggregates to daily/weekly metrics.
-Deterministic, explainable, and reproducible.
+Implements canonical training load model:
+- DTL (Daily Training Load) = f(intensity, duration, modality)
+- CTL (Chronic Training Load) = 42-day EWMA of DTL
+- ATL (Acute Training Load) = 7-day EWMA of DTL
+- TSB (Training Stress Balance) = CTL - ATL
+
+All sports normalized to unified internal unit for cross-sport comparison.
+
+Phase 1: Basic EMA-based CTL/ATL with unified DTL
+Phase 2: Athlete-specific τ, confidence intervals, recovery modifiers (future)
+Phase 3: Predictive TSB, risk scoring, AI explanations (future)
 """
 
 from __future__ import annotations
@@ -11,32 +20,49 @@ from datetime import date, timedelta
 
 from app.state.models import Activity
 
+# Canonical time constants (industry defaults)
+TAU_CTL_DAYS = 42.0  # Chronic Training Load time constant
+TAU_ATL_DAYS = 7.0  # Acute Training Load time constant
 
-def compute_activity_load(activity: Activity) -> float:  # noqa: C901, PLR0912
-    """Compute training load for a single activity.
+# Modality factors (normalize different sports to unified unit)
+# Run > Bike > Swim (relative strain impact)
+MODALITY_FACTORS: dict[str, float] = {
+    "run": 1.0,  # Baseline (highest impact)
+    "trail run": 1.1,  # Slightly higher due to terrain
+    "walk": 0.3,  # Low impact
+    "ride": 0.7,  # Lower impact than running
+    "virtualride": 0.7,
+    "ebikeride": 0.4,  # E-bike is lower intensity
+    "swim": 0.5,  # Lower impact, different muscle groups
+    "default": 0.8,  # Default for unknown activities
+}
 
-    Uses TRIMP (Training Impulse) proxy based on duration and intensity.
-    For activities without HR data, uses duration-based estimation.
+
+def compute_activity_load(activity: Activity) -> float:
+    """Compute Daily Training Load (DTL) for a single activity.
+
+    Formula: DTL = duration x intensity_factor x modality_factor x personalization_factor
+
+    Currently implements:
+    - duration: Activity duration in hours
+    - intensity_factor: Based on HR, power, pace vs baseline
+    - modality_factor: Sport-specific normalization (run > bike > swim)
+    - personalization_factor: Defaults to 1.0 (Phase 2: athlete-specific)
 
     Args:
         activity: Activity record
 
     Returns:
-        Load score (float, typically 0-100+ depending on duration/intensity)
+        DTL score (float, unified unit across all sports)
 
-    Formula:
-        - Base load = duration_hours * intensity_factor
-        - Intensity factor based on activity type and distance
-        - For runs: higher intensity for shorter/faster runs
-        - For rides: power-based if available, otherwise duration-based
+    Notes:
+        - All sports normalized to same internal unit
+        - HR-based intensity preferred when available
+        - Power-based for cycling when available
+        - Pace-based fallback for running
+        - Duration-based fallback for other activities
     """
     duration_hours = activity.duration_seconds / 3600.0
-
-    # Base load from duration
-    base_load = duration_hours
-
-    # Intensity multiplier based on activity type
-    activity_type = activity.type.lower()
 
     # Extract raw data for intensity estimation
     raw_data = activity.raw_json or {}
@@ -44,94 +70,165 @@ def compute_activity_load(activity: Activity) -> float:  # noqa: C901, PLR0912
     avg_power = raw_data.get("average_watts")
     max_hr = raw_data.get("max_heartrate")
 
-    # Calculate intensity factor
-    intensity_factor = 1.0
+    activity_type = activity.type.lower()
 
-    if activity_type in {"run", "trail run", "walk"}:
-        # Running: estimate intensity from pace (distance/duration)
-        if activity.distance_meters > 0 and duration_hours > 0:
-            pace_kmh = (activity.distance_meters / 1000.0) / duration_hours
-            # Faster pace = higher intensity
-            # Typical easy pace: 8-10 km/h, tempo: 12-14 km/h, threshold: 15+ km/h
-            if pace_kmh < 8:
-                intensity_factor = 0.8  # Very easy/recovery
-            elif pace_kmh < 10:
-                intensity_factor = 1.0  # Easy
-            elif pace_kmh < 12:
-                intensity_factor = 1.2  # Moderate
-            elif pace_kmh < 15:
-                intensity_factor = 1.5  # Tempo
-            else:
-                intensity_factor = 2.0  # Threshold/VO2max
+    # Step 1: Calculate intensity_factor
+    intensity_factor = _compute_intensity_factor(
+        activity_type=activity_type,
+        duration_hours=duration_hours,
+        distance_meters=activity.distance_meters,
+        avg_hr=avg_hr,
+        max_hr=max_hr,
+        avg_power=avg_power,
+        elevation_gain_meters=activity.elevation_gain_meters,
+    )
 
-        # HR-based adjustment if available
-        if avg_hr and max_hr:
-            hr_ratio = avg_hr / max_hr if max_hr > 0 else 0.5
-            # HR zones: 0.5-0.6 (zone 1), 0.6-0.7 (zone 2), 0.7-0.8 (zone 3), 0.8-0.9 (zone 4), 0.9+ (zone 5)
-            if hr_ratio < 0.6:
-                intensity_factor *= 0.8
-            elif hr_ratio < 0.7:
-                intensity_factor *= 1.0
-            elif hr_ratio < 0.8:
-                intensity_factor *= 1.3
-            elif hr_ratio < 0.9:
-                intensity_factor *= 1.6
-            else:
-                intensity_factor *= 2.0
+    # Step 2: Get modality_factor (sport normalization)
+    modality_factor = MODALITY_FACTORS.get(activity_type, MODALITY_FACTORS["default"])
 
-    elif activity_type in {"ride", "virtualride", "ebikeride"}:
-        # Cycling: power-based if available, otherwise duration-based
-        if avg_power:
-            # Power-based load: TSS proxy
-            # Typical FTP: 200-300W, so normalize around 250W
-            normalized_power = avg_power / 250.0
-            intensity_factor = max(0.5, min(2.0, normalized_power))
-        # Duration-based estimation
-        # Longer rides typically lower intensity
-        elif duration_hours > 4:
-            intensity_factor = 0.8  # Endurance pace
-        elif duration_hours > 2:
-            intensity_factor = 1.0  # Moderate
-        else:
-            intensity_factor = 1.3  # Shorter = likely higher intensity
+    # Step 3: Personalization factor (Phase 2: athlete-specific)
+    # For now, default to 1.0 (no personalization)
+    personalization_factor = 1.0
 
-        # HR-based adjustment if available
-        if avg_hr and max_hr:
-            hr_ratio = avg_hr / max_hr if max_hr > 0 else 0.5
-            if hr_ratio < 0.6:
-                intensity_factor *= 0.8
-            elif hr_ratio < 0.7:
-                intensity_factor *= 1.0
-            elif hr_ratio < 0.8:
-                intensity_factor *= 1.2
-            elif hr_ratio < 0.9:
-                intensity_factor *= 1.5
-            else:
-                intensity_factor *= 1.8
+    # Final DTL calculation
+    dtl = duration_hours * intensity_factor * modality_factor * personalization_factor
 
-    elif activity_type in {"swim"}:
-        # Swimming: typically lower intensity multiplier
-        intensity_factor = 0.7  # Swimming is typically lower impact
+    return round(dtl, 2)
 
+
+def _compute_intensity_factor(
+    *,
+    activity_type: str,
+    duration_hours: float,
+    distance_meters: float,
+    avg_hr: int | None,
+    max_hr: int | None,
+    avg_power: float | None,
+    elevation_gain_meters: float,
+) -> float:
+    """Compute intensity factor from available metrics.
+
+    Priority:
+    1. HR-based (most accurate for all sports)
+    2. Power-based (cycling)
+    3. Pace-based (running)
+    4. Duration-based (fallback)
+
+    Args:
+        activity_type: Activity type (run, ride, swim, etc.)
+        duration_hours: Duration in hours
+        distance_meters: Distance in meters
+        avg_hr: Average heart rate (bpm)
+        max_hr: Maximum heart rate (bpm)
+        avg_power: Average power (watts)
+        elevation_gain_meters: Elevation gain in meters
+
+    Returns:
+        Intensity factor (typically 0.5-2.5)
+    """
+    # HR-based intensity (preferred when available)
+    if avg_hr and max_hr and max_hr > 0:
+        return _intensity_from_hr(avg_hr, max_hr)
+
+    # Power-based intensity (cycling)
+    if activity_type in {"ride", "virtualride"} and avg_power:
+        return _intensity_from_power(avg_power)
+
+    # Pace-based intensity (running)
+    if activity_type in {"run", "trail run"} and distance_meters > 0 and duration_hours > 0:
+        return _intensity_from_pace(distance_meters, duration_hours, elevation_gain_meters)
+
+    # Duration-based fallback
+    return _intensity_from_duration(duration_hours)
+
+
+def _intensity_from_hr(avg_hr: int, max_hr: int) -> float:
+    """Compute intensity from heart rate zones.
+
+    Args:
+        avg_hr: Average heart rate (bpm)
+        max_hr: Maximum heart rate (bpm)
+
+    Returns:
+        Intensity factor (0.6-2.0)
+    """
+    hr_ratio = avg_hr / max_hr
+    if hr_ratio < 0.6:
+        return 0.6
+    if hr_ratio < 0.7:
+        return 0.8
+    if hr_ratio < 0.8:
+        return 1.0
+    if hr_ratio < 0.9:
+        return 1.5
+    return 2.0
+
+
+def _intensity_from_power(avg_power: float) -> float:
+    """Compute intensity from power (cycling).
+
+    Args:
+        avg_power: Average power (watts)
+
+    Returns:
+        Intensity factor (0.5-2.5)
+    """
+    normalized_power = avg_power / 250.0
+    return max(0.5, min(2.5, normalized_power))
+
+
+def _intensity_from_pace(distance_meters: float, duration_hours: float, elevation_gain_meters: float) -> float:
+    """Compute intensity from pace (running).
+
+    Args:
+        distance_meters: Distance in meters
+        duration_hours: Duration in hours
+        elevation_gain_meters: Elevation gain in meters
+
+    Returns:
+        Intensity factor (0.6-2.0+)
+    """
+    pace_kmh = (distance_meters / 1000.0) / duration_hours
+    if pace_kmh < 8:
+        intensity = 0.6
+    elif pace_kmh < 10:
+        intensity = 0.8
+    elif pace_kmh < 12:
+        intensity = 1.0
+    elif pace_kmh < 15:
+        intensity = 1.5
     else:
-        # Other activities: duration-based
-        intensity_factor = 1.0
+        intensity = 2.0
 
-    # Apply elevation adjustment
-    if activity.elevation_gain_meters > 0 and activity.distance_meters > 0:
-        elevation_per_km = (activity.elevation_gain_meters / 1000.0) / (activity.distance_meters / 1000.0)
-        # Significant elevation (>50m/km) increases load
+    # Elevation adjustment
+    if elevation_gain_meters > 0:
+        elevation_per_km = (elevation_gain_meters / 1000.0) / (distance_meters / 1000.0)
         if elevation_per_km > 50:
-            intensity_factor *= 1.3
+            intensity *= 1.3
         elif elevation_per_km > 30:
-            intensity_factor *= 1.15
+            intensity *= 1.15
         elif elevation_per_km > 15:
-            intensity_factor *= 1.05
+            intensity *= 1.05
 
-    # Final load score
-    load_score = base_load * intensity_factor
+    return intensity
 
-    return round(load_score, 2)
+
+def _intensity_from_duration(duration_hours: float) -> float:
+    """Compute intensity from duration (fallback).
+
+    Args:
+        duration_hours: Duration in hours
+
+    Returns:
+        Intensity factor (0.7-1.5)
+    """
+    if duration_hours > 4:
+        return 0.7
+    if duration_hours > 2:
+        return 1.0
+    if duration_hours > 1:
+        return 1.2
+    return 1.5
 
 
 def compute_daily_load_scores(
@@ -172,17 +269,31 @@ def compute_ctl_atl_tsb_from_loads(
     start_date: date,
     end_date: date,
 ) -> dict[date, dict[str, float]]:
-    """Compute CTL, ATL, TSB from daily load scores.
+    """Compute CTL, ATL, TSB from daily training loads (DTL).
+
+    Canonical formulas:
+    - CTL[t] = CTL[t-1] + (DTL[t] - CTL[t-1]) / τ_CTL
+    - ATL[t] = ATL[t-1] + (DTL[t] - ATL[t-1]) / τ_ATL
+    - TSB[t] = CTL[t] - ATL[t]
+
+    Where:
+    - τ_CTL = 42 days (chronic fitness, what you can sustain)
+    - τ_ATL = 7 days (acute fatigue, what you're currently absorbing)
 
     Args:
-        daily_loads: Dictionary mapping date -> daily load score
+        daily_loads: Dictionary mapping date -> DTL (Daily Training Load)
         start_date: Start date (inclusive)
         end_date: End date (inclusive)
 
     Returns:
         Dictionary mapping date -> {"ctl": float, "atl": float, "tsb": float}
+
+    Notes:
+        - Missing days are treated as rest days (DTL = 0.0)
+        - All dates in range are included (continuous series)
+        - Deterministic and idempotent
     """
-    # Build continuous series (fill gaps with 0.0)
+    # Build continuous series (fill gaps with 0.0 for rest days)
     continuous_dates: list[date] = []
     daily_load_series: list[float] = []
 
@@ -196,8 +307,8 @@ def compute_ctl_atl_tsb_from_loads(
         return {}
 
     # Calculate EWMA for CTL (42-day) and ATL (7-day)
-    ctl_series = _calculate_ewma(daily_load_series, tau_days=42.0)
-    atl_series = _calculate_ewma(daily_load_series, tau_days=7.0)
+    ctl_series = _calculate_ewma(daily_load_series, tau_days=TAU_CTL_DAYS)
+    atl_series = _calculate_ewma(daily_load_series, tau_days=TAU_ATL_DAYS)
 
     # Build result dictionary
     result: dict[date, dict[str, float]] = {}
@@ -215,29 +326,42 @@ def compute_ctl_atl_tsb_from_loads(
 
 
 def _calculate_ewma(values: list[float], tau_days: float) -> list[float]:
-    """Calculate exponentially weighted moving average.
+    """Calculate exponentially weighted moving average (EWMA).
+
+    Implements the canonical EMA formula used in training load models.
+
+    Formula:
+        alpha = 1 - exp(-1 / tau)
+        EWMA[t] = alpha * value[t] + (1 - alpha) * EWMA[t-1]
+
+    Where:
+        - tau: Time constant (days to reach ~63% of new value)
+        - alpha: Smoothing factor (higher = more responsive)
 
     Args:
-        values: List of daily values (training load scores)
+        values: List of daily values (DTL scores)
         tau_days: Time constant in days (42 for CTL, 7 for ATL)
 
     Returns:
         List of EWMA values, one per input value
 
-    Formula:
-        alpha = 1 - exp(-1 / tau)
-        ewma[i] = alpha * value[i] + (1 - alpha) * ewma[i-1]
-        ewma[0] = value[0] (or 0 if empty)
+    Notes:
+        - First value initializes the EWMA
+        - Missing days (0.0) are treated as rest days, not gaps
+        - Same formula as TrainingPeaks/WKO5 industry standard
     """
     if not values:
         return []
 
+    # Calculate smoothing factor
+    # alpha = 1 - e^(-1/tau) where tau is the time constant
     alpha = 1 - math.exp(-1 / tau_days)
 
     result: list[float] = []
     prev = values[0] if values else 0.0
 
     for value in values:
+        # EWMA: weighted average of current value and previous EWMA
         prev = alpha * value + (1 - alpha) * prev
         result.append(round(prev, 2))
 

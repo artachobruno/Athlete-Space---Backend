@@ -139,13 +139,16 @@ def _create_and_save_plan(
         Success message or error message
     """
     try:
+        logger.info(f"Generating race build sessions for {distance} on {race_date}")
         sessions = generate_race_build_sessions(
             race_date=race_date,
             race_distance=distance,
             target_time=target_time,
         )
+        logger.info(f"Generated {len(sessions)} sessions for race plan")
 
         plan_id = f"race_{distance}_{race_date.strftime('%Y%m%d')}"
+        logger.info(f"Saving {len(sessions)} planned sessions with plan_id={plan_id}")
         saved_count = save_planned_sessions(
             user_id=user_id,
             athlete_id=athlete_id,
@@ -153,6 +156,7 @@ def _create_and_save_plan(
             plan_type="race",
             plan_id=plan_id,
         )
+        logger.info(f"Successfully saved {saved_count} planned sessions")
 
         weeks = len({s.get("week_number", 0) for s in sessions})
         start_date = (race_date - timedelta(weeks=weeks)).strftime("%B %d, %Y")
@@ -279,7 +283,9 @@ def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | 
 
     # Generate sessions if we have user_id and athlete_id
     if user_id and athlete_id:
+        logger.info(f"Creating and saving race plan: user_id={user_id}, athlete_id={athlete_id}, distance={distance}, date={race_date}")
         return _create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
 
     # Return plan details without saving
+    logger.warning(f"Missing user_id or athlete_id - returning preview plan. user_id={user_id}, athlete_id={athlete_id}")
     return _build_preview_plan(distance, race_date)

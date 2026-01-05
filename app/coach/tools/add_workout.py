@@ -1,6 +1,9 @@
+from datetime import datetime, timedelta, timezone
+
 from loguru import logger
 
 from app.coach.models import AthleteState
+from app.coach.tools.session_planner import save_planned_sessions
 
 
 def _check_fatigue_warning(tsb: float, workout_lower: str) -> str | None:
@@ -42,6 +45,90 @@ def _get_interval_workout_message(workout_lower: str) -> str | None:
             "Total duration: ~75-90 min\n"
             "Focus: Sustained effort, aerobic power"
         )
+    return None
+
+
+def _parse_workout_details(workout_lower: str) -> tuple[str, str, int, str]:
+    """Parse workout description to extract type, title, duration, and intensity.
+
+    Args:
+        workout_lower: Lowercase workout description
+
+    Returns:
+        Tuple of (title, intensity, duration_minutes, type)
+    """
+    # Determine workout type (default to Run)
+    workout_type = "Run"
+    if "bike" in workout_lower or "cycling" in workout_lower:
+        workout_type = "Bike"
+    elif "swim" in workout_lower:
+        workout_type = "Swim"
+
+    # Workout patterns with priority order (more specific first)
+    workout_patterns = [
+        # Interval variations (most specific first)
+        (["interval", "repetition", "vo2"], ("VO₂max Intervals", "hard", 70)),
+        (["interval", "repetition", "5k"], ("VO₂max Intervals", "hard", 70)),
+        (["interval", "repetition", "3k"], ("VO₂max Intervals", "hard", 70)),
+        (["interval", "repetition", "threshold"], ("Threshold Intervals", "hard", 80)),
+        (["interval", "repetition", "tempo"], ("Threshold Intervals", "hard", 80)),
+        (["interval", "repetition"], ("Intervals", "hard", 60)),
+        # Other workout types
+        (["tempo"], ("Tempo Run", "moderate", 70)),
+        (["threshold"], ("Tempo Run", "moderate", 70)),
+        (["long"], ("Long Run", "easy", 90)),
+        (["endurance"], ("Long Run", "easy", 90)),
+        (["easy"], ("Easy Run", "easy", 60)),
+        (["recovery"], ("Easy Run", "easy", 60)),
+        (["aerobic"], ("Easy Run", "easy", 60)),
+        (["fartlek"], ("Fartlek", "moderate", 55)),
+    ]
+
+    # Check patterns in order
+    for keywords, (title, intensity, duration) in workout_patterns:
+        if any(keyword in workout_lower for keyword in keywords):
+            return (title, intensity, duration, workout_type)
+
+    # Default
+    return ("Workout", "moderate", 60, workout_type)
+
+
+def _extract_date_from_description(workout_lower: str) -> datetime | None:
+    """Extract date from workout description.
+
+    Args:
+        workout_lower: Lowercase workout description
+
+    Returns:
+        datetime object if date found, None otherwise
+    """
+    # Check for "today", "tomorrow", day names
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if "today" in workout_lower:
+        return today
+    if "tomorrow" in workout_lower:
+        return today + timedelta(days=1)
+
+    # Check for day names (monday, tuesday, etc.)
+    days = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+    for day_name, day_offset in days.items():
+        if day_name in workout_lower:
+            current_weekday = today.weekday()
+            target_offset = day_offset
+            days_ahead = (target_offset - current_weekday) % 7
+            if days_ahead == 0:
+                days_ahead = 7  # Next week if same day
+            return today + timedelta(days=days_ahead)
+
     return None
 
 
@@ -107,12 +194,19 @@ def _parse_workout_type(workout_lower: str, tsb: float, workout_description: str
     )
 
 
-def add_workout(state: AthleteState, workout_description: str) -> str:
+def add_workout(
+    state: AthleteState,
+    workout_description: str,
+    user_id: str | None = None,
+    athlete_id: int | None = None,
+) -> str:
     """Add a specific workout to the training plan.
 
     Args:
         state: Current athlete state.
         workout_description: User's description of the workout they want to add.
+        user_id: Optional user ID for saving to calendar.
+        athlete_id: Optional athlete ID for saving to calendar.
 
     Returns:
         Confirmation and guidance on adding the workout to the plan.
@@ -128,6 +222,48 @@ def add_workout(state: AthleteState, workout_description: str) -> str:
 
     # Parse workout type
     recommendation = _parse_workout_type(workout_lower, tsb, workout_description)
+
+    # Save to calendar if user_id and athlete_id provided
+    if user_id and athlete_id:
+        try:
+            # Extract workout details
+            title, intensity, duration_minutes, workout_type = _parse_workout_details(workout_lower)
+
+            # Determine date (default to tomorrow if not specified)
+            workout_date = _extract_date_from_description(workout_lower)
+            if workout_date is None:
+                # Default to tomorrow
+                tomorrow = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                workout_date = tomorrow
+
+            # Create session data
+            session_data = {
+                "date": workout_date,
+                "type": workout_type,
+                "title": title,
+                "duration_minutes": duration_minutes,
+                "intensity": intensity,
+                "notes": None,
+            }
+
+            # Save session
+            saved_count = save_planned_sessions(
+                user_id=user_id,
+                athlete_id=athlete_id,
+                sessions=[session_data],
+                plan_type="single",
+                plan_id=None,
+            )
+
+            if saved_count > 0:
+                date_str = workout_date.strftime("%B %d, %Y")
+                recommendation += f"\n\n✅ Session saved to your calendar for {date_str}!"
+            else:
+                recommendation += "\n\nNote: Session may already exist in your calendar."
+
+        except Exception as e:
+            logger.error(f"Error saving workout to calendar: {e}", exc_info=True)
+            recommendation += "\n\n⚠️ Note: Could not save to calendar, but the workout plan is ready!"
 
     # Add context based on state
     if tsb > 5:

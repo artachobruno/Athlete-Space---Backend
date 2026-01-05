@@ -196,11 +196,13 @@ def _get_athlete_state(athlete_id: int, days: int, days_to_race: int | None) -> 
     return (None, athlete_state)
 
 
-def _route_to_tool(intent: CoachIntent, athlete_state: AthleteState, message: str) -> str:
+def _route_to_tool(intent: CoachIntent, athlete_state: AthleteState, message: str, athlete_id: int) -> str:
     """Route intent to appropriate coaching tool."""
     logger.info(f"Routing to tool: {intent.value}")
+    # Get user_id for tools that need it
+    user_id = get_user_id_from_athlete_id(athlete_id)
     tool_map: dict[CoachIntent, str] = {
-        CoachIntent.NEXT_SESSION: recommend_next_session(athlete_state),
+        CoachIntent.NEXT_SESSION: recommend_next_session(athlete_state, user_id),
         CoachIntent.ADJUST_LOAD: adjust_training_load(athlete_state, message),
         CoachIntent.EXPLAIN_STATE: explain_training_state(athlete_state),
         CoachIntent.PLAN_RACE: plan_race_build(message),
@@ -299,6 +301,6 @@ def dispatch_coach_chat(
 
     # Route to appropriate tool (intent routing uses LLM, tools may be rule-based)
     logger.info(f"Using intent routing with LLM (intent={intent.value})")
-    reply = _route_to_tool(intent, athlete_state, message)
+    reply = _route_to_tool(intent, athlete_state, message, athlete_id)
     logger.info(f"Dispatch completed successfully with intent: {intent.value}, reply length: {len(reply)}")
     return intent.value, reply

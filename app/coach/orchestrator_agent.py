@@ -283,7 +283,7 @@ async def recommend_next_session_tool(deps: CoachDeps) -> str:
             "Once I know this, I can recommend the perfect session for you. "
             "Also, syncing your Strava activities will help me provide even more personalized recommendations!"
         )
-    return await asyncio.to_thread(recommend_next_session, deps.athlete_state)
+    return await asyncio.to_thread(recommend_next_session, deps.athlete_state, deps.user_id)
 
 
 async def add_workout_tool(workout_description: str, deps: CoachDeps) -> str:
@@ -297,7 +297,7 @@ async def add_workout_tool(workout_description: str, deps: CoachDeps) -> str:
             "Based on your answers, I can help you plan the perfect workout. "
             "Syncing your Strava activities will help me provide even more personalized recommendations!"
         )
-    return await asyncio.to_thread(add_workout, deps.athlete_state, workout_description)
+    return await asyncio.to_thread(add_workout, deps.athlete_state, workout_description, deps.user_id, deps.athlete_id)
 
 
 async def adjust_training_load_tool(user_feedback: str, deps: CoachDeps) -> str:

@@ -73,6 +73,46 @@ def route_intent(message: str) -> CoachIntent:
         return CoachIntent.FREE_CHAT
 
     try:
+        # Log LLM model being called
+        model_name = "gpt-4o-mini" if _llm is not None else "unknown"
+        logger.info(
+            "Calling intent router LLM",
+            model=model_name,
+            provider="openai",
+        )
+
+        # Log prompt at debug level
+        system_prompt = """
+You are an intent classifier for an endurance training coach.
+
+Choose ONE intent only.
+
+TODAY_SESSION:
+- asking what to do today
+- today's workout
+- session for today
+
+FATIGUE_CHECK:
+- am I tired
+- should I rest
+- fatigue / soreness / burnout
+
+LOAD_EXPLANATION:
+- explain CTL, ATL, TSB
+- training load explanation
+
+FREE_CHAT:
+- anything else
+"""
+        full_prompt_text = f"System Prompt:\n{system_prompt}\n\nUser Message:\n{message}"
+        logger.debug(
+            "Intent router prompt",
+            prompt_length=len(full_prompt_text),
+            system_prompt_length=len(system_prompt),
+            user_message_length=len(message),
+            full_prompt=full_prompt_text,
+        )
+
         logger.info("Routing intent with LLM")
         raw_result = _chain.invoke({"message": message})
 
@@ -81,7 +121,19 @@ def route_intent(message: str) -> CoachIntent:
         else:
             result = IntentResult.model_validate(raw_result)
 
-        logger.info(f"Intent routed to: {result.intent}")
+        # Log response at debug level
+        logger.debug(
+            "Intent router response",
+            intent=result.intent.value,
+            full_response=result.model_dump_json(indent=2),
+        )
+
+        # Log intent decision at info level
+        logger.info(
+            "Intent decision",
+            intent=result.intent.value,
+            user_message_preview=message[:100],
+        )
     except Exception as e:
         logger.error(f"Error routing intent: {type(e).__name__}: {e}", exc_info=True)
         logger.warning("Falling back to FREE_CHAT intent due to error")

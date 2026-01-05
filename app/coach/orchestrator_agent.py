@@ -418,6 +418,32 @@ async def run_conversation(
 
     message_history = load_context(deps.athlete_id)
 
+    # Log LLM model being called
+    model_name = ORCHESTRATOR_AGENT_MODEL.model_name
+    logger.info(
+        "Calling orchestrator LLM",
+        model=model_name,
+        provider="openai",
+        athlete_id=deps.athlete_id,
+    )
+
+    # Log full prompt at debug level
+    prompt_parts = [f"Instructions: {ORCHESTRATOR_INSTRUCTIONS}"]
+    if message_history:
+        history_text = "\n".join([f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in message_history])
+        prompt_parts.append(f"Message History:\n{history_text}")
+    prompt_parts.append(f"User Input: {user_input}")
+    full_prompt = "\n\n".join(prompt_parts)
+
+    logger.debug(
+        "Orchestrator prompt",
+        prompt_length=len(full_prompt),
+        instructions_length=len(ORCHESTRATOR_INSTRUCTIONS),
+        message_history_length=len(message_history) if message_history else 0,
+        user_input_length=len(user_input),
+        full_prompt=full_prompt,
+    )
+
     # Run agent
     logger.debug(
         "Running orchestrator agent",
@@ -435,7 +461,25 @@ async def run_conversation(
         deps=deps,
         message_history=typed_message_history,
     )
-    logger.info("Agent result", result=result.output)
+
+    # Log response at debug level
+    logger.debug(
+        "Orchestrator response",
+        response_type=result.output.response_type,
+        intent=result.output.intent,
+        message_length=len(result.output.message),
+        has_structured_data=bool(result.output.structured_data),
+        has_follow_up=bool(result.output.follow_up),
+        full_response=result.output.model_dump_json(indent=2),
+    )
+
+    # Log intent decision at info level
+    logger.info(
+        "Orchestrator intent decision",
+        intent=result.output.intent,
+        response_type=result.output.response_type,
+        athlete_id=deps.athlete_id,
+    )
 
     # Save conversation history
     save_context(

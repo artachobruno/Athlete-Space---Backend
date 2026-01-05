@@ -223,6 +223,23 @@ guidance once their training data is synced, but still provide general advice no
 Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice."""
 
         try:
+            # Log LLM model being called
+            model_name = "gpt-4o-mini" if _llm is not None else "unknown"
+            logger.info(
+                "Calling open question LLM (Legacy Orchestrator)",
+                model=model_name,
+                provider="openai",
+            )
+
+            # Log prompt at debug level
+            logger.debug(
+                "Open question prompt (Legacy Orchestrator)",
+                prompt_length=len(prompt_text),
+                question_length=len(question),
+                has_athlete_state=_current_athlete_state is not None,
+                full_prompt=prompt_text,
+            )
+
             logger.info("Invoking LLM for open question")
             response = _llm.invoke([HumanMessage(content=prompt_text)])
             if not hasattr(response, "content"):
@@ -230,16 +247,26 @@ Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical t
                 return str(response)
             content = response.content
             if isinstance(content, str):
+                content_str = content
                 logger.info("Open question answered successfully")
-                return content
-            if isinstance(content, list):
+            elif isinstance(content, list):
+                content_str = " ".join(str(item) for item in content if isinstance(item, str))
                 logger.info("Open question answered successfully (list content)")
-                return " ".join(str(item) for item in content if isinstance(item, str))
-            logger.info("Open question answered successfully (converted content)")
-            return str(content)
+            else:
+                content_str = str(content)
+                logger.info("Open question answered successfully (converted content)")
+
+            # Log response at debug level
+            logger.debug(
+                "Open question response (Legacy Orchestrator)",
+                response_length=len(content_str),
+                full_response=content_str,
+            )
         except Exception as e:
             logger.error(f"Error answering open question: {e}")
             return "I encountered an error answering your question. Could you try rephrasing it or use a specific coaching tool?"
+        else:
+            return content_str
 
     # Create tool list
     _coaching_tools = [
@@ -450,6 +477,61 @@ def run_orchestrator(
     else:
         full_input = user_message
 
+    # Log LLM model being called
+    model_name = "gpt-4o-mini" if _llm is not None else "unknown"
+    logger.info(
+        "Calling orchestrator LLM (Legacy LangChain)",
+        model=model_name,
+        provider="openai",
+    )
+
+    # Log full prompt at debug level
+    if _orchestrator_prompt is not None:
+        system_prompt = (
+            "You are Virtus Coach Orchestrator - an intelligent coaching assistant "
+            "that helps athletes optimize their training.\n\n"
+            "You have access to various coaching tools that can:\n"
+            "- Recommend next sessions\n"
+            "- Adjust training load\n"
+            "- Explain training state\n"
+            "- Plan weekly training\n"
+            "- Add specific workouts\n"
+            "- Run training analysis\n"
+            "- Generate shareable reports\n"
+            "- Plan for races\n"
+            "- Plan entire seasons\n"
+            "- Answer general training questions (open questions, technique, nutrition, etc.)\n\n"
+            "Your role is to understand what the athlete needs and use the appropriate tools to help them.\n\n"
+            "CRITICAL RULES:\n"
+            "- You MUST ALWAYS provide a helpful answer, even if training data is limited or unavailable\n"
+            '- NEVER say "I don\'t have enough signal" or "I can\'t answer" - always provide value\n'
+            "- If training data is unavailable, use answer_general_question to provide general training advice\n"
+            "- If you can't use a specific tool due to missing data, still provide helpful general guidance\n"
+            "- Be conversational, helpful, and always engage with the user's question\n\n"
+            "Guidelines:\n"
+            "- Always consider the athlete's current training state when making recommendations (if available)\n"
+            "- If multiple tools could be useful, use them in sequence\n"
+            "- Be conversational and helpful\n"
+            "- For general questions about training, technique, nutrition, or any open-ended inquiries, "
+            "use answer_general_question\n"
+            "- If the request is unclear, use explain_state or run_analysis first to understand the situation better\n"
+            "  (if data available)\n"
+            "- When answering open questions, you can combine tools (e.g., first check their state with run_analysis,\n"
+            "  then answer their question with context)\n"
+            "- If training data is not available, still provide helpful general training advice using "
+            "answer_general_question\n\n"
+            "Available tools are described below. Choose the most appropriate tool(s) for each request.\n"
+        )
+        full_prompt_text = f"System Prompt:\n{system_prompt}\n\nUser Input:\n{full_input}"
+        logger.debug(
+            "Orchestrator prompt (Legacy LangChain)",
+            prompt_length=len(full_prompt_text),
+            system_prompt_length=len(system_prompt),
+            user_input_length=len(full_input),
+            conversation_history_length=len(conversation_history) if conversation_history else 0,
+            full_prompt=full_prompt_text,
+        )
+
     try:
         logger.info(f"Running LLM orchestrator agent for message: {user_message[:100]}")
         result = _orchestrator_agent.invoke({"input": full_input})
@@ -460,6 +542,14 @@ def run_orchestrator(
             "output",
             "I'm here to help with your training. Could you rephrase your question?",
         )
+
+        # Log response at debug level
+        logger.debug(
+            "Orchestrator response (Legacy LangChain)",
+            output_length=len(output),
+            full_response=output,
+        )
+
         logger.info(f"LLM orchestrator completed successfully, output length: {len(output)}")
     except Exception as e:
         logger.error(f"Error running orchestrator: {e}", exc_info=True)

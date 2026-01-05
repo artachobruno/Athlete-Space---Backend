@@ -61,8 +61,16 @@ def _answer_general_question_with_llm(question: str) -> str:
         )
 
     try:
+        # Log LLM model being called
+        model_name = "gpt-4o-mini"
+        logger.info(
+            "Calling general question LLM",
+            model=model_name,
+            provider="openai",
+        )
+
         llm = ChatOpenAI(
-            model="gpt-4o-mini",
+            model=model_name,
             temperature=0.3,
             api_key=SecretStr(settings.openai_api_key),
         )
@@ -85,6 +93,14 @@ Provide a helpful, knowledgeable answer about training, technique, or general en
 Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice.
 If the question requires personalized data (like current fitness or fatigue), explain that you'll be able to
 provide more specific guidance once their training data is synced, but still provide general advice now."""
+
+        # Log prompt at debug level
+        logger.debug(
+            "General question prompt",
+            prompt_length=len(prompt_text),
+            question_length=len(question),
+            full_prompt=prompt_text,
+        )
 
         logger.info("Invoking LLM for general question (no training data)")
         response = llm.invoke([HumanMessage(content=prompt_text)])
@@ -110,6 +126,14 @@ provide more specific guidance once their training data is synced, but still pro
         else:
             content_str = str(content)
             logger.info("General question answered successfully via LLM (converted content)")
+
+        # Log response at debug level
+        logger.debug(
+            "General question response",
+            response_length=len(content_str),
+            full_response=content_str,
+        )
+
         return content_str
 
 

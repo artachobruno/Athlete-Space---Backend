@@ -112,29 +112,23 @@ def _build_overview_response(
 
     Returns:
         Overview response dictionary
+
+    Note:
+        When data_quality_status != "ok", metrics are still returned with calculated
+        values. The UI should display a "Limited data" badge to indicate the data
+        quality status. This matches TrainingPeaks / WKO behavior.
     """
-    if data_quality_status != "ok":
-        metrics_data = {"ctl": [], "atl": [], "tsb": []}
-        # When data quality is insufficient, return zeros for today's metrics
-        # to avoid displaying misleading calculated values from insufficient data
-        today_values = {
-            "ctl": 0.0,
-            "atl": 0.0,
-            "tsb": 0.0,
-            "tsb_7d_avg": 0.0,
-        }
-    else:
-        metrics_data = {
-            "ctl": metrics_result["ctl"],
-            "atl": metrics_result["atl"],
-            "tsb": metrics_result["tsb"],
-        }
-        today_values = {
-            "ctl": round(today_metrics["today_ctl"], 1),
-            "atl": round(today_metrics["today_atl"], 1),
-            "tsb": round(today_metrics["today_tsb"], 1),
-            "tsb_7d_avg": round(today_metrics["tsb_7d_avg"], 1),
-        }
+    metrics_data = {
+        "ctl": metrics_result["ctl"],
+        "atl": metrics_result["atl"],
+        "tsb": metrics_result["tsb"],
+    }
+    today_values = {
+        "ctl": round(today_metrics["today_ctl"], 1),
+        "atl": round(today_metrics["today_atl"], 1),
+        "tsb": round(today_metrics["today_tsb"], 1),
+        "tsb_7d_avg": round(today_metrics["tsb_7d_avg"], 1),
+    }
 
     return {
         "connected": True,
@@ -349,7 +343,8 @@ def get_overview(user_id: str = Depends(get_current_user_id)):
     Rules:
         - No LLM
         - No inference
-        - If data_quality != "ok" → metrics may be empty
+        - Metrics are always returned with calculated values
+        - UI should display "Limited data" badge when data_quality != "ok"
         - Uses derived data (daily_training_summary), not raw activities
     """
     try:
@@ -359,3 +354,40 @@ def get_overview(user_id: str = Depends(get_current_user_id)):
     except Exception as e:
         logger.error(f"Error getting overview: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get overview: {e!s}") from e
+
+
+@router.get("/overview/debug")
+def get_overview_debug(user_id: str = Depends(get_current_user_id)):
+    """Debug endpoint to visualize overview data directly in browser.
+
+    Returns overview data with server timestamp for debugging frontend mismatches,
+    confirming CTL source, and comparing metrics vs today values.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        {
+            "server_time": str,  # ISO 8601 timestamp
+            "overview": {
+                "connected": bool,
+                "last_sync": str | null,
+                "data_quality": "ok" | "limited" | "insufficient",
+                "metrics": {...},
+                "today": {...}
+            }
+        }
+
+    Access at: https://<your-render-url>/me/overview/debug
+    """
+    try:
+        overview = get_overview_data(user_id)
+        return {
+            "server_time": datetime.now(timezone.utc).isoformat(),
+            "overview": overview,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting overview debug: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get overview debug: {e!s}") from e

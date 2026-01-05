@@ -27,11 +27,17 @@ CRITICAL RULES FOR TRAINING STATE:
   "you're starting out strong", "looks like you need recovery", etc. when data is insufficient
 - ONLY make observations about training state if confidence >= 0.1 AND you have clear, reliable data
 
-If athlete state is provided WITH sufficient confidence (>= 0.1):
+If athlete state is provided WITH sufficient confidence (>= 0.3):
 - Give ONE brief, positive observation about their training state
 - Keep it casual and human-sounding
 - No metrics or technical terms — just natural language
 - Focus on positive aspects, not assumptions about fatigue or recovery needs
+
+If athlete state is provided BUT confidence is LOW (0.1 <= confidence < 0.3):
+- Acknowledge that you have some training data but it's limited
+- Ask what they're training for or what they need help with
+- Don't make specific observations about fatigue, recovery, or training state
+- Be encouraging and ready to help as more data comes in
 
 If athlete state is provided BUT confidence is low (< 0.1) OR no athlete state:
 - Ask them what they're training for or what they need help with
@@ -87,7 +93,8 @@ def _build_cold_start_context(state: AthleteState | None) -> str:
             "Be conversational and natural — like a real person, not a formal introduction."
         )
 
-    has_sufficient_data = state.confidence >= 0.1
+    has_sufficient_data = state.confidence >= 0.3
+    has_some_data = state.confidence >= 0.1
 
     if has_sufficient_data:
         return f"""Generate a short, casual welcome message (1-2 sentences max).
@@ -103,9 +110,22 @@ Give ONE brief, positive observation about their training. Then ask how you can 
 Keep it conversational, like a human coach would talk.
 Focus on positive aspects - don't assume fatigue or recovery needs."""
 
+    if has_some_data:
+        return f"""Generate a short, casual welcome message (1-2 sentences max).
+
+Training data confidence is MODERATE ({state.confidence:.2f} - between 0.1 and 0.3). You have SOME data but it's limited.
+
+ABSOLUTE RULES:
+- Acknowledge that you have some training data but it's limited
+- Ask what they're training for or what they need help with
+- NEVER make specific observations about fatigue, recovery, or training state
+- NEVER say things like "you're pushing hard", "you're feeling fatigued", "looks like you need recovery", etc.
+- Be encouraging and ready to help as more data comes in
+- Be conversational and natural — like a real person, not a formal introduction."""
+
     return f"""Generate a short, casual welcome message (1-2 sentences max).
 
-CRITICAL: Training data confidence is LOW ({state.confidence:.2f} < 0.1). You have INSUFFICIENT data.
+CRITICAL: Training data confidence is VERY LOW ({state.confidence:.2f} < 0.1). You have INSUFFICIENT data.
 
 ABSOLUTE RULES:
 - NEVER make statements about current fatigue, training state, or how the athlete is feeling
@@ -125,7 +145,7 @@ def welcome_new_user(state: AthleteState | None = None) -> str:
     """
     if _cold_start_chain is None or not settings.openai_api_key:
         logger.warning("LLM not available for cold start, using fallback message")
-        if state is not None and state.confidence >= 0.1:
+        if state is not None and state.confidence >= 0.3:
             fallback = "Hey! I see your training looks good. What can I help you with today?"
         else:
             fallback = "Hi! What are you training for? I'd love to help you reach your goals."
@@ -146,7 +166,7 @@ def welcome_new_user(state: AthleteState | None = None) -> str:
         logger.info("Cold start message generated successfully")
     except Exception as e:
         logger.error(f"Error generating cold start message: {e}", exc_info=True)
-        if state is not None and state.confidence >= 0.1:
+        if state is not None and state.confidence >= 0.3:
             return "Hey! I see your training looks good. What can I help you with today?"
         return "Hi! What are you training for? I'd love to help you reach your goals."
     else:

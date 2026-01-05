@@ -55,10 +55,14 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
         # Also check what athlete_ids actually exist in the table for debugging
         if message_count == 0:
             existing_athlete_ids = db.query(CoachMessage.athlete_id).distinct().all()
+            existing_ids_list = [row[0] for row in existing_athlete_ids] if existing_athlete_ids else []
             logger.debug(
                 "No messages found for athlete_id, checking existing athlete_ids in table",
                 searched_athlete_id=athlete_id,
-                existing_athlete_ids=[row[0] for row in existing_athlete_ids] if existing_athlete_ids else [],
+                searched_athlete_id_type=type(athlete_id).__name__,
+                existing_athlete_ids=existing_ids_list,
+                existing_athlete_id_types=[type(row[0]).__name__ for row in existing_athlete_ids] if existing_athlete_ids else [],
+                total_messages_in_table=db.query(CoachMessage).count(),
             )
 
         return message_count == 0
@@ -112,9 +116,19 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
                 daily_load=training_data.daily_load,
                 days_to_race=req.days_to_race,
             )
+            logger.debug(
+                "Cold start with training data",
+                athlete_id=athlete_id,
+                ctl=athlete_state.ctl,
+                atl=athlete_state.atl,
+                tsb=athlete_state.tsb,
+                confidence=athlete_state.confidence,
+                load_trend=athlete_state.load_trend,
+                flags=athlete_state.flags,
+            )
             reply = welcome_new_user(athlete_state)
-        except RuntimeError:
-            logger.warning("Cold start with no training data available")
+        except RuntimeError as e:
+            logger.warning("Cold start with no training data available", error=str(e))
             reply = welcome_new_user(None)
 
         return CoachChatResponse(

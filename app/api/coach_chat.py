@@ -3,6 +3,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.coach.chat_utils.schemas import CoachChatRequest, CoachChatResponse
+from app.coach.context_management import save_context
 from app.coach.orchestrator_agent import run_conversation
 from app.coach.orchestrator_deps import CoachDeps
 from app.coach.state_builder import build_athlete_state
@@ -130,6 +131,14 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         except RuntimeError as e:
             logger.warning("Cold start with no training data available", error=str(e))
             reply = welcome_new_user(None)
+
+        # Save conversation history for cold start
+        save_context(
+            athlete_id=athlete_id,
+            model_name="gpt-4o-mini",
+            user_message=req.message,
+            assistant_message=reply,
+        )
 
         return CoachChatResponse(
             intent="cold_start",

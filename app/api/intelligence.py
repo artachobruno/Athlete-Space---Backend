@@ -16,7 +16,7 @@ from app.coach.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.intelligence.failures import IntelligenceFailureHandler
 from app.intelligence.store import IntentStore
 from app.state.db import get_session
-from app.state.models import StravaAccount
+from app.state.models import Activity, StravaAccount
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
 
@@ -196,6 +196,16 @@ def get_daily_decision(
         # Try fallback to inactive decision
         decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=False)
         if decision_model is None:
+            # Diagnostic: Check if user has activities/data available
+            with get_session() as session:
+                activity_count = session.execute(select(Activity).where(Activity.user_id == user_id)).scalars().all()
+                activity_count = len(list(activity_count))
+
+            logger.warning(
+                f"Daily decision not found for user_id={user_id}, athlete_id={athlete_id}, "
+                f"decision_date={decision_date.isoformat()}, activity_count={activity_count}"
+            )
+
             raise HTTPException(
                 status_code=503,
                 detail=f"Daily decision not available for {decision_date.isoformat()}. The coach will generate it soon.",

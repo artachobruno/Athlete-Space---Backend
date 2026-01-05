@@ -162,6 +162,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     # Create dependencies
     deps = CoachDeps(
         athlete_id=athlete_id,
+        user_id=user_id,
         athlete_state=athlete_state,
         days=req.days,
         days_to_race=req.days_to_race,

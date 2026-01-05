@@ -20,9 +20,34 @@ from app.api.schemas import (
     CalendarWeekResponse,
 )
 from app.state.db import get_session
-from app.state.models import Activity
+from app.state.models import Activity, PlannedSession
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
+
+
+def _planned_session_to_calendar(planned: PlannedSession) -> CalendarSession:
+    """Convert PlannedSession to CalendarSession.
+
+    Args:
+        planned: PlannedSession record
+
+    Returns:
+        CalendarSession object
+    """
+    time_str = planned.time if planned.time else None
+
+    return CalendarSession(
+        id=planned.id,
+        date=planned.date.strftime("%Y-%m-%d"),
+        time=time_str,
+        type=planned.type,
+        title=planned.title,
+        duration_minutes=planned.duration_minutes,
+        distance_km=round(planned.distance_km, 2) if planned.distance_km else None,
+        intensity=planned.intensity,
+        status=planned.status,
+        notes=planned.notes,
+    )
 
 
 def _activity_to_session(activity: Activity) -> CalendarSession:
@@ -80,6 +105,7 @@ def get_season(user_id: str = Depends(get_current_user_id)):
     season_end = now + timedelta(days=90)
 
     with get_session() as session:
+        # Get completed activities
         activities = session.execute(
             select(Activity)
             .where(
@@ -90,15 +116,33 @@ def get_season(user_id: str = Depends(get_current_user_id)):
             .order_by(Activity.start_time)
         ).all()
 
-        sessions = [_activity_to_session(a[0]) for a in activities]
-        completed = len(sessions)  # All activities are completed
-        planned = 0  # No planned sessions yet
+        activity_sessions = [_activity_to_session(a[0]) for a in activities]
+
+        # Get planned sessions
+        planned_sessions = session.execute(
+            select(PlannedSession)
+            .where(
+                PlannedSession.user_id == user_id,
+                PlannedSession.date >= season_start,
+                PlannedSession.date <= season_end,
+            )
+            .order_by(PlannedSession.date)
+        ).all()
+
+        planned_calendar_sessions = [_planned_session_to_calendar(p[0]) for p in planned_sessions]
+
+        # Combine and sort by date
+        all_sessions = activity_sessions + planned_calendar_sessions
+        all_sessions.sort(key=lambda s: s.date)
+
+        completed = len(activity_sessions)
+        planned = len([s for s in planned_calendar_sessions if s.status == "planned"])
 
     return CalendarSeasonResponse(
         season_start=season_start.strftime("%Y-%m-%d"),
         season_end=season_end.strftime("%Y-%m-%d"),
-        sessions=sessions,
-        total_sessions=len(sessions),
+        sessions=all_sessions,
+        total_sessions=len(all_sessions),
         completed_sessions=completed,
         planned_sessions=planned,
     )
@@ -122,6 +166,7 @@ def get_week(user_id: str = Depends(get_current_user_id)):
     sunday = monday + timedelta(days=6)
 
     with get_session() as session:
+        # Get completed activities
         activities = session.execute(
             select(Activity)
             .where(
@@ -132,7 +177,24 @@ def get_week(user_id: str = Depends(get_current_user_id)):
             .order_by(Activity.start_time)
         ).all()
 
-        sessions = [_activity_to_session(a[0]) for a in activities]
+        activity_sessions = [_activity_to_session(a[0]) for a in activities]
+
+        # Get planned sessions
+        planned_sessions = session.execute(
+            select(PlannedSession)
+            .where(
+                PlannedSession.user_id == user_id,
+                PlannedSession.date >= monday,
+                PlannedSession.date <= sunday,
+            )
+            .order_by(PlannedSession.date)
+        ).all()
+
+        planned_calendar_sessions = [_planned_session_to_calendar(p[0]) for p in planned_sessions]
+
+        # Combine and sort by date
+        sessions = activity_sessions + planned_calendar_sessions
+        sessions.sort(key=lambda s: (s.date, s.time or ""))
 
     return CalendarWeekResponse(
         week_start=monday.strftime("%Y-%m-%d"),
@@ -158,6 +220,7 @@ def get_today(user_id: str = Depends(get_current_user_id)):
     today_str = today.strftime("%Y-%m-%d")
 
     with get_session() as session:
+        # Get completed activities
         activities = session.execute(
             select(Activity)
             .where(
@@ -168,7 +231,24 @@ def get_today(user_id: str = Depends(get_current_user_id)):
             .order_by(Activity.start_time)
         ).all()
 
-        sessions = [_activity_to_session(a[0]) for a in activities]
+        activity_sessions = [_activity_to_session(a[0]) for a in activities]
+
+        # Get planned sessions
+        planned_sessions = session.execute(
+            select(PlannedSession)
+            .where(
+                PlannedSession.user_id == user_id,
+                PlannedSession.date >= today_start,
+                PlannedSession.date <= today_end,
+            )
+            .order_by(PlannedSession.date, PlannedSession.time)
+        ).all()
+
+        planned_calendar_sessions = [_planned_session_to_calendar(p[0]) for p in planned_sessions]
+
+        # Combine and sort by time
+        sessions = activity_sessions + planned_calendar_sessions
+        sessions.sort(key=lambda s: s.time or "23:59")
 
     return CalendarTodayResponse(
         date=today_str,
@@ -191,16 +271,22 @@ def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_cu
     logger.info(f"[CALENDAR] GET /calendar/sessions called for user_id={user_id}: limit={limit}, offset={offset}")
 
     with get_session() as session:
-        # Get total count
-        total_result = session.execute(select(Activity).where(Activity.user_id == user_id))
-        total = len(list(total_result))
+        # Get activities
+        activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time.desc())).all()
+        activity_sessions = [_activity_to_session(a[0]) for a in activities]
 
-        # Get paginated activities
-        activities = session.execute(
-            select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time.desc()).limit(limit).offset(offset)
+        # Get planned sessions
+        planned_sessions = session.execute(
+            select(PlannedSession).where(PlannedSession.user_id == user_id).order_by(PlannedSession.date.desc())
         ).all()
+        planned_calendar_sessions = [_planned_session_to_calendar(p[0]) for p in planned_sessions]
 
-        sessions = [_activity_to_session(a[0]) for a in activities]
+        # Combine and sort by date (most recent first)
+        all_sessions = activity_sessions + planned_calendar_sessions
+        all_sessions.sort(key=lambda s: s.date, reverse=True)
+
+        total = len(all_sessions)
+        sessions = all_sessions[offset : offset + limit]
 
     return CalendarSessionsResponse(
         sessions=sessions,

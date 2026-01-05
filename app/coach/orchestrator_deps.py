@@ -15,6 +15,7 @@ class CoachDeps(BaseModel):
     """
 
     athlete_id: int
+    user_id: str | None = None  # User ID (Clerk) - used for storing planned sessions
     athlete_state: AthleteState | None = None
     days: int = 60
     days_to_race: int | None = None

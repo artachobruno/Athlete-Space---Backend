@@ -203,6 +203,10 @@ Add natural conversational engagement when appropriate:
    - **BUT**: Only reference training state if `athlete_state` is available
 
 4. **Quality over quantity**: Better to use the right tool once than multiple tools unnecessarily
+   - **CRITICAL**: NEVER call the same tool repeatedly with the same or similar input
+   - If a tool returns a response, use that response - don't call it again expecting different results
+   - If a tool response isn't what you need, synthesize what you have and respond to the user instead of calling the tool again
+   - Each tool call should provide new information - if you're not getting new information, stop calling tools
 
 5. **Natural language**: Write like a helpful coach, not a robotic system
 
@@ -212,6 +216,7 @@ Add natural conversational engagement when appropriate:
    - Don't use multiple tools when one is sufficient
    - Don't use tools for simple conversational responses
    - If `athlete_state` is None, most tools will return clarifying questions - use that information appropriately
+   - **NEVER call the same tool more than once per conversation turn** - if you need more info, ask the user instead
 
 8. **Ask clarifying questions proactively**:
    - When you need more context to provide a good recommendation, ask questions
@@ -347,14 +352,22 @@ async def plan_week_tool(deps: CoachDeps) -> str:
 
 async def plan_race_build_tool(race_description: str, deps: CoachDeps) -> str:
     """Tool wrapper for plan_race_build."""
-    _ = deps  # Unused but required by pydantic_ai tool signature
-    return await asyncio.to_thread(plan_race_build, race_description)
+    return await asyncio.to_thread(
+        plan_race_build,
+        race_description,
+        deps.user_id,
+        deps.athlete_id,
+    )
 
 
-async def plan_season_tool(deps: CoachDeps) -> str:
+async def plan_season_tool(message: str, deps: CoachDeps) -> str:
     """Tool wrapper for plan_season."""
-    _ = deps  # Unused but required by pydantic_ai tool signature
-    return await asyncio.to_thread(plan_season)
+    return await asyncio.to_thread(
+        plan_season,
+        message if message else "",
+        deps.user_id,
+        deps.athlete_id,
+    )
 
 
 # ============================================================================

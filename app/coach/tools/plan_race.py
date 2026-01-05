@@ -5,6 +5,9 @@ from loguru import logger
 
 from app.coach.tools.session_planner import generate_race_build_sessions, save_planned_sessions
 
+# Simple cache to prevent repeated calls with same input (cleared periodically)
+_recent_calls: dict[str, datetime] = {}
+
 
 def _extract_race_distance(message_lower: str) -> str | None:
     """Extract race distance from message."""
@@ -105,7 +108,34 @@ def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | 
         Response message with plan details or clarification questions
     """
     logger.info(f"Tool plan_race_build called (message_length={len(message)})")
-    message_lower = message.lower()
+    message_lower = message.lower().strip()
+
+    # Create a simple hash of the message for duplicate detection
+    message_hash = str(hash(message_lower[:100]))  # Use first 100 chars
+    now = datetime.now(timezone.utc)
+
+    # Check if we've been called recently with similar input (within last 10 seconds)
+    if message_hash in _recent_calls:
+        last_time = _recent_calls[message_hash]
+        if (now - last_time).total_seconds() < 10:
+            logger.warning("Duplicate tool call detected within 10 seconds, blocking repeat call")
+            return (
+                "I've already provided information about race planning. "
+                "**Please do not call this tool again with the same input.**\n\n"
+                "To create a specific training plan, provide both the race distance and date in your message:\n\n"
+                "• **Race distance** (e.g., 5K, 10K, half marathon, marathon, ultra)\n"
+                "• **Race date** (e.g., 2026-04-15 or April 15, 2026)\n\n"
+                'Example: "I want to train for a marathon on April 15, 2026"'
+            )
+
+    # Update cache
+    _recent_calls[message_hash] = now
+    # Clean old entries (older than 30 seconds) to prevent memory growth
+    cutoff = now - timedelta(seconds=30)
+    # Filter and update cache in place to avoid type checker issues
+    keys_to_remove = [k for k, v in _recent_calls.items() if v <= cutoff]
+    for key in keys_to_remove:
+        del _recent_calls[key]
 
     # Extract race distance, date, and target time
     distance = _extract_race_distance(message_lower)
@@ -120,14 +150,20 @@ def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | 
         if not race_date:
             missing.append("race date (e.g., 2026-04-15 or April 15, 2026)")
 
-        return (
-            f"I'd love to create a personalized race training plan for you! To generate your plan, I need:\n\n"
-            f"• **Race distance**: {missing[0] if 'distance' in str(missing) else '✓'}\n"
-            f"• **Race date**: {missing[0] if 'date' in str(missing) else '✓'}\n"
+        # Return a FINAL response that the orchestrator should pass directly to the user
+        # Format: Start with [CLARIFICATION] marker so orchestrator knows this is final
+        clarification_msg = (
+            "I'd love to create a personalized race training plan for you! "
+            "To generate your plan, I need:\n\n"
+            f"• **Race distance**: {missing[0] if missing and 'distance' in missing[0] else '✓'}\n"
+            f"• **Race date**: {missing[0] if missing and 'date' in missing[0] else '✓'}\n"
             f"• **Target time** (optional): Your goal finish time\n\n"
-            f"Once you provide these details, I'll generate a complete training plan with specific sessions "
-            f"that will be added to your calendar."
+            f"**Please provide both the race distance and date in your message**, and I'll generate "
+            f"a complete training plan with specific sessions that will be added to your calendar.\n\n"
+            f'Example: "I want to train for a marathon on April 15, 2026"'
         )
+        # Return with marker - orchestrator will strip it and use response_type="clarification"
+        return f"[CLARIFICATION] {clarification_msg}"
 
     # Validate race date is in the future
     if race_date < datetime.now(timezone.utc):
@@ -169,7 +205,8 @@ def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | 
                 f"• Race-specific workouts\n"
                 f"• Taper period before race\n\n"
                 f"Your planned sessions are now available in your calendar! "
-                f"{f'Target time: {target_time}' if target_time else ''}"
+                f"{f'Target time: {target_time}' if target_time else ''}\n\n"
+                f"**The plan is complete and ready to use. No further action needed.**"
             )
         except Exception as e:
             logger.error(f"Error generating race plan: {e}", exc_info=True)

@@ -6,15 +6,17 @@ overview. No ingestion logic is performed here - all data comes from the databas
 
 from __future__ import annotations
 
+import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from loguru import logger
 from sqlalchemy import func, select
 
 from app.api.dependencies.auth import get_current_user_id
 from app.ingestion.sla import SYNC_SLA_SECONDS
+from app.ingestion.tasks import history_backfill_task
 from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
 from app.metrics.data_quality import assess_data_quality
 from app.metrics.training_load import compute_training_load
@@ -338,9 +340,36 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
     # Auto-trigger aggregation if needed
     daily_rows = _maybe_trigger_aggregation(user_id, activity_count, daily_rows, days=days)
 
+    # Check if we need to fetch more historical data (ensure at least 90 days)
+    days_with_training = sum(1 for row in daily_rows if row.get("load_score", 0.0) > 0.0)
+    if days_with_training < 90 and activity_count > 0:
+        logger.info(
+            f"[API] /me/overview: user_id={user_id} has only {days_with_training} days with training "
+            f"(need 90). Triggering history backfill."
+        )
+        try:
+            # Trigger history backfill in background to fetch more data
+            def trigger_backfill():
+                try:
+                    history_backfill_task(user_id)
+                except Exception as e:
+                    logger.error(f"[API] History backfill failed for user_id={user_id}: {e}", exc_info=True)
+
+            threading.Thread(target=trigger_backfill, daemon=True).start()
+        except Exception as e:
+            logger.warning(f"[API] Failed to trigger history backfill for user_id={user_id}: {e}")
+
     # Log daily rows info for debugging
-    date_range = f"{daily_rows[0]['date']} to {daily_rows[-1]['date']}" if daily_rows else "none"
-    logger.info(f"[API] /me/overview: user_id={user_id}, daily_rows_count={len(daily_rows)}, date_range={date_range}")
+    logger.info(
+        f"[API] /me/overview: user_id={user_id}, daily_rows_count={len(daily_rows)}, "
+        f"date_range={daily_rows[0]['date']} to {daily_rows[-1]['date']}"
+        if daily_rows
+        else "none"
+    )
+    logger.debug(
+        f"[API] /me/overview: Sending {len(daily_rows)} days to frontend "
+        f"({days_with_training} days with training, {len(daily_rows) - days_with_training} rest days)"
+    )
 
     # Assess data quality and compute metrics
     data_quality_status = assess_data_quality(daily_rows)
@@ -441,3 +470,155 @@ def get_overview(
     except Exception as e:
         logger.error(f"Error getting overview: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get overview: {e!s}") from e
+
+
+def _parse_activity_date(activity_time) -> date:
+    """Parse activity start time to date."""
+    if isinstance(activity_time, datetime):
+        return activity_time.date()
+    return datetime.fromisoformat(str(activity_time)).date()
+
+
+def _format_activity_time(activity_time) -> str:
+    """Format activity start time to ISO string."""
+    if isinstance(activity_time, datetime):
+        return activity_time.isoformat()
+    return str(activity_time)
+
+
+@router.get("/debug/data")
+def get_debug_data(user_id: str = Depends(get_current_user_id)):
+    """Debug endpoint to see all data we have for a user.
+
+    Shows:
+    - All activities with date ranges
+    - Daily summary data
+    - Date gaps and statistics
+    - Sync status
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Dictionary with comprehensive debug information about user's data
+    """
+    logger.info(f"[API] /me/debug/data endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            # Get account info
+            account = get_strava_account(user_id)
+            last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None
+
+            # Get all activities
+            activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time)).scalars().all()
+
+            total_activities = len(activities)
+            if total_activities == 0:
+                return {
+                    "user_id": user_id,
+                    "connected": True,
+                    "last_sync": last_sync,
+                    "total_activities": 0,
+                    "activities": [],
+                    "date_range": None,
+                    "gaps": [],
+                }
+
+            # Get date range
+            first_date = _parse_activity_date(activities[0].start_time)
+            last_date = _parse_activity_date(activities[-1].start_time)
+
+            # Group activities by date
+            activities_by_date: dict[str, list[dict]] = {}
+            for activity in activities:
+                activity_date = _parse_activity_date(activity.start_time)
+                date_str = activity_date.isoformat()
+                if date_str not in activities_by_date:
+                    activities_by_date[date_str] = []
+                activities_by_date[date_str].append({
+                    "id": str(activity.id),
+                    "strava_id": activity.strava_activity_id,
+                    "type": activity.type,
+                    "start_time": _format_activity_time(activity.start_time),
+                    "duration_s": activity.duration_seconds,
+                    "distance_m": activity.distance_meters,
+                    "elevation_m": activity.elevation_gain_meters,
+                })
+
+            # Find date gaps
+            current_date = first_date
+            gaps = []
+            while current_date <= last_date:
+                date_str = current_date.isoformat()
+                if date_str not in activities_by_date:
+                    gaps.append(date_str)
+                current_date += timedelta(days=1)
+
+            # Get daily summary rows
+            daily_rows = get_daily_rows(session, user_id, days=365)
+            daily_summary_dates = [row["date"] for row in daily_rows if row.get("load_score", 0.0) > 0.0]
+
+            return {
+                "user_id": user_id,
+                "connected": True,
+                "last_sync": last_sync,
+                "total_activities": total_activities,
+                "date_range": {
+                    "first_activity": first_date.isoformat(),
+                    "last_activity": last_date.isoformat(),
+                    "total_days": (last_date - first_date).days + 1,
+                    "days_with_activities": len(activities_by_date),
+                    "days_without_activities": len(gaps),
+                },
+                "activities_by_date": activities_by_date,
+                "gaps": gaps[:100],  # Limit to first 100 gaps
+                "daily_summary": {
+                    "total_days": len(daily_rows),
+                    "days_with_training": len(daily_summary_dates),
+                    "date_range": f"{daily_rows[0]['date']} to {daily_rows[-1]['date']}" if daily_rows else "none",
+                },
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting debug data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get debug data: {e!s}") from e
+
+
+@router.post("/sync/history")
+def trigger_history_sync(
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Trigger full historical backfill from Strava for the current user.
+
+    This will fetch all historical activities from Strava that are missing
+    from the database. The sync runs in the background.
+
+    Args:
+        background_tasks: FastAPI background tasks
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Dictionary with sync status and message
+    """
+    logger.info(f"[API] /me/sync/history endpoint called for user_id={user_id}")
+    try:
+        # Verify user has Strava account
+        account = get_strava_account(user_id)
+
+        # Schedule background task
+        background_tasks.add_task(history_backfill_task, user_id)
+
+        logger.info(f"[API] History backfill task scheduled for user_id={user_id}")
+        return {
+            "success": True,
+            "message": "Historical sync started in background. This may take several minutes.",
+            "user_id": user_id,
+            "last_sync": datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering history sync: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to trigger history sync: {e!s}") from e

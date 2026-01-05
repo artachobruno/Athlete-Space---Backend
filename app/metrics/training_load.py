@@ -149,8 +149,8 @@ def compute_training_load(
 
     Args:
         daily_rows: List of daily training rows from daily_training_summary.
-                   Rows should be ordered chronologically.
-                   Missing days are not included (explicit gaps).
+                   Rows should be ordered chronologically and include all days
+                   in the requested range (missing days have zero values).
 
     Returns:
         Dictionary with keys:

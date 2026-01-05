@@ -183,16 +183,16 @@ def _sync_user_activities(  # noqa: C901, PLR0912
         logger.error(f"[SYNC] Failed to get access token for user_id={user_id}: {e!s}", exc_info=True)
         raise TokenRefreshError(f"Failed to get access token: {e!s}") from e
 
-    # Calculate date range (use last_sync_at if available, otherwise last 7 days)
+    # Calculate date range (use last_sync_at if available, otherwise last 90 days)
     now = datetime.now(timezone.utc)
     if account.last_sync_at:
         after_date = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc)
         # Add 1 second buffer to avoid missing activities
         after_date += timedelta(seconds=1)
     else:
-        # First sync: fetch last 7 days
-        after_date = now - timedelta(days=7)
-        logger.info(f"[SYNC] First sync for user_id={user_id}, fetching last 7 days")
+        # First sync: fetch last 90 days to ensure we have enough data for metrics
+        after_date = now - timedelta(days=90)
+        logger.info(f"[SYNC] First sync for user_id={user_id}, fetching last 90 days")
 
     logger.info(f"[SYNC] Fetching activities for user_id={user_id} from {after_date.isoformat()} to {now.isoformat()}")
 

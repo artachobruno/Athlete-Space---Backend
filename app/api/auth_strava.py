@@ -10,9 +10,10 @@ This module implements Step 3: Connection-only OAuth flow.
 from __future__ import annotations
 
 import secrets
+import threading
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 from sqlalchemy import select
@@ -21,6 +22,8 @@ from app.api.dependencies.auth import get_current_user_id
 from app.core.auth_jwt import create_access_token, decode_access_token
 from app.core.encryption import EncryptionError, encrypt_token
 from app.core.settings import settings
+from app.ingestion.background_sync import sync_user_activities
+from app.ingestion.tasks import history_backfill_task
 from app.integrations.strava.oauth import exchange_code_for_token
 from app.state.db import get_session
 from app.state.models import StravaAccount, User
@@ -128,9 +131,7 @@ def _resolve_or_create_user_id(athlete_id: str, user_id: str | None) -> str:
         return user_id
 
     with get_session() as session:
-        existing_account = session.execute(
-            select(StravaAccount).where(StravaAccount.athlete_id == athlete_id)
-        ).first()
+        existing_account = session.execute(select(StravaAccount).where(StravaAccount.athlete_id == athlete_id)).first()
 
         if existing_account:
             resolved_user_id = existing_account[0].user_id
@@ -299,6 +300,7 @@ def strava_callback(
     code: str,
     state: str,
     request: Request,
+    background_tasks: BackgroundTasks | None = None,
 ):
     """Handle Strava OAuth callback and store encrypted tokens.
 
@@ -310,6 +312,7 @@ def strava_callback(
         code: Authorization code from Strava
         state: OAuth state token for CSRF protection (contains user_id)
         request: FastAPI request object
+        background_tasks: Optional FastAPI background tasks for async operations
 
     Returns:
         RedirectResponse to frontend with token in URL on success,
@@ -353,6 +356,9 @@ def strava_callback(
         logger.info(f"[STRAVA_OAUTH] OAuth successful for user_id={user_id}, athlete_id={athlete_id}")
 
         _encrypt_and_store_tokens(user_id, athlete_id, access_token, refresh_token, expires_at)
+
+        # Trigger initial sync and history backfill to fetch at least 90 days of data
+        _trigger_initial_sync(user_id, background_tasks)
 
         # Issue JWT token for the user
         jwt_token = create_access_token(user_id)
@@ -403,3 +409,41 @@ def strava_disconnect(user_id: str = Depends(get_current_user_id)):
         logger.info(f"[STRAVA_OAUTH] Disconnected Strava account for user_id={user_id}, athlete_id={athlete_id}")
 
     return {"success": True, "message": "Strava account disconnected"}
+
+
+def _trigger_initial_sync(user_id: str, background_tasks: BackgroundTasks | None) -> None:
+    """Trigger initial sync and history backfill for new Strava connection.
+
+    Args:
+        user_id: User ID to sync
+        background_tasks: FastAPI background tasks (optional)
+    """
+    logger.info(f"[STRAVA_OAUTH] Triggering initial sync for user_id={user_id} to fetch 90 days of data")
+    try:
+        # Trigger sync in background (non-blocking)
+        # This will fetch the last 90 days on first sync
+        sync_result = sync_user_activities(user_id)
+        if "error" in sync_result:
+            logger.warning(f"[STRAVA_OAUTH] Initial sync failed for user_id={user_id}: {sync_result.get('error')}")
+        else:
+            logger.info(f"[STRAVA_OAUTH] Initial sync completed for user_id={user_id}: {sync_result}")
+
+        # Also trigger history backfill to ensure we get all historical data beyond 90 days
+        # Use background tasks if available, otherwise use threading
+        if background_tasks is not None:
+            background_tasks.add_task(history_backfill_task, user_id)
+            logger.info(f"[STRAVA_OAUTH] History backfill scheduled via background_tasks for user_id={user_id}")
+        else:
+            # Fallback to threading if background_tasks not available
+            def trigger_backfill():
+                try:
+                    history_backfill_task(user_id)
+                except Exception as e:
+                    logger.error(f"[STRAVA_OAUTH] History backfill failed for user_id={user_id}: {e}", exc_info=True)
+
+            backfill_thread = threading.Thread(target=trigger_backfill, daemon=True)
+            backfill_thread.start()
+            logger.info(f"[STRAVA_OAUTH] History backfill scheduled via thread for user_id={user_id}")
+    except Exception as e:
+        logger.error(f"[STRAVA_OAUTH] Failed to trigger initial sync for user_id={user_id}: {e}", exc_info=True)
+        # Don't fail OAuth if sync fails - user can manually trigger sync later

@@ -7,7 +7,7 @@ recomputes the last 60 days to handle updates and corrections.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import cast
 
 from loguru import logger
@@ -127,6 +127,8 @@ def aggregate_daily_training(user_id: str) -> None:
 def get_daily_rows(session: Session, user_id: str, days: int = 60) -> list[DailyTrainingRow]:
     """Get daily training rows from daily_training_summary.
 
+    Returns data for all days in the requested range, filling missing days with zero values.
+
     Args:
         session: Database session
         user_id: Clerk user ID (string)
@@ -134,11 +136,13 @@ def get_daily_rows(session: Session, user_id: str, days: int = 60) -> list[Daily
 
     Returns:
         List of daily rows with keys: date, duration_s, distance_m, elevation_m, load_score
-        Ordered chronologically. Missing days are not included (explicit gaps).
+        Ordered chronologically. All days from start_date to end_date are included,
+        with missing days filled with zero values.
     """
     end_date = datetime.now(timezone.utc).date()
     start_date = end_date - timedelta(days=days)
 
+    # Fetch existing rows from database
     rows = session.execute(
         text(
             """
@@ -157,14 +161,33 @@ def get_daily_rows(session: Session, user_id: str, days: int = 60) -> list[Daily
         },
     ).fetchall()
 
-    result = [
-        {
-            "date": row.date if isinstance(row.date, str) else row.date.isoformat(),
+    # Create a map of date -> row data for quick lookup
+    data_map: dict[date, DailyTrainingRow] = {}
+    for row in rows:
+        row_date = row.date if isinstance(row.date, date) else datetime.fromisoformat(row.date).date()
+        data_map[row_date] = {
+            "date": row_date.isoformat(),
             "duration_s": int(row.duration_s),
             "distance_m": float(row.distance_m),
             "elevation_m": float(row.elevation_m),
             "load_score": float(row.load_score),
         }
-        for row in rows
-    ]
+
+    # Build complete list for all days in range, filling missing days with zeros
+    result: list[DailyTrainingRow] = []
+    current_date = start_date
+    while current_date <= end_date:
+        if current_date in data_map:
+            result.append(data_map[current_date])
+        else:
+            # Fill missing day with zero values
+            result.append({
+                "date": current_date.isoformat(),
+                "duration_s": 0,
+                "distance_m": 0.0,
+                "elevation_m": 0.0,
+                "load_score": 0.0,
+            })
+        current_date += timedelta(days=1)
+
     return cast(list[DailyTrainingRow], result)

@@ -7,7 +7,7 @@ overview. No ingestion logic is performed here - all data comes from the databas
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -142,6 +142,10 @@ def _build_overview_response(
 def _maybe_trigger_aggregation(user_id: str, activity_count: int, daily_rows: list, days: int = 60) -> list:
     """Trigger aggregation if needed and return updated daily_rows.
 
+    Triggers aggregation if:
+    - We have activities but no daily rows, OR
+    - We have fewer daily rows than requested (to ensure full date range is aggregated)
+
     Args:
         user_id: Clerk user ID (string)
         activity_count: Number of activities in database
@@ -151,14 +155,29 @@ def _maybe_trigger_aggregation(user_id: str, activity_count: int, daily_rows: li
     Returns:
         Updated daily_rows list (may be re-fetched after aggregation)
     """
+    should_aggregate = False
+    reason = ""
+
     if activity_count > 0 and len(daily_rows) == 0:
-        logger.info(f"[API] /me/overview: Auto-triggering aggregation for user_id={user_id} (activities={activity_count}, daily_rows=0)")
+        should_aggregate = True
+        reason = "no daily rows"
+    elif activity_count > 0 and len(daily_rows) < days:
+        # Check if we're missing days in the requested range
+        # If we have activities but fewer aggregated days than requested, re-aggregate
+        should_aggregate = True
+        reason = f"only {len(daily_rows)} days available, {days} requested"
+
+    if should_aggregate:
+        logger.info(
+            f"[API] /me/overview: Auto-triggering aggregation for user_id={user_id} "
+            f"(activities={activity_count}, daily_rows={len(daily_rows)}, reason={reason})"
+        )
         try:
             aggregate_daily_training(user_id)
             # Re-fetch daily rows after aggregation in a new session
             with get_session() as session:
                 daily_rows = get_daily_rows(session, user_id, days=days)
-            logger.info(f"[API] /me/overview: Aggregation completed, now have {len(daily_rows)} daily rows")
+            logger.info(f"[API] /me/overview: Aggregation completed, now have {len(daily_rows)} daily rows (requested {days} days)")
         except Exception as e:
             logger.error(
                 f"[API] /me/overview: Failed to auto-aggregate for user_id={user_id}: {e}",
@@ -282,38 +301,52 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
     days = min(days, 365)  # Cap at 1 year for performance
 
     request_time = time.time()
-    now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
-    logger.info(f"[API] /me/overview called at {now_str} for user_id={user_id}, days={days}")
+    logger.info(
+        f"[API] /me/overview called at {datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]} for user_id={user_id}, days={days}"
+    )
 
     # Get StravaAccount for user
     account = get_strava_account(user_id)
-
-    last_sync = None
-    if account.last_sync_at:
-        last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat()
+    last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None
 
     # Check if we have activities but no daily rows - trigger aggregation if needed
     with get_session() as session:
         # Count activities for this user
-        result_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar()
-        activity_count = result_count if result_count is not None else 0
+        activity_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
+
+        # Count activities in the requested date range
+        end_date = datetime.now(timezone.utc).date()
+        start_date = end_date - timedelta(days=days)
+        activities_in_range = (
+            session.execute(
+                select(func.count(Activity.id)).where(
+                    Activity.user_id == user_id,
+                    func.date(Activity.start_time) >= start_date,
+                    func.date(Activity.start_time) <= end_date,
+                )
+            ).scalar()
+            or 0
+        )
+
+        logger.info(
+            f"[API] /me/overview: user_id={user_id}, total_activities={activity_count}, "
+            f"activities_in_range({days} days)={activities_in_range}"
+        )
+
         daily_rows = get_daily_rows(session, user_id, days=days)
 
     # Auto-trigger aggregation if needed
     daily_rows = _maybe_trigger_aggregation(user_id, activity_count, daily_rows, days=days)
 
     # Log daily rows info for debugging
-    date_range_str = f"{daily_rows[0]['date']} to {daily_rows[-1]['date']}" if daily_rows else "none"
-    logger.info(f"[API] /me/overview: user_id={user_id}, daily_rows_count={len(daily_rows)}, date_range={date_range_str}")
+    date_range = f"{daily_rows[0]['date']} to {daily_rows[-1]['date']}" if daily_rows else "none"
+    logger.info(f"[API] /me/overview: user_id={user_id}, daily_rows_count={len(daily_rows)}, date_range={date_range}")
 
-    # Assess data quality
+    # Assess data quality and compute metrics
     data_quality_status = assess_data_quality(daily_rows)
     logger.info(f"[API] /me/overview: data_quality={data_quality_status} (requires >=14 days, got {len(daily_rows)} days)")
 
-    # Compute training load metrics
     metrics_result = compute_training_load(daily_rows)
-
-    # Extract today's values and 7-day TSB average
     today_metrics = _extract_today_metrics(metrics_result)
 
     elapsed = time.time() - request_time

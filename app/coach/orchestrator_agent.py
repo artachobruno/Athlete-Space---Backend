@@ -9,6 +9,7 @@ from typing import cast
 from loguru import logger
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
+from pydantic_ai.usage import UsageLimits
 
 from app.coach.context_management import load_context, save_context
 from app.coach.orchestrator_deps import CoachDeps
@@ -493,10 +494,15 @@ async def run_conversation(
     # pydantic_ai accepts dict format at runtime but type checker expects ModelMessage
     typed_message_history = cast(list[ModelMessage], message_history) if message_history else None
 
+    # Increase request limit to handle complex conversations with multiple tool calls
+    # Default is 50, which can be exceeded in complex scenarios
+    usage_limits = UsageLimits(request_limit=200)
+
     result = await ORCHESTRATOR_AGENT.run(
         user_prompt=user_input,
         deps=deps,
         message_history=typed_message_history,
+        usage_limits=usage_limits,
     )
 
     # Log response at debug level

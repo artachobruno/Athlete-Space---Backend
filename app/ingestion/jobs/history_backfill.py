@@ -21,6 +21,7 @@ from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_tok
 from app.core.settings import settings
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
+from app.metrics.daily_aggregation import aggregate_daily_training
 from app.state.db import get_session
 from app.state.models import Activity, StravaAccount
 
@@ -363,3 +364,13 @@ def backfill_user_history(user_id: str) -> None:
 
         # Update cursor after successful batch
         _update_cursor(session, account, activities, user_id)
+
+        # Trigger daily aggregation to update CTL, ATL, TSB metrics after saving activities
+        if saved_count > 0:
+            logger.info(f"[HISTORY_BACKFILL] Triggering daily aggregation for user_id={user_id} after saving {saved_count} activities")
+            try:
+                aggregate_daily_training(user_id)
+                logger.info(f"[HISTORY_BACKFILL] Daily aggregation completed for user_id={user_id}")
+            except Exception as e:
+                logger.error(f"[HISTORY_BACKFILL] Daily aggregation failed for user_id={user_id}: {e}", exc_info=True)
+                # Don't fail backfill if aggregation fails

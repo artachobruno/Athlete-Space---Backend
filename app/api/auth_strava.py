@@ -24,6 +24,7 @@ from app.core.settings import settings
 from app.ingestion.background_sync import sync_user_activities
 from app.ingestion.tasks import history_backfill_task
 from app.integrations.strava.oauth import exchange_code_for_token
+from app.metrics.daily_aggregation import aggregate_daily_training
 from app.state.db import get_session
 from app.state.models import StravaAccount, User
 
@@ -426,6 +427,14 @@ def _trigger_initial_sync(user_id: str, background_tasks: BackgroundTasks) -> No
             logger.warning(f"[STRAVA_OAUTH] Initial sync failed for user_id={user_id}: {sync_result.get('error')}")
         else:
             logger.info(f"[STRAVA_OAUTH] Initial sync completed for user_id={user_id}: {sync_result}")
+
+        # Trigger daily aggregation to update CTL, ATL, TSB metrics
+        try:
+            aggregate_daily_training(user_id)
+            logger.info(f"[STRAVA_OAUTH] Daily aggregation completed for user_id={user_id}")
+        except Exception as e:
+            logger.error(f"[STRAVA_OAUTH] Daily aggregation failed for user_id={user_id}: {e}", exc_info=True)
+            # Don't fail if aggregation fails
 
         # Also trigger history backfill to ensure we get all historical data beyond 90 days
         background_tasks.add_task(history_backfill_task, user_id)

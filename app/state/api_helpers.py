@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.metrics.training_load import calculate_ctl_atl_tsb
-from app.state.db import SessionLocal
+from app.state.db import SessionLocal, get_session
+from app.state.models import StravaAccount
 
 
 @dataclass(slots=True)
@@ -18,8 +19,35 @@ class TrainingData:
     dates: list[str]
 
 
-def get_training_data(days: int = 60) -> TrainingData:
-    """Fetch and compute training metrics for coach tools."""
+def get_user_id_from_athlete_id(athlete_id: int) -> str | None:
+    """Get user_id from athlete_id using StravaAccount.
+
+    Args:
+        athlete_id: Strava athlete ID (int)
+
+    Returns:
+        User ID (string) or None if not found
+    """
+    with get_session() as session:
+        result = session.execute(select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id))).first()
+        if result:
+            return result[0].user_id
+        return None
+
+
+def get_training_data(user_id: str, days: int = 60) -> TrainingData:
+    """Fetch and compute training metrics for coach tools.
+
+    Args:
+        user_id: Clerk user ID (string) to filter activities
+        days: Number of days to look back (default: 60)
+
+    Returns:
+        TrainingData with CTL, ATL, TSB metrics
+
+    Raises:
+        RuntimeError: If no training data is available
+    """
     db = SessionLocal()
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -31,12 +59,16 @@ def get_training_data(days: int = 60) -> TrainingData:
                     date(start_time) as day,
                     SUM(duration_seconds) / 3600.0 as hours
                 FROM activities
-                WHERE start_time >= :since
+                WHERE user_id = :user_id
+                AND start_time >= :since
                 GROUP BY day
                 ORDER BY day
                 """
             ),
-            {"since": since.isoformat()},
+            {
+                "user_id": user_id,
+                "since": since.isoformat(),
+            },
         ).fetchall()
 
         if not rows:

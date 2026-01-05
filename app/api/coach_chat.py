@@ -7,7 +7,7 @@ from app.coach.orchestrator_agent import run_conversation
 from app.coach.orchestrator_deps import CoachDeps
 from app.coach.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
-from app.state.api_helpers import get_training_data
+from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 from app.state.db import get_session
 from app.state.models import CoachMessage, StravaAuth
 
@@ -63,11 +63,20 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     # Check if this is a cold start (empty history)
     history_empty = _is_history_empty(athlete_id)
 
+    # Get user_id from athlete_id
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.warning(f"Cannot find user_id for athlete_id={athlete_id}")
+        return CoachChatResponse(
+            intent="error",
+            reply="Unable to find user account. Please reconnect your Strava account.",
+        )
+
     # Handle cold start
     if history_empty:
         logger.info("Cold start detected - providing welcome message")
         try:
-            training_data = get_training_data(days=req.days)
+            training_data = get_training_data(user_id=user_id, days=req.days)
             athlete_state = build_athlete_state(
                 ctl=training_data.ctl,
                 atl=training_data.atl,
@@ -87,7 +96,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
 
     # Build athlete state
     try:
-        training_data = get_training_data(days=req.days)
+        training_data = get_training_data(user_id=user_id, days=req.days)
         athlete_state = build_athlete_state(
             ctl=training_data.ctl,
             atl=training_data.atl,

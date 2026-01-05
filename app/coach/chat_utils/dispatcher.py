@@ -15,7 +15,7 @@ from app.coach.tools.plan_week import plan_week
 from app.coach.tools.run_analysis import run_analysis
 from app.coach.tools.share_report import share_report
 from app.core.settings import settings
-from app.state.api_helpers import get_training_data
+from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 
 try:
     from langchain_core.messages import HumanMessage
@@ -113,12 +113,16 @@ provide more specific guidance once their training data is synced, but still pro
         return content_str
 
 
-def _handle_cold_start(days: int, days_to_race: int | None) -> tuple[str, str]:
+def _handle_cold_start(athlete_id: int, days: int, days_to_race: int | None) -> tuple[str, str]:
     """Handle cold start scenario - provide welcome message."""
     logger.info(f"Cold start detected - providing welcome message (days={days}, days_to_race={days_to_race})")
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.warning(f"Cannot find user_id for athlete_id={athlete_id} in cold start")
+        return ("error", "Unable to find user account. Please reconnect your Strava account.")
     try:
         logger.info("Fetching training data for cold start")
-        training_data = get_training_data(days=days)
+        training_data = get_training_data(user_id=user_id, days=days)
         logger.info("Building athlete state for cold start")
         athlete_state = build_athlete_state(
             ctl=training_data.ctl,
@@ -137,16 +141,20 @@ def _handle_cold_start(days: int, days_to_race: int | None) -> tuple[str, str]:
     return ("cold_start", reply)
 
 
-def _get_athlete_state(days: int, days_to_race: int | None) -> tuple[str, str] | tuple[None, AthleteState]:
+def _get_athlete_state(athlete_id: int, days: int, days_to_race: int | None) -> tuple[str, str] | tuple[None, AthleteState]:
     """Get athlete state or return error response.
 
     Returns:
         Tuple of (error_type, error_message) if error, or (None, AthleteState) if successful
     """
     logger.info(f"Getting athlete state (days={days}, days_to_race={days_to_race})")
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.warning(f"Cannot find user_id for athlete_id={athlete_id}")
+        return ("error", "Unable to find user account. Please reconnect your Strava account.")
     try:
         logger.info("Fetching training data")
-        training_data = get_training_data(days=days)
+        training_data = get_training_data(user_id=user_id, days=days)
     except RuntimeError as e:
         logger.warning(f"No training data available: {e}")
         # Return a special error type that allows LLM fallback
@@ -185,6 +193,7 @@ def _route_to_tool(intent: CoachIntent, athlete_state: AthleteState, message: st
 
 def dispatch_coach_chat(
     message: str,
+    athlete_id: int,
     days: int,
     days_to_race: int | None = None,
     *,
@@ -196,6 +205,7 @@ def dispatch_coach_chat(
 
     Args:
         message: User's message to the coach
+        athlete_id: Strava athlete ID (int)
         days: Number of days of training data to consider
         days_to_race: Optional days until race
         history_empty: If True, this is a cold start (first message).
@@ -215,7 +225,7 @@ def dispatch_coach_chat(
     # Handle cold start - provide welcome message regardless of intent
     if history_empty:
         logger.info("Handling cold start scenario")
-        return _handle_cold_start(days, days_to_race)
+        return _handle_cold_start(athlete_id, days, days_to_race)
 
     logger.info("Routing intent from user message")
     intent = route_intent(message)
@@ -223,7 +233,7 @@ def dispatch_coach_chat(
 
     # Build athlete state
     logger.info("Building athlete state for tool routing")
-    state_result = _get_athlete_state(days, days_to_race)
+    state_result = _get_athlete_state(athlete_id, days, days_to_race)
     has_training_data = state_result[0] is None
 
     if not has_training_data:  # Error response

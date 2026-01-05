@@ -20,7 +20,7 @@ from app.api.schemas import (
 from app.coach.chat_utils.dispatcher import dispatch_coach_chat
 from app.coach.coach_service import get_coach_advice
 from app.state.db import get_session
-from app.state.models import CoachMessage, StravaAuth
+from app.state.models import CoachMessage, StravaAccount, StravaAuth
 
 router = APIRouter(prefix="/coach", tags=["coach"])
 
@@ -76,6 +76,7 @@ def ask_coach(message: str, days: int = 60, athlete_id: int = 23078584):
     # Use dispatch_coach_chat which handles intent routing and tool execution
     intent, reply = dispatch_coach_chat(
         message=message,
+        athlete_id=athlete_id,
         days=days,
         days_to_race=None,
         history_empty=history_empty,
@@ -373,10 +374,24 @@ def ask_coach_endpoint(request: CoachAskRequest, user_id: str = Depends(get_curr
     now = datetime.now(timezone.utc)
 
     try:
-        history_empty = _is_history_empty()
+        # Get athlete_id from user_id
+        with get_session() as session:
+            result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+            if not result:
+                logger.warning(f"No Strava account found for user_id={user_id}")
+                return CoachAskResponse(
+                    reply="Please connect your Strava account first.",
+                    intent="error",
+                    confidence=0.0,
+                    timestamp=now.isoformat(),
+                )
+            athlete_id = int(result[0].athlete_id)
+
+        history_empty = _is_history_empty(athlete_id=athlete_id)
 
         intent, reply = dispatch_coach_chat(
             message=request.message,
+            athlete_id=athlete_id,
             days=60,
             days_to_race=None,
             history_empty=history_empty,

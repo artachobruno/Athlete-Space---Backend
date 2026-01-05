@@ -95,12 +95,7 @@ def store_activity(
                 # Note: session.commit() is handled by get_session() context manager
                 logger.debug(f"[DATA] About to commit session for activity {activity_id}")
                 start_time_str = str(start_time) if start_time else "None"
-                logger.info(
-                    "[DATA] Stored activity %s for athlete_id=%s (start_time=%s)",
-                    activity_id,
-                    user_id,
-                    start_time_str,
-                )
+                logger.info(f"[DATA] Stored activity {activity_id} for athlete_id={user_id} (start_time={start_time_str})")
             except ValueError as e:
                 # ValueError from save_activity_record means StravaAccount lookup failed
                 logger.error(f"[DATA] Cannot store activity {activity_id} for athlete_id={user_id}: StravaAccount not found. Error: {e}")

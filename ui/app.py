@@ -236,12 +236,45 @@ metrics = overview.get("metrics", {})
 today = overview.get("today", {})
 data_quality_status = overview.get("data_quality", "insufficient")
 
-df = pd.DataFrame({
-    "date": pd.to_datetime([d for d, _ in metrics.get("ctl", [])]),
-    "CTL": [v for _, v in metrics.get("ctl", [])],
-    "ATL": [v for _, v in metrics.get("atl", [])],
-    "TSB": [v for _, v in metrics.get("tsb", [])],
-})
+# Extract metrics lists
+ctl_list = metrics.get("ctl", [])
+atl_list = metrics.get("atl", [])
+tsb_list = metrics.get("tsb", [])
+
+# Debug: print what we're getting
+print(f"[UI] Metrics debug: ctl={len(ctl_list)} items, atl={len(atl_list)} items, tsb={len(tsb_list)} items")
+print(f"[UI] Data quality: {data_quality_status}")
+if ctl_list:
+    print(f"[UI] First CTL entry: {ctl_list[0]}, Last CTL entry: {ctl_list[-1]}")
+    print(f"[UI] First ATL entry: {atl_list[0] if atl_list else 'N/A'}, Last ATL entry: {atl_list[-1] if atl_list else 'N/A'}")
+    print(f"[UI] First TSB entry: {tsb_list[0] if tsb_list else 'N/A'}, Last TSB entry: {tsb_list[-1] if tsb_list else 'N/A'}")
+
+# Create DataFrame - ensure all lists have the same length
+min_length = min(len(ctl_list), len(atl_list), len(tsb_list))
+if min_length == 0:
+    df = pd.DataFrame({"date": [], "CTL": [], "ATL": [], "TSB": []})
+    df["date"] = pd.to_datetime(df["date"])
+    print("[UI] WARNING: All metrics lists are empty - creating empty DataFrame")
+else:
+    # Use the minimum length to ensure all columns have the same number of rows
+    if len(ctl_list) != len(atl_list) or len(atl_list) != len(tsb_list):
+        print(f"[UI] WARNING: Metrics lists have different lengths! Truncating to minimum length: {min_length}")
+        ctl_list = ctl_list[:min_length]
+        atl_list = atl_list[:min_length]
+        tsb_list = tsb_list[:min_length]
+
+    df = pd.DataFrame({
+        "date": pd.to_datetime([d for d, _ in ctl_list]),
+        "CTL": [v for _, v in ctl_list],
+        "ATL": [v for _, v in atl_list],
+        "TSB": [v for _, v in tsb_list],
+    })
+
+    # Debug: check if DataFrame is empty
+    if df.empty:
+        print("[UI] WARNING: DataFrame is empty after creation!")
+    else:
+        print(f"[UI] DataFrame created successfully: {len(df)} rows, date range: {df['date'].min()} to {df['date'].max()}")
 
 # -------------------------------------------------
 # KPI
@@ -258,25 +291,30 @@ k4.metric("Data", data_quality_status)
 main, side = st_any.columns([2, 1])
 
 with main:
-    chart = (
-        alt.Chart(df)
-        .transform_fold(["CTL", "ATL", "TSB"], as_=["metric", "value"])
-        .mark_line(strokeWidth=2)
-        .encode(
-            x=alt.X("date:T", axis=alt.Axis(grid=False)),
-            y=alt.Y("value:Q", axis=alt.Axis(grid=True, gridColor="#1E2230")),
-            color=alt.Color(
-                "metric:N",
-                scale=alt.Scale(
-                    domain=["CTL", "ATL", "TSB"],
-                    range=["#5B8DEF", "#9AA0AE", "#7A869A"],
+    if df.empty:
+        metrics_info = f"ctl={len(ctl_list)}, atl={len(atl_list)}, tsb={len(tsb_list)}"
+        st_any.warning(f"No training data available for chart. Data quality: {data_quality_status}. Metrics: {metrics_info}")
+        st_any.info("Training data will appear here once you have at least 14 days of activity data.")
+    else:
+        chart = (
+            alt.Chart(df)
+            .transform_fold(["CTL", "ATL", "TSB"], as_=["metric", "value"])
+            .mark_line(strokeWidth=2)
+            .encode(
+                x=alt.X("date:T", axis=alt.Axis(grid=False)),
+                y=alt.Y("value:Q", axis=alt.Axis(grid=True, gridColor="#1E2230")),
+                color=alt.Color(
+                    "metric:N",
+                    scale=alt.Scale(
+                        domain=["CTL", "ATL", "TSB"],
+                        range=["#5B8DEF", "#9AA0AE", "#7A869A"],
+                    ),
+                    legend=alt.Legend(title=None),
                 ),
-                legend=alt.Legend(title=None),
-            ),
+            )
+            .properties(height=300)
         )
-        .properties(height=300)
-    )
-    st_any.altair_chart(chart, use_container_width=True)
+        st_any.altair_chart(chart, use_container_width=True)
 
 # -------------------------------------------------
 # Coach Panel

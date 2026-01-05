@@ -39,10 +39,28 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
     if athlete_id is None:
         athlete_id = _get_athlete_id()
         if athlete_id is None:
+            logger.debug("No athlete_id found, treating as cold start")
             return True
 
     with get_session() as db:
         message_count = db.query(CoachMessage).filter(CoachMessage.athlete_id == athlete_id).count()
+        logger.debug(
+            "Checking coach message history",
+            athlete_id=athlete_id,
+            athlete_id_type=type(athlete_id).__name__,
+            message_count=message_count,
+            is_empty=message_count == 0,
+        )
+
+        # Also check what athlete_ids actually exist in the table for debugging
+        if message_count == 0:
+            existing_athlete_ids = db.query(CoachMessage.athlete_id).distinct().all()
+            logger.debug(
+                "No messages found for athlete_id, checking existing athlete_ids in table",
+                searched_athlete_id=athlete_id,
+                existing_athlete_ids=[row[0] for row in existing_athlete_ids] if existing_athlete_ids else [],
+            )
+
         return message_count == 0
 
 
@@ -53,6 +71,11 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
 
     # Get athlete ID
     athlete_id = _get_athlete_id()
+    logger.debug(
+        "Retrieved athlete_id for coach chat",
+        athlete_id=athlete_id,
+        athlete_id_type=type(athlete_id).__name__ if athlete_id is not None else None,
+    )
     if athlete_id is None:
         logger.warning("No athlete ID found, cannot process coach chat")
         return CoachChatResponse(
@@ -62,6 +85,11 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
 
     # Check if this is a cold start (empty history)
     history_empty = _is_history_empty(athlete_id)
+    logger.debug(
+        "Cold start check result",
+        athlete_id=athlete_id,
+        history_empty=history_empty,
+    )
 
     # Get user_id from athlete_id
     user_id = get_user_id_from_athlete_id(athlete_id)

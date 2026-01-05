@@ -18,22 +18,34 @@ Rules:
 - Don't list all your capabilities — just be friendly and helpful
 - No formal introductions — just start chatting naturally
 
-If athlete state is provided:
-- Give ONE brief observation about their training state
+CRITICAL RULES FOR TRAINING STATE:
+- If athlete state confidence is very low (< 0.1), you have INSUFFICIENT data
+- NEVER make statements about current fatigue, training state, metrics, or how the athlete is feeling when:
+  * athlete_state is None, OR
+  * athlete_state.confidence is very low (< 0.1)
+- NEVER say things like "you're pushing hard", "you're feeling fatigued", "your training load is...",
+  "you're starting out strong", "looks like you need recovery", etc. when data is insufficient
+- ONLY make observations about training state if confidence >= 0.1 AND you have clear, reliable data
+
+If athlete state is provided WITH sufficient confidence (>= 0.1):
+- Give ONE brief, positive observation about their training state
 - Keep it casual and human-sounding
 - No metrics or technical terms — just natural language
+- Focus on positive aspects, not assumptions about fatigue or recovery needs
 
-If no athlete state is provided:
+If athlete state is provided BUT confidence is low (< 0.1) OR no athlete state:
 - Ask them what they're training for or what they need help with
+- Don't make any statements about their current training state
 - Don't explain what you can do — just be ready to help
 
 Examples:
-BAD: "Hello and welcome! I'm your Coach, your dedicated AI training coach
-here to support you on your endurance journey. My role is to help you..."
+BAD: "Hello and welcome! I'm your Coach, your dedicated AI training coach..."
 
-GOOD: "Hey! I'm your Coach. I see your training looks solid — how can I help you today?"
+BAD (insufficient data): "Hey! Looks like you're pushing hard but might need a little recovery time."
 
-GOOD (no data): "Hi! What are you training for? I'd love to help you reach your goals."
+GOOD (with sufficient data): "Hey! I see your training looks solid — how can I help you today?"
+
+GOOD (insufficient data): "Hi! What are you training for? I'd love to help you reach your goals."
 
 Return ONLY the message text. No metadata or structure. Keep it under 50 words.
 """
@@ -59,6 +71,49 @@ else:
     _cold_start_chain = None
 
 
+def _build_cold_start_context(state: AthleteState | None) -> str:
+    """Build context string for cold start message generation.
+
+    Args:
+        state: Optional athlete state.
+
+    Returns:
+        Context string for LLM prompt.
+    """
+    if state is None:
+        return (
+            "Generate a short, casual welcome message (1-2 sentences max). "
+            "No training data available yet. Ask them what they're training for or what they need help with. "
+            "Be conversational and natural — like a real person, not a formal introduction."
+        )
+
+    has_sufficient_data = state.confidence >= 0.1
+
+    if has_sufficient_data:
+        return f"""Generate a short, casual welcome message (1-2 sentences max).
+
+Athlete's training state (data confidence: {state.confidence:.2f}):
+- Fitness level: {state.ctl:.1f}
+- Fatigue: {state.atl:.1f}
+- Form: {state.tsb:.1f}
+- Trend: {state.load_trend}
+- Flags: {", ".join(state.flags) if state.flags else "none"}
+
+Give ONE brief, positive observation about their training. Then ask how you can help.
+Keep it conversational, like a human coach would talk.
+Focus on positive aspects - don't assume fatigue or recovery needs."""
+
+    return f"""Generate a short, casual welcome message (1-2 sentences max).
+
+CRITICAL: Training data confidence is LOW ({state.confidence:.2f} < 0.1). You have INSUFFICIENT data.
+
+ABSOLUTE RULES:
+- NEVER make statements about current fatigue, training state, or how the athlete is feeling
+- NEVER say things like "you're pushing hard", "you're feeling fatigued", "looks like you need recovery", etc.
+- ONLY ask what they're training for or what they need help with
+- Be conversational and natural — like a real person, not a formal introduction."""
+
+
 def welcome_new_user(state: AthleteState | None = None) -> str:
     """Generate a welcome message using the LLM agent for new users.
 
@@ -70,53 +125,29 @@ def welcome_new_user(state: AthleteState | None = None) -> str:
     """
     if _cold_start_chain is None or not settings.openai_api_key:
         logger.warning("LLM not available for cold start, using fallback message")
-        if state is not None:
+        if state is not None and state.confidence >= 0.1:
             fallback = "Hey! I see your training looks good. What can I help you with today?"
         else:
             fallback = "Hi! What are you training for? I'd love to help you reach your goals."
         return fallback
 
-    # Build context for the LLM
-    if state is not None:
-        context = f"""Generate a short, casual welcome message (1-2 sentences max).
-
-Athlete's training state:
-- Fitness level: {state.ctl:.1f}
-- Fatigue: {state.atl:.1f}
-- Form: {state.tsb:.1f}
-- Trend: {state.load_trend}
-- Flags: {", ".join(state.flags) if state.flags else "none"}
-
-Give ONE brief, natural observation about their training. Then ask how you can help.
-Keep it conversational, like a human coach would talk."""
-    else:
-        context = (
-            "Generate a short, casual welcome message (1-2 sentences max). "
-            "No training data available yet. Ask them what they're training for or what they need help with. "
-            "Be conversational and natural — like a real person, not a formal introduction."
-        )
+    context = _build_cold_start_context(state)
 
     try:
         logger.info("Generating cold start welcome message with LLM")
         response = _cold_start_chain.invoke({"context": context})
-        # Chain returns AIMessage with .content attribute
-        # Extract string content, handling potential list/str types
         content = response.content
         if isinstance(content, str):
             message = content
         elif isinstance(content, list):
-            # If content is a list, join all string elements
             message = " ".join(str(item) for item in content if isinstance(item, str))
         else:
             message = str(content)
         logger.info("Cold start message generated successfully")
     except Exception as e:
         logger.error(f"Error generating cold start message: {e}", exc_info=True)
-        # Fallback to a simple message if LLM fails
-        if state is not None:
-            fallback = "Hey! I see your training looks good. What can I help you with today?"
-        else:
-            fallback = "Hi! What are you training for? I'd love to help you reach your goals."
-        return fallback
+        if state is not None and state.confidence >= 0.1:
+            return "Hey! I see your training looks good. What can I help you with today?"
+        return "Hi! What are you training for? I'd love to help you reach your goals."
     else:
         return message

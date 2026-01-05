@@ -139,13 +139,14 @@ def _build_overview_response(
     }
 
 
-def _maybe_trigger_aggregation(user_id: str, activity_count: int, daily_rows: list) -> list:
+def _maybe_trigger_aggregation(user_id: str, activity_count: int, daily_rows: list, days: int = 60) -> list:
     """Trigger aggregation if needed and return updated daily_rows.
 
     Args:
         user_id: Clerk user ID (string)
         activity_count: Number of activities in database
         daily_rows: Current daily rows list
+        days: Number of days to fetch after aggregation (default: 60)
 
     Returns:
         Updated daily_rows list (may be re-fetched after aggregation)
@@ -156,7 +157,7 @@ def _maybe_trigger_aggregation(user_id: str, activity_count: int, daily_rows: li
             aggregate_daily_training(user_id)
             # Re-fetch daily rows after aggregation in a new session
             with get_session() as session:
-                daily_rows = get_daily_rows(session, user_id, days=60)
+                daily_rows = get_daily_rows(session, user_id, days=days)
             logger.info(f"[API] /me/overview: Aggregation completed, now have {len(daily_rows)} daily rows")
         except Exception as e:
             logger.error(
@@ -256,11 +257,12 @@ def get_status(user_id: str = Depends(get_current_user_id)):
         }
 
 
-def get_overview_data(user_id: str) -> dict:
+def get_overview_data(user_id: str, days: int = 7) -> dict:
     """Get athlete training overview data (internal function).
 
     Args:
         user_id: Current authenticated user ID
+        days: Number of days to look back (default: 7)
 
     Returns:
         Overview response dictionary with connected, last_sync, data_quality, metrics, today
@@ -274,9 +276,14 @@ def get_overview_data(user_id: str) -> dict:
         logger.error(error_msg)
         raise TypeError(error_msg)
 
+    # Validate days parameter
+    if days < 1:
+        days = 7
+    days = min(days, 365)  # Cap at 1 year for performance
+
     request_time = time.time()
     now_str = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
-    logger.info(f"[API] /me/overview called at {now_str} for user_id={user_id}")
+    logger.info(f"[API] /me/overview called at {now_str} for user_id={user_id}, days={days}")
 
     # Get StravaAccount for user
     account = get_strava_account(user_id)
@@ -290,10 +297,10 @@ def get_overview_data(user_id: str) -> dict:
         # Count activities for this user
         result_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar()
         activity_count = result_count if result_count is not None else 0
-        daily_rows = get_daily_rows(session, user_id, days=60)
+        daily_rows = get_daily_rows(session, user_id, days=days)
 
     # Auto-trigger aggregation if needed
-    daily_rows = _maybe_trigger_aggregation(user_id, activity_count, daily_rows)
+    daily_rows = _maybe_trigger_aggregation(user_id, activity_count, daily_rows, days=days)
 
     # Log daily rows info for debugging
     date_range_str = f"{daily_rows[0]['date']} to {daily_rows[-1]['date']}" if daily_rows else "none"
@@ -316,7 +323,7 @@ def get_overview_data(user_id: str) -> dict:
 
 
 @router.get("/overview/debug")
-def get_overview_debug(user_id: str = Depends(get_current_user_id)):
+def get_overview_debug(user_id: str = Depends(get_current_user_id), days: int = 7):
     """Debug endpoint to visualize overview data directly in browser.
 
     Returns overview data with server timestamp for debugging frontend mismatches,
@@ -324,6 +331,7 @@ def get_overview_debug(user_id: str = Depends(get_current_user_id)):
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
+        days: Number of days to look back (default: 7)
 
     Returns:
         {
@@ -340,7 +348,7 @@ def get_overview_debug(user_id: str = Depends(get_current_user_id)):
     Access at: https://<your-render-url>/me/overview/debug
     """
     try:
-        overview = get_overview_data(user_id)
+        overview = get_overview_data(user_id, days=days)
         return {
             "server_time": datetime.now(timezone.utc).isoformat(),
             "overview": overview,
@@ -353,11 +361,12 @@ def get_overview_debug(user_id: str = Depends(get_current_user_id)):
 
 
 @router.get("/overview")
-def get_overview(user_id: str = Depends(get_current_user_id)):
+def get_overview(user_id: str = Depends(get_current_user_id), days: int = 7):
     """Get athlete training overview.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
+        days: Number of days to look back (default: 7, max: 365)
 
     Returns:
         {
@@ -385,7 +394,7 @@ def get_overview(user_id: str = Depends(get_current_user_id)):
         - Uses derived data (daily_training_summary), not raw activities
     """
     try:
-        return get_overview_data(user_id)
+        return get_overview_data(user_id, days=days)
     except HTTPException:
         raise
     except Exception as e:

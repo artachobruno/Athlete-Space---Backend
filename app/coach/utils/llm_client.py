@@ -112,7 +112,7 @@ class CoachLLMClient:
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
-            result_type=SeasonPlan,
+            output_type=SeasonPlan,
         )
 
         context_str = json.dumps(context, indent=2, default=str)
@@ -178,7 +178,7 @@ class CoachLLMClient:
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
-            result_type=WeeklyIntent,
+            output_type=WeeklyIntent,
         )
 
         context_str = json.dumps(context, indent=2, default=str)
@@ -240,7 +240,7 @@ class CoachLLMClient:
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
-            result_type=DailyDecision,
+            output_type=DailyDecision,
         )
 
         context_str = json.dumps(context, indent=2, default=str)

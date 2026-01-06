@@ -20,6 +20,70 @@ from app.integrations.strava.service import get_strava_client
 router = APIRouter(prefix="/activities", tags=["activities", "debug"])
 
 
+def _format_streams_for_frontend(streams_data: dict | None) -> dict | None:
+    """Format streams data for frontend consumption.
+
+    Converts raw Strava streams format to frontend-friendly structure with:
+    - GPS route points (latlng)
+    - Elevation over time (altitude)
+    - Pace over time (converted from velocity_smooth)
+
+    Args:
+        streams_data: Raw streams data from Strava
+
+    Returns:
+        Formatted streams data or None if not available
+    """
+    if not streams_data:
+        return None
+
+    # Extract time series (common to all streams)
+    time_series = streams_data.get("time", [])
+    if not time_series:
+        return None
+
+    # GPS route points (latlng)
+    latlng = streams_data.get("latlng", [])
+
+    # Elevation over time (altitude in meters)
+    altitude = streams_data.get("altitude", [])
+
+    # Pace calculation: velocity_smooth is in m/s, convert to min/km
+    # pace_min_per_km = 1000 / (velocity_m_per_s * 60) = 1000 / (velocity * 60)
+    velocity_smooth = streams_data.get("velocity_smooth", [])
+    pace_min_per_km: list[float | None] = []
+    for velocity in velocity_smooth:
+        if velocity and velocity > 0:
+            # Convert m/s to min/km: (1000 meters) / (velocity m/s * 60 seconds/min)
+            pace = (1000.0 / (velocity * 60.0)) if velocity > 0 else None
+            pace_min_per_km.append(round(pace, 2) if pace else None)
+        else:
+            pace_min_per_km.append(None)
+
+    # Heart rate (if available)
+    heartrate = streams_data.get("heartrate", [])
+
+    distance = streams_data.get("distance", [])
+
+    # Power (if available, in watts)
+    watts = streams_data.get("watts", [])
+
+    # Cadence (if available)
+    cadence = streams_data.get("cadence", [])
+
+    return {
+        "time": time_series,  # Time in seconds from start
+        "route_points": latlng,  # GPS coordinates: [[lat, lng], ...]
+        "elevation": altitude,  # Elevation in meters
+        "pace": pace_min_per_km,  # Pace in min/km (None for stopped periods)
+        "heartrate": heartrate,  # Heart rate in bpm
+        "distance": distance,  # Cumulative distance in meters
+        "power": watts,  # Power in watts (cycling)
+        "cadence": cadence,  # Cadence in rpm
+        "data_points": len(time_series),
+    }
+
+
 @router.get("")
 def get_activities(
     limit: int = Query(default=50, ge=1, le=100),
@@ -211,3 +275,86 @@ def fetch_activity_streams(
             "message": "Streams data not available for this activity",
             "streams_data": None,
         }
+
+
+@router.get("/{activity_id}/streams")
+def get_activity_streams(
+    activity_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Get formatted streams data for an activity (GPS, elevation, pace).
+
+    This endpoint returns time-series data formatted for frontend visualization:
+    - GPS route points (latlng) for map display
+    - Elevation over time for elevation profile
+    - Pace over time (converted to min/km) for pace chart
+    - Heart rate, power, cadence if available
+
+    Args:
+        activity_id: Activity UUID
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Formatted streams data with:
+        - time: List of time values in seconds from start
+        - route_points: List of [lat, lng] GPS coordinates
+        - elevation: List of elevation values in meters
+        - pace: List of pace values in min/km (None for stopped periods)
+        - heartrate: List of heart rate values in bpm (if available)
+        - distance: List of cumulative distance in meters
+        - power: List of power values in watts (if available)
+        - cadence: List of cadence values in rpm (if available)
+        - data_points: Number of data points
+
+    Frontend Usage:
+        GET /activities/{activity_id}/streams
+
+        Response structure:
+        {
+          "time": [0, 1, 2, ...],
+          "route_points": [[lat1, lng1], [lat2, lng2], ...],
+          "elevation": [100.5, 101.2, ...],
+          "pace": [5.2, 5.1, null, ...],  // min/km, null when stopped
+          "heartrate": [120, 125, ...],
+          "distance": [0, 10, 20, ...],
+          "power": [200, 210, ...],
+          "cadence": [85, 86, ...],
+          "data_points": 3600
+        }
+
+        All arrays are aligned by index - streams[i] corresponds to time[i].
+    """
+    logger.info(f"[ACTIVITIES] GET /activities/{activity_id}/streams called for user_id={user_id}")
+
+    with get_session() as session:
+        activity_result = session.execute(
+            select(Activity).where(
+                Activity.id == activity_id,
+                Activity.user_id == user_id,
+            )
+        ).first()
+
+        if not activity_result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Activity {activity_id} not found",
+            )
+
+        activity = activity_result[0]
+
+        if not activity.streams_data:
+            fetch_endpoint = f"/activities/{activity_id}/fetch-streams"
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Streams data not available for activity {activity_id}. Use POST {fetch_endpoint} to fetch it first.",
+            )
+
+        formatted_streams = _format_streams_for_frontend(activity.streams_data)
+
+        if not formatted_streams:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Streams data is empty or invalid for activity {activity_id}",
+            )
+
+        return formatted_streams

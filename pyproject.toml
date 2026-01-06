@@ -23,6 +23,9 @@ dependencies = [
     "litellm~=1.80",
     "pydantic-ai>=0.0.14",
     "tenacity<9.0.0,>=8.3.0",
+    "langchain>=0.1.16",
+    "langchain-core>=0.1.45",
+    "langchain-openai>=0.1.7",
 
     # --- Storage / Caching ---
     "redis~=7.0.1",

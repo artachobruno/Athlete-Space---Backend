@@ -1,14 +1,11 @@
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from loguru import logger
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
-from app.coach.config.models import USER_FACING_MODEL
 from app.coach.tools.session_planner import generate_race_build_sessions, save_planned_sessions
-from app.config.settings import settings
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
 _recent_calls: dict[str, datetime] = {}
@@ -38,7 +35,7 @@ class RaceInformation(BaseModel):
 
 
 def _extract_race_information(message: str) -> RaceInformation:
-    """Extract race information from user message using LLM.
+    """Extract race information from user message using simple parsing.
 
     Args:
         message: User message containing race details
@@ -46,48 +43,75 @@ def _extract_race_information(message: str) -> RaceInformation:
     Returns:
         RaceInformation with extracted fields (may have None values if not found)
     """
-    if not settings.openai_api_key:
-        logger.warning("OPENAI_API_KEY not set, cannot extract race information with LLM")
-        return RaceInformation()
+    message_lower = message.lower()
+    race_info = RaceInformation()
 
-    try:
-        llm = ChatOpenAI(
-            model=USER_FACING_MODEL,
-            temperature=0.0,
-            api_key=SecretStr(settings.openai_api_key),
-        )
+    # Extract distance
+    distance_patterns = {
+        "5K": ["5k", "5 k", "five k"],
+        "10K": ["10k", "10 k", "ten k"],
+        "Half Marathon": ["half marathon", "half-marathon", "21k", "21.1k", "13.1"],
+        "Marathon": ["marathon", "42k", "42.2k", "26.2"],
+        "Ultra": ["ultra", "ultramarathon", "50k", "100k"],
+    }
+    for distance, patterns in distance_patterns.items():
+        if any(pattern in message_lower for pattern in patterns):
+            race_info.distance = distance
+            break
 
-        system_prompt = (
-            "You are a race information extractor. Extract race details from user messages.\n\n"
-            "Extract:\n"
-            "- Race distance: 5K, 10K, Half Marathon, Marathon, or Ultra\n"
-            "- Race date: Convert to YYYY-MM-DD format. "
-            "Handle formats like: MM/DD, MM/DD/YYYY, MM-DD, 'April 5', 'April 5 2026', etc. "
-            "For MM/DD format, interpret as month/day (e.g., '04/05' = April 5). "
-            "If year is missing, assume current year ({current_date}) or next year if the date has already passed.\n"
-            '- Target time: Convert to HH:MM:SS format (e.g., "2:25" becomes "2:25:00", '
-            '"2h30m" becomes "2:30:00", "2 hours 25 minutes" becomes "2:25:00")\n\n'
-            "If information is not present or unclear, set the field to null.\n\n"
-            "Current date: {current_date}"
-        )
-        # LangChain template variable, not an f-string - suppress RUF027 false positive
-        human_msg = "{message}"  # noqa: RUF027
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", human_msg),
-        ])
+    # Extract date (simple patterns)
+    current_date = datetime.now(timezone.utc)
+    month_map = {
+        "january": 1,
+        "february": 2,
+        "march": 3,
+        "april": 4,
+        "may": 5,
+        "june": 6,
+        "july": 7,
+        "august": 8,
+        "september": 9,
+        "october": 10,
+        "november": 11,
+        "december": 12,
+    }
+    date_patterns = [
+        (r"(\d{4})-(\d{2})-(\d{2})", lambda m: datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)),
+        (r"(\d{1,2})/(\d{1,2})/(\d{4})", lambda m: datetime(int(m.group(3)), int(m.group(1)), int(m.group(2)), tzinfo=timezone.utc)),
+        (
+            r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})",
+            lambda m: datetime(int(m.group(3)), month_map[m.group(1).lower()], int(m.group(2)), tzinfo=timezone.utc),
+        ),
+    ]
 
-        current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        chain = prompt | llm.with_structured_output(RaceInformation)
-        result = chain.invoke({"message": message, "current_date": current_date})
-        race_info = RaceInformation.model_validate(result) if isinstance(result, dict) else result
+    for pattern, parser in date_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            try:
+                date_obj = parser(match)
+                if date_obj >= current_date:
+                    race_info.date = date_obj.strftime("%Y-%m-%d")
+                    break
+            except (ValueError, KeyError, IndexError):
+                continue
 
-        logger.info(
-            f"Extracted race information: distance={race_info.distance}, date={race_info.date}, target_time={race_info.target_time}"
-        )
-    except Exception as e:
-        logger.error(f"Error extracting race information with LLM: {e}", exc_info=True)
-        race_info = RaceInformation()
+    # Extract target time (simple patterns)
+    time_patterns = [
+        (r"(\d{1,2}):(\d{2}):(\d{2})", lambda m: f"{m.group(1)}:{m.group(2)}:{m.group(3)}"),
+        (r"(\d{1,2}):(\d{2})", lambda m: f"{m.group(1)}:{m.group(2)}:00"),
+        (r"(\d{1,2})h\s*(\d{1,2})m", lambda m: f"{m.group(1)}:{m.group(2)}:00"),
+        (r"(\d{1,2})\s*hours?\s*(\d{1,2})\s*minutes?", lambda m: f"{m.group(1)}:{m.group(2)}:00"),
+    ]
+    for pattern, parser in time_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            try:
+                race_info.target_time = parser(match)
+                break
+            except (ValueError, IndexError):
+                continue
+
+    logger.info(f"Extracted race information: distance={race_info.distance}, date={race_info.date}, target_time={race_info.target_time}")
     return race_info
 
 

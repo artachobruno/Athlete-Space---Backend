@@ -13,20 +13,18 @@ import json
 from pathlib import Path
 from typing import Any
 
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from loguru import logger
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
+from pydantic_ai import Agent
 
 from app.coach.config.models import USER_FACING_MODEL
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
-from app.config.settings import settings
 from app.core.constraints import (
     validate_daily_decision,
     validate_season_plan,
     validate_weekly_intent,
 )
+from app.services.llm.model import get_model
 
 # Maximum retries for LLM calls
 MAX_RETRIES = 2
@@ -66,22 +64,16 @@ def _load_prompt(filename: str) -> str:
     return prompt_path.read_text(encoding="utf-8")
 
 
-def _get_llm() -> ChatOpenAI:
-    """Get configured LLM instance.
+def _get_model():
+    """Get configured LLM model.
 
     Returns:
-        Configured ChatOpenAI instance
+        Configured pydantic_ai model instance
 
     Raises:
         ValueError: If OPENAI_API_KEY is not configured
     """
-    if not settings.openai_api_key:
-        raise ValueError("OPENAI_API_KEY is not set. Please configure it in your .env file or environment variables.")
-    return ChatOpenAI(
-        model=USER_FACING_MODEL,
-        temperature=0.2,
-        api_key=SecretStr(settings.openai_api_key),
-    )
+    return get_model("openai", USER_FACING_MODEL)
 
 
 class CoachLLMClient:
@@ -96,7 +88,7 @@ class CoachLLMClient:
 
     def __init__(self) -> None:
         """Initialize the client."""
-        self.llm = _get_llm()
+        self.model = _get_model()
 
     def generate_season_plan(self, context: dict[str, Any]) -> SeasonPlan:
         """Generate a season plan from LLM.
@@ -117,42 +109,32 @@ class CoachLLMClient:
             RuntimeError: If LLM call fails
         """
         prompt_text = _load_prompt("season_plan.txt")
-        parser = PydanticOutputParser(pydantic_object=SeasonPlan)
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", prompt_text),
-            (
-                "human",
-                "Context:\n{context}\n\n{format_instructions}",
-            ),
-        ])
-
-        chain = prompt | self.llm | parser
+        agent = Agent(
+            model=self.model,
+            system_prompt=prompt_text,
+            result_type=SeasonPlan,
+        )
 
         context_str = json.dumps(context, indent=2, default=str)
 
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating season plan (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = chain.invoke({
-                    "context": context_str,
-                    "format_instructions": parser.get_format_instructions(),
-                })
+                result = agent.run_sync(f"Context:\n{context_str}")
 
                 # Validate against constraints
-                errors = validate_season_plan(result)
+                errors = validate_season_plan(result.data)
                 if errors:
                     error_msg = "; ".join(errors)
                     if attempt < MAX_RETRIES:
                         logger.warning(f"Season plan validation failed: {error_msg}. Retrying...")
-                        # Add error feedback to context for retry
                         context["validation_errors"] = error_msg
                         context_str = json.dumps(context, indent=2, default=str)
                         continue
                     _raise_validation_error("Season plan", error_msg)
                 else:
                     logger.info("Season plan generated successfully")
-                    return result
+                    return result.data
 
             except ValidationError as e:
                 if attempt < MAX_RETRIES:
@@ -193,30 +175,21 @@ class CoachLLMClient:
             RuntimeError: If LLM call fails
         """
         prompt_text = _load_prompt("weekly_intent.txt")
-        parser = PydanticOutputParser(pydantic_object=WeeklyIntent)
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", prompt_text),
-            (
-                "human",
-                "Context:\n{context}\n\n{format_instructions}",
-            ),
-        ])
-
-        chain = prompt | self.llm | parser
+        agent = Agent(
+            model=self.model,
+            system_prompt=prompt_text,
+            result_type=WeeklyIntent,
+        )
 
         context_str = json.dumps(context, indent=2, default=str)
 
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating weekly intent (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = chain.invoke({
-                    "context": context_str,
-                    "format_instructions": parser.get_format_instructions(),
-                })
+                result = agent.run_sync(f"Context:\n{context_str}")
 
                 # Validate against constraints
-                errors = validate_weekly_intent(result, previous_volume)
+                errors = validate_weekly_intent(result.data, previous_volume)
                 if errors:
                     error_msg = "; ".join(errors)
                     if attempt < MAX_RETRIES:
@@ -227,7 +200,7 @@ class CoachLLMClient:
                     _raise_validation_error("Weekly intent", error_msg)
                 else:
                     logger.info("Weekly intent generated successfully")
-                    return result
+                    return result.data
 
             except ValidationError as e:
                 if attempt < MAX_RETRIES:
@@ -264,30 +237,21 @@ class CoachLLMClient:
             RuntimeError: If LLM call fails
         """
         prompt_text = _load_prompt("daily_decision.txt")
-        parser = PydanticOutputParser(pydantic_object=DailyDecision)
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", prompt_text),
-            (
-                "human",
-                "Context:\n{context}\n\n{format_instructions}",
-            ),
-        ])
-
-        chain = prompt | self.llm | parser
+        agent = Agent(
+            model=self.model,
+            system_prompt=prompt_text,
+            result_type=DailyDecision,
+        )
 
         context_str = json.dumps(context, indent=2, default=str)
 
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating daily decision (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = chain.invoke({
-                    "context": context_str,
-                    "format_instructions": parser.get_format_instructions(),
-                })
+                result = agent.run_sync(f"Context:\n{context_str}")
 
                 # Validate against constraints
-                errors = validate_daily_decision(result)
+                errors = validate_daily_decision(result.data)
                 if errors:
                     error_msg = "; ".join(errors)
                     if attempt < MAX_RETRIES:
@@ -298,7 +262,7 @@ class CoachLLMClient:
                     _raise_validation_error("Daily decision", error_msg)
                 else:
                     logger.info("Daily decision generated successfully")
-                    return result
+                    return result.data
 
             except ValidationError as e:
                 if attempt < MAX_RETRIES:

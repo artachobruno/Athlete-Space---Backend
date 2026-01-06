@@ -1,14 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from loguru import logger
-from pydantic import SecretStr
 from sqlalchemy import select
 
-from app.coach.config.models import USER_FACING_MODEL
 from app.coach.schemas.athlete_state import AthleteState
-from app.config.settings import settings
+from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import Activity
 from app.db.session import get_session
 
@@ -159,91 +156,66 @@ def _build_athlete_state_string(state: AthleteState) -> str:
     return athlete_state_str
 
 
-def _generate_llm_recommendation(state: AthleteState, context_string: str) -> str:
-    """Generate session recommendation using LLM.
+def _generate_daily_decision_recommendation(state: AthleteState, context_string: str) -> str:
+    """Generate session recommendation using daily_decision via llm_client.
 
     Args:
         state: Current athlete training state
         context_string: Context string about recent training history
 
     Returns:
-        Recommendation string from LLM
+        Recommendation string from daily_decision
     """
-    system_prompt = """You are Virtus Coach, an elite endurance training intelligence system.
+    try:
+        client = CoachLLMClient()
 
-Your role is to recommend today's training session based on the athlete's current training state and recent training history.
+        # Build context for daily_decision
+        context: dict[str, Any] = {
+            "athlete_state": state.model_dump(),
+            "training_history": context_string if context_string else "No recent training history",
+            "yesterday_training": context_string.split(" | ", maxsplit=1)[0] if context_string and " | " in context_string else "Unknown",
+            "day_context": {
+                "day_of_week": datetime.now(timezone.utc).strftime("%A"),
+                "time_of_year": datetime.now(timezone.utc).strftime("%B"),
+            },
+        }
 
-Consider:
-- Training Stress Balance (TSB): Negative values indicate fatigue, positive values indicate freshness
-- Chronic Training Load (CTL): Long-term fitness level
-- Acute Training Load (ATL): Recent training load
-- Load trends: Are they building, maintaining, or recovering?
-- Recent training history: What have they been doing?
-- Days since rest: How long since their last rest day?
-- Confidence: How much data is available?
+        decision = client.generate_daily_decision(context)
 
-Provide a clear, actionable recommendation that includes:
-1. Brief context about their current state (if relevant)
-2. A specific session recommendation with:
-   - Session type (easy run, tempo, intervals, rest, etc.)
-   - Duration or structure
-   - Intensity guidance
-   - Any specific considerations
+        # Format the decision as a recommendation string
+        recommendation_parts = []
+        if decision.explanation:
+            recommendation_parts.append(decision.explanation)
+        if decision.session_type:
+            recommendation_parts.append(f"Session type: {decision.session_type}")
+        if decision.volume_hours:
+            recommendation_parts.append(f"Duration: {decision.volume_hours:.1f} hours")
+        if decision.intensity_focus:
+            recommendation_parts.append(f"Intensity: {decision.intensity_focus}")
 
-Be concise, practical, and coach-like. Avoid explaining metrics - just provide the recommendation."""
-
-    athlete_state_str = _build_athlete_state_string(state)
-
-    user_prompt = athlete_state_str
-    if context_string:
-        user_prompt += f"\nRecent Training History:\n{context_string}\n"
-    user_prompt += "\nRecommend today's training session:"
-
-    llm = ChatOpenAI(
-        model=USER_FACING_MODEL,
-        temperature=0.3,
-        api_key=SecretStr(settings.openai_api_key),
-    )
-
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("human", user_prompt),
-    ])
-
-    chain = prompt | llm
-    result = chain.invoke({})
-
-    # Extract content from LLM response
-    if hasattr(result, "content"):
-        content = result.content
-        if isinstance(content, str):
-            return content
-        return str(content)
-    return str(result)
+        return "\n".join(recommendation_parts) if recommendation_parts else decision.explanation or "No recommendation available"
+    except Exception as e:
+        logger.error(f"Error generating daily decision: {e}", exc_info=True)
+        return "[CLARIFICATION] daily_decision_generation_failed"
 
 
 def recommend_next_session(state: AthleteState, user_id: str | None = None) -> str:
-    """Recommend today's session based on fatigue, load balance, and historical data using LLM.
+    """Recommend today's session using daily_decision via llm_client.
 
     Args:
         state: Current athlete training state
         user_id: Optional user ID to query historical activities
 
     Returns:
-        Recommendation string with session details
+        Recommendation string with session details or clarification request
     """
     logger.info(
         f"Tool recommend_next_session called (TSB={state.tsb:.1f}, CTL={state.ctl:.1f}, "
         f"confidence={state.confidence:.2f}, user_id={'provided' if user_id else 'not provided'})"
     )
 
-    if not settings.openai_api_key:
-        logger.warning("OPENAI_API_KEY not set, cannot generate session recommendation with LLM")
-        return (
-            "I'd love to recommend today's session! To provide the best guidance, please ensure "
-            "OpenAI API key is configured. Syncing your Strava activities will also help me provide "
-            "personalized recommendations."
-        )
+    if state.confidence < 0.1:
+        return "[CLARIFICATION] athlete_state_confidence_low"
 
     # Get historical context if user_id is available
     context_string = ""
@@ -257,13 +229,10 @@ def recommend_next_session(state: AthleteState, user_id: str | None = None) -> s
             logger.warning(f"Error fetching activities: {e}, proceeding without historical context")
 
     try:
-        recommendation = _generate_llm_recommendation(state, context_string)
-        logger.info("Generated session recommendation using LLM")
+        recommendation = _generate_daily_decision_recommendation(state, context_string)
+        logger.info("Generated session recommendation using daily_decision")
     except Exception as e:
-        logger.error(f"Error generating session recommendation with LLM: {e}", exc_info=True)
-        return (
-            "I encountered an error generating your session recommendation. "
-            "Please try again or ask a more specific question about your training."
-        )
+        logger.error(f"Error generating session recommendation: {e}", exc_info=True)
+        return "[CLARIFICATION] daily_decision_generation_failed"
     else:
         return recommendation

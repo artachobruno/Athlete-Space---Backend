@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from loguru import logger
 
-from app.coach.agents.simple_agent import run_coach_chain
-from app.coach.services.state_builder import build_athlete_state
 from app.coach.utils.context_builder import build_coach_context
 
 
@@ -40,43 +38,10 @@ def get_coach_advice(overview_payload: dict) -> dict:
         logger.info(f"Coach gated: data_quality={data_quality}")
         return _get_static_message(data_quality)
 
-    # Data quality is ok - call LLM
-    logger.info("Coach data quality OK - calling LLM via run_coach_chain")
-
-    # Build athlete state from context
-    logger.info("Extracting metrics from context")
-    metrics = context["metrics"]
-
-    # Build minimal daily_load for state_builder (it needs some data)
-    # Use a simple pattern based on current metrics
-    # Note: build_athlete_state will calculate load_trend internally from daily_load
-    logger.info("Building daily_load approximation")
-    daily_load = [metrics["ctl_today"] / 7.0] * 14  # Approximate daily load
-
-    logger.info("Building athlete state for LLM coach chain")
-    athlete_state = build_athlete_state(
-        ctl=metrics["ctl_today"],
-        atl=metrics["atl_today"],
-        tsb=metrics["tsb_today"],
-        daily_load=daily_load,
-        days_to_race=None,
-    )
-    logger.info(f"Athlete state built (CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f})")
-
-    try:
-        logger.info("Calling LLM coach chain (run_coach_chain)")
-        coach_response = run_coach_chain(athlete_state)
-        logger.info(
-            "LLM coach response generated successfully",
-            risk_level=coach_response.risk_level,
-            intervention=coach_response.intervention,
-        )
-        return coach_response.model_dump()
-    except Exception as e:
-        logger.error(f"Error calling LLM coach chain: {type(e).__name__}: {e}", exc_info=True)
-        # Fallback to static message on LLM error
-        logger.warning("Falling back to static message due to LLM error")
-        return _get_static_message("insufficient")
+    # Data quality is ok - return static message
+    # Note: LLM calls should go through orchestrator, not this service
+    logger.info("Coach data quality OK - returning static message")
+    return _get_static_message("ok")
 
 
 def _get_static_message(data_quality: str) -> dict:

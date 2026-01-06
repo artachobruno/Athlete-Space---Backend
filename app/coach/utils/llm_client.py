@@ -19,7 +19,7 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import SecretStr, ValidationError
 
-from app.coach.core.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.config.settings import settings
 from app.core.constraints import (
     validate_daily_decision,

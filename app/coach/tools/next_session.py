@@ -6,7 +6,7 @@ from loguru import logger
 from pydantic import SecretStr
 from sqlalchemy import select
 
-from app.coach.core.models import AthleteState
+from app.coach.schemas.athlete_state import AthleteState
 from app.config.settings import settings
 from app.db.models import Activity
 from app.db.session import get_session

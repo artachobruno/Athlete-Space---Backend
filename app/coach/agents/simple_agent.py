@@ -4,9 +4,9 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import SecretStr
 
-from app.coach.core.instructions import COACH_AGENT_INSTRUCTIONS
-from app.coach.core.models import AthleteState
-from app.coach.core.responses import CoachAgentResponse
+from app.coach.runtime.instructions import COACH_AGENT_INSTRUCTIONS
+from app.coach.schemas.athlete_state import AthleteState
+from app.coach.schemas.responses import CoachAgentResponse
 from app.config.settings import settings
 
 if not settings.openai_api_key:

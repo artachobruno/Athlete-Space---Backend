@@ -9,29 +9,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from loguru import logger
 
+from app.analytics.api import router as analytics_router
 from app.api.activities.activities import router as activities_router
 from app.api.admin.admin_activities import router as admin_activities_router
 from app.api.admin.admin_ingestion_status import router as admin_ingestion_router
 from app.api.admin.admin_retry import router as admin_retry_router
-from app.api.analytics.analytics import router as analytics_router
 from app.api.auth.auth import router as auth_router
 from app.api.auth.auth_strava import router as auth_strava_router
-from app.api.calendar.calendar import router as calendar_router
-from app.api.coach.coach import router as coach_router
-from app.api.coach.coach_chat import router as coach_chat_router
-from app.api.ingestion.ingestion_strava import router as ingestion_strava_router
 from app.api.integrations.integrations_strava import router as integrations_strava_router
 from app.api.intelligence.intelligence import router as intelligence_router
 from app.api.strava.strava import router as strava_router
 from app.api.training.state import router as state_router
 from app.api.training.training import router as training_router
 from app.api.user.me import router as me_router
-from app.api.webhooks.webhooks import router as webhooks_router
+from app.calendar.api import router as calendar_router
+from app.coach.api import router as coach_router
+from app.coach.api_chat import router as coach_chat_router
 from app.config.settings import settings
+from app.core.logger import setup_logger
 from app.db.models import Base
 from app.db.session import engine
-from app.services.ingestion.sync_scheduler import sync_tick
-from app.utils.logger import setup_logger
+from app.ingestion.api import router as ingestion_strava_router
+from app.ingestion.sync_scheduler import sync_tick
+from app.webhooks.strava import router as webhooks_router
 from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_source_default import migrate_activities_source_default

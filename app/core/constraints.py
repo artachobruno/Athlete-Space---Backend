@@ -4,7 +4,7 @@ These are validation rules that constrain LLM outputs.
 They do NOT generate outputs - they only validate them.
 """
 
-from app.coach.core.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 
 # Volume bounds (hours per week)
 MAX_WEEKLY_VOLUME_HOURS = 30.0

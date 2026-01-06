@@ -7,7 +7,7 @@ route requests to the appropriate coaching tools based on user intent.
 from loguru import logger
 from pydantic import SecretStr
 
-from app.coach.core.models import AthleteState
+from app.coach.schemas.athlete_state import AthleteState
 from app.coach.tools.add_workout import add_workout
 from app.coach.tools.adjust_load import adjust_training_load
 from app.coach.tools.explain_state import explain_training_state

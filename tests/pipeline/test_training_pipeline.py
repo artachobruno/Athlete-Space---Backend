@@ -1,6 +1,6 @@
 import datetime as dt
 
-from models.activity import ActivityRecord
+from app.state.models import ActivityRecord
 from pipeline.training_pipeline import StubTrainingAgent, run_training_pipeline
 
 

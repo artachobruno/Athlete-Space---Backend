@@ -1,7 +1,7 @@
 import datetime as dt
 
-from models.activity import ActivityRecord
-from state.training_state_builder import build_training_state
+from app.state.builder import build_training_state
+from app.state.models import ActivityRecord
 
 
 def make_activity(

@@ -10,7 +10,7 @@ from typing import Any
 
 from loguru import logger
 
-from app.coach.core.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.services.intelligence.store import IntentStore
 
 

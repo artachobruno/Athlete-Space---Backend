@@ -1,9 +1,9 @@
 from loguru import logger
 from pydantic import SecretStr
 
-from app.coach.core.models import AthleteState
-from app.coach.routing.intent_router import route_intent
-from app.coach.routing.intents import CoachIntent
+from app.coach.runtime.intents import CoachIntent
+from app.coach.runtime.router import route_intent
+from app.coach.schemas.athlete_state import AthleteState
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.add_workout import add_workout
 from app.coach.tools.adjust_load import adjust_training_load
@@ -16,7 +16,7 @@ from app.coach.tools.plan_week import plan_week
 from app.coach.tools.run_analysis import run_analysis
 from app.coach.tools.share_report import share_report
 from app.config.settings import settings
-from app.services.state.api_helpers import get_training_data, get_user_id_from_athlete_id
+from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 
 try:
     from langchain_core.messages import HumanMessage

@@ -4,9 +4,8 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Protocol
 
-from models.activity import ActivityRecord
-from models.training_state import TrainingState
-from state.training_state_builder import build_training_state
+from app.state.builder import build_training_state
+from app.state.models import ActivityRecord, TrainingState
 
 # -------------------------------------------------------------------
 # Agent Interface (Contract)

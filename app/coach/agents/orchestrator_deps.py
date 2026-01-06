@@ -5,7 +5,7 @@ Provides context and dependencies needed by the pydantic_ai agent.
 
 from pydantic import BaseModel
 
-from app.coach.core.models import AthleteState
+from app.coach.schemas.athlete_state import AthleteState
 
 
 class CoachDeps(BaseModel):

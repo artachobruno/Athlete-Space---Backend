@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import datetime as dt
 
-from integrations.strava.client import StravaClient
-from integrations.strava.mapper import map_strava_activity
-from models.activity import ActivityRecord
+from app.integrations.strava.client import StravaClient
+from app.integrations.strava.schemas import map_strava_activity
+from app.state.models import ActivityRecord
 
 
 def ingest_strava_activities(

@@ -6,8 +6,8 @@ import json
 from fastapi import APIRouter, Form
 from fastapi.responses import HTMLResponse
 
+from app.integrations.strava.client import StravaClient
 from ingestion.strava_ingestion import ingest_strava_activities
-from integrations.strava.client import StravaClient
 
 router = APIRouter()
 

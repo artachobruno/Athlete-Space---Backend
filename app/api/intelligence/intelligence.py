@@ -11,8 +11,8 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
-from app.coach.core.contracts import DailyDecisionResponse, SeasonPlanResponse, WeeklyIntentResponse
-from app.coach.core.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.contracts import DailyDecisionResponse, SeasonPlanResponse, WeeklyIntentResponse
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
 from app.services.intelligence.failures import IntelligenceFailureHandler

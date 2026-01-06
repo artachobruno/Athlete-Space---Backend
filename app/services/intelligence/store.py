@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy import select
 
-from app.coach.core.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.db.models import DailyDecision as DailyDecisionModel
 from app.db.models import SeasonPlan as SeasonPlanModel
 from app.db.models import WeeklyIntent as WeeklyIntentModel

@@ -9,8 +9,8 @@ from loguru import logger
 
 from app.db.models import StravaAuth
 from app.db.session import get_session
-from app.services.ingestion.save_activities import save_activity_record
-from app.services.integrations.strava.schemas import StravaActivity, map_strava_activity
+from app.ingestion.save_activities import save_activity_record
+from app.integrations.strava.schemas import StravaActivity, map_strava_activity
 
 
 def _raise_type_error_for_raw_data(raw: dict | None) -> None:

@@ -1,8 +1,8 @@
 import datetime as dt
 
+from app.integrations.strava.client import StravaClient
+from app.integrations.strava.schemas import StravaActivity
 from ingestion.strava_ingestion import ingest_strava_activities
-from integrations.strava.client import StravaClient
-from integrations.strava.models import StravaActivity
 
 
 class FakeStravaClient(StravaClient):

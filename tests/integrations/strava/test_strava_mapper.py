@@ -1,7 +1,6 @@
 import datetime as dt
 
-from integrations.strava.mapper import map_strava_activity
-from integrations.strava.models import StravaActivity
+from app.integrations.strava.schemas import StravaActivity, map_strava_activity
 
 
 def test_strava_activity_mapping():

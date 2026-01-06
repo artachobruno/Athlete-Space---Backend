@@ -72,7 +72,8 @@ class IntentStore:
             next_version = (max_version or 0) + 1
 
             # Create new plan
-            plan_dict = plan.model_dump()
+            # Use mode='json' to serialize dates/datetimes to strings for JSON storage
+            plan_dict = plan.model_dump(mode="json")
             plan_dict["_context_hash"] = context_hash
             new_plan = SeasonPlanModel(
                 user_id=user_id,
@@ -171,7 +172,8 @@ class IntentStore:
             next_version = (max_version or 0) + 1
 
             # Create new intent
-            intent_dict = intent.model_dump()
+            # Use mode='json' to serialize dates/datetimes to strings for JSON storage
+            intent_dict = intent.model_dump(mode="json")
             intent_dict["_context_hash"] = context_hash
             new_intent = WeeklyIntentModel(
                 user_id=user_id,
@@ -277,7 +279,8 @@ class IntentStore:
             next_version = (max_version or 0) + 1
 
             # Create new decision
-            decision_dict = decision.model_dump()
+            # Use mode='json' to serialize dates/datetimes to strings for JSON storage
+            decision_dict = decision.model_dump(mode="json")
             decision_dict["_context_hash"] = context_hash
             new_decision = DailyDecisionModel(
                 user_id=user_id,

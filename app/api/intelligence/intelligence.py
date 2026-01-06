@@ -249,10 +249,9 @@ def get_daily_decision(
 
             except Exception as e:
                 logger.error(
-                    f"Failed to generate daily decision on-demand: {e}",
-                    user_id=user_id,
-                    athlete_id=athlete_id,
-                    decision_date=decision_date.isoformat(),
+                    f"Failed to generate daily decision on-demand for "
+                    f"user_id={user_id}, athlete_id={athlete_id}, "
+                    f"decision_date={decision_date.isoformat()}: {e}",
                     exc_info=True,
                 )
                 # Diagnostic: Check if user has activities/data available

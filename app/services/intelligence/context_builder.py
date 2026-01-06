@@ -16,6 +16,20 @@ from app.db.session import get_session
 from app.services.intelligence.store import IntentStore
 
 
+def _normalize_datetime(dt: datetime) -> datetime:
+    """Normalize datetime to timezone-aware (UTC).
+
+    Args:
+        dt: Datetime that may be naive or aware
+
+    Returns:
+        Timezone-aware datetime (UTC)
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _build_athlete_state_from_overview(overview: dict[str, Any]) -> dict[str, Any]:
     """Build athlete state dict from overview data.
 
@@ -98,7 +112,7 @@ def _format_training_history(activities: list[Activity], days: int = 7) -> str:
         return "No recent training history"
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    recent = [a for a in activities if a.start_time >= since]
+    recent = [a for a in activities if _normalize_datetime(a.start_time) >= since]
 
     if not recent:
         return f"No activities in the last {days} days"
@@ -122,7 +136,7 @@ def _get_yesterday_training(activities: list[Activity]) -> str:
     yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_end = yesterday_start + timedelta(days=1)
 
-    yesterday_activities = [a for a in activities if yesterday_start <= a.start_time < yesterday_end]
+    yesterday_activities = [a for a in activities if yesterday_start <= _normalize_datetime(a.start_time) < yesterday_end]
 
     if not yesterday_activities:
         return "Rest day"

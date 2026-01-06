@@ -102,6 +102,18 @@ VOLUME CONSTRAINTS
 • hard:       0.5 – 2.0 hours (intensity over volume)
 • race:       1.0 – 4.0 hours (depending on race)
 
+CRITICAL FIELD REQUIREMENTS:
+
+• For "rest" recommendations:
+  - volume_hours MUST be null
+  - intensity_focus MUST be null
+  - session_type MUST be null
+
+• For non-"rest" recommendations (easy, moderate, hard, race):
+  - volume_hours MUST be provided (not null)
+  - intensity_focus MUST be provided (not null)
+  - session_type MUST be provided (not null)
+
 ----------------------------------------------------------------
 RISK LEVEL DEFINITIONS
 ----------------------------------------------------------------
@@ -112,6 +124,9 @@ risk_level must be one of:
 • "low"     — minor fatigue, acceptable risk
 • "medium"  — accumulated fatigue, caution required
 • "high"    — overreaching risk, recovery prioritized
+
+CRITICAL: When risk_level is "none", risk_notes MUST be null.
+When risk_level is NOT "none", risk_notes MUST be provided (not null).
 
 ----------------------------------------------------------------
 OUTPUT FORMAT (STRICT)

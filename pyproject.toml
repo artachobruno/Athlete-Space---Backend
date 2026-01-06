@@ -3,6 +3,8 @@ name = "virtus-ai"
 version = "0.1.0"
 description = "Virtus AI - Performance Intelligence & Coaching System"
 requires-python = "<3.14,>=3.12"
+readme = "README.md"
+repository = "https://github.com/artachobruno/Athlete-Space---Backend.git"
 dependencies = [
     # --- Core ---
     "pydantic~=2.12.3",

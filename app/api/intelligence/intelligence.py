@@ -8,20 +8,38 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.dependencies.auth import get_current_user_id
 from app.coach.schemas.contracts import DailyDecisionResponse, SeasonPlanResponse, WeeklyIntentResponse
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
+from app.services.intelligence.context_builder import build_daily_decision_context
 from app.services.intelligence.failures import IntelligenceFailureHandler
 from app.services.intelligence.store import IntentStore
+from app.services.intelligence.triggers import RegenerationTriggers
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
 
 store = IntentStore()
 failure_handler = IntelligenceFailureHandler()
+triggers = RegenerationTriggers()
+
+
+def _raise_unavailable_error(decision_date: date) -> None:
+    """Raise HTTPException for unavailable daily decision.
+
+    Args:
+        decision_date: Decision date
+
+    Raises:
+        HTTPException: Always raises with 503 status
+    """
+    raise HTTPException(
+        status_code=503,
+        detail=f"Daily decision not available for {decision_date.isoformat()}. The coach will generate it soon.",
+    )
 
 
 def _get_athlete_id_from_user(user_id: str) -> int:
@@ -196,20 +214,62 @@ def get_daily_decision(
         # Try fallback to inactive decision
         decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=False)
         if decision_model is None:
-            # Diagnostic: Check if user has activities/data available
-            with get_session() as session:
-                activity_count = session.execute(select(Activity).where(Activity.user_id == user_id)).scalars().all()
-                activity_count = len(list(activity_count))
-
-            logger.warning(
-                f"Daily decision not found for user_id={user_id}, athlete_id={athlete_id}, "
-                f"decision_date={decision_date.isoformat()}, activity_count={activity_count}"
+            # Generate on-demand if missing
+            logger.info(
+                f"Daily decision not found, generating on-demand for user_id={user_id}, "
+                f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
             )
 
-            raise HTTPException(
-                status_code=503,
-                detail=f"Daily decision not available for {decision_date.isoformat()}. The coach will generate it soon.",
-            )
+            try:
+                # Build context for daily decision
+                context = build_daily_decision_context(user_id, athlete_id, decision_date)
+
+                # Get weekly intent ID if available
+                week_start = decision_date - timedelta(days=decision_date.weekday())
+                week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+                weekly_intent_model = store.get_latest_weekly_intent(athlete_id, week_start_dt, active_only=True)
+                weekly_intent_id = weekly_intent_model.id if weekly_intent_model else None
+
+                # Generate and save the decision
+                decision_id = triggers.maybe_regenerate_daily_decision(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    decision_date=decision_date,
+                    context=context,
+                    weekly_intent_id=weekly_intent_id,
+                )
+
+                if decision_id:
+                    # Retrieve the newly created decision
+                    decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=True)
+                    logger.info(f"Successfully generated daily decision on-demand, decision_id={decision_id}")
+                else:
+                    # Generation was skipped (context unchanged), but we still don't have a decision
+                    _raise_unavailable_error(decision_date)
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to generate daily decision on-demand: {e}",
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    decision_date=decision_date.isoformat(),
+                    exc_info=True,
+                )
+                # Diagnostic: Check if user has activities/data available
+                with get_session() as session:
+                    activity_count = (
+                        session.execute(select(func.count()).select_from(Activity).where(Activity.user_id == user_id)).scalar() or 0
+                    )
+
+                logger.warning(
+                    f"Daily decision generation failed for user_id={user_id}, athlete_id={athlete_id}, "
+                    f"decision_date={decision_date.isoformat()}, activity_count={activity_count}"
+                )
+
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Daily decision not available for {decision_date.isoformat()}. The coach will generate it soon.",
+                ) from e
 
     try:
         decision = DailyDecision(**decision_model.decision_data)

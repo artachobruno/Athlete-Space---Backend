@@ -3,6 +3,7 @@ import os
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +32,7 @@ from app.db.models import Base
 from app.db.session import engine
 from app.ingestion.api import router as ingestion_strava_router
 from app.ingestion.sync_scheduler import sync_tick
+from app.services.intelligence.scheduler import generate_daily_decisions_for_all_users
 from app.webhooks.strava import router as webhooks_router
 from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
@@ -167,8 +169,17 @@ async def lifespan(_app: FastAPI):
         name="Strava Background Sync",
         replace_existing=True,
     )
+    # Run daily decision generation overnight at 2 AM UTC
+    scheduler.add_job(
+        generate_daily_decisions_for_all_users,
+        trigger=CronTrigger(hour=2, minute=0),
+        id="daily_decision_generation",
+        name="Daily Decision Generation",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info("[SCHEDULER] Started automatic background sync scheduler (runs every 6 hours)")
+    logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
 
     # Run initial sync tick
     try:

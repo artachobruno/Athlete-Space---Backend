@@ -1,10 +1,12 @@
 import time
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
-from sqlalchemy import func, select, text
+from sqlalchemy import Row, func, select, text
+from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
 from app.api.user.me import get_overview_data
@@ -12,9 +14,183 @@ from app.coach.services.coach_service import get_coach_advice
 from app.config.settings import settings
 from app.db.models import Activity
 from app.db.session import SessionLocal, get_session
+from app.metrics.load_computation import compute_activity_tss
 from app.metrics.training_load import calculate_ctl_atl_tsb
 
 router = APIRouter(prefix="/state", tags=["state"])
+
+
+def _normalize_tss(tss: float) -> float:
+    """Normalize TSS to -100 to 100 scale.
+
+    TSS typically ranges from 0-200+ per day.
+    Formula: (TSS / 200) * 200 - 100 = TSS - 100, clamped to -100 to 100.
+
+    Args:
+        tss: Training Stress Score (typically 0-200+)
+
+    Returns:
+        Normalized TSS in -100 to 100 range
+    """
+    normalized = tss - 100.0
+    return round(max(-100.0, min(100.0, normalized)), 1)
+
+
+def _normalize_metric(value: float, max_value: float = 100.0) -> float:
+    """Normalize a metric (CTL/ATL) to -100 to 100 scale.
+
+    Args:
+        value: Metric value (typically 0-max_value)
+        max_value: Maximum expected value for normalization (default 100)
+
+    Returns:
+        Normalized value in -100 to 100 range
+    """
+    normalized = (value / max_value) * 200.0 - 100.0
+    return round(max(-100.0, min(100.0, normalized)), 1)
+
+
+def _process_activities_for_tss(activities_query: Sequence[Row]) -> dict[str, dict[str, float]]:
+    """Process activities and calculate daily TSS and hours.
+
+    Args:
+        activities_query: Sequence of activity rows from database query
+
+    Returns:
+        Dictionary mapping date -> {"hours": float, "tss": float}
+    """
+    daily_data: dict[str, dict[str, float]] = {}
+    for row in activities_query:
+        activity_date = row.start_time.date().isoformat()
+        if activity_date not in daily_data:
+            daily_data[activity_date] = {"hours": 0.0, "tss": 0.0}
+
+        daily_data[activity_date]["hours"] += row.duration_seconds / 3600.0
+
+        # Calculate TSS for this activity
+        activity_obj = Activity(
+            id=row.id,
+            user_id="",
+            athlete_id="",
+            strava_activity_id="",
+            start_time=row.start_time,
+            type=row.type,
+            duration_seconds=row.duration_seconds,
+            distance_meters=row.distance_meters or 0.0,
+            elevation_gain_meters=row.elevation_gain_meters or 0.0,
+            raw_json=row.raw_json,
+        )
+        activity_tss = compute_activity_tss(activity_obj)
+        daily_data[activity_date]["tss"] += activity_tss
+
+    return daily_data
+
+
+def _normalize_tsb_range(tsb_values: list[float]) -> list[float]:
+    """Normalize TSB values to -100 to 100 scale based on their range.
+
+    TSB can be negative or positive, so we normalize based on the actual range
+    in the dataset.
+
+    Args:
+        tsb_values: List of TSB values
+
+    Returns:
+        List of normalized TSB values in -100 to 100 range
+    """
+    if not tsb_values:
+        return []
+
+    # Find the range in the data
+    min_tsb = min(tsb_values)
+    max_tsb = max(tsb_values)
+    range_tsb = max_tsb - min_tsb
+
+    if range_tsb == 0:
+        # All values are the same, center at 0
+        return [0.0] * len(tsb_values)
+
+    # Normalize to -100 to 100
+    normalized = []
+    for tsb in tsb_values:
+        # Map from [min, max] to [-100, 100]
+        normalized_value = ((tsb - min_tsb) / range_tsb) * 200.0 - 100.0
+        normalized.append(round(max(-100.0, min(100.0, normalized_value)), 1))
+
+    return normalized
+
+
+def _get_debug_result(db: Session, days: int) -> dict:
+    """Get debug result for training load endpoint.
+
+    Args:
+        db: Database session
+        days: Number of days to look back
+
+    Returns:
+        Debug result dictionary
+    """
+    total_count = db.execute(text("SELECT COUNT(*) as cnt FROM activities")).fetchone()
+    sample_rows = db.execute(text("SELECT id, start_time, duration_seconds FROM activities LIMIT 5")).fetchall()
+    return {
+        "debug": {
+            "total_activities": total_count[0] if total_count else 0,
+            "sample_rows": [dict(r._mapping) for r in sample_rows] if sample_rows else [],
+            "query_filter": f"start_time >= {datetime.now(timezone.utc) - timedelta(days=days)}",
+        }
+    }
+
+
+def _normalize_all_metrics(
+    daily_tss: list[float],
+    metrics: dict[str, list[float]],
+) -> dict[str, list[float]]:
+    """Normalize all training load metrics to -100 to 100 scale.
+
+    Args:
+        daily_tss: List of daily TSS values
+        metrics: Dictionary with "ctl", "atl", "tsb" lists
+
+    Returns:
+        Dictionary with normalized "tss", "ctl", "atl", "tsb" lists
+    """
+    return {
+        "tss": [_normalize_tss(tss) for tss in daily_tss],
+        "ctl": [_normalize_metric(ctl, max_value=100.0) for ctl in metrics["ctl"]],
+        "atl": [_normalize_metric(atl, max_value=100.0) for atl in metrics["atl"]],
+        "tsb": _normalize_tsb_range(metrics["tsb"]),
+    }
+
+
+def _build_training_load_response(
+    dates: list[str],
+    daily_load: list[float],
+    normalized_metrics: dict[str, list[float]],
+    weekly_data: dict[str, list],
+) -> dict:
+    """Build the training load response dictionary.
+
+    Args:
+        dates: List of date strings
+        daily_load: List of daily training hours
+        normalized_metrics: Dictionary with normalized "tss", "ctl", "atl", "tsb"
+        weekly_data: Dictionary with weekly volume data
+
+    Returns:
+        Complete response dictionary
+    """
+    return {
+        "dates": dates,
+        "daily_load": daily_load,
+        "daily_tss": normalized_metrics["tss"],
+        "ctl": normalized_metrics["ctl"],
+        "atl": normalized_metrics["atl"],
+        "tsb": normalized_metrics["tsb"],
+        "weekly_dates": weekly_data["dates"],
+        "weekly_volume": weekly_data["volume"],
+        "weekly_rolling_avg": weekly_data["rolling_avg"],
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _calculate_weekly_volume(dates: list[str], daily_load: list[float]) -> dict[str, list]:
@@ -90,77 +266,93 @@ def debug_info():
 
 @router.get("/training-load")
 def training_load(days: int = 60, debug: bool = False):
-    """Get training load metrics (CTL, ATL, TSB).
+    """Get training load metrics (CTL, ATL, TSB, TSS) normalized to -100 to 100 scale.
+
+    All metrics (TSS, ATL, CTL, TSB) are normalized to a -100 to 100 scale for consistent visualization.
 
     Args:
         days: Number of days to look back (default: 60)
         debug: If True, return raw query results for debugging
+
+    Returns:
+        Dictionary with:
+        - dates: List of date strings (ISO format)
+        - daily_load: List of daily training hours (raw values)
+        - daily_tss: List of TSS values normalized to -100 to 100
+        - ctl: List of CTL values normalized to -100 to 100
+        - atl: List of ATL values normalized to -100 to 100
+        - tsb: List of TSB values normalized to -100 to 100
+        - weekly_dates: List of week start dates
+        - weekly_volume: List of weekly volume hours
+        - weekly_rolling_avg: List of 4-week rolling averages
+        - last_updated: ISO timestamp
+
+    Frontend Usage:
+        GET /state/training-load?days=60
+
+        Response structure:
+        {
+          "dates": ["2026-01-01", "2026-01-02", ...],
+          "daily_tss": [-50.0, 25.0, ...],  // -100 to 100 scale
+          "ctl": [-20.0, -15.0, ...],      // -100 to 100 scale
+          "atl": [10.0, 15.0, ...],         // -100 to 100 scale
+          "tsb": [-30.0, -30.0, ...],       // -100 to 100 scale
+          ...
+        }
+
+        All metrics are aligned by index with the dates array.
     """
     logger.info(f"Training load requested: days={days}, debug={debug}")
     db = SessionLocal()
 
-    # Debug: First check if we can connect and see any data at all
     if debug:
         logger.debug("Debug mode: fetching raw activity data")
-        total_count = db.execute(text("SELECT COUNT(*) as cnt FROM activities")).fetchone()
-        sample_rows = db.execute(text("SELECT id, start_time, duration_seconds FROM activities LIMIT 5")).fetchall()
-        result = {
-            "debug": {
-                "total_activities": total_count[0] if total_count else 0,
-                "sample_rows": [dict(r._mapping) for r in sample_rows] if sample_rows else [],
-                "query_filter": f"start_time >= {datetime.now(timezone.utc) - timedelta(days=days)}",
-            }
-        }
+        result = _get_debug_result(db, days)
         logger.debug(f"Debug result: {result}")
         return result
 
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    # Convert to ISO format string for SQLite compatibility
-    since_str = since.isoformat()
+    since_str = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     logger.debug(f"Querying activities since: {since_str}")
 
     try:
-        rows = db.execute(
+        activities_query = db.execute(
             text(
                 """
                 SELECT
-                    date(start_time) as day,
-                    SUM(duration_seconds) / 3600.0 as hours
+                    id,
+                    start_time,
+                    type,
+                    duration_seconds,
+                    distance_meters,
+                    elevation_gain_meters,
+                    raw_json
                 FROM activities
                 WHERE start_time >= :since
-                GROUP BY day
-                ORDER BY day
+                ORDER BY start_time
                 """
             ),
             {"since": since_str},
         ).fetchall()
 
-        logger.info(f"Found {len(rows)} days with activity data")
+        logger.info(f"Found {len(activities_query)} activities")
 
-        dates = [r.day for r in rows]
-        daily_load = [r.hours for r in rows]
+        daily_data = _process_activities_for_tss(activities_query)
+        dates = sorted(daily_data.keys())
+        daily_load = [daily_data[date]["hours"] for date in dates]
+        daily_tss = [daily_data[date]["tss"] for date in dates]
 
-        # Calculate training load metrics using canonical computation rules
         metrics = calculate_ctl_atl_tsb(daily_load)
-
-        # Calculate weekly volume for bar chart
+        normalized_metrics = _normalize_all_metrics(daily_tss, metrics)
         weekly_data = _calculate_weekly_volume(dates, daily_load)
+        result = _build_training_load_response(dates, daily_load, normalized_metrics, weekly_data)
 
-        result = {
-            "dates": dates,
-            "daily_load": daily_load,
-            "ctl": metrics["ctl"],
-            "atl": metrics["atl"],
-            "tsb": metrics["tsb"],
-            "weekly_dates": weekly_data["dates"],
-            "weekly_volume": weekly_data["volume"],
-            "weekly_rolling_avg": weekly_data["rolling_avg"],
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-        }
-        tsb_list = metrics["tsb"]
-        tsb_min = min(tsb_list) if tsb_list else 0.0
-        tsb_max = max(tsb_list) if tsb_list else 0.0
-        logger.info(f"Training load calculated: {len(dates)} days, TSB range: {tsb_min:.1f} to {tsb_max:.1f}")
+        tsb_norm_min = min(normalized_metrics["tsb"]) if normalized_metrics["tsb"] else 0.0
+        tsb_norm_max = max(normalized_metrics["tsb"]) if normalized_metrics["tsb"] else 0.0
+        logger.info(
+            f"Training load calculated: {len(dates)} days, "
+            f"TSB normalized range: {tsb_norm_min:.1f} to {tsb_norm_max:.1f} "
+            f"(all metrics on -100 to 100 scale)"
+        )
     except Exception as e:
         logger.error(f"Error calculating training load: {e}")
         raise

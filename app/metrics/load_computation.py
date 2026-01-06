@@ -96,6 +96,85 @@ def compute_activity_load(activity: Activity) -> float:
     return round(dtl, 2)
 
 
+def compute_activity_tss(activity: Activity) -> float:
+    """Compute Training Stress Score (TSS) for a single activity.
+
+    TSS is a standardized metric (0-100+ scale) that quantifies training stress.
+    Formula: TSS = (duration x IF²) x 100
+    Where IF = Intensity Factor (0.0-1.0+)
+
+    For cycling: IF = normalized_power / FTP (if available)
+    For running: IF = HR-based or pace-based intensity
+    For other sports: IF = estimated from available metrics
+
+    Args:
+        activity: Activity record
+
+    Returns:
+        TSS score (float, typically 0-200, can exceed for very long/hard sessions)
+
+    Notes:
+        - TSS of 100 = 1 hour at FTP/threshold pace
+        - TSS < 50 = recovery/easy session
+        - TSS 50-100 = moderate session
+        - TSS > 100 = hard/long session
+    """
+    duration_hours = activity.duration_seconds / 3600.0
+
+    # Extract raw data for intensity estimation
+    raw_data = activity.raw_json or {}
+    avg_hr = raw_data.get("average_heartrate")
+    avg_power = raw_data.get("average_watts")
+    max_hr = raw_data.get("max_heartrate")
+    normalized_power = raw_data.get("weighted_average_watts")  # NP if available
+
+    activity_type = activity.type.lower()
+
+    # Calculate Intensity Factor (IF)
+    # IF ranges from 0.0 (rest) to 1.0+ (above threshold)
+    if activity_type in {"ride", "virtualride"} and normalized_power:
+        # For cycling with normalized power, estimate IF
+        # Assuming average FTP of 250W (will be personalized in Phase 2)
+        estimated_ftp = 250.0
+        intensity_factor = min(normalized_power / estimated_ftp, 1.5)  # Cap at 1.5x FTP
+    elif activity_type in {"ride", "virtualride"} and avg_power:
+        # Fallback: use average power with estimated FTP
+        estimated_ftp = 250.0
+        intensity_factor = min(avg_power / estimated_ftp, 1.5)
+    elif avg_hr and max_hr and max_hr > 0:
+        # HR-based IF (works for all sports)
+        hr_ratio = avg_hr / max_hr
+        # Map HR zones to IF: 50-60% = 0.5, 60-70% = 0.65, 70-80% = 0.8, 80-90% = 0.95, 90%+ = 1.1
+        if hr_ratio < 0.6:
+            intensity_factor = 0.5
+        elif hr_ratio < 0.7:
+            intensity_factor = 0.65
+        elif hr_ratio < 0.8:
+            intensity_factor = 0.8
+        elif hr_ratio < 0.9:
+            intensity_factor = 0.95
+        else:
+            intensity_factor = 1.1
+    else:
+        # Fallback: use the same intensity factor calculation as DTL
+        intensity_factor = _compute_intensity_factor(
+            activity_type=activity_type,
+            duration_hours=duration_hours,
+            distance_meters=activity.distance_meters,
+            avg_hr=avg_hr,
+            max_hr=max_hr,
+            avg_power=avg_power,
+            elevation_gain_meters=activity.elevation_gain_meters,
+        )
+        # Normalize to 0.0-1.0+ range for IF
+        intensity_factor = min(intensity_factor / 1.5, 1.2)  # Normalize our intensity factor to IF range
+
+    # TSS = (duration in hours x IF²) x 100
+    tss = (duration_hours * intensity_factor * intensity_factor) * 100.0
+
+    return round(tss, 1)
+
+
 def _compute_intensity_factor(
     *,
     activity_type: str,

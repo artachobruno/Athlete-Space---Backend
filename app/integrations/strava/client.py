@@ -191,6 +191,47 @@ class StravaClient:
         logger.info(f"[STRAVA_CLIENT] Fetched {len(all_activities)} total activities")
         return all_activities
 
+    @staticmethod
+    def _parse_streams_payload(
+        payload: dict | list,
+        activity_id: int,
+    ) -> dict[str, list] | None:
+        """Parse streams payload from Strava API.
+
+        Args:
+            payload: Response payload (dict or list format)
+            activity_id: Activity ID for logging
+
+        Returns:
+            Dictionary keyed by stream type, or None if invalid
+        """
+        streams_dict: dict[str, list] = {}
+
+        if isinstance(payload, dict):
+            # When key_by_type=true, Strava returns a dict keyed by stream type
+            streams_dict = payload
+        elif isinstance(payload, list):
+            # When key_by_type=false, Strava returns a list of stream objects
+            for stream in payload:
+                if not isinstance(stream, dict):
+                    logger.warning(
+                        f"[STRAVA_CLIENT] Unexpected stream type for activity {activity_id}: "
+                        f"expected dict, got {type(stream).__name__}, value: {str(stream)[:100]}"
+                    )
+                    continue
+
+                stream_type = stream.get("type")
+                if stream_type:
+                    streams_dict[stream_type] = stream.get("data", [])
+        else:
+            logger.error(
+                f"[STRAVA_CLIENT] Unexpected payload type for activity {activity_id}: "
+                f"expected dict or list, got {type(payload).__name__}, payload: {str(payload)[:200]}"
+            )
+            return None
+
+        return streams_dict
+
     def fetch_activity_streams(
         self,
         *,
@@ -261,13 +302,9 @@ class StravaClient:
                 logger.debug(f"[STRAVA_CLIENT] No streams data for activity {activity_id}")
                 return None
 
-            # Strava returns streams as a list of stream objects
-            # Convert to dict keyed by stream type for easier access
-            streams_dict: dict[str, list] = {}
-            for stream in payload:
-                stream_type = stream.get("type")
-                if stream_type:
-                    streams_dict[stream_type] = stream.get("data", [])
+            streams_dict = StravaClient._parse_streams_payload(payload, activity_id)
+            if streams_dict is None:
+                return None
 
             logger.info(
                 f"[STRAVA_CLIENT] Fetched streams for activity {activity_id}: "

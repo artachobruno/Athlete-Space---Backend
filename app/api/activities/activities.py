@@ -256,7 +256,14 @@ def fetch_activity_streams(
             ) from e
 
         # Fetch and save streams
-        success = fetch_and_save_streams(session, client, activity)
+        try:
+            success = fetch_and_save_streams(session, client, activity)
+        except Exception as e:
+            logger.error(f"[ACTIVITIES] Error fetching streams for activity {activity_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch streams data: {e!s}",
+            ) from e
 
         if success:
             # Refresh activity to get updated streams_data
@@ -270,11 +277,11 @@ def fetch_activity_streams(
                 "data_points": data_points,
             }
 
-        return {
-            "success": False,
-            "message": "Streams data not available for this activity",
-            "streams_data": None,
-        }
+        # Streams not available - return 404 instead of 200 with success=False
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Streams data not available for this activity. This may be due to API limitations or activity type restrictions.",
+        )
 
 
 @router.get("/{activity_id}/streams")

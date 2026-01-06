@@ -59,20 +59,31 @@ def fetch_and_save_streams(
             logger.debug(f"[FETCH_STREAMS] No streams available for activity {strava_activity_id}")
             return False
 
+        # Validate streams is a dict
+        if not isinstance(streams, dict):
+            logger.error(
+                f"[FETCH_STREAMS] Invalid streams format for activity {strava_activity_id}: expected dict, got {type(streams).__name__}"
+            )
+            return False
+
         # Update activity with streams data
         activity.streams_data = streams
         session.add(activity)
         session.commit()
 
-        data_points = len(streams.get("time", []))
+        data_points = len(streams.get("time", [])) if streams else 0
         logger.info(
             f"[FETCH_STREAMS] Successfully saved streams for activity {strava_activity_id}: "
             f"{len(streams)} stream types, {data_points} data points"
         )
     except Exception as e:
-        logger.error(f"[FETCH_STREAMS] Error fetching streams for activity {strava_activity_id}: {e}")
+        logger.error(
+            f"[FETCH_STREAMS] Error fetching streams for activity {strava_activity_id}: {e}",
+            exc_info=True,
+        )
         session.rollback()
-        return False
+        # Re-raise the exception so the API endpoint can handle it properly
+        raise
     else:
         return True
 

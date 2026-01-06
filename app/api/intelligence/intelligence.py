@@ -242,6 +242,11 @@ def get_daily_decision(
                 if decision_id:
                     # Retrieve the newly created decision
                     decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=True)
+                    if decision_model is None:
+                        logger.error(
+                            f"Decision was generated (decision_id={decision_id}) but could not be retrieved. This should not happen."
+                        )
+                        _raise_unavailable_error(decision_date)
                     logger.info(f"Successfully generated daily decision on-demand, decision_id={decision_id}")
                 else:
                     # Generation was skipped (context unchanged), but we still don't have a decision
@@ -269,6 +274,14 @@ def get_daily_decision(
                     status_code=503,
                     detail=f"Daily decision not available for {decision_date.isoformat()}. The coach will generate it soon.",
                 ) from e
+
+    # Final check - decision_model should never be None at this point
+    if decision_model is None:
+        logger.error(
+            f"decision_model is None after all attempts for user_id={user_id}, "
+            f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
+        )
+        _raise_unavailable_error(decision_date)
 
     try:
         decision = DailyDecision(**decision_model.decision_data)

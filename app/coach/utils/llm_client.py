@@ -123,7 +123,7 @@ class CoachLLMClient:
                 result = agent.run_sync(f"Context:\n{context_str}")
 
                 # Validate against constraints
-                errors = validate_season_plan(result.data)
+                errors = validate_season_plan(result.output)
                 if errors:
                     error_msg = "; ".join(errors)
                     if attempt < MAX_RETRIES:
@@ -134,7 +134,7 @@ class CoachLLMClient:
                     _raise_validation_error("Season plan", error_msg)
                 else:
                     logger.info("Season plan generated successfully")
-                    return result.data
+                    return result.output
 
             except ValidationError as e:
                 if attempt < MAX_RETRIES:
@@ -189,7 +189,7 @@ class CoachLLMClient:
                 result = agent.run_sync(f"Context:\n{context_str}")
 
                 # Validate against constraints
-                errors = validate_weekly_intent(result.data, previous_volume)
+                errors = validate_weekly_intent(result.output, previous_volume)
                 if errors:
                     error_msg = "; ".join(errors)
                     if attempt < MAX_RETRIES:
@@ -200,7 +200,7 @@ class CoachLLMClient:
                     _raise_validation_error("Weekly intent", error_msg)
                 else:
                     logger.info("Weekly intent generated successfully")
-                    return result.data
+                    return result.output
 
             except ValidationError as e:
                 if attempt < MAX_RETRIES:
@@ -251,7 +251,7 @@ class CoachLLMClient:
                 result = agent.run_sync(f"Context:\n{context_str}")
 
                 # Validate against constraints
-                errors = validate_daily_decision(result.data)
+                errors = validate_daily_decision(result.output)
                 if errors:
                     error_msg = "; ".join(errors)
                     if attempt < MAX_RETRIES:
@@ -262,7 +262,7 @@ class CoachLLMClient:
                     _raise_validation_error("Daily decision", error_msg)
                 else:
                     logger.info("Daily decision generated successfully")
-                    return result.data
+                    return result.output
 
             except ValidationError as e:
                 if attempt < MAX_RETRIES:

@@ -148,7 +148,7 @@ def _get_activities_for_context(user_id: str) -> list[Activity]:
         user_id: User ID
 
     Returns:
-        List of activities from last 14 days
+        List of activities from last 14 days (detached from session)
     """
     with get_session() as session:
         since = datetime.now(timezone.utc) - timedelta(days=14)
@@ -164,7 +164,11 @@ def _get_activities_for_context(user_id: str) -> list[Activity]:
             .scalars()
             .all()
         )
-        return list(activities)
+        # Detach objects from session so they can be used after session closes
+        activities_list = list(activities)
+        for activity in activities_list:
+            session.expunge(activity)
+        return activities_list
 
 
 def _get_weekly_intent_for_context(athlete_id: int, decision_date: date) -> WeeklyIntent | None:

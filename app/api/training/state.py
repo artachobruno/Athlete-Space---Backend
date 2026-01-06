@@ -12,7 +12,7 @@ from app.coach.services.coach_service import get_coach_advice
 from app.config.settings import settings
 from app.db.models import Activity
 from app.db.session import SessionLocal, get_session
-from app.services.metrics.training_load import calculate_ctl_atl_tsb
+from app.metrics.training_load import calculate_ctl_atl_tsb
 
 router = APIRouter(prefix="/state", tags=["state"])
 

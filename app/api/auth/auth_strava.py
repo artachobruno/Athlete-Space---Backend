@@ -23,10 +23,10 @@ from app.core.auth_jwt import create_access_token, decode_access_token
 from app.core.encryption import EncryptionError, encrypt_token
 from app.db.models import StravaAccount, User
 from app.db.session import get_session
-from app.services.ingestion.background_sync import sync_user_activities
-from app.services.ingestion.tasks import history_backfill_task
-from app.services.integrations.strava.oauth import exchange_code_for_token
-from app.services.metrics.daily_aggregation import aggregate_daily_training
+from app.ingestion.background_sync import sync_user_activities
+from app.ingestion.tasks import history_backfill_task
+from app.integrations.strava.oauth import exchange_code_for_token
+from app.metrics.daily_aggregation import aggregate_daily_training
 
 router = APIRouter(prefix="/auth/strava", tags=["auth", "strava"])
 

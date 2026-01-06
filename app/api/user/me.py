@@ -17,11 +17,11 @@ from sqlalchemy import func, select
 from app.api.dependencies.auth import get_current_user_id
 from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
-from app.services.ingestion.sla import SYNC_SLA_SECONDS
-from app.services.ingestion.tasks import history_backfill_task
-from app.services.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
-from app.services.metrics.data_quality import assess_data_quality
-from app.services.metrics.training_load import compute_training_load
+from app.ingestion.sla import SYNC_SLA_SECONDS
+from app.ingestion.tasks import history_backfill_task
+from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
+from app.metrics.data_quality import assess_data_quality
+from app.metrics.training_load import compute_training_load
 
 router = APIRouter(prefix="/me", tags=["me"])
 

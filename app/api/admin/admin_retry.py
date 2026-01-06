@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks
 
-from app.services.ingestion.tasks import backfill_task, incremental_task
+from app.ingestion.tasks import backfill_task, incremental_task
 
 router = APIRouter(prefix="/admin/retry", tags=["admin"])
 

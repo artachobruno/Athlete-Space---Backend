@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import datetime as dt
 
-from app.services.integrations.strava.client import StravaClient
-from app.services.integrations.strava.oauth import exchange_code_for_token
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.config.settings import settings
+from app.integrations.strava.client import StravaClient
+from app.integrations.strava.oauth import exchange_code_for_token
 from ingestion.strava_ingestion import ingest_strava_activities
 
 STRAVA_CLIENT_ID = settings.strava_client_id

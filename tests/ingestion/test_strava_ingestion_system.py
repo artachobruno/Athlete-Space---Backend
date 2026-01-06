@@ -7,10 +7,10 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.db.session import get_session
+from app.ingestion.locks import lock_manager
+from app.ingestion.quota_manager import quota_manager
+from app.ingestion.scheduler import ingestion_tick
 from app.models import Activity, StravaAuth
-from app.services.ingestion.locks import lock_manager
-from app.services.ingestion.quota_manager import quota_manager
-from app.services.ingestion.scheduler import ingestion_tick
 
 
 def assert_redis():

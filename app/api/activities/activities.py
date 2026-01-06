@@ -13,9 +13,9 @@ from sqlalchemy import select
 from app.api.dependencies.auth import get_current_user_id
 from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
-from app.services.ingestion.fetch_streams import fetch_and_save_streams
-from app.services.integrations.strava.client import StravaClient
-from app.services.integrations.strava.service import get_strava_client
+from app.ingestion.fetch_streams import fetch_and_save_streams
+from app.integrations.strava.client import StravaClient
+from app.integrations.strava.service import get_strava_client
 
 router = APIRouter(prefix="/activities", tags=["activities", "debug"])
 

@@ -3,8 +3,8 @@ import time
 from fastapi import APIRouter
 
 from app.db.session import get_session
+from app.ingestion.quota_manager import quota_manager
 from app.models import StravaAuth
-from app.services.ingestion.quota_manager import quota_manager
 
 NOW = int(time.time())
 

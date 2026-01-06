@@ -9,8 +9,8 @@ from sqlalchemy import func, select
 from app.config.settings import settings
 from app.db.models import Activity, StravaAccount, StravaAuth
 from app.db.session import get_session
-from app.services.ingestion.tasks import backfill_task, incremental_task
-from app.services.metrics.daily_aggregation import aggregate_daily_training
+from app.ingestion.tasks import backfill_task, incremental_task
+from app.metrics.daily_aggregation import aggregate_daily_training
 
 STRAVA_CLIENT_ID = settings.strava_client_id
 STRAVA_CLIENT_SECRET = settings.strava_client_secret

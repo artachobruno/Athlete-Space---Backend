@@ -1,6 +1,7 @@
 from loguru import logger
 from pydantic import SecretStr
 
+from app.coach.config.models import USER_FACING_MODEL
 from app.coach.runtime.intents import CoachIntent
 from app.coach.runtime.router import route_intent
 from app.coach.schemas.athlete_state import AthleteState
@@ -27,14 +28,6 @@ except ImportError:
     LANGCHAIN_LLM_AVAILABLE = False
     ChatOpenAI = None
     HumanMessage = None
-
-try:
-    from app.coach.agents.langchain_orchestrator import run_orchestrator
-
-    ORCHESTRATOR_AVAILABLE = True
-except ImportError:
-    ORCHESTRATOR_AVAILABLE = False
-    run_orchestrator = None
 
 
 def _answer_general_question_with_llm(question: str) -> str:
@@ -63,7 +56,7 @@ def _answer_general_question_with_llm(question: str) -> str:
 
     try:
         # Log LLM model being called
-        model_name = "gpt-4o-mini"
+        model_name = USER_FACING_MODEL
         logger.info(
             "Calling general question LLM",
             model=model_name,
@@ -239,8 +232,8 @@ def dispatch_coach_chat(
                       Will return welcome message instead of routing intent.
         conversation_history: List of previous messages with 'role' and 'content' keys.
                              Used to provide context to the LLM.
-        use_orchestrator: If True, use the LangChain orchestrator (default: True).
-                         Falls back to intent routing if orchestrator unavailable.
+        use_orchestrator: Deprecated parameter, kept for backward compatibility.
+                         All requests now use intent-based routing.
     """
     history_count = len(conversation_history) if conversation_history else 0
     logger.info(
@@ -276,29 +269,6 @@ def dispatch_coach_chat(
 
     # At this point, state_result[0] is None, so state_result[1] is AthleteState
     athlete_state = state_result[1]
-
-    # Use orchestrator if requested and available
-    if use_orchestrator and ORCHESTRATOR_AVAILABLE and run_orchestrator is not None:
-        logger.info("Using LLM orchestrator for coach chat (LangChain agent with tools)")
-        try:
-            logger.info(f"Calling LLM orchestrator with message: {message[:100]}, history_count={history_count}")
-            reply = run_orchestrator(message, athlete_state, conversation_history=conversation_history)
-            logger.info(f"LLM orchestrator completed successfully, reply length: {len(reply)}")
-
-            # Check if reply indicates insufficient data - if so, use general question handler
-            insufficient_data_phrases = ("don't have enough signal", "can't answer", "not enough data", "insufficient")
-            if reply and any(phrase in reply.lower() for phrase in insufficient_data_phrases):
-                logger.warning("Orchestrator returned insufficient data message, using general question handler")
-                reply = _answer_general_question_with_llm(message)
-                intent_result = ("general_question", reply)
-            else:
-                intent_result = ("orchestrator", reply)
-        except Exception as e:
-            logger.error(f"LLM orchestrator failed, falling back to intent routing: {e}", exc_info=True)
-            raise
-        else:
-            return intent_result
-            # Fall through to intent-based routing
 
     # Route to appropriate tool (intent routing uses LLM, tools may be rule-based)
     logger.info(f"Using intent routing with LLM (intent={intent.value})")

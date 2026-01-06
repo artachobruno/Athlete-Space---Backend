@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import BaseModel, Field, SecretStr
 
+from app.coach.config.models import USER_FACING_MODEL
 from app.coach.tools.session_planner import generate_race_build_sessions, save_planned_sessions
 from app.config.settings import settings
 
@@ -51,7 +52,7 @@ def _extract_race_information(message: str) -> RaceInformation:
 
     try:
         llm = ChatOpenAI(
-            model="gpt-4o-mini",
+            model=USER_FACING_MODEL,
             temperature=0.0,
             api_key=SecretStr(settings.openai_api_key),
         )

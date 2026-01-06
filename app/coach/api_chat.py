@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import CoachDeps
+from app.coach.config.models import USER_FACING_MODEL
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.coach.utils.context_management import save_context
@@ -135,7 +136,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         # Save conversation history for cold start
         save_context(
             athlete_id=athlete_id,
-            model_name="gpt-4o-mini",
+            model_name=USER_FACING_MODEL,
             user_message=req.message,
             assistant_message=reply,
         )

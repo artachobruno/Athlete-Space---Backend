@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import SecretStr
 
+from app.coach.config.models import TOOL_PLANNING_MODEL
 from app.coach.runtime.intents import CoachIntent
 from app.coach.schemas.router import IntentRouterResponse
 from app.config.settings import settings
@@ -44,7 +45,7 @@ Return JSON ONLY.
 # Model
 # -------------------------------------------------
 _llm = ChatOpenAI(
-    model="gpt-4o-mini",
+    model=TOOL_PLANNING_MODEL,
     temperature=0.0,
     api_key=SecretStr(settings.openai_api_key) if settings.openai_api_key else None,
 )

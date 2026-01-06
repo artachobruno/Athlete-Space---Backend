@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import SecretStr
 
+from app.coach.config.models import COACH_REASONING_DEFAULT
 from app.coach.runtime.instructions import COACH_AGENT_INSTRUCTIONS
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.responses import CoachAgentResponse
@@ -15,7 +16,7 @@ if not settings.openai_api_key:
     llm = None
 else:
     llm = ChatOpenAI(
-        model="gpt-4o-mini",
+        model=COACH_REASONING_DEFAULT,
         temperature=0.2,
         api_key=SecretStr(settings.openai_api_key),
     )

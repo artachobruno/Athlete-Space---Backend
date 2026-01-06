@@ -6,6 +6,7 @@ from loguru import logger
 from pydantic import SecretStr
 from sqlalchemy import select
 
+from app.coach.config.models import USER_FACING_MODEL
 from app.coach.schemas.athlete_state import AthleteState
 from app.config.settings import settings
 from app.db.models import Activity
@@ -199,7 +200,7 @@ Be concise, practical, and coach-like. Avoid explaining metrics - just provide t
     user_prompt += "\nRecommend today's training session:"
 
     llm = ChatOpenAI(
-        model="gpt-4o-mini",
+        model=USER_FACING_MODEL,
         temperature=0.3,
         api_key=SecretStr(settings.openai_api_key),
     )

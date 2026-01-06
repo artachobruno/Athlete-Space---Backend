@@ -3,6 +3,7 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import SecretStr
 
+from app.coach.config.models import USER_FACING_MODEL
 from app.coach.schemas.athlete_state import AthleteState
 from app.config.settings import settings
 
@@ -24,7 +25,7 @@ def run_analysis(state: AthleteState) -> str:
 
     try:
         llm = ChatOpenAI(
-            model="gpt-4o-mini",
+            model=USER_FACING_MODEL,
             temperature=0.3,
             api_key=SecretStr(settings.openai_api_key),
         )

@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import SecretStr, ValidationError
 
+from app.coach.config.models import USER_FACING_MODEL
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.config.settings import settings
 from app.core.constraints import (
@@ -77,7 +78,7 @@ def _get_llm() -> ChatOpenAI:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not set. Please configure it in your .env file or environment variables.")
     return ChatOpenAI(
-        model="gpt-4o-mini",
+        model=USER_FACING_MODEL,
         temperature=0.2,
         api_key=SecretStr(settings.openai_api_key),
     )

@@ -9,11 +9,11 @@ Centralized model definitions following the architecture:
 """
 
 # Orchestrator
-ORCHESTRATOR_MODEL = "gpt-5.2"
+ORCHESTRATOR_MODEL = "gpt-4o"
 
 # Core Coach Reasoning
 COACH_REASONING_DEFAULT = "gpt-4.1-turbo"
-COACH_REASONING_COMPLEX = "gpt-5.2"
+COACH_REASONING_COMPLEX = "gpt-4o"
 
 # Tool Planning
 TOOL_PLANNING_MODEL = "gpt-4o-mini"

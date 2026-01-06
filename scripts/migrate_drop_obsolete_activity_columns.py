@@ -12,8 +12,8 @@ This migration removes old column names that don't match the Activity model:
 from loguru import logger
 from sqlalchemy import text
 
-from app.core.settings import settings
-from app.state.db import engine
+from app.config.settings import settings
+from app.db.session import engine
 
 # Columns to drop (old names that don't match Activity model)
 OBSOLETE_COLUMNS = ["sport", "avg_hr", "distance_m", "elevation_m", "duration_s"]

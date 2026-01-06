@@ -1,3 +1,7 @@
+# ⚠️ LEGACY: One-time migration script - not included in run_migrations.py
+# WARNING: This will DROP the existing activities table and recreate it.
+# Only use this for local development/testing databases!
+# Keep for historical reference and potential database recovery scenarios
 """Recreate activities table with correct schema.
 
 WARNING: This will DROP the existing activities table and recreate it.
@@ -7,8 +11,8 @@ Only use this for local development/testing databases!
 from loguru import logger
 from sqlalchemy import text
 
-from app.state.db import engine
-from app.state.models import Base
+from app.db.models import Base
+from app.db.session import engine
 
 
 def _is_postgresql() -> bool:

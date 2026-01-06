@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from loguru import logger
 
-from app.core.settings import settings
+from app.config.settings import settings
 
 
 def create_access_token(user_id: str) -> str:

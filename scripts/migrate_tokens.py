@@ -1,3 +1,5 @@
+# ⚠️ LEGACY: One-time migration script - not included in run_migrations.py
+# Keep for historical reference and potential database recovery scenarios
 """Migration script to remove access_token from strava_auth table.
 
 This migration:
@@ -12,8 +14,8 @@ This preserves existing refresh tokens while removing access tokens
 
 from sqlalchemy import text
 
-from app.state.db import engine
-from app.state.models import Base
+from app.db.models import Base
+from app.db.session import engine
 
 
 def migrate_tokens() -> None:

@@ -1,6 +1,6 @@
 from loguru import logger
 
-from app.coach.models import AthleteState
+from app.coach.core.models import AthleteState
 
 
 def explain_load(state: AthleteState) -> str:

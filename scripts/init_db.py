@@ -1,5 +1,5 @@
-from app.state.db import engine
-from app.state.models import Base
+from app.db.models import Base
+from app.db.session import engine
 
 
 def init_db():

@@ -1,0 +1,307 @@
+from loguru import logger
+from pydantic import SecretStr
+
+from app.coach.core.models import AthleteState
+from app.coach.routing.intent_router import route_intent
+from app.coach.routing.intents import CoachIntent
+from app.coach.services.state_builder import build_athlete_state
+from app.coach.tools.add_workout import add_workout
+from app.coach.tools.adjust_load import adjust_training_load
+from app.coach.tools.cold_start import welcome_new_user
+from app.coach.tools.explain_state import explain_training_state
+from app.coach.tools.next_session import recommend_next_session
+from app.coach.tools.plan_race import plan_race_build
+from app.coach.tools.plan_season import plan_season
+from app.coach.tools.plan_week import plan_week
+from app.coach.tools.run_analysis import run_analysis
+from app.coach.tools.share_report import share_report
+from app.config.settings import settings
+from app.services.state.api_helpers import get_training_data, get_user_id_from_athlete_id
+
+try:
+    from langchain_core.messages import HumanMessage
+    from langchain_openai import ChatOpenAI
+
+    LANGCHAIN_LLM_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_LLM_AVAILABLE = False
+    ChatOpenAI = None
+    HumanMessage = None
+
+try:
+    from app.coach.agents.langchain_orchestrator import run_orchestrator
+
+    ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    ORCHESTRATOR_AVAILABLE = False
+    run_orchestrator = None
+
+
+def _answer_general_question_with_llm(question: str) -> str:
+    """Answer general questions using LLM when training data is not available.
+
+    Args:
+        question: User's question
+
+    Returns:
+        LLM-generated response
+    """
+    if not LANGCHAIN_LLM_AVAILABLE or ChatOpenAI is None or HumanMessage is None:
+        logger.warning("LLM not available for general questions")
+        return (
+            "I'm here to help with your training, but I need your Strava account connected "
+            "and some training data synced to provide personalized guidance. "
+            "For now, I can answer general training questions once my LLM features are configured."
+        )
+
+    if not settings.openai_api_key:
+        logger.warning("OPENAI_API_KEY not set, cannot answer general questions")
+        return (
+            "I'd love to help, but I need your training data synced first. "
+            "Please connect your Strava account and sync some activities, then I can provide personalized coaching advice."
+        )
+
+    try:
+        # Log LLM model being called
+        model_name = "gpt-4o-mini"
+        logger.info(
+            "Calling general question LLM",
+            model=model_name,
+            provider="openai",
+        )
+
+        llm = ChatOpenAI(
+            model=model_name,
+            temperature=0.3,
+            api_key=SecretStr(settings.openai_api_key),
+        )
+
+        prompt_text = f"""You are Virtus Coach, an elite endurance training intelligence system.
+You provide expert, personalized coaching advice based on training science.
+
+CRITICAL: The athlete's training data is NOT available. You have NO information about their current state.
+
+User question: {question}
+
+ABSOLUTE RULES WHEN NO DATA IS AVAILABLE:
+- NEVER make statements about current fatigue, training state, metrics, or how the athlete is feeling
+- NEVER say things like "you're feeling fatigued", "your training load is...", "you're starting out strong", etc.
+- ONLY provide general training advice, principles, or guidance
+- Explain that you'll be able to provide personalized guidance once training data is synced
+- Always provide value - do NOT say "I don't have enough signal" or "I can't answer"
+
+Provide a helpful, knowledgeable answer about training, technique, or general endurance coaching.
+Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice.
+If the question requires personalized data (like current fitness or fatigue), explain that you'll be able to
+provide more specific guidance once their training data is synced, but still provide general advice now."""
+
+        # Log prompt at debug level
+        logger.debug(
+            "General question prompt",
+            prompt_length=len(prompt_text),
+            question_length=len(question),
+            full_prompt=prompt_text,
+        )
+
+        logger.info("Invoking LLM for general question (no training data)")
+        response = llm.invoke([HumanMessage(content=prompt_text)])
+    except Exception as e:
+        logger.error(f"Error answering general question with LLM: {e}", exc_info=True)
+        return (
+            "I encountered an error processing your question. "
+            "Please make sure your Strava account is connected and synced, "
+            "or try rephrasing your question."
+        )
+    else:
+        if not hasattr(response, "content"):
+            logger.warning("LLM response missing content attribute")
+            return str(response)
+
+        content = response.content
+        if isinstance(content, str):
+            content_str = content
+            logger.info("General question answered successfully via LLM")
+        elif isinstance(content, list):
+            content_str = " ".join(str(item) for item in content if isinstance(item, str))
+            logger.info("General question answered successfully via LLM (list content)")
+        else:
+            content_str = str(content)
+            logger.info("General question answered successfully via LLM (converted content)")
+
+        # Log response at debug level
+        logger.debug(
+            "General question response",
+            response_length=len(content_str),
+            full_response=content_str,
+        )
+
+        return content_str
+
+
+def _handle_cold_start(athlete_id: int, days: int, days_to_race: int | None) -> tuple[str, str]:
+    """Handle cold start scenario - provide welcome message."""
+    logger.info(f"Cold start detected - providing welcome message (days={days}, days_to_race={days_to_race})")
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.warning(f"Cannot find user_id for athlete_id={athlete_id} in cold start")
+        return ("error", "Unable to find user account. Please reconnect your Strava account.")
+    try:
+        logger.info("Fetching training data for cold start")
+        training_data = get_training_data(user_id=user_id, days=days)
+        logger.info("Building athlete state for cold start")
+        athlete_state = build_athlete_state(
+            ctl=training_data.ctl,
+            atl=training_data.atl,
+            tsb=training_data.tsb,
+            daily_load=training_data.daily_load,
+            days_to_race=days_to_race,
+        )
+        logger.info("Calling welcome_new_user tool")
+        reply = welcome_new_user(athlete_state)
+    except RuntimeError:
+        # Even if we don't have training data, provide a welcome message
+        logger.warning("Cold start with no training data available")
+        reply = welcome_new_user(None)
+
+    return ("cold_start", reply)
+
+
+def _get_athlete_state(athlete_id: int, days: int, days_to_race: int | None) -> tuple[str, str] | tuple[None, AthleteState]:
+    """Get athlete state or return error response.
+
+    Returns:
+        Tuple of (error_type, error_message) if error, or (None, AthleteState) if successful
+    """
+    logger.info(f"Getting athlete state (days={days}, days_to_race={days_to_race})")
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.warning(f"Cannot find user_id for athlete_id={athlete_id}")
+        return ("error", "Unable to find user account. Please reconnect your Strava account.")
+    try:
+        logger.info("Fetching training data")
+        training_data = get_training_data(user_id=user_id, days=days)
+    except RuntimeError as e:
+        logger.warning(f"No training data available: {e}")
+        # Return a special error type that allows LLM fallback
+        return ("no_training_data", "")
+
+    logger.info("Building athlete state from training data")
+    athlete_state = build_athlete_state(
+        ctl=training_data.ctl,
+        atl=training_data.atl,
+        tsb=training_data.tsb,
+        daily_load=training_data.daily_load,
+        days_to_race=days_to_race,
+    )
+    logger.info(f"Athlete state built successfully (CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f})")
+    return (None, athlete_state)
+
+
+def _route_to_tool(intent: CoachIntent, athlete_state: AthleteState, message: str, athlete_id: int) -> str:
+    """Route intent to appropriate coaching tool."""
+    logger.info(f"Routing to tool: {intent.value}")
+    # Get user_id for tools that need it
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    tool_map: dict[CoachIntent, str] = {
+        CoachIntent.NEXT_SESSION: recommend_next_session(athlete_state, user_id),
+        CoachIntent.ADJUST_LOAD: adjust_training_load(athlete_state, message),
+        CoachIntent.EXPLAIN_STATE: explain_training_state(athlete_state),
+        CoachIntent.PLAN_RACE: plan_race_build(message),
+        CoachIntent.PLAN_SEASON: plan_season(),
+        CoachIntent.PLAN_WEEK: plan_week(athlete_state),
+        CoachIntent.ADD_WORKOUT: add_workout(athlete_state, message),
+        CoachIntent.RUN_ANALYSIS: run_analysis(athlete_state),
+        CoachIntent.SHARE_REPORT: share_report(athlete_state),
+    }
+    result = tool_map.get(intent, "Unsupported request.")
+    logger.info(f"Tool {intent.value} completed successfully")
+    return result
+
+
+def dispatch_coach_chat(
+    message: str,
+    athlete_id: int,
+    days: int,
+    days_to_race: int | None = None,
+    *,
+    history_empty: bool = False,
+    conversation_history: list[dict[str, str]] | None = None,
+    use_orchestrator: bool = True,
+) -> tuple[str, str]:
+    """Route user message -> coaching tool -> response text.
+
+    Args:
+        message: User's message to the coach
+        athlete_id: Strava athlete ID (int)
+        days: Number of days of training data to consider
+        days_to_race: Optional days until race
+        history_empty: If True, this is a cold start (first message).
+                      Will return welcome message instead of routing intent.
+        conversation_history: List of previous messages with 'role' and 'content' keys.
+                             Used to provide context to the LLM.
+        use_orchestrator: If True, use the LangChain orchestrator (default: True).
+                         Falls back to intent routing if orchestrator unavailable.
+    """
+    history_count = len(conversation_history) if conversation_history else 0
+    logger.info(
+        f"Dispatching coach chat (message_length={len(message)}, days={days}, "
+        f"days_to_race={days_to_race}, history_empty={history_empty}, "
+        f"history_count={history_count}, use_orchestrator={use_orchestrator})"
+    )
+
+    # Handle cold start - provide welcome message regardless of intent
+    if history_empty:
+        logger.info("Handling cold start scenario")
+        return _handle_cold_start(athlete_id, days, days_to_race)
+
+    logger.info("Routing intent from user message")
+    intent = route_intent(message)
+    logger.info(f"Dispatching coach intent: {intent}")
+
+    # Build athlete state
+    logger.info("Building athlete state for tool routing")
+    state_result = _get_athlete_state(athlete_id, days, days_to_race)
+    has_training_data = state_result[0] is None
+
+    if not has_training_data:  # Error response
+        error_type = state_result[0]
+        logger.warning(f"Failed to get athlete state: {error_type}")
+        # If no training data, use LLM to answer general questions
+        if error_type == "no_training_data":
+            logger.info("No training data available, using LLM for general question")
+            reply = _answer_general_question_with_llm(message)
+            return ("general_question", reply)
+        # For other errors, return the error message
+        return state_result  # type: ignore[return-value]
+
+    # At this point, state_result[0] is None, so state_result[1] is AthleteState
+    athlete_state = state_result[1]
+
+    # Use orchestrator if requested and available
+    if use_orchestrator and ORCHESTRATOR_AVAILABLE and run_orchestrator is not None:
+        logger.info("Using LLM orchestrator for coach chat (LangChain agent with tools)")
+        try:
+            logger.info(f"Calling LLM orchestrator with message: {message[:100]}, history_count={history_count}")
+            reply = run_orchestrator(message, athlete_state, conversation_history=conversation_history)
+            logger.info(f"LLM orchestrator completed successfully, reply length: {len(reply)}")
+
+            # Check if reply indicates insufficient data - if so, use general question handler
+            insufficient_data_phrases = ("don't have enough signal", "can't answer", "not enough data", "insufficient")
+            if reply and any(phrase in reply.lower() for phrase in insufficient_data_phrases):
+                logger.warning("Orchestrator returned insufficient data message, using general question handler")
+                reply = _answer_general_question_with_llm(message)
+                intent_result = ("general_question", reply)
+            else:
+                intent_result = ("orchestrator", reply)
+        except Exception as e:
+            logger.error(f"LLM orchestrator failed, falling back to intent routing: {e}", exc_info=True)
+            raise
+        else:
+            return intent_result
+            # Fall through to intent-based routing
+
+    # Route to appropriate tool (intent routing uses LLM, tools may be rule-based)
+    logger.info(f"Using intent routing with LLM (intent={intent.value})")
+    reply = _route_to_tool(intent, athlete_state, message, athlete_id)
+    logger.info(f"Dispatch completed successfully with intent: {intent.value}, reply length: {len(reply)}")
+    return intent.value, reply

@@ -1,6 +1,8 @@
+# ⚠️ LEGACY: One-time migration script - not included in run_migrations.py
+# Keep for historical reference and potential database recovery scenarios
 import sqlite3
 
-from app.core.settings import settings
+from app.config.settings import settings
 
 DB_PATH = settings.database_url.replace("sqlite:///", "")
 

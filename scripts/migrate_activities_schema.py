@@ -6,7 +6,7 @@ the current Activity model schema.
 
 from sqlalchemy import text
 
-from app.state.db import engine
+from app.db.session import engine
 
 
 def _is_postgresql() -> bool:

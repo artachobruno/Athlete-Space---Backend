@@ -7,7 +7,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, SecretStr
 
 from app.coach.tools.session_planner import generate_race_build_sessions, save_planned_sessions
-from app.core.settings import settings
+from app.config.settings import settings
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
 _recent_calls: dict[str, datetime] = {}

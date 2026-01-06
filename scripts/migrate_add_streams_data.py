@@ -1,3 +1,5 @@
+# ⚠️ LEGACY: One-time migration script - not included in run_migrations.py
+# Keep for historical reference and potential database recovery scenarios
 """Migration script to add streams_data column to activities table.
 
 This migration adds a JSON column to store time-series streams data from Strava
@@ -16,8 +18,8 @@ from __future__ import annotations
 from loguru import logger
 from sqlalchemy import text
 
-from app.core.settings import settings
-from app.state.db import SessionLocal
+from app.config.settings import settings
+from app.db.session import SessionLocal
 
 
 def migrate_add_streams_data() -> None:

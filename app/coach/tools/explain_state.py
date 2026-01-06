@@ -3,8 +3,8 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import SecretStr
 
-from app.coach.models import AthleteState
-from app.core.settings import settings
+from app.coach.core.models import AthleteState
+from app.config.settings import settings
 
 
 def explain_training_state(state: AthleteState) -> str:

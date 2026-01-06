@@ -1,0 +1,562 @@
+"""LangChain agent orchestrator for Virtus Coach.
+
+This orchestrator uses LangChain's agent framework to intelligently
+route requests to the appropriate coaching tools based on user intent.
+"""
+
+from loguru import logger
+from pydantic import SecretStr
+
+from app.coach.core.models import AthleteState
+from app.coach.tools.add_workout import add_workout
+from app.coach.tools.adjust_load import adjust_training_load
+from app.coach.tools.explain_state import explain_training_state
+from app.coach.tools.next_session import recommend_next_session
+from app.coach.tools.plan_race import plan_race_build
+from app.coach.tools.plan_season import plan_season
+from app.coach.tools.plan_week import plan_week
+from app.coach.tools.run_analysis import run_analysis
+from app.coach.tools.share_report import share_report
+from app.config.settings import settings
+
+try:
+    from langchain.agents import AgentExecutor, create_openai_tools_agent  # type: ignore[reportAttributeAccessIssue]
+    from langchain_core.messages import HumanMessage
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+    from langchain_core.tools import StructuredTool
+    from langchain_openai import ChatOpenAI
+
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    StructuredTool = None
+    ChatOpenAI = None
+    AgentExecutor = None
+    create_openai_tools_agent = None
+    ChatPromptTemplate = None
+    MessagesPlaceholder = None
+    HumanMessage = None
+    logger.warning("LangChain agent features not available - install langchain>=0.1.16")
+
+
+if not LANGCHAIN_AVAILABLE:
+    _orchestrator_agent = None
+    _llm = None
+else:
+    # Initialize LLM
+    if not settings.openai_api_key:
+        _llm = None
+        logger.warning("OPENAI_API_KEY not set. Orchestrator will not work.")
+    elif ChatOpenAI is None:
+        _llm = None
+        logger.warning("ChatOpenAI not available. Orchestrator will not work.")
+    else:
+        _llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.3,
+            api_key=SecretStr(settings.openai_api_key),
+        )
+
+    # Define coaching tools as LangChain tools
+    def _make_tool(func, name: str, description: str):
+        """Helper to create LangChain tool from function."""
+        if StructuredTool is None:
+            raise RuntimeError("StructuredTool not available")
+        return StructuredTool.from_function(
+            func=func,
+            name=name,
+            description=description,
+        )
+
+    # Store athlete state in a way tools can access it
+    _current_athlete_state: AthleteState | None = None
+
+    def _recommend_next_session_wrapper() -> str:
+        """Wrapper to get athlete state from context."""
+        logger.info("Orchestrator calling tool: recommend_next_session")
+        if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
+            return "Error: Athlete state not available"
+        result = recommend_next_session(_current_athlete_state)
+        logger.info("Tool recommend_next_session completed")
+        return result
+
+    def _adjust_load_wrapper(message: str) -> str:
+        """Wrapper for adjust_load that includes athlete state."""
+        logger.info(f"Orchestrator calling tool: adjust_training_load (message_length={len(message)})")
+        if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
+            return "Error: Athlete state not available"
+        result = adjust_training_load(_current_athlete_state, message)
+        logger.info("Tool adjust_training_load completed")
+        return result
+
+    def _explain_state_wrapper() -> str:
+        """Wrapper for explain_state."""
+        logger.info("Orchestrator calling tool: explain_training_state")
+        if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
+            return "Error: Athlete state not available"
+        result = explain_training_state(_current_athlete_state)
+        logger.info("Tool explain_training_state completed")
+        return result
+
+    def _plan_week_wrapper() -> str:
+        """Wrapper for plan_week."""
+        logger.info("Orchestrator calling tool: plan_week")
+        if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
+            return "Error: Athlete state not available"
+        result = plan_week(_current_athlete_state)
+        logger.info("Tool plan_week completed")
+        return result
+
+    def _add_workout_wrapper(workout_description: str) -> str:
+        """Wrapper for add_workout."""
+        logger.info(f"Orchestrator calling tool: add_workout (description_length={len(workout_description)})")
+        if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
+            return "Error: Athlete state not available"
+        result = add_workout(_current_athlete_state, workout_description)
+        logger.info("Tool add_workout completed")
+        return result
+
+    def _run_analysis_wrapper() -> str:
+        """Wrapper for run_analysis."""
+        logger.info("Orchestrator calling tool: run_analysis")
+        if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
+            return "Error: Athlete state not available"
+        result = run_analysis(_current_athlete_state)
+        logger.info("Tool run_analysis completed")
+        return result
+
+    def _share_report_wrapper() -> str:
+        """Wrapper for share_report."""
+        logger.info("Orchestrator calling tool: share_report")
+        if _current_athlete_state is None:
+            logger.error("Athlete state not available in orchestrator")
+            return "Error: Athlete state not available"
+        result = share_report(_current_athlete_state)
+        logger.info("Tool share_report completed")
+        return result
+
+    def _plan_race_wrapper(race_description: str) -> str:
+        """Wrapper for plan_race."""
+        logger.info(f"Orchestrator calling tool: plan_race (description_length={len(race_description)})")
+        result = plan_race_build(race_description)
+        logger.info("Tool plan_race completed")
+        return result
+
+    def _plan_season_wrapper() -> str:
+        """Wrapper for plan_season."""
+        logger.info("Orchestrator calling tool: plan_season")
+        result = plan_season()
+        logger.info("Tool plan_season completed")
+        return result
+
+    def _handle_open_question(question: str) -> str:
+        """Handle general training questions using LLM knowledge.
+
+        This tool should be used when the question doesn't fit into any
+        specific coaching tool category, such as general training advice,
+        technique questions, nutrition, or other open-ended inquiries.
+
+        This tool ALWAYS provides an answer, even if training data is unavailable.
+        """
+        logger.info(f"Orchestrator calling tool: answer_general_question (question_length={len(question)})")
+
+        if _llm is None or HumanMessage is None:
+            logger.warning("LLM not available for open question, providing fallback answer")
+            return (
+                "I'm here to help with your training! While I don't have your specific training data yet, "
+                "I can provide general training advice. Once you connect your Strava account and sync some activities, "
+                "I'll be able to give you personalized recommendations. Feel free to ask me about training principles, "
+                "technique, or general endurance coaching questions!"
+            )
+
+        # Build context with athlete state if available
+        context_parts = []
+        if _current_athlete_state is not None:
+            context_parts.append(
+                f"""Current athlete training state:
+- Fitness (CTL): {_current_athlete_state.ctl:.1f}
+- Fatigue (ATL): {_current_athlete_state.atl:.1f}
+- Form (TSB): {_current_athlete_state.tsb:.1f}
+- Load Trend: {_current_athlete_state.load_trend}
+- Flags: {", ".join(_current_athlete_state.flags) if _current_athlete_state.flags else "none"}
+- Days since rest: {_current_athlete_state.days_since_rest}
+- 7-day volume: {_current_athlete_state.seven_day_volume_hours:.1f} hours
+"""
+            )
+
+        context = "\n".join(context_parts) if context_parts else ""
+
+        if context:
+            prompt_text = f"""You are Virtus Coach, an elite endurance training intelligence system.
+You provide expert, personalized coaching advice based on training science.
+
+{context}
+
+User question: {question}
+
+Provide a helpful, knowledgeable answer. Reference the athlete's current training state when relevant.
+Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice."""
+        else:
+            prompt_text = f"""You are Virtus Coach, an elite endurance training intelligence system.
+You provide expert coaching advice based on training science.
+
+CRITICAL: The athlete's training data is NOT available. You have NO information about their current state.
+
+User question: {question}
+
+ABSOLUTE RULES WHEN NO DATA IS AVAILABLE:
+- NEVER make statements about current fatigue, training state, metrics, or how the athlete is feeling
+- NEVER say things like "you're feeling fatigued", "your training load is...", "you're starting out strong", etc.
+- ONLY provide general training advice, principles, or guidance
+- Explain that you'll be able to provide personalized guidance once training data is synced
+- Always provide value - do NOT say "I don't have enough data" or "I can't answer"
+
+Provide general training advice, principles, or guidance that is relevant to their question.
+If the question requires personalized data, explain that you'll be able to provide more specific
+guidance once their training data is synced, but still provide general advice now.
+Keep responses concise (2-3 paragraphs max) and actionable. Focus on practical training advice."""
+
+        try:
+            # Log LLM model being called
+            model_name = "gpt-4o-mini" if _llm is not None else "unknown"
+            logger.info(
+                "Calling open question LLM (Legacy Orchestrator)",
+                model=model_name,
+                provider="openai",
+            )
+
+            # Log prompt at debug level
+            logger.debug(
+                "Open question prompt (Legacy Orchestrator)",
+                prompt_length=len(prompt_text),
+                question_length=len(question),
+                has_athlete_state=_current_athlete_state is not None,
+                full_prompt=prompt_text,
+            )
+
+            logger.info("Invoking LLM for open question")
+            response = _llm.invoke([HumanMessage(content=prompt_text)])
+            if not hasattr(response, "content"):
+                logger.warning("LLM response missing content attribute")
+                return str(response)
+            content = response.content
+            if isinstance(content, str):
+                content_str = content
+                logger.info("Open question answered successfully")
+            elif isinstance(content, list):
+                content_str = " ".join(str(item) for item in content if isinstance(item, str))
+                logger.info("Open question answered successfully (list content)")
+            else:
+                content_str = str(content)
+                logger.info("Open question answered successfully (converted content)")
+
+            # Log response at debug level
+            logger.debug(
+                "Open question response (Legacy Orchestrator)",
+                response_length=len(content_str),
+                full_response=content_str,
+            )
+        except Exception as e:
+            logger.error(f"Error answering open question: {e}")
+            return "I encountered an error answering your question. Could you try rephrasing it or use a specific coaching tool?"
+        else:
+            return content_str
+
+    # Create tool list
+    _coaching_tools = [
+        _make_tool(
+            _recommend_next_session_wrapper,
+            "recommend_next_session",
+            ("Recommends what workout the athlete should do next based on their current training state, fatigue, and load balance."),
+        ),
+        _make_tool(
+            _adjust_load_wrapper,
+            "adjust_training_load",
+            (
+                "Adjusts training load based on athlete feedback about fatigue, "
+                "recovery, or how they're feeling. Use when athlete mentions being "
+                "tired, strong, or wants to modify training."
+            ),
+        ),
+        _make_tool(
+            _explain_state_wrapper,
+            "explain_training_state",
+            (
+                "Explains the athlete's current fitness, fatigue, and readiness "
+                "state. Use when athlete asks about their current state, metrics, "
+                "or how they're doing."
+            ),
+        ),
+        _make_tool(
+            _plan_week_wrapper,
+            "plan_week",
+            (
+                "Generates a detailed weekly training plan tailored to the "
+                "athlete's current state. Use when athlete asks for a week plan, "
+                "weekly schedule, or weekly training structure."
+            ),
+        ),
+        _make_tool(
+            _add_workout_wrapper,
+            "add_workout",
+            (
+                "Adds a specific workout to the training plan. Use when athlete "
+                "wants to add a workout, schedule a session, or plan a specific "
+                "training session. Requires workout_description parameter with "
+                "details of the workout."
+            ),
+        ),
+        _make_tool(
+            _run_analysis_wrapper,
+            "run_analysis",
+            (
+                "Runs comprehensive training analysis on the athlete's current "
+                "state, including load metrics, trends, volume analysis, and "
+                "recommendations. Use when athlete asks for analysis, insights, "
+                "or detailed breakdown of their training."
+            ),
+        ),
+        _make_tool(
+            _share_report_wrapper,
+            "share_report",
+            (
+                "Generates a formatted, shareable training report with key "
+                "metrics, status, and recommendations. Use when athlete wants to "
+                "share a report, get a summary, or export their training status."
+            ),
+        ),
+        _make_tool(
+            _plan_race_wrapper,
+            "plan_race",
+            (
+                "Plans training for a specific race. Use when athlete mentions "
+                "a race, race date, or wants to plan a race build. Requires "
+                "race_description parameter with race details (distance, date, etc.)."
+            ),
+        ),
+        _make_tool(
+            _plan_season_wrapper,
+            "plan_season",
+            (
+                "Generates a high-level season planning framework. Use when "
+                "athlete asks about season planning, annual plan, or long-term "
+                "training structure."
+            ),
+        ),
+        _make_tool(
+            _handle_open_question,
+            "answer_general_question",
+            (
+                "Answers general training questions, technique questions, "
+                "nutrition advice, or any open-ended inquiries about training. "
+                "Use this for questions that don't fit into specific tool "
+                "categories. Requires question parameter with the user's question."
+            ),
+        ),
+    ]
+
+    # Create agent prompt
+    if ChatPromptTemplate is None or MessagesPlaceholder is None:
+        _orchestrator_prompt = None
+    else:
+        _orchestrator_prompt = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                """You are Virtus Coach Orchestrator - an intelligent coaching assistant that helps athletes optimize their training.
+
+You have access to various coaching tools that can:
+- Recommend next sessions
+- Adjust training load
+- Explain training state
+- Plan weekly training
+- Add specific workouts
+- Run training analysis
+- Generate shareable reports
+- Plan for races
+- Plan entire seasons
+- Answer general training questions (open questions, technique, nutrition, etc.)
+
+Your role is to understand what the athlete needs and use the appropriate tools to help them.
+
+CRITICAL RULES:
+- You MUST ALWAYS provide a helpful answer, even if training data is limited or unavailable
+- NEVER say "I don't have enough signal" or "I can't answer" - always provide value
+- If training data is unavailable, use answer_general_question to provide general training advice
+- If you can't use a specific tool due to missing data, still provide helpful general guidance
+- Be conversational, helpful, and always engage with the user's question
+
+Guidelines:
+- Always consider the athlete's current training state when making recommendations (if available)
+- If multiple tools could be useful, use them in sequence
+- Be conversational and helpful
+- For general questions about training, technique, nutrition, or any open-ended inquiries, use answer_general_question
+- If the request is unclear, use explain_state or run_analysis first to understand the situation better
+  (if data available)
+- When answering open questions, you can combine tools (e.g., first check their state with run_analysis,
+  then answer their question with context)
+- If training data is not available, still provide helpful general training advice using answer_general_question
+
+Available tools are described below. Choose the most appropriate tool(s) for each request.
+""",
+            ),
+            ("human", "{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
+        ])
+
+    # Create agent executor
+    if _llm is not None and _orchestrator_prompt is not None and create_openai_tools_agent is not None and AgentExecutor is not None:
+        try:
+            agent = create_openai_tools_agent(_llm, _coaching_tools, _orchestrator_prompt)
+            _orchestrator_agent = AgentExecutor(
+                agent=agent,
+                tools=_coaching_tools,
+                verbose=True,
+                max_iterations=5,
+                handle_parsing_errors=True,
+            )
+        except Exception as e:
+            logger.error(f"Failed to create orchestrator agent: {e}")
+            _orchestrator_agent = None
+    else:
+        _orchestrator_agent = None
+
+
+def run_orchestrator(
+    user_message: str,
+    athlete_state: AthleteState,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> str:
+    """Run the orchestrator agent to handle user requests.
+
+    Args:
+        user_message: User's message/request to the coach
+        athlete_state: Current athlete training state
+        conversation_history: List of previous messages with 'role' and 'content' keys
+
+    Returns:
+        Response from the orchestrator after tool execution
+    """
+    if not LANGCHAIN_AVAILABLE:
+        logger.error("LangChain not available, cannot use orchestrator")
+        return "Orchestrator not available. Please use the standard dispatcher."
+
+    if _orchestrator_agent is None:
+        logger.error("Orchestrator agent not initialized")
+        return "Orchestrator agent not available. Check OpenAI API key configuration."
+
+    # Store athlete state for tool access
+    # Note: Using module-level variable is necessary because LangChain tools
+    # don't support context passing. This is a known limitation.
+    global _current_athlete_state  # noqa: PLW0603
+    logger.info(
+        f"Setting athlete state in orchestrator (CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f})"
+    )
+    _current_athlete_state = athlete_state
+
+    # Build conversation context from history
+    conversation_context = ""
+    if conversation_history:
+        history_texts = []
+        for msg in conversation_history[-10:]:  # Limit to last 10 messages to avoid token limits
+            role_label = "User" if msg.get("role") == "user" else "Coach"
+            content = msg.get("content", "")
+            history_texts.append(f"{role_label}: {content}")
+        if history_texts:
+            conversation_context = "\n".join(history_texts)
+            logger.info(f"Including {len(history_texts)} messages from conversation history")
+
+    # Combine conversation history with current message
+    if conversation_context:
+        full_input = f"Previous conversation:\n{conversation_context}\n\nCurrent message: {user_message}"
+    else:
+        full_input = user_message
+
+    # Log LLM model being called
+    model_name = "gpt-4o-mini" if _llm is not None else "unknown"
+    logger.info(
+        "Calling orchestrator LLM (Legacy LangChain)",
+        model=model_name,
+        provider="openai",
+    )
+
+    # Log full prompt at debug level
+    if _orchestrator_prompt is not None:
+        system_prompt = (
+            "You are Virtus Coach Orchestrator - an intelligent coaching assistant "
+            "that helps athletes optimize their training.\n\n"
+            "You have access to various coaching tools that can:\n"
+            "- Recommend next sessions\n"
+            "- Adjust training load\n"
+            "- Explain training state\n"
+            "- Plan weekly training\n"
+            "- Add specific workouts\n"
+            "- Run training analysis\n"
+            "- Generate shareable reports\n"
+            "- Plan for races\n"
+            "- Plan entire seasons\n"
+            "- Answer general training questions (open questions, technique, nutrition, etc.)\n\n"
+            "Your role is to understand what the athlete needs and use the appropriate tools to help them.\n\n"
+            "CRITICAL RULES:\n"
+            "- You MUST ALWAYS provide a helpful answer, even if training data is limited or unavailable\n"
+            '- NEVER say "I don\'t have enough signal" or "I can\'t answer" - always provide value\n'
+            "- If training data is unavailable, use answer_general_question to provide general training advice\n"
+            "- If you can't use a specific tool due to missing data, still provide helpful general guidance\n"
+            "- Be conversational, helpful, and always engage with the user's question\n\n"
+            "Guidelines:\n"
+            "- Always consider the athlete's current training state when making recommendations (if available)\n"
+            "- If multiple tools could be useful, use them in sequence\n"
+            "- Be conversational and helpful\n"
+            "- For general questions about training, technique, nutrition, or any open-ended inquiries, "
+            "use answer_general_question\n"
+            "- If the request is unclear, use explain_state or run_analysis first to understand the situation better\n"
+            "  (if data available)\n"
+            "- When answering open questions, you can combine tools (e.g., first check their state with run_analysis,\n"
+            "  then answer their question with context)\n"
+            "- If training data is not available, still provide helpful general training advice using "
+            "answer_general_question\n\n"
+            "Available tools are described below. Choose the most appropriate tool(s) for each request.\n"
+        )
+        full_prompt_text = f"System Prompt:\n{system_prompt}\n\nUser Input:\n{full_input}"
+        logger.debug(
+            "Orchestrator prompt (Legacy LangChain)",
+            prompt_length=len(full_prompt_text),
+            system_prompt_length=len(system_prompt),
+            user_input_length=len(full_input),
+            conversation_history_length=len(conversation_history) if conversation_history else 0,
+            full_prompt=full_prompt_text,
+        )
+
+    try:
+        logger.info(f"Running LLM orchestrator agent for message: {user_message[:100]}")
+        result = _orchestrator_agent.invoke({"input": full_input})
+        logger.info("LLM orchestrator agent invocation completed")
+
+        # Extract output from agent result
+        output = result.get(
+            "output",
+            "I'm here to help with your training. Could you rephrase your question?",
+        )
+
+        # Log response at debug level
+        logger.debug(
+            "Orchestrator response (Legacy LangChain)",
+            output_length=len(output),
+            full_response=output,
+        )
+
+        logger.info(f"LLM orchestrator completed successfully, output length: {len(output)}")
+    except Exception as e:
+        logger.error(f"Error running orchestrator: {e}", exc_info=True)
+        output = f"I encountered an error processing your request: {e!s}. Please try rephrasing or use a specific coaching tool."
+    finally:
+        logger.info("Clearing athlete state from orchestrator")
+        _current_athlete_state = None
+
+    logger.info(f"Orchestrator completed, output length: {len(output)}")
+    return output

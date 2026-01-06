@@ -12,8 +12,8 @@ This migration creates the strava_accounts table with:
 
 from sqlalchemy import text
 
-from app.state.db import engine
-from app.state.models import Base
+from app.db.models import Base
+from app.db.session import engine
 
 
 def migrate_strava_accounts() -> None:

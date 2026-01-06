@@ -12,8 +12,8 @@ import sys
 from loguru import logger
 from sqlalchemy import inspect, text
 
-from app.core.settings import settings
-from app.state.db import engine
+from app.config.settings import settings
+from app.db.session import engine
 
 
 def _check_database_type() -> tuple[bool, bool]:

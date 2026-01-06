@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
-from app.coach.models import AthleteState
+from app.coach.core.models import AthleteState
 from app.coach.tools.session_planner import save_planned_sessions
 
 

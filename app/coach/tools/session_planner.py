@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 from sqlalchemy import select
 
-from app.state.db import get_session
-from app.state.models import PlannedSession
+from app.db.models import PlannedSession
+from app.db.session import get_session
 
 
 def save_planned_sessions(

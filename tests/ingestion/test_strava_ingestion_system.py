@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 from loguru import logger
 from sqlalchemy import text
 
-from app.ingestion.locks import lock_manager
-from app.ingestion.quota_manager import quota_manager
-from app.ingestion.scheduler import ingestion_tick
+from app.db.session import get_session
 from app.models import Activity, StravaAuth
-from app.state.db import get_session
+from app.services.ingestion.locks import lock_manager
+from app.services.ingestion.quota_manager import quota_manager
+from app.services.ingestion.scheduler import ingestion_tick
 
 
 def assert_redis():

@@ -11,7 +11,7 @@ Migration defaults:
 
 from sqlalchemy import text
 
-from app.state.db import engine
+from app.db.session import engine
 
 
 def _table_exists(conn) -> bool:

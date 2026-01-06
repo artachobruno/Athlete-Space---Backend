@@ -1,0 +1,40 @@
+{
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Darwin",
+  "reportMissingImports": false,
+  "typeCheckingMode": "basic",
+  "reportImportCycles": "error",
+  "reportMissingTypeStubs": false,
+  "reportFunctionMemberAccess": false,
+  "reportGeneralTypeIssues": false,
+  "reportOptionalMemberAccess": false,
+  "reportOptionalSubscript": false,
+  "reportPrivateImportUsage": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownParameterType": false,
+  "reportUnknownReturnType": false,
+  "reportAttributeAccessIssue": false,
+  "reportUnknownLambdaType": false,
+  "reportCallIssue": false,
+  "venvPath": ".",
+  "venv": ".venv",
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.12",
+      "pythonPlatform": "Darwin",
+      "extraPaths": []
+    }
+  ],
+  "exclude": [
+    "**/tests/**",
+    "**/.venv",
+    "**/venv",
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/build",
+    "**/dist"
+  ]
+}

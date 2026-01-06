@@ -6,10 +6,10 @@ from loguru import logger
 from pydantic import SecretStr
 from sqlalchemy import select
 
-from app.coach.models import AthleteState
-from app.core.settings import settings
-from app.state.db import get_session
-from app.state.models import Activity
+from app.coach.core.models import AthleteState
+from app.config.settings import settings
+from app.db.models import Activity
+from app.db.session import get_session
 
 
 def _get_recent_activities(user_id: str, days: int = 7) -> list[Activity]:

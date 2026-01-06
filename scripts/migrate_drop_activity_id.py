@@ -7,8 +7,8 @@ The Activity model uses 'id' (UUID) as the primary key and 'strava_activity_id' 
 from loguru import logger
 from sqlalchemy import text
 
-from app.core.settings import settings
-from app.state.db import engine
+from app.config.settings import settings
+from app.db.session import engine
 
 
 def _is_postgresql() -> bool:

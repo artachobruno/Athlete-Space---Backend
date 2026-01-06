@@ -1,3 +1,5 @@
+# ⚠️ LEGACY: One-time migration script - not included in run_migrations.py
+# Keep for historical reference and potential database recovery scenarios
 """Migration script to add sync tracking columns to strava_auth table.
 
 This migration adds:
@@ -9,8 +11,8 @@ These columns enable SLA monitoring and auto-healing of stuck backfills.
 
 from sqlalchemy import text
 
-from app.state.db import engine
-from app.state.models import Base
+from app.db.models import Base
+from app.db.session import engine
 
 
 def migrate_sync_tracking() -> None:

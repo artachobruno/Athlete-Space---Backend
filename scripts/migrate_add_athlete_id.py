@@ -1,3 +1,5 @@
+# ⚠️ LEGACY: One-time migration script - not included in run_migrations.py
+# Keep for historical reference and potential database recovery scenarios
 """Migration script to add athlete_id column to activities table.
 
 This migration adds the athlete_id column to support multi-user persistence.
@@ -7,8 +9,8 @@ For existing activities without athlete_id, it attempts to infer from StravaAuth
 from loguru import logger
 from sqlalchemy import text
 
-from app.core.settings import settings
-from app.state.db import engine
+from app.config.settings import settings
+from app.db.session import engine
 
 
 def _is_postgresql() -> bool:

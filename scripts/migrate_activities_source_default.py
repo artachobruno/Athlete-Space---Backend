@@ -6,8 +6,8 @@ This migration ensures the source column has a default value of 'strava' at the 
 from loguru import logger
 from sqlalchemy import text
 
-from app.core.settings import settings
-from app.state.db import engine
+from app.config.settings import settings
+from app.db.session import engine
 
 
 def _is_postgresql() -> bool:

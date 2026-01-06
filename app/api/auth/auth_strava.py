@@ -25,8 +25,10 @@ from app.db.models import StravaAccount, User
 from app.db.session import get_session
 from app.ingestion.background_sync import sync_user_activities
 from app.ingestion.tasks import history_backfill_task
+from app.integrations.strava.client import StravaClient
 from app.integrations.strava.oauth import exchange_code_for_token
 from app.metrics.daily_aggregation import aggregate_daily_training
+from app.services.profile_service import merge_strava_profile
 
 router = APIRouter(prefix="/auth/strava", tags=["auth", "strava"])
 
@@ -356,6 +358,20 @@ def strava_callback(
         logger.info(f"[STRAVA_OAUTH] OAuth successful for user_id={user_id}, athlete_id={athlete_id}")
 
         _encrypt_and_store_tokens(user_id, athlete_id, access_token, refresh_token, expires_at)
+
+        # Fetch and merge athlete profile from Strava
+        try:
+            logger.info(f"[STRAVA_OAUTH] Fetching athlete profile for user_id={user_id}")
+            strava_client = StravaClient(access_token=access_token)
+            strava_athlete = strava_client.fetch_athlete()
+            logger.info(f"[STRAVA_OAUTH] Fetched athlete profile: {strava_athlete.get('firstname')} {strava_athlete.get('lastname')}")
+
+            with get_session() as session:
+                merge_strava_profile(session, user_id, strava_athlete)
+            logger.info(f"[STRAVA_OAUTH] Profile merged successfully for user_id={user_id}")
+        except Exception as e:
+            logger.error(f"[STRAVA_OAUTH] Failed to fetch/merge athlete profile for user_id={user_id}: {e}", exc_info=True)
+            # Don't fail OAuth if profile fetch fails - user can still use the app
 
         # Trigger initial sync and history backfill to fetch at least 90 days of data
         _trigger_initial_sync(user_id, background_tasks)

@@ -15,7 +15,7 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from app.api.dependencies.auth import get_current_user_id
-from app.db.models import Activity, StravaAccount
+from app.db.models import Activity, AthleteProfile, StravaAccount
 from app.db.session import get_session
 from app.ingestion.sla import SYNC_SLA_SECONDS
 from app.ingestion.tasks import history_backfill_task
@@ -622,3 +622,77 @@ def trigger_history_sync(
     except Exception as e:
         logger.error(f"Error triggering history sync: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to trigger history sync: {e!s}") from e
+
+
+@router.get("/profile")
+def get_profile(user_id: str = Depends(get_current_user_id)):
+    """Get athlete profile information.
+
+    Returns profile data including fields imported from Strava and user input.
+    Fields are source-tagged to indicate where data came from.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        {
+            "name": str | null,
+            "gender": "M" | "F" | null,
+            "weight_kg": float | null,
+            "location": str | null,
+            "age": int | null,
+            "height_cm": int | null,
+            "primary_goal": str | null,
+            "onboarding_completed": bool,
+            "sources": {
+                "name": "strava" | "user" | null,
+                "gender": "strava" | "user" | null,
+                "weight_kg": "strava" | "user" | null,
+                "location": "strava" | "user" | null,
+                "age": "user" | null,
+                "height_cm": "user" | null,
+                "primary_goal": "user" | null,
+            },
+            "strava_connected": bool,
+        }
+    """
+    logger.info(f"[API] /me/profile endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+
+            if not profile:
+                # Return empty profile if none exists
+                logger.info(f"[API] No profile found for user_id={user_id}, returning empty profile")
+                return {
+                    "name": None,
+                    "gender": None,
+                    "weight_kg": None,
+                    "location": None,
+                    "age": None,
+                    "height_cm": None,
+                    "primary_goal": None,
+                    "onboarding_completed": False,
+                    "sources": {},
+                    "strava_connected": False,
+                }
+
+            # Detach from session
+            session.expunge(profile)
+
+            logger.info(f"[API] Profile retrieved for user_id={user_id}, onboarding_completed={profile.onboarding_completed}")
+            return {
+                "name": profile.name,
+                "gender": profile.gender,
+                "weight_kg": profile.weight_kg,
+                "location": profile.location,
+                "age": profile.age,
+                "height_cm": profile.height_cm,
+                "primary_goal": profile.primary_goal,
+                "onboarding_completed": profile.onboarding_completed,
+                "sources": profile.sources,
+                "strava_connected": profile.strava_connected,
+            }
+    except Exception as e:
+        logger.error(f"Error getting profile: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get profile: {e!s}") from e

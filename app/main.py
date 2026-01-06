@@ -5,9 +5,9 @@ from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
 
 from app.analytics.api import router as analytics_router
@@ -200,22 +200,42 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Virtus AI", lifespan=lifespan)
 
 # Configure CORS
-cors_origins = [
-    "https://pace-ai.onrender.com",  # Production frontend
-    settings.frontend_url,  # Frontend URL from settings
-    "http://localhost:5173",  # Local dev (Vite default)
-    "http://localhost:3000",  # Local dev (alternative port)
-]
+# Get allowed origins from environment variable or use defaults
+cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
+if cors_origins_env:
+    cors_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+else:
+    cors_origins = [
+        "https://pace-ai.onrender.com",  # Production frontend
+        settings.frontend_url,  # Frontend URL from settings
+        "http://localhost:5173",  # Local dev (Vite default)
+        "http://localhost:3000",  # Local dev (alternative port)
+        "http://localhost:8080",  # Local dev (alternative port)
+        "http://localhost:8501",  # Streamlit default
+    ]
+
 # Remove duplicates and filter out empty strings
 cors_origins = list(set(filter(None, cors_origins)))
 logger.info(f"[CORS] Configured allowed origins: {cors_origins}")
+
+# CORS middleware must be added before routers to ensure it handles all requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
-    expose_headers=["Location", "Content-Type", "Authorization"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+        "X-CSRFToken",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers",
+    ],
+    expose_headers=["*"],  # Expose all headers to frontend
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 app.include_router(activities_router)
@@ -245,13 +265,38 @@ def health():
     return {"status": "ok"}
 
 
+@app.exception_handler(Exception)
+def global_exception_handler(_request: Request, exc: Exception):
+    """Global exception handler for unhandled exceptions.
+
+    FastAPI's CORSMiddleware will automatically add CORS headers to this response.
+    This handler only catches exceptions that aren't already handled by FastAPI
+    (like HTTPException which FastAPI handles automatically).
+    """
+    # Don't handle HTTPException - FastAPI handles those automatically with CORS
+    if isinstance(exc, HTTPException):
+        raise exc
+
+    logger.exception(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "Internal server error"},
+    )
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log all HTTP requests."""
     logger.debug(f"Request: {request.method} {request.url.path}")
-    response = await call_next(request)
-    logger.debug(f"Response: {response.status_code} for {request.method} {request.url.path}")
-    return response
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        logger.exception(f"Error processing request {request.method} {request.url.path}: {e}")
+        # Re-raise to let the exception handler deal with it
+        raise
+    else:
+        logger.debug(f"Response: {response.status_code} for {request.method} {request.url.path}")
+        return response
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -284,3 +284,26 @@ class StravaClient:
             raise
         else:
             return streams_dict if streams_dict else None
+
+    def fetch_athlete(self) -> dict:
+        """Fetch authenticated athlete profile from Strava API.
+
+        Returns:
+            Dictionary containing athlete profile data from Strava API.
+            Includes: id, firstname, lastname, sex, weight, city, state, country, profile (photo URL)
+        """
+        logger.info("[STRAVA_CLIENT] Fetching athlete profile")
+        quota_manager.wait_for_slot()
+
+        resp = httpx.get(
+            f"{STRAVA_BASE_URL}/athlete",
+            headers=self._headers(),
+            timeout=15,
+        )
+
+        quota_manager.update_from_headers(dict(resp.headers))
+        resp.raise_for_status()
+
+        athlete_data = resp.json()
+        logger.info(f"[STRAVA_CLIENT] Fetched athlete profile for athlete_id={athlete_data.get('id')}")
+        return athlete_data

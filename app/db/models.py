@@ -401,3 +401,49 @@ class PlannedSession(Base):
     )
 
     __table_args__ = (UniqueConstraint("user_id", "date", "time", "title", name="uq_planned_session_user_datetime_title"),)
+
+
+class AthleteProfile(Base):
+    """Athlete profile information for onboarding and coaching.
+
+    Stores athlete profile data from Strava and user input.
+    Fields are source-tagged to track where data came from.
+
+    Schema:
+    - user_id: Foreign key to users.id (primary key)
+    - name: Full name (from Strava or user input)
+    - gender: Gender (M/F/null, from Strava or user input)
+    - weight_kg: Weight in kilograms (from Strava or user input)
+    - location: Location string (city, state, country from Strava or user input)
+    - age: Age in years (user input only, never from Strava)
+    - height_cm: Height in centimeters (user input only, never from Strava)
+    - primary_goal: Primary training goal (user input only, never from Strava)
+    - onboarding_completed: Whether onboarding is complete (default: False)
+    - sources: JSON field tracking source of each field ("strava" | "user")
+    - strava_athlete_id: Strava athlete ID (integer, nullable)
+    - strava_connected: Whether Strava is connected (default: False)
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
+    """
+
+    __tablename__ = "athlete_profiles"
+
+    user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    gender: Mapped[str | None] = mapped_column(String, nullable=True)  # M, F, or None
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    location: Mapped[str | None] = mapped_column(String, nullable=True)
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    primary_goal: Mapped[str | None] = mapped_column(String, nullable=True)
+    onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sources: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    strava_athlete_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    strava_connected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )

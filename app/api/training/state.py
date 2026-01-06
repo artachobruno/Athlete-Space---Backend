@@ -61,6 +61,11 @@ def _process_activities_for_tss(activities_query: Sequence[Row]) -> dict[str, di
     """
     daily_data: dict[str, dict[str, float]] = {}
     for row in activities_query:
+        # Skip activities with missing required fields
+        if row.duration_seconds is None or row.start_time is None:
+            logger.warning(f"Skipping activity {row.id}: missing duration_seconds or start_time")
+            continue
+
         activity_date = row.start_time.date().isoformat()
         if activity_date not in daily_data:
             daily_data[activity_date] = {"hours": 0.0, "tss": 0.0}
@@ -74,7 +79,7 @@ def _process_activities_for_tss(activities_query: Sequence[Row]) -> dict[str, di
             athlete_id="",
             strava_activity_id="",
             start_time=row.start_time,
-            type=row.type,
+            type=row.type or "Unknown",
             duration_seconds=row.duration_seconds,
             distance_meters=row.distance_meters or 0.0,
             elevation_gain_meters=row.elevation_gain_meters or 0.0,

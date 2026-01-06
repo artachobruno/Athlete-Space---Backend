@@ -293,18 +293,60 @@ class IntentStore:
             )
 
             session.add(new_decision)
+            session.flush()  # Flush to ensure ID is generated and object is persisted
+
+            # Verify ID is set after flush
+            if not new_decision.id:
+                raise ValueError("Decision ID was not generated after flush")
+
+            # Refresh to ensure object is fully synchronized with database
+            session.refresh(new_decision)
+
+            decision_id = new_decision.id
+            logger.debug(f"Decision ID after flush and refresh: {decision_id}, type: {type(decision_id)}")
+
             session.commit()
+
+            # Verify the decision can be retrieved immediately after commit
+            verification = session.execute(select(DailyDecisionModel).where(DailyDecisionModel.id == decision_id)).scalar_one_or_none()
+            if verification is None:
+                logger.error(
+                    f"CRITICAL: Decision {decision_id} was committed but cannot be retrieved in same session. "
+                    f"This indicates a database transaction issue."
+                )
+            else:
+                logger.debug(f"Verified decision exists in database: {decision_id}")
 
             logger.info(
                 "Daily decision saved",
-                decision_id=new_decision.id,
+                decision_id=decision_id,
                 user_id=user_id,
                 athlete_id=athlete_id,
                 decision_date=decision.decision_date.isoformat(),
                 version=next_version,
             )
 
-            return new_decision.id
+            return decision_id
+
+    @staticmethod
+    def get_daily_decision_by_id(decision_id: str) -> DailyDecisionModel | None:
+        """Get a daily decision by its ID.
+
+        Args:
+            decision_id: Decision ID (UUID string)
+
+        Returns:
+            DailyDecisionModel or None if not found
+        """
+        logger.debug(f"Looking up decision by ID: {decision_id}, type: {type(decision_id)}")
+        with get_session() as session:
+            result = session.execute(select(DailyDecisionModel).where(DailyDecisionModel.id == decision_id)).scalar_one_or_none()
+            if result is None:
+                # Debug: Check if any decisions exist for this athlete/date
+                logger.warning(f"Decision not found by ID: {decision_id}")
+            else:
+                logger.debug(f"Found decision: id={result.id}, type={type(result.id)}")
+            return result
 
     @staticmethod
     def get_latest_daily_decision(

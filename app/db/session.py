@@ -94,9 +94,13 @@ def _handle_session_commit(session: Session) -> None:
         logger.debug(f"Session has {len(session.dirty)} dirty objects: {[str(obj) for obj in list(session.dirty)[:3]]}")
     if session.new:
         logger.debug(f"Session has {len(session.new)} new objects: {[str(obj) for obj in list(session.new)[:3]]}")
-    logger.debug("Calling session.commit()")
-    session.commit()
-    logger.debug("Database session committed successfully")
+    # Only commit if there are changes to avoid unnecessary commits
+    if session.dirty or session.new or session.deleted:
+        logger.debug("Calling session.commit()")
+        session.commit()
+        logger.debug("Database session committed successfully")
+    else:
+        logger.debug("No changes to commit, skipping commit")
 
 
 def _log_keyerror_details(session: Session, error: KeyError) -> None:

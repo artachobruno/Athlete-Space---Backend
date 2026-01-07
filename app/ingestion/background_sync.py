@@ -194,6 +194,17 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         after_date = now - timedelta(days=90)
         logger.info(f"[SYNC] First sync for user_id={user_id}, fetching last 90 days")
 
+    # Always check for recent activities (last 48 hours) to ensure nothing is missing
+    # This is a safety check to catch any activities that might have been missed
+    recent_check_date = now - timedelta(hours=48)
+    if after_date > recent_check_date:
+        # If our sync window is very recent, extend it to cover last 48 hours
+        logger.info(
+            f"[SYNC] Extending sync window to cover last 48 hours for safety check: "
+            f"after_date={after_date.isoformat()} -> recent_check_date={recent_check_date.isoformat()}"
+        )
+        after_date = recent_check_date
+
     logger.info(f"[SYNC] Fetching activities for user_id={user_id} from {after_date.isoformat()} to {now.isoformat()}")
 
     # Create Strava client

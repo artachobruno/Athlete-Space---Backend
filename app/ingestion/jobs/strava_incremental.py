@@ -11,9 +11,21 @@ from app.integrations.strava.service import get_strava_client
 def incremental_sync_user(user):
     logger.info(f"[INCREMENTAL] Starting incremental sync for athlete_id={user.athlete_id}")
 
+    now = dt.datetime.now(tz=dt.UTC)
     after = (
         dt.datetime.fromtimestamp(user.last_ingested_at, tz=dt.UTC) if user.last_ingested_at else dt.datetime.fromtimestamp(0, tz=dt.UTC)
     )
+
+    # Always check for recent activities (last 48 hours) to ensure nothing is missing
+    # This is a safety check to catch any activities that might have been missed
+    recent_check_date = now - dt.timedelta(hours=48)
+    if after > recent_check_date:
+        # If our sync window is very recent, extend it to cover last 48 hours
+        logger.info(
+            f"[INCREMENTAL] Extending sync window to cover last 48 hours for safety check: "
+            f"after={after.isoformat()} -> recent_check_date={recent_check_date.isoformat()}"
+        )
+        after = recent_check_date
 
     logger.info(f"[INCREMENTAL] Fetching activities after {after.isoformat()} for athlete_id={user.athlete_id}")
     client = get_strava_client(user.athlete_id)

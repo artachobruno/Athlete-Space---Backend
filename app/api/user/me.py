@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from app.api.dependencies.auth import get_current_user_id
 from app.db.models import Activity, AthleteProfile, StravaAccount
 from app.db.session import get_session
+from app.ingestion.background_sync import sync_user_activities
 from app.ingestion.sla import SYNC_SLA_SECONDS
 from app.ingestion.tasks import history_backfill_task
 from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
@@ -583,6 +584,111 @@ def get_debug_data(user_id: str = Depends(get_current_user_id)):
     except Exception as e:
         logger.error(f"Error getting debug data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get debug data: {e!s}") from e
+
+
+@router.post("/sync/check")
+def check_recent_activities(
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Check for recent activities (last 48 hours) and sync if needed.
+
+    This endpoint should be called on every refresh or new session to ensure
+    today's activities are always synced. Runs in background.
+
+    Args:
+        background_tasks: FastAPI background tasks
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Dictionary with sync status and message
+    """
+    logger.info(f"[API] /me/sync/check endpoint called for user_id={user_id}")
+    try:
+        # Verify user has Strava account
+        account = get_strava_account(user_id)
+
+        # Trigger sync in background (will check last 48 hours automatically)
+        def sync_task():
+            try:
+                result = sync_user_activities(user_id)
+                if "error" in result:
+                    logger.warning(f"[API] Sync check failed for user_id={user_id}: {result.get('error')}")
+                else:
+                    logger.info(
+                        f"[API] Sync check completed for user_id={user_id}: "
+                        f"imported={result.get('imported', 0)}, skipped={result.get('skipped', 0)}"
+                    )
+            except Exception as e:
+                logger.error(f"[API] Error in sync check task for user_id={user_id}: {e}", exc_info=True)
+
+        background_tasks.add_task(sync_task)
+
+        logger.info(f"[API] Recent activities check scheduled for user_id={user_id}")
+        return {
+            "success": True,
+            "message": "Checking for recent activities (last 48 hours). Sync running in background.",
+            "user_id": user_id,
+            "last_sync": datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking recent activities: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to check recent activities: {e!s}") from e
+
+
+@router.post("/sync/now")
+def trigger_sync_now(
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Trigger immediate sync of activities from Strava.
+
+    User-initiated sync that fetches all activities since last sync (or last 48 hours).
+    Runs in background to avoid blocking the request.
+
+    Args:
+        background_tasks: FastAPI background tasks
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Dictionary with sync status and message
+    """
+    logger.info(f"[API] /me/sync/now endpoint called for user_id={user_id}")
+    try:
+        # Verify user has Strava account
+        account = get_strava_account(user_id)
+
+        # Trigger sync in background
+        def sync_task():
+            try:
+                result = sync_user_activities(user_id)
+                if "error" in result:
+                    logger.warning(f"[API] Manual sync failed for user_id={user_id}: {result.get('error')}")
+                else:
+                    logger.info(
+                        f"[API] Manual sync completed for user_id={user_id}: "
+                        f"imported={result.get('imported', 0)}, skipped={result.get('skipped', 0)}, "
+                        f"total_fetched={result.get('total_fetched', 0)}"
+                    )
+            except Exception as e:
+                logger.error(f"[API] Error in manual sync task for user_id={user_id}: {e}", exc_info=True)
+
+        background_tasks.add_task(sync_task)
+
+        logger.info(f"[API] Manual sync scheduled for user_id={user_id}")
+        return {
+            "success": True,
+            "message": "Sync started in background. This will fetch activities from the last 48 hours or since your last sync.",
+            "user_id": user_id,
+            "last_sync": datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering manual sync: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to trigger sync: {e!s}") from e
 
 
 @router.post("/sync/history")

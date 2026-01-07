@@ -175,6 +175,17 @@ def ingest_activities(
             after_date = requested_after_date
             logger.info(f"[INGESTION] First sync for user_id={user_id}, fetching from {after_date.isoformat()}")
 
+        # Always check for recent activities (last 48 hours) to ensure nothing is missing
+        # This is a safety check to catch any activities that might have been missed
+        recent_check_date = now - timedelta(hours=48)
+        if after_date > recent_check_date:
+            # If our sync window is very recent, extend it to cover last 48 hours
+            logger.info(
+                f"[INGESTION] Extending sync window to cover last 48 hours for safety check: "
+                f"after_date={after_date.isoformat()} -> recent_check_date={recent_check_date.isoformat()}"
+            )
+            after_date = recent_check_date
+
         after_ts = after_date
 
         logger.info(f"[INGESTION] Fetching activities for user_id={user_id} from {after_date.isoformat()} to {now.isoformat()}")

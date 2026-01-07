@@ -343,10 +343,25 @@ def compute_daily_load_scores(
     return daily_loads
 
 
+def _normalize_to_scale(value: float, max_value: float = 100.0) -> float:
+    """Normalize a metric value to -100 to 100 scale.
+
+    Args:
+        value: Metric value (typically 0-max_value)
+        max_value: Maximum expected value for normalization (default 100)
+
+    Returns:
+        Normalized value in -100 to 100 range
+    """
+    normalized = (value / max_value) * 200.0 - 100.0
+    return round(max(-100.0, min(100.0, normalized)), 2)
+
+
 def compute_ctl_atl_tsb_from_loads(
     daily_loads: dict[date, float],
     start_date: date,
     end_date: date,
+    normalize: bool = True,
 ) -> dict[date, dict[str, float]]:
     """Compute CTL, ATL, TSB from daily training loads (DTL).
 
@@ -363,14 +378,17 @@ def compute_ctl_atl_tsb_from_loads(
         daily_loads: Dictionary mapping date -> DTL (Daily Training Load)
         start_date: Start date (inclusive)
         end_date: End date (inclusive)
+        normalize: If True, normalize CTL and ATL to -100 to 100 scale (default: True)
 
     Returns:
         Dictionary mapping date -> {"ctl": float, "atl": float, "tsb": float}
+        Values are normalized to -100 to 100 scale if normalize=True
 
     Notes:
         - Missing days are treated as rest days (DTL = 0.0)
         - All dates in range are included (continuous series)
         - Deterministic and idempotent
+        - CTL and ATL are normalized to -100 to 100 scale by default
     """
     # Build continuous series (fill gaps with 0.0 for rest days)
     continuous_dates: list[date] = []
@@ -392,8 +410,17 @@ def compute_ctl_atl_tsb_from_loads(
     # Build result dictionary
     result: dict[date, dict[str, float]] = {}
     for i, date_val in enumerate(continuous_dates):
-        ctl = round(ctl_series[i], 2)
-        atl = round(atl_series[i], 2)
+        ctl = ctl_series[i]
+        atl = atl_series[i]
+
+        if normalize:
+            # Normalize CTL and ATL to -100 to 100 scale
+            ctl = _normalize_to_scale(ctl)
+            atl = _normalize_to_scale(atl)
+        else:
+            ctl = round(ctl, 2)
+            atl = round(atl, 2)
+
         tsb = round(ctl - atl, 2)
         result[date_val] = {
             "ctl": ctl,

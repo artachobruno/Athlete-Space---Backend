@@ -33,23 +33,39 @@ class DailyTrainingRow(TypedDict):
     load_score: float
 
 
-def calculate_ctl_atl_tsb(daily_load: list[float]) -> dict[str, list[float]]:
+def _normalize_to_scale(value: float, max_value: float = 100.0) -> float:
+    """Normalize a metric value to -100 to 100 scale.
+
+    Args:
+        value: Metric value (typically 0-max_value)
+        max_value: Maximum expected value for normalization (default 100)
+
+    Returns:
+        Normalized value in -100 to 100 range
+    """
+    normalized = (value / max_value) * 200.0 - 100.0
+    return round(max(-100.0, min(100.0, normalized)), 2)
+
+
+def calculate_ctl_atl_tsb(daily_load: list[float], normalize: bool = True) -> dict[str, list[float]]:
     """Calculate CTL, ATL, and TSB from daily training load.
 
     Args:
         daily_load: List of daily training hours (float), ordered chronologically.
                    Missing days should be represented as 0.0, not omitted.
+        normalize: If True, normalize CTL and ATL to -100 to 100 scale (default: True)
 
     Returns:
         Dictionary with keys:
-        - "ctl": List of CTL values (42-day EWMA)
-        - "atl": List of ATL values (7-day EWMA)
-        - "tsb": List of TSB values (CTL - ATL)
+        - "ctl": List of CTL values (42-day EWMA, normalized to -100 to 100 if normalize=True)
+        - "atl": List of ATL values (7-day EWMA, normalized to -100 to 100 if normalize=True)
+        - "tsb": List of TSB values (CTL - ATL, also normalized if normalize=True)
 
     Algorithm:
         - CTL = 42-day exponentially weighted moving average
         - ATL = 7-day exponentially weighted moving average
         - TSB = CTL - ATL
+        - If normalize=True, CTL and ATL are normalized to -100 to 100 scale
 
     Properties:
         - Deterministic: Same input produces same output
@@ -67,6 +83,12 @@ def calculate_ctl_atl_tsb(daily_load: list[float]) -> dict[str, list[float]]:
 
     ctl = _calculate_ewma(daily_load, tau_days=42)
     atl = _calculate_ewma(daily_load, tau_days=7)
+
+    if normalize:
+        # Normalize CTL and ATL to -100 to 100 scale
+        ctl = [_normalize_to_scale(c) for c in ctl]
+        atl = [_normalize_to_scale(a) for a in atl]
+
     tsb = [round(c - a, 2) for c, a in zip(ctl, atl, strict=False)]
 
     return {"ctl": ctl, "atl": atl, "tsb": tsb}
@@ -144,6 +166,7 @@ def get_current_metrics(daily_load: list[float]) -> dict[str, float]:
 
 def compute_training_load(
     daily_rows: list[DailyTrainingRow],
+    normalize: bool = True,
 ) -> dict[str, list[tuple[str, float]]]:
     """Compute CTL, ATL, and TSB from daily training rows.
 
@@ -151,16 +174,17 @@ def compute_training_load(
         daily_rows: List of daily training rows from daily_training_summary.
                    Rows should be ordered chronologically and include all days
                    in the requested range (missing days have zero values).
+        normalize: If True, normalize CTL and ATL to -100 to 100 scale (default: True)
 
     Returns:
         Dictionary with keys:
-        - "ctl": List of (date, value) tuples for CTL
-        - "atl": List of (date, value) tuples for ATL
+        - "ctl": List of (date, value) tuples for CTL (normalized to -100 to 100 if normalize=True)
+        - "atl": List of (date, value) tuples for ATL (normalized to -100 to 100 if normalize=True)
         - "tsb": List of (date, value) tuples for TSB
 
     Rules:
-        - CTL = 42-day EWMA of load_score
-        - ATL = 7-day EWMA of load_score
+        - CTL = 42-day EWMA of load_score, normalized to -100 to 100 scale
+        - ATL = 7-day EWMA of load_score, normalized to -100 to 100 scale
         - TSB = CTL - ATL
         - Missing days = load_score = 0
         - UTC only
@@ -191,8 +215,8 @@ def compute_training_load(
         daily_load.append(load_map.get(current_date, 0.0))
         current_date += timedelta(days=1)
 
-    # Calculate metrics
-    metrics = calculate_ctl_atl_tsb(daily_load)
+    # Calculate metrics (with normalization by default)
+    metrics = calculate_ctl_atl_tsb(daily_load, normalize=normalize)
 
     # Convert to (date, value) tuples
     date_strings = [d.isoformat() for d in continuous_dates]

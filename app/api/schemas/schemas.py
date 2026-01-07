@@ -227,3 +227,107 @@ class CoachAskResponse(BaseModel):
     intent: str | None = Field(description="Detected intent of the message", default=None)
     confidence: float = Field(description="Confidence in the response (0.0 to 1.0)", ge=0.0, le=1.0)
     timestamp: str = Field(description="ISO 8601 timestamp")
+
+
+# ============================================================================
+# Profile Schemas
+# ============================================================================
+
+
+class AthleteProfileResponse(BaseModel):
+    """Response for GET /me/profile."""
+
+    name: str | None = Field(description="Full name", default=None)
+    email: str | None = Field(description="Email address", default=None)
+    gender: str | None = Field(description="Gender (M/F)", default=None)
+    date_of_birth: str | None = Field(description="Date of birth (YYYY-MM-DD)", default=None)
+    weight_kg: float | None = Field(description="Weight in kilograms", default=None)
+    height_cm: int | None = Field(description="Height in centimeters", default=None)
+    location: str | None = Field(description="Location string", default=None)
+    unit_system: str = Field(description="Unit system: imperial or metric", default="metric")
+    strava_connected: bool = Field(description="Whether Strava is connected", default=False)
+
+
+class AthleteProfileUpdateRequest(BaseModel):
+    """Request for PUT /me/profile."""
+
+    name: str | None = Field(description="Full name", default=None)
+    email: str | None = Field(description="Email address", default=None)
+    gender: str | None = Field(description="Gender (M/F)", default=None)
+    date_of_birth: str | None = Field(description="Date of birth (YYYY-MM-DD)", default=None)
+    weight_kg: float | None = Field(description="Weight in kilograms", default=None)
+    height_cm: int | None = Field(description="Height in centimeters", default=None)
+    location: str | None = Field(description="Location string", default=None)
+    unit_system: str | None = Field(description="Unit system: imperial or metric", default=None)
+
+
+class TrainingPreferencesResponse(BaseModel):
+    """Response for GET /me/training-preferences."""
+
+    years_of_training: int = Field(description="Years of structured training", default=0)
+    primary_sports: list[str] = Field(description="List of primary sports", default_factory=list)
+    available_days: list[str] = Field(description="Available training days", default_factory=list)
+    weekly_hours: float = Field(description="Weekly training hours", default=10.0)
+    training_focus: str = Field(description="Training focus: race_focused or general_fitness", default="general_fitness")
+    injury_history: bool = Field(description="Whether athlete has injury history", default=False)
+
+
+class TrainingPreferencesUpdateRequest(BaseModel):
+    """Request for PUT /me/training-preferences."""
+
+    years_of_training: int | None = Field(description="Years of structured training", default=None, ge=0)
+    primary_sports: list[str] | None = Field(description="List of primary sports", default=None)
+    available_days: list[str] | None = Field(description="Available training days", default=None)
+    weekly_hours: float | None = Field(description="Weekly training hours", default=None, ge=3.0, le=25.0)
+    training_focus: str | None = Field(description="Training focus: race_focused or general_fitness", default=None)
+    injury_history: bool | None = Field(description="Whether athlete has injury history", default=None)
+
+
+class PrivacySettingsResponse(BaseModel):
+    """Response for GET /me/privacy-settings."""
+
+    profile_visibility: str = Field(description="Profile visibility: public, private, or coaches", default="private")
+    share_activity_data: bool = Field(description="Allow sharing anonymized activity data", default=False)
+    share_training_metrics: bool = Field(description="Allow sharing training metrics with coaches", default=False)
+
+
+class PrivacySettingsUpdateRequest(BaseModel):
+    """Request for PUT /me/privacy-settings."""
+
+    profile_visibility: str | None = Field(description="Profile visibility: public, private, or coaches", default=None)
+    share_activity_data: bool | None = Field(description="Allow sharing anonymized activity data", default=None)
+    share_training_metrics: bool | None = Field(description="Allow sharing training metrics with coaches", default=None)
+
+
+class NotificationsResponse(BaseModel):
+    """Response for GET /me/notifications."""
+
+    email_notifications: bool = Field(description="Receive email notifications", default=True)
+    push_notifications: bool = Field(description="Receive push notifications", default=True)
+    workout_reminders: bool = Field(description="Receive workout reminders", default=True)
+    training_load_alerts: bool = Field(description="Receive training load alerts", default=True)
+    race_reminders: bool = Field(description="Receive race reminders", default=True)
+    weekly_summary: bool = Field(description="Receive weekly summary", default=True)
+    goal_achievements: bool = Field(description="Receive goal achievement notifications", default=True)
+    coach_messages: bool = Field(description="Receive coach message notifications", default=True)
+
+
+class NotificationsUpdateRequest(BaseModel):
+    """Request for PUT /me/notifications."""
+
+    email_notifications: bool | None = Field(description="Receive email notifications", default=None)
+    push_notifications: bool | None = Field(description="Receive push notifications", default=None)
+    workout_reminders: bool | None = Field(description="Receive workout reminders", default=None)
+    training_load_alerts: bool | None = Field(description="Receive training load alerts", default=None)
+    race_reminders: bool | None = Field(description="Receive race reminders", default=None)
+    weekly_summary: bool | None = Field(description="Receive weekly summary", default=None)
+    goal_achievements: bool | None = Field(description="Receive goal achievement notifications", default=None)
+    coach_messages: bool | None = Field(description="Receive coach message notifications", default=None)
+
+
+class ChangePasswordRequest(BaseModel):
+    """Request for POST /me/change-password."""
+
+    current_password: str = Field(description="Current password")
+    new_password: str = Field(description="New password (min 8 characters)", min_length=8)
+    confirm_password: str = Field(description="Confirm new password", min_length=8)

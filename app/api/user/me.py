@@ -15,7 +15,18 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from app.api.dependencies.auth import get_current_user_id
-from app.db.models import Activity, AthleteProfile, StravaAccount
+from app.api.schemas.schemas import (
+    AthleteProfileResponse,
+    AthleteProfileUpdateRequest,
+    ChangePasswordRequest,
+    NotificationsResponse,
+    NotificationsUpdateRequest,
+    PrivacySettingsResponse,
+    PrivacySettingsUpdateRequest,
+    TrainingPreferencesResponse,
+    TrainingPreferencesUpdateRequest,
+)
+from app.db.models import Activity, AthleteProfile, StravaAccount, UserSettings
 from app.db.session import get_session
 from app.ingestion.background_sync import sync_user_activities
 from app.ingestion.sla import SYNC_SLA_SECONDS
@@ -25,6 +36,59 @@ from app.metrics.data_quality import assess_data_quality
 from app.metrics.training_load import compute_training_load
 
 router = APIRouter(prefix="/me", tags=["me"])
+
+
+def _validate_unit_system(unit_system: str) -> None:
+    """Validate unit system value.
+
+    Args:
+        unit_system: Unit system to validate
+
+    Raises:
+        HTTPException: If unit_system is invalid
+    """
+    if unit_system not in {"imperial", "metric"}:
+        raise HTTPException(status_code=400, detail="unit_system must be 'imperial' or 'metric'")
+
+
+def _validate_training_focus(training_focus: str) -> None:
+    """Validate training focus value.
+
+    Args:
+        training_focus: Training focus to validate
+
+    Raises:
+        HTTPException: If training_focus is invalid
+    """
+    if training_focus not in {"race_focused", "general_fitness"}:
+        raise HTTPException(status_code=400, detail="training_focus must be 'race_focused' or 'general_fitness'")
+
+
+def _validate_profile_visibility(profile_visibility: str) -> None:
+    """Validate profile visibility value.
+
+    Args:
+        profile_visibility: Profile visibility to validate
+
+    Raises:
+        HTTPException: If profile_visibility is invalid
+    """
+    if profile_visibility not in {"public", "private", "coaches"}:
+        raise HTTPException(status_code=400, detail="profile_visibility must be 'public', 'private', or 'coaches'")
+
+
+def _validate_password_match(new_password: str, confirm_password: str) -> None:
+    """Validate that new password and confirmation match.
+
+    Args:
+        new_password: New password
+        confirm_password: Password confirmation
+
+    Raises:
+        HTTPException: If passwords don't match
+    """
+    if new_password != confirm_password:
+        raise HTTPException(status_code=400, detail="New password and confirmation do not match")
 
 
 def get_strava_account(user_id: str) -> StravaAccount:
@@ -784,37 +848,17 @@ def trigger_history_sync(
         raise HTTPException(status_code=500, detail=f"Failed to trigger history sync: {e!s}") from e
 
 
-@router.get("/profile")
+@router.get("/profile", response_model=AthleteProfileResponse)
 def get_profile(user_id: str = Depends(get_current_user_id)):
     """Get athlete profile information.
 
     Returns profile data including fields imported from Strava and user input.
-    Fields are source-tagged to indicate where data came from.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
-        {
-            "name": str | null,
-            "gender": "M" | "F" | null,
-            "weight_kg": float | null,
-            "location": str | null,
-            "age": int | null,
-            "height_cm": int | null,
-            "primary_goal": str | null,
-            "onboarding_completed": bool,
-            "sources": {
-                "name": "strava" | "user" | null,
-                "gender": "strava" | "user" | null,
-                "weight_kg": "strava" | "user" | null,
-                "location": "strava" | "user" | null,
-                "age": "user" | null,
-                "height_cm": "user" | null,
-                "primary_goal": "user" | null,
-            },
-            "strava_connected": bool,
-        }
+        AthleteProfileResponse with all profile fields
     """
     logger.info(f"[API] /me/profile endpoint called for user_id={user_id}")
     try:
@@ -822,37 +866,431 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
             profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
 
             if not profile:
-                # Return empty profile if none exists
                 logger.info(f"[API] No profile found for user_id={user_id}, returning empty profile")
-                return {
-                    "name": None,
-                    "gender": None,
-                    "weight_kg": None,
-                    "location": None,
-                    "age": None,
-                    "height_cm": None,
-                    "primary_goal": None,
-                    "onboarding_completed": False,
-                    "sources": {},
-                    "strava_connected": False,
-                }
+                return AthleteProfileResponse(
+                    name=None,
+                    email=None,
+                    gender=None,
+                    date_of_birth=None,
+                    weight_kg=None,
+                    height_cm=None,
+                    location=None,
+                    unit_system="metric",
+                    strava_connected=False,
+                )
 
-            # Detach from session
             session.expunge(profile)
 
-            logger.info(f"[API] Profile retrieved for user_id={user_id}, onboarding_completed={profile.onboarding_completed}")
-            return {
-                "name": profile.name,
-                "gender": profile.gender,
-                "weight_kg": profile.weight_kg,
-                "location": profile.location,
-                "age": profile.age,
-                "height_cm": profile.height_cm,
-                "primary_goal": profile.primary_goal,
-                "onboarding_completed": profile.onboarding_completed,
-                "sources": profile.sources,
-                "strava_connected": profile.strava_connected,
-            }
+            date_of_birth_str = None
+            if profile.date_of_birth:
+                date_of_birth_str = profile.date_of_birth.date().isoformat()
+
+            logger.info(f"[API] Profile retrieved for user_id={user_id}")
+            return AthleteProfileResponse(
+                name=profile.name,
+                email=profile.email,
+                gender=profile.gender,
+                date_of_birth=date_of_birth_str,
+                weight_kg=profile.weight_kg,
+                height_cm=profile.height_cm,
+                location=profile.location,
+                unit_system=profile.unit_system or "metric",
+                strava_connected=profile.strava_connected,
+            )
     except Exception as e:
         logger.error(f"Error getting profile: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get profile: {e!s}") from e
+
+
+@router.put("/profile", response_model=AthleteProfileResponse)
+def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(get_current_user_id)):
+    """Update athlete profile information.
+
+    Args:
+        request: Profile update request with fields to update
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Updated AthleteProfileResponse
+    """
+    logger.info(f"[API] /me/profile PUT endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+
+            if not profile:
+                profile = AthleteProfile(user_id=user_id)
+                session.add(profile)
+
+            # Update fields that are provided
+            if request.name is not None:
+                profile.name = request.name
+                profile.sources["name"] = "user"
+
+            if request.email is not None:
+                profile.email = request.email
+
+            if request.gender is not None:
+                profile.gender = request.gender
+                profile.sources["gender"] = "user"
+
+            if request.date_of_birth is not None:
+                try:
+                    # Parse YYYY-MM-DD format
+                    parsed_date = datetime.strptime(request.date_of_birth, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    profile.date_of_birth = parsed_date
+                except ValueError as e:
+                    logger.warning(f"Failed to parse date_of_birth: {e}")
+                    raise HTTPException(status_code=400, detail=f"Invalid date format: {request.date_of_birth}. Expected YYYY-MM-DD") from e
+
+            if request.weight_kg is not None:
+                profile.weight_kg = request.weight_kg
+                profile.sources["weight_kg"] = "user"
+
+            if request.height_cm is not None:
+                profile.height_cm = request.height_cm
+                profile.sources["height_cm"] = "user"
+
+            if request.location is not None:
+                profile.location = request.location
+                profile.sources["location"] = "user"
+
+            if request.unit_system is not None:
+                _validate_unit_system(request.unit_system)
+                profile.unit_system = request.unit_system
+
+            profile.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(profile)
+            session.expunge(profile)
+
+            date_of_birth_str = None
+            if profile.date_of_birth:
+                date_of_birth_str = profile.date_of_birth.date().isoformat()
+
+            logger.info(f"[API] Profile updated for user_id={user_id}")
+            return AthleteProfileResponse(
+                name=profile.name,
+                email=profile.email,
+                gender=profile.gender,
+                date_of_birth=date_of_birth_str,
+                weight_kg=profile.weight_kg,
+                height_cm=profile.height_cm,
+                location=profile.location,
+                unit_system=profile.unit_system or "metric",
+                strava_connected=profile.strava_connected,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating profile: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update profile: {e!s}") from e
+
+
+@router.get("/training-preferences", response_model=TrainingPreferencesResponse)
+def get_training_preferences(user_id: str = Depends(get_current_user_id)):
+    """Get training preferences.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        TrainingPreferencesResponse with all training preference fields
+    """
+    logger.info(f"[API] /me/training-preferences endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+
+            if not settings:
+                logger.info(f"[API] No settings found for user_id={user_id}, returning defaults")
+                return TrainingPreferencesResponse()
+
+            session.expunge(settings)
+
+            return TrainingPreferencesResponse(
+                years_of_training=settings.years_of_training or 0,
+                primary_sports=settings.primary_sports or [],
+                available_days=settings.available_days or [],
+                weekly_hours=settings.weekly_hours or 10.0,
+                training_focus=settings.training_focus or "general_fitness",
+                injury_history=settings.injury_history or False,
+            )
+    except Exception as e:
+        logger.error(f"Error getting training preferences: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get training preferences: {e!s}") from e
+
+
+@router.put("/training-preferences", response_model=TrainingPreferencesResponse)
+def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_id: str = Depends(get_current_user_id)):
+    """Update training preferences.
+
+    Args:
+        request: Training preferences update request
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Updated TrainingPreferencesResponse
+    """
+    logger.info(f"[API] /me/training-preferences PUT endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+
+            if not settings:
+                settings = UserSettings(user_id=user_id)
+                session.add(settings)
+
+            # Update fields that are provided
+            if request.years_of_training is not None:
+                settings.years_of_training = request.years_of_training
+
+            if request.primary_sports is not None:
+                settings.primary_sports = request.primary_sports
+
+            if request.available_days is not None:
+                settings.available_days = request.available_days
+
+            if request.weekly_hours is not None:
+                settings.weekly_hours = request.weekly_hours
+
+            if request.training_focus is not None:
+                _validate_training_focus(request.training_focus)
+                settings.training_focus = request.training_focus
+
+            if request.injury_history is not None:
+                settings.injury_history = request.injury_history
+
+            settings.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(settings)
+            session.expunge(settings)
+
+            logger.info(f"[API] Training preferences updated for user_id={user_id}")
+            return TrainingPreferencesResponse(
+                years_of_training=settings.years_of_training or 0,
+                primary_sports=settings.primary_sports or [],
+                available_days=settings.available_days or [],
+                weekly_hours=settings.weekly_hours or 10.0,
+                training_focus=settings.training_focus or "general_fitness",
+                injury_history=settings.injury_history or False,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating training preferences: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update training preferences: {e!s}") from e
+
+
+@router.get("/privacy-settings", response_model=PrivacySettingsResponse)
+def get_privacy_settings(user_id: str = Depends(get_current_user_id)):
+    """Get privacy settings.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        PrivacySettingsResponse with all privacy setting fields
+    """
+    logger.info(f"[API] /me/privacy-settings endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+
+            if not settings:
+                logger.info(f"[API] No settings found for user_id={user_id}, returning defaults")
+                return PrivacySettingsResponse()
+
+            session.expunge(settings)
+
+            return PrivacySettingsResponse(
+                profile_visibility=settings.profile_visibility or "private",
+                share_activity_data=settings.share_activity_data or False,
+                share_training_metrics=settings.share_training_metrics or False,
+            )
+    except Exception as e:
+        logger.error(f"Error getting privacy settings: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get privacy settings: {e!s}") from e
+
+
+@router.put("/privacy-settings", response_model=PrivacySettingsResponse)
+def update_privacy_settings(request: PrivacySettingsUpdateRequest, user_id: str = Depends(get_current_user_id)):
+    """Update privacy settings.
+
+    Args:
+        request: Privacy settings update request
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Updated PrivacySettingsResponse
+    """
+    logger.info(f"[API] /me/privacy-settings PUT endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+
+            if not settings:
+                settings = UserSettings(user_id=user_id)
+                session.add(settings)
+
+            # Update fields that are provided
+            if request.profile_visibility is not None:
+                _validate_profile_visibility(request.profile_visibility)
+                settings.profile_visibility = request.profile_visibility
+
+            if request.share_activity_data is not None:
+                settings.share_activity_data = request.share_activity_data
+
+            if request.share_training_metrics is not None:
+                settings.share_training_metrics = request.share_training_metrics
+
+            settings.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(settings)
+            session.expunge(settings)
+
+            logger.info(f"[API] Privacy settings updated for user_id={user_id}")
+            return PrivacySettingsResponse(
+                profile_visibility=settings.profile_visibility or "private",
+                share_activity_data=settings.share_activity_data or False,
+                share_training_metrics=settings.share_training_metrics or False,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating privacy settings: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update privacy settings: {e!s}") from e
+
+
+@router.get("/notifications", response_model=NotificationsResponse)
+def get_notifications(user_id: str = Depends(get_current_user_id)):
+    """Get notification preferences.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        NotificationsResponse with all notification preference fields
+    """
+    logger.info(f"[API] /me/notifications endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+
+            if not settings:
+                logger.info(f"[API] No settings found for user_id={user_id}, returning defaults")
+                return NotificationsResponse()
+
+            session.expunge(settings)
+
+            return NotificationsResponse(
+                email_notifications=settings.email_notifications if settings.email_notifications is not None else True,
+                push_notifications=settings.push_notifications if settings.push_notifications is not None else True,
+                workout_reminders=settings.workout_reminders if settings.workout_reminders is not None else True,
+                training_load_alerts=settings.training_load_alerts if settings.training_load_alerts is not None else True,
+                race_reminders=settings.race_reminders if settings.race_reminders is not None else True,
+                weekly_summary=settings.weekly_summary if settings.weekly_summary is not None else True,
+                goal_achievements=settings.goal_achievements if settings.goal_achievements is not None else True,
+                coach_messages=settings.coach_messages if settings.coach_messages is not None else True,
+            )
+    except Exception as e:
+        logger.error(f"Error getting notifications: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get notifications: {e!s}") from e
+
+
+@router.put("/notifications", response_model=NotificationsResponse)
+def update_notifications(request: NotificationsUpdateRequest, user_id: str = Depends(get_current_user_id)):
+    """Update notification preferences.
+
+    Args:
+        request: Notifications update request
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Updated NotificationsResponse
+    """
+    logger.info(f"[API] /me/notifications PUT endpoint called for user_id={user_id}")
+    try:
+        with get_session() as session:
+            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+
+            if not settings:
+                settings = UserSettings(user_id=user_id)
+                session.add(settings)
+
+            # Update fields that are provided
+            if request.email_notifications is not None:
+                settings.email_notifications = request.email_notifications
+
+            if request.push_notifications is not None:
+                settings.push_notifications = request.push_notifications
+
+            if request.workout_reminders is not None:
+                settings.workout_reminders = request.workout_reminders
+
+            if request.training_load_alerts is not None:
+                settings.training_load_alerts = request.training_load_alerts
+
+            if request.race_reminders is not None:
+                settings.race_reminders = request.race_reminders
+
+            if request.weekly_summary is not None:
+                settings.weekly_summary = request.weekly_summary
+
+            if request.goal_achievements is not None:
+                settings.goal_achievements = request.goal_achievements
+
+            if request.coach_messages is not None:
+                settings.coach_messages = request.coach_messages
+
+            settings.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(settings)
+            session.expunge(settings)
+
+            logger.info(f"[API] Notifications updated for user_id={user_id}")
+            return NotificationsResponse(
+                email_notifications=settings.email_notifications if settings.email_notifications is not None else True,
+                push_notifications=settings.push_notifications if settings.push_notifications is not None else True,
+                workout_reminders=settings.workout_reminders if settings.workout_reminders is not None else True,
+                training_load_alerts=settings.training_load_alerts if settings.training_load_alerts is not None else True,
+                race_reminders=settings.race_reminders if settings.race_reminders is not None else True,
+                weekly_summary=settings.weekly_summary if settings.weekly_summary is not None else True,
+                goal_achievements=settings.goal_achievements if settings.goal_achievements is not None else True,
+                coach_messages=settings.coach_messages if settings.coach_messages is not None else True,
+            )
+    except Exception as e:
+        logger.error(f"Error updating notifications: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update notifications: {e!s}") from e
+
+
+@router.post("/change-password")
+def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_current_user_id)):
+    """Change user password.
+
+    Args:
+        request: Password change request with current and new passwords
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Success message
+
+    Note:
+        This is a placeholder endpoint. Password management should be implemented
+        based on your authentication system (e.g., Clerk, Auth0, etc.).
+    """
+    logger.info(f"[API] /me/change-password endpoint called for user_id={user_id}")
+    try:
+        # Validate passwords match
+        _validate_password_match(request.new_password, request.confirm_password)
+
+        # TODO: Implement password change logic based on your auth system
+        # This is a placeholder - actual implementation depends on authentication provider
+        logger.warning(f"[API] Password change requested for user_id={user_id} - not yet implemented")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing password: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to change password: {e!s}") from e
+    else:
+        return {"success": True, "message": "Password change functionality to be implemented"}

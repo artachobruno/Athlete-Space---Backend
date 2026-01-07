@@ -412,11 +412,14 @@ class AthleteProfile(Base):
     Schema:
     - user_id: Foreign key to users.id (primary key)
     - name: Full name (from Strava or user input)
+    - email: Email address (user input only)
     - gender: Gender (M/F/null, from Strava or user input)
+    - date_of_birth: Date of birth (user input only)
     - weight_kg: Weight in kilograms (from Strava or user input)
+    - height_cm: Height in centimeters (user input only, never from Strava)
     - location: Location string (city, state, country from Strava or user input)
     - age: Age in years (user input only, never from Strava)
-    - height_cm: Height in centimeters (user input only, never from Strava)
+    - unit_system: Unit system preference ("imperial" or "metric")
     - primary_goal: Primary training goal (user input only, never from Strava)
     - onboarding_completed: Whether onboarding is complete (default: False)
     - sources: JSON field tracking source of each field ("strava" | "user")
@@ -430,16 +433,87 @@ class AthleteProfile(Base):
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
+    email: Mapped[str | None] = mapped_column(String, nullable=True)
     gender: Mapped[str | None] = mapped_column(String, nullable=True)  # M, F, or None
+    date_of_birth: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     location: Mapped[str | None] = mapped_column(String, nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    unit_system: Mapped[str | None] = mapped_column(String, nullable=True, default="metric")  # "imperial" or "metric"
     primary_goal: Mapped[str | None] = mapped_column(String, nullable=True)
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sources: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     strava_athlete_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     strava_connected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class UserSettings(Base):
+    """User settings for training preferences, privacy, and notifications.
+
+    Stores user preferences and settings for the application.
+    One settings record per user.
+
+    Schema:
+    - user_id: Foreign key to users.id (primary key)
+    - Training Preferences:
+      - years_of_training: Years of structured training experience
+      - primary_sports: JSON array of sports (e.g., ["Running", "Cycling"])
+      - available_days: JSON array of available training days (e.g., ["Mon", "Tue"])
+      - weekly_hours: Weekly training hours (float, 3-25)
+      - training_focus: "race_focused" or "general_fitness"
+      - injury_history: Boolean indicating injury history
+    - Privacy Settings:
+      - profile_visibility: "public", "private", "coaches" (default: "private")
+      - share_activity_data: Boolean for anonymized activity data sharing
+      - share_training_metrics: Boolean for sharing metrics with coaches
+    - Notifications:
+      - email_notifications: Boolean (default: True)
+      - push_notifications: Boolean (default: True)
+      - workout_reminders: Boolean (default: True)
+      - training_load_alerts: Boolean (default: True)
+      - race_reminders: Boolean (default: True)
+      - weekly_summary: Boolean (default: True)
+      - goal_achievements: Boolean (default: True)
+      - coach_messages: Boolean (default: True)
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
+    """
+
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+
+    # Training Preferences
+    years_of_training: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    primary_sports: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    available_days: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    weekly_hours: Mapped[float | None] = mapped_column(Float, nullable=True, default=10.0)
+    training_focus: Mapped[str | None] = mapped_column(String, nullable=True, default="general_fitness")
+    injury_history: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Privacy Settings
+    profile_visibility: Mapped[str] = mapped_column(String, nullable=False, default="private")
+    share_activity_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    share_training_metrics: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Notifications
+    email_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    push_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    workout_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    training_load_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    race_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    weekly_summary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    goal_achievements: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    coach_messages: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

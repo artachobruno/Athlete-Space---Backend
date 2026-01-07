@@ -155,17 +155,17 @@ class StravaClient:
             logger.debug(f"[STRAVA_CLIENT] Fetching page {page}")
             quota_manager.wait_for_slot()
 
-            params: dict[str, int | str] = {
+            pagination_params: dict[str, int | str] = {
                 "page": page,
                 "per_page": min(per_page, 200),  # Strava max is 200
             }
             if after_ts:
-                params["after"] = int(after_ts.timestamp())
+                pagination_params["after"] = int(after_ts.timestamp())
 
             resp = httpx.get(
                 f"{STRAVA_BASE_URL}/athlete/activities",
                 headers=self._headers(),
-                params=params,
+                params=pagination_params,
                 timeout=15,
             )
 

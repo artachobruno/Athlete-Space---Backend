@@ -53,10 +53,21 @@ def _format_streams_for_frontend(streams_data: dict | None) -> dict | None:
     velocity_smooth = streams_data.get("velocity_smooth", [])
     pace_min_per_km: list[float | None] = []
     for velocity in velocity_smooth:
-        if velocity and velocity > 0:
+        if velocity is None:
+            pace_min_per_km.append(None)
+            continue
+
+        # Convert to float if string
+        try:
+            velocity_float = float(velocity) if not isinstance(velocity, (int, float)) else velocity
+        except (ValueError, TypeError):
+            pace_min_per_km.append(None)
+            continue
+
+        if velocity_float > 0:
             # Convert m/s to min/km: (1000 meters) / (velocity m/s * 60 seconds/min)
-            pace = (1000.0 / (velocity * 60.0)) if velocity > 0 else None
-            pace_min_per_km.append(round(pace, 2) if pace else None)
+            pace = 1000.0 / (velocity_float * 60.0)
+            pace_min_per_km.append(round(pace, 2))
         else:
             pace_min_per_km.append(None)
 

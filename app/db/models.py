@@ -98,6 +98,7 @@ class Activity(Base):
     distance_meters: Mapped[float | None] = mapped_column(Float, nullable=True)
     elevation_gain_meters: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    streams_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     source: Mapped[str] = mapped_column(String, nullable=False, default="strava")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 

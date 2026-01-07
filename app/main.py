@@ -44,6 +44,7 @@ from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_source_default import migrate_activities_source_default
 from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
+from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_daily_summary import migrate_daily_summary
@@ -182,6 +183,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_llm_metadata_fields: {e}")
     logger.error(f"Migration failed: migrate_llm_metadata_fields - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: add streams_data column to activities")
+    migrate_add_streams_data()
+    logger.info("✓ Migration completed: add streams_data column to activities")
+except Exception as e:
+    migration_errors.append(f"migrate_add_streams_data: {e}")
+    logger.error(f"Migration failed: migrate_add_streams_data - {e}", exc_info=True)
 
 if migration_errors:
     logger.error(

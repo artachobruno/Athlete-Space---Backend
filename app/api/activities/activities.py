@@ -139,7 +139,7 @@ def get_activities(
                 "elevation_gain_meters": activity.elevation_gain_meters,
                 "created_at": activity.created_at.isoformat(),
                 "has_raw_json": activity.raw_json is not None,
-                "has_streams": activity.streams_data is not None,
+                "has_streams": getattr(activity, "streams_data", None) is not None,
             })
 
         logger.info(f"[ACTIVITIES] Returning {len(activities)} activities (total: {total})")

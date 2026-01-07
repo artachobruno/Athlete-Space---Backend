@@ -370,7 +370,11 @@ def strava_callback(
                 merge_strava_profile(session, user_id, strava_athlete)
             logger.info(f"[STRAVA_OAUTH] Profile merged successfully for user_id={user_id}")
         except Exception as e:
-            logger.error(f"[STRAVA_OAUTH] Failed to fetch/merge athlete profile for user_id={user_id}: {e}", exc_info=True)
+            # Use repr() to avoid KeyError when exception message contains curly braces
+            logger.error(
+                f"[STRAVA_OAUTH] Failed to fetch/merge athlete profile for user_id={user_id}: {e!r}",
+                exc_info=True,
+            )
             # Don't fail OAuth if profile fetch fails - user can still use the app
 
         # Trigger initial sync and history backfill to fetch at least 90 days of data

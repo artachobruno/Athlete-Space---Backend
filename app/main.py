@@ -43,6 +43,7 @@ from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_source_default import migrate_activities_source_default
 from scripts.migrate_activities_user_id import migrate_activities_user_id
+from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_daily_summary import migrate_daily_summary
@@ -77,6 +78,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_strava_accounts: {e}")
     logger.error(f"Migration failed: migrate_strava_accounts - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: athlete_profiles athlete_id column")
+    migrate_add_athlete_id_to_profiles()
+    logger.info("✓ Migration completed: athlete_profiles athlete_id column")
+except Exception as e:
+    migration_errors.append(f"migrate_add_athlete_id_to_profiles: {e}")
+    logger.error(f"✗ Migration failed: migrate_add_athlete_id_to_profiles - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: activities id column (integer to UUID)")

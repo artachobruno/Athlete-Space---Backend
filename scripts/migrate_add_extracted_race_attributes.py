@@ -1,99 +1,70 @@
-# ⚠️ LEGACY: One-time migration script - not included in run_migrations.py
-# Keep for historical reference and potential database recovery scenarios
 """Migration script to add extracted_race_attributes column to athlete_profiles table.
 
 This migration adds a JSON column to store extracted race attributes from goal extraction.
-
-Usage:
-    From project root:
-    python scripts/migrate_add_extracted_race_attributes.py
-
-    Or as a module:
-    python -m scripts.migrate_add_extracted_race_attributes
 """
 
 from __future__ import annotations
 
-from loguru import logger
 from sqlalchemy import text
 
-from app.config.settings import settings
-from app.db.session import SessionLocal
+from app.db.session import engine
 
 
 def _is_postgresql() -> bool:
     """Check if database is PostgreSQL."""
-    return "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower()
+    return "postgresql" in str(engine.url).lower() or "postgres" in str(engine.url).lower()
 
 
-def _column_exists(db, table_name: str, column_name: str) -> bool:
-    """Check if a column exists in a table.
-
-    Args:
-        db: Database session
-        table_name: Name of the table
-        column_name: Name of the column
-
-    Returns:
-        True if column exists, False otherwise
-    """
+def _column_exists(conn, table_name: str, column_name: str) -> bool:
+    """Check if a column exists in a table."""
     if _is_postgresql():
-        result = db.execute(
+        result = conn.execute(
             text(
                 """
                 SELECT column_name
                 FROM information_schema.columns
                 WHERE table_name = :table_name AND column_name = :column_name
-                """,
+                """
             ),
             {"table_name": table_name, "column_name": column_name},
-        ).fetchone()
-        return result is not None
-    result = db.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
-    return any(col[1] == column_name for col in result)
+        )
+    else:
+        # SQLite
+        result = conn.execute(text(f"PRAGMA table_info({table_name})"))
+        columns = [row[1] for row in result.fetchall()]
+        return column_name in columns
+    return result.fetchone() is not None
 
 
 def migrate_add_extracted_race_attributes() -> None:
     """Add extracted_race_attributes column to athlete_profiles table."""
-    logger.info("Starting migration: add extracted_race_attributes column to athlete_profiles table")
+    print("Starting migration: add extracted_race_attributes column to athlete_profiles")
 
-    db = SessionLocal()
-    try:
-        if _column_exists(db, "athlete_profiles", "extracted_race_attributes"):
-            logger.info("Column extracted_race_attributes already exists, skipping migration")
+    with engine.begin() as conn:
+        # Check if athlete_profiles table exists
+        if _is_postgresql():
+            result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'athlete_profiles'"))
+        else:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='athlete_profiles'"))
+        table_exists = result.fetchone() is not None
+
+        if not table_exists:
+            print("athlete_profiles table does not exist. It will be created by Base.metadata.create_all()")
             return
 
-        logger.info("Adding extracted_race_attributes column to athlete_profiles table")
-        if _is_postgresql():
-            db.execute(
-                text(
-                    """
-                    ALTER TABLE athlete_profiles
-                    ADD COLUMN extracted_race_attributes JSONB
-                    """,
-                ),
-            )
+        # Add extracted_race_attributes column if it doesn't exist
+        if not _column_exists(conn, "athlete_profiles", "extracted_race_attributes"):
+            print("Adding extracted_race_attributes column to athlete_profiles table...")
+            if _is_postgresql():
+                conn.execute(text("ALTER TABLE athlete_profiles ADD COLUMN extracted_race_attributes JSONB"))
+            else:
+                conn.execute(text("ALTER TABLE athlete_profiles ADD COLUMN extracted_race_attributes JSON"))
+            print("✓ Added extracted_race_attributes column")
         else:
-            db.execute(
-                text(
-                    """
-                    ALTER TABLE athlete_profiles
-                    ADD COLUMN extracted_race_attributes JSON
-                    """,
-                ),
-            )
+            print("extracted_race_attributes column already exists, skipping")
 
-        db.commit()
-        logger.info("Successfully added extracted_race_attributes column to athlete_profiles table")
-
-    except Exception as e:
-        logger.error(f"Error during migration: {e}")
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    print("Migration complete: extracted_race_attributes column added to athlete_profiles")
 
 
 if __name__ == "__main__":
     migrate_add_extracted_race_attributes()
-    logger.info("Migration completed successfully")

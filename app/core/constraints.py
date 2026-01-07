@@ -180,8 +180,12 @@ def validate_daily_decision(decision: DailyDecision) -> list[str]:
     errors.extend(_validate_daily_risk(decision))
 
     # Confidence bounds
-    if not (MIN_CONFIDENCE <= decision.confidence <= MAX_CONFIDENCE):
-        errors.append(f"Confidence must be between {MIN_CONFIDENCE} and {MAX_CONFIDENCE}")
+    if not (MIN_CONFIDENCE <= decision.confidence.score <= MAX_CONFIDENCE):
+        errors.append(f"Confidence score must be between {MIN_CONFIDENCE} and {MAX_CONFIDENCE}")
+
+    # Confidence explanation length
+    if not (20 <= len(decision.confidence.explanation) <= 200):
+        errors.append("Confidence explanation must be between 20 and 200 characters")
 
     # Explanation length
     if not (MIN_DAILY_EXPLANATION_LENGTH <= len(decision.explanation) <= MAX_DAILY_EXPLANATION_LENGTH):

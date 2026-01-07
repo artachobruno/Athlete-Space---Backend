@@ -60,7 +60,12 @@ def _activity_to_session(activity: Activity) -> CalendarSession:
         CalendarSession object
     """
     # Determine intensity based on duration
-    duration_hours = activity.duration_seconds / 3600.0
+    if activity.duration_seconds is None:
+        duration_hours = 0.0
+        duration_minutes = 0
+    else:
+        duration_hours = activity.duration_seconds / 3600.0
+        duration_minutes = int(activity.duration_seconds / 60)
 
     if duration_hours > 1.5:
         intensity = "easy"
@@ -73,16 +78,21 @@ def _activity_to_session(activity: Activity) -> CalendarSession:
     time_str = activity.start_time.strftime("%H:%M")
 
     # Determine distance in km
-    distance_km = activity.distance_meters / 1000.0 if activity.distance_meters > 0 else None
+    if activity.distance_meters is not None and activity.distance_meters > 0:
+        distance_km = round(activity.distance_meters / 1000.0, 2)
+    else:
+        distance_km = None
+
+    activity_type = activity.type or "Activity"
 
     return CalendarSession(
         id=activity.id,
         date=activity.start_time.strftime("%Y-%m-%d"),
         time=time_str,
-        type=activity.type,
-        title=f"{activity.type} - {int(activity.duration_seconds / 60)}min",
-        duration_minutes=int(activity.duration_seconds / 60),
-        distance_km=round(distance_km, 2) if distance_km else None,
+        type=activity_type,
+        title=f"{activity_type} - {duration_minutes}min",
+        duration_minutes=duration_minutes,
+        distance_km=distance_km,
         intensity=intensity,
         status="completed",  # All activities from Strava are completed
         notes=None,

@@ -48,80 +48,72 @@ class StravaAuth(Base):
     # Ingestion state
     last_ingested_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backfill_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    backfill_done: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    backfill_done: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Sync tracking
     last_successful_sync_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backfill_updated_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Error tracking
-    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Activity(Base):
     """Strava activity records stored as immutable facts.
 
-    Step 4: Historical activity ingestion from Strava.
-    Stores activities with full raw JSON for future processing.
+    Step 1: Raw activity data from Strava API.
+    Activities are never updated - only inserted.
+    Duplicate prevention via unique constraint on (user_id, strava_activity_id).
 
     Schema:
     - id: UUID primary key
     - user_id: Foreign key to users.id (Clerk user ID)
-    - athlete_id: Strava athlete ID (string, indexed)
-    - strava_activity_id: Strava's activity ID (string)
-    - source: Activity source (string, default: "strava")
-    - start_time: Activity start time in UTC (datetime, indexed)
-    - type: Activity type (string, e.g., "Run", "Ride")
-    - duration_seconds: Activity duration in seconds (integer)
-    - distance_meters: Distance in meters (float)
-    - elevation_gain_meters: Elevation gain in meters (float)
-    - raw_json: Full raw JSON response from Strava API (JSONB)
-    - streams_data: Time-series streams data from Strava (GPS, HR, power, cadence, etc.) (JSONB)
+    - strava_activity_id: Strava's activity ID (for duplicate prevention)
+    - athlete_id: Strava athlete ID (for filtering)
+    - type: Activity type (run, ride, etc.)
+    - start_time: Activity start timestamp (UTC, indexed)
+    - duration_seconds: Activity duration
+    - distance_meters: Distance in meters
+    - elevation_gain_meters: Elevation gain
+    - raw_json: Full Strava API response (JSON)
+    - source: Source system (default: "strava")
     - created_at: Record creation timestamp
 
     Constraints:
     - Unique constraint: (user_id, strava_activity_id) prevents duplicates
     - All timestamps are UTC (no timezone ambiguity)
-    - raw_json stores complete Strava response for future use
+    - Activities are immutable (no updates, only inserts)
     """
 
     __tablename__ = "activities"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
-
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    strava_activity_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     athlete_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    strava_activity_id: Mapped[str] = mapped_column(String, nullable=False)
-    source: Mapped[str] = mapped_column(String, nullable=False, server_default="strava", default="strava")
-
+    type: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    type: Mapped[str] = mapped_column(String, nullable=False)
-    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
-    distance_meters: Mapped[float] = mapped_column(Float, nullable=False)
-    elevation_gain_meters: Mapped[float] = mapped_column(Float, nullable=False)
-
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    distance_meters: Mapped[float | None] = mapped_column(Float, nullable=True)
+    elevation_gain_meters: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    streams_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-
+    source: Mapped[str] = mapped_column(String, nullable=False, default="strava")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (UniqueConstraint("user_id", "strava_activity_id", name="uq_activity_user_strava_id"),)
 
 
 class CoachMessage(Base):
-    """Coach chat message history storage.
-
-    Stores conversation history between athletes and the AI coach.
-    """
+    """Coach chat message history storage."""
 
     __tablename__ = "coach_messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     role: Mapped[str] = mapped_column(String, nullable=False)  # "user" or "assistant"
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class StravaAccount(Base):
@@ -139,6 +131,9 @@ class StravaAccount(Base):
     - last_sync_at: Last successful sync timestamp (nullable)
     - oldest_synced_at: Earliest activity timestamp synced (Unix epoch seconds, nullable)
     - full_history_synced: Whether full history backfill is complete (default: False)
+    - sync_success_count: Number of successful syncs (for reliability tracking)
+    - sync_failure_count: Number of failed syncs (for reliability tracking)
+    - last_sync_error: Last sync error message (nullable)
     - created_at: Account creation timestamp
     """
 
@@ -152,27 +147,25 @@ class StravaAccount(Base):
     last_sync_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     oldest_synced_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     full_history_synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sync_success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sync_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
-
-    __table_args__ = (
-        # Enforce one Strava account per user
-        # Foreign key constraint handled at application level (SQLite compatibility)
-    )
 
 
 class DailyTrainingLoad(Base):
     """Daily training load metrics (CTL, ATL, TSB).
 
-    Step 6: Derived metrics computed from activities.
+    Step 4: Computed metrics derived from activities.
     Stores daily aggregated training load metrics.
 
     Schema:
     - user_id: Foreign key to users.id (Clerk user ID)
     - date: Date (YYYY-MM-DD, indexed)
-    - ctl: Chronic Training Load (42-day EMA)
-    - atl: Acute Training Load (7-day EMA)
+    - ctl: Chronic Training Load
+    - atl: Acute Training Load
     - tsb: Training Stress Balance (CTL - ATL)
-    - load_score: Daily training load score (computed from activities)
+    - load_score: Daily training load score
     - created_at: Record creation timestamp
     - updated_at: Last update timestamp
 
@@ -360,6 +353,42 @@ class DailyDecision(Base):
     __table_args__ = (UniqueConstraint("athlete_id", "decision_date", "version", name="uq_daily_decision_athlete_date_version"),)
 
 
+class WeeklyReport(Base):
+    """LLM-generated weekly coach report storage.
+
+    Stores weekly coach reports generated by the LLM.
+    Each report summarizes a completed week.
+    """
+
+    __tablename__ = "weekly_reports"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    # Report data (stored as JSON)
+    report_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+    # Versioning
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    # Week identification
+    week_start: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    week_end: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    __table_args__ = (UniqueConstraint("athlete_id", "week_start", "version", name="uq_weekly_report_athlete_week_version"),)
+
+
 class PlannedSession(Base):
     """Planned training sessions generated by race/season planning tools.
 
@@ -388,8 +417,10 @@ class PlannedSession(Base):
     plan_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # Reference to race/season plan
     week_number: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Week in the plan
 
-    # Status tracking
-    status: Mapped[str] = mapped_column(String, nullable=False, default="planned")  # planned, completed, skipped, cancelled
+    # Completion tracking
+    completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_activity_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Link to actual Activity if completed
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -400,52 +431,38 @@ class PlannedSession(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    __table_args__ = (UniqueConstraint("user_id", "date", "time", "title", name="uq_planned_session_user_datetime_title"),)
-
 
 class AthleteProfile(Base):
     """Athlete profile information for onboarding and coaching.
 
-    Stores athlete profile data from Strava and user input.
-    Fields are source-tagged to track where data came from.
-
-    Schema:
-    - user_id: Foreign key to users.id (primary key)
-    - name: Full name (from Strava or user input)
-    - email: Email address (user input only)
-    - gender: Gender (M/F/null, from Strava or user input)
-    - date_of_birth: Date of birth (user input only)
-    - weight_kg: Weight in kilograms (from Strava or user input)
-    - height_cm: Height in centimeters (user input only, never from Strava)
-    - location: Location string (city, state, country from Strava or user input)
-    - age: Age in years (user input only, never from Strava)
-    - unit_system: Unit system preference ("imperial" or "metric")
-    - primary_goal: Primary training goal (user input only, never from Strava)
-    - onboarding_completed: Whether onboarding is complete (default: False)
-    - sources: JSON field tracking source of each field ("strava" | "user")
-    - strava_athlete_id: Strava athlete ID (integer, nullable)
-    - strava_connected: Whether Strava is connected (default: False)
-    - created_at: Record creation timestamp
-    - updated_at: Last update timestamp
+    Stores athlete-specific data that influences coaching decisions.
     """
 
     __tablename__ = "athlete_profiles"
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
-    name: Mapped[str | None] = mapped_column(String, nullable=True)
-    email: Mapped[str | None] = mapped_column(String, nullable=True)
-    gender: Mapped[str | None] = mapped_column(String, nullable=True)  # M, F, or None
-    date_of_birth: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
-    height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    location: Mapped[str | None] = mapped_column(String, nullable=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    # Basic info
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    unit_system: Mapped[str | None] = mapped_column(String, nullable=True, default="metric")  # "imperial" or "metric"
-    primary_goal: Mapped[str | None] = mapped_column(String, nullable=True)
-    onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    sources: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    strava_athlete_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    strava_connected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    gender: Mapped[str | None] = mapped_column(String, nullable=True)
+    height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Training history
+    years_training: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    primary_sport: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Goals
+    primary_goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_races: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+
+    # Health and constraints
+    injury_history: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    current_injuries: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    training_constraints: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -458,61 +475,27 @@ class AthleteProfile(Base):
 class UserSettings(Base):
     """User settings for training preferences, privacy, and notifications.
 
-    Stores user preferences and settings for the application.
-    One settings record per user.
+    Stores user preferences that affect the application behavior.
 
-    Schema:
-    - user_id: Foreign key to users.id (primary key)
-    - Training Preferences:
-      - years_of_training: Years of structured training experience
-      - primary_sports: JSON array of sports (e.g., ["Running", "Cycling"])
-      - available_days: JSON array of available training days (e.g., ["Mon", "Tue"])
-      - weekly_hours: Weekly training hours (float, 3-25)
-      - training_focus: "race_focused" or "general_fitness"
-      - injury_history: Boolean indicating injury history
-    - Privacy Settings:
-      - profile_visibility: "public", "private", "coaches" (default: "private")
-      - share_activity_data: Boolean for anonymized activity data sharing
-      - share_training_metrics: Boolean for sharing metrics with coaches
-    - Notifications:
-      - email_notifications: Boolean (default: True)
-      - push_notifications: Boolean (default: True)
-      - workout_reminders: Boolean (default: True)
-      - training_load_alerts: Boolean (default: True)
-      - race_reminders: Boolean (default: True)
+    Fields:
+      - user_id: Foreign key to users.id (primary key)
+      - units: Measurement units preference ("metric" or "imperial")
+      - timezone: User timezone (IANA timezone string)
+      - notifications_enabled: Whether to send notifications
+      - email_notifications: Whether to send email notifications
       - weekly_summary: Boolean (default: True)
-      - goal_achievements: Boolean (default: True)
-      - coach_messages: Boolean (default: True)
-    - created_at: Record creation timestamp
-    - updated_at: Last update timestamp
+      - created_at: Settings creation timestamp
+      - updated_at: Last update timestamp
     """
 
     __tablename__ = "user_settings"
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
-
-    # Training Preferences
-    years_of_training: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
-    primary_sports: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    available_days: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    weekly_hours: Mapped[float | None] = mapped_column(Float, nullable=True, default=10.0)
-    training_focus: Mapped[str | None] = mapped_column(String, nullable=True, default="general_fitness")
-    injury_history: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-    # Privacy Settings
-    profile_visibility: Mapped[str] = mapped_column(String, nullable=False, default="private")
-    share_activity_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    share_training_metrics: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-    # Notifications
-    email_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    push_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    workout_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    training_load_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    race_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    units: Mapped[str] = mapped_column(String, nullable=False, default="metric")
+    timezone: Mapped[str] = mapped_column(String, nullable=False, default="UTC")
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    email_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     weekly_summary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    goal_achievements: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    coach_messages: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(

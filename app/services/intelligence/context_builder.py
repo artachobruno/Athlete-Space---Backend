@@ -10,7 +10,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.api.user.me import get_overview_data
-from app.coach.schemas.intent_schemas import DailyDecision, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.db.models import Activity
 from app.db.session import get_session
 from app.services.intelligence.store import IntentStore
@@ -132,11 +132,11 @@ def _get_yesterday_training(activities: list[Activity]) -> str:
     Returns:
         Description of yesterday's training
     """
-    now = datetime.now(timezone.utc)
-    yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday_end = yesterday_start + timedelta(days=1)
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday_start = datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=timezone.utc)
+    yesterday_end = datetime.combine(yesterday, datetime.max.time()).replace(tzinfo=timezone.utc)
 
-    yesterday_activities = [a for a in activities if yesterday_start <= _normalize_datetime(a.start_time) < yesterday_end]
+    yesterday_activities = [a for a in activities if yesterday_start <= _normalize_datetime(a.start_time) <= yesterday_end]
 
     if not yesterday_activities:
         return "Rest day"
@@ -204,6 +204,28 @@ def _get_weekly_intent_for_context(athlete_id: int, decision_date: date) -> Week
             return WeeklyIntent(**weekly_intent_model.intent_data)
         except Exception as e:
             logger.warning(f"Failed to parse weekly intent: {e}")
+    return None
+
+
+def _get_previous_week_intent(athlete_id: int, week_start: date) -> WeeklyIntent | None:
+    """Get previous week's intent for comparison.
+
+    Args:
+        athlete_id: Athlete ID
+        week_start: Current week start date
+
+    Returns:
+        Previous week's WeeklyIntent if available, None otherwise
+    """
+    store = IntentStore()
+    previous_week_start = week_start - timedelta(days=7)
+    previous_week_start_dt = datetime.combine(previous_week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+    previous_intent_model = store.get_latest_weekly_intent(athlete_id, previous_week_start_dt, active_only=True)
+    if previous_intent_model:
+        try:
+            return WeeklyIntent(**previous_intent_model.intent_data)
+        except Exception as e:
+            logger.warning(f"Failed to parse previous week intent: {e}")
     return None
 
 
@@ -294,4 +316,104 @@ def build_daily_decision_context(
         context["recent_decisions"] = [d.model_dump() for d in recent_decisions]
 
     logger.info(f"Built context with athlete_state, training_history, weekly_intent={'present' if weekly_intent else 'none'}")
+    return context
+
+
+def build_weekly_intent_context(
+    user_id: str,
+    athlete_id: int,
+    week_start: date,
+) -> dict[str, Any]:
+    """Build context dictionary for weekly intent generation.
+
+    Args:
+        user_id: User ID
+        athlete_id: Athlete ID
+        week_start: Week start date (Monday)
+
+    Returns:
+        Context dictionary with:
+        - season_plan: Current SeasonPlan (if exists)
+        - training_history: Recent training history (last 2-4 weeks)
+        - athlete_state: Current athlete state
+        - week_context: Week number, time of year, upcoming events
+        - previous_week_intent: Previous week's intent (for comparison)
+        - recent_decisions: Recent daily decisions
+    """
+    logger.info(f"Building weekly intent context for user_id={user_id}, athlete_id={athlete_id}, week_start={week_start.isoformat()}")
+
+    # Get overview data for athlete state
+    try:
+        overview = get_overview_data(user_id)
+    except Exception as e:
+        logger.warning(f"Failed to get overview data: {e}, using minimal context")
+        overview = {"today": {}, "metrics": {"ctl": [], "atl": [], "tsb": []}, "data_quality": "insufficient"}
+
+    # Get activities and build context components
+    activities_list = _get_activities_for_context(user_id)
+    athlete_state = _build_athlete_state_from_overview(overview)
+    training_history = _format_training_history(activities_list, days=28)
+
+    # Build week context
+    week_datetime = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+    week_context = {
+        "week_number": (week_start - date(2024, 1, 1)).days // 7 + 1,  # Simplified week number
+        "time_of_year": week_datetime.strftime("%B"),
+    }
+
+    # Get optional context components
+    store = IntentStore()
+    season_plan_model = store.get_latest_season_plan(athlete_id, active_only=True)
+    season_plan = None
+    if season_plan_model:
+        try:
+            season_plan = SeasonPlan(**season_plan_model.plan_data)
+        except Exception as e:
+            logger.warning(f"Failed to parse season plan: {e}")
+
+    previous_week_intent = _get_previous_week_intent(athlete_id, week_start)
+
+    # Get recent daily decisions (last 7 days)
+    recent_decisions = []
+    today = datetime.now(timezone.utc).date()
+    for days_ago in range(0, 7):
+        check_date = week_start + timedelta(days=days_ago)
+        if check_date <= today:
+            check_date_dt = datetime.combine(check_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            decision_model = store.get_latest_daily_decision(athlete_id, check_date_dt, active_only=True)
+            if decision_model:
+                try:
+                    decision = DailyDecision(**decision_model.decision_data)
+                    recent_decisions.append(decision)
+                except Exception as e:
+                    logger.warning(f"Failed to parse recent decision: {e}")
+
+    # Build final context
+    context = {
+        "athlete_state": athlete_state,
+        "training_history": training_history,
+        "week_context": week_context,
+    }
+
+    if season_plan:
+        context["season_plan"] = season_plan.model_dump()
+
+    if previous_week_intent:
+        context["previous_week_intent"] = previous_week_intent.model_dump()
+        # Add change explanation context
+        volume_change = previous_week_intent.volume_target_hours
+        context["previous_volume"] = volume_change
+        context["change_reasoning"] = {
+            "previous_volume": previous_week_intent.volume_target_hours,
+            "previous_focus": previous_week_intent.focus,
+            "previous_risk_notes": previous_week_intent.risk_notes,
+        }
+
+    if recent_decisions:
+        context["recent_decisions"] = [d.model_dump() for d in recent_decisions]
+
+    logger.info(
+        f"Built weekly intent context with season_plan={'present' if season_plan else 'none'}, "
+        f"previous_week_intent={'present' if previous_week_intent else 'none'}"
+    )
     return context

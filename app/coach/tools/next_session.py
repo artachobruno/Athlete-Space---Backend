@@ -76,9 +76,17 @@ def _format_activity_summary(activity: Activity) -> str:
     Returns:
         Formatted string describing the activity
     """
-    duration_min = activity.duration_seconds // 60
-    distance_km = activity.distance_meters / 1000.0
-    activity_type = activity.type
+    if activity.duration_seconds is None:
+        duration_min = 0
+    else:
+        duration_min = activity.duration_seconds // 60
+
+    if activity.distance_meters is None:
+        distance_km = 0.0
+    else:
+        distance_km = activity.distance_meters / 1000.0
+
+    activity_type = activity.type or "Activity"
 
     parts = [f"{activity_type}"]
     if duration_min > 0:
@@ -118,7 +126,8 @@ def _build_context_string(yesterday_activities: list[Activity], recent_activitie
 
     # Recent pattern
     if recent_activities:
-        total_duration = sum(a.duration_seconds for a in recent_activities) / 3600.0
+        total_duration_seconds = sum((a.duration_seconds or 0) for a in recent_activities)
+        total_duration = total_duration_seconds / 3600.0
         activity_count = len(recent_activities)
         context_parts.append(f"Last 7 days: {activity_count} sessions, {total_duration:.1f} hours")
 

@@ -12,8 +12,8 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from app.api.dependencies.auth import get_current_user_id
-from app.coach.schemas.contracts import DailyDecisionResponse, SeasonPlanResponse, WeeklyIntentResponse
-from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.contracts import DailyDecisionResponse, SeasonPlanResponse, WeeklyIntentResponse, WeeklyReportResponse
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.db.models import Activity, StravaAccount
 from app.db.models import DailyDecision as DailyDecisionModel
 from app.db.session import get_session
@@ -350,4 +350,70 @@ def get_daily_decision(
         is_active=decision_model.is_active,
         created_at=decision_model.created_at,
         updated_at=decision_model.updated_at,
+    )
+
+
+@router.get("/week-report", response_model=WeeklyReportResponse)
+def get_weekly_report(
+    user_id: str = Depends(get_current_user_id),
+    week_start: date | None = None,
+):
+    """Get the latest active weekly report for the current user.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+        week_start: Week start date (Monday). If None, uses previous week.
+
+    Returns:
+        Latest active WeeklyReport for the week or 503 if unavailable
+
+    Raises:
+        HTTPException: If report not found or Strava account not connected
+    """
+    athlete_id = _get_athlete_id_from_user(user_id)
+    if week_start is None:
+        # Get previous week (reports are generated at end of week)
+        today = datetime.now(timezone.utc).date()
+        days_since_monday = today.weekday()
+        current_week_start = today - timedelta(days=days_since_monday)
+        week_start = current_week_start - timedelta(days=7)
+
+    logger.info(f"Getting weekly report for user_id={user_id}, athlete_id={athlete_id}, week_start={week_start.isoformat()}")
+
+    week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+    report_model = store.get_latest_weekly_report(athlete_id, week_start_dt, active_only=True)
+
+    if report_model is None:
+        # Try fallback to inactive report
+        report_model = store.get_latest_weekly_report(athlete_id, week_start_dt, active_only=False)
+        if report_model is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Weekly report not available for week starting {week_start.isoformat()}. The coach will generate it soon.",
+            )
+
+    try:
+        report = WeeklyReport(**report_model.report_data)
+    except Exception as e:
+        logger.error(
+            "Failed to parse weekly report",
+            report_id=report_model.id,
+            athlete_id=athlete_id,
+            error=str(e),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to parse weekly report data",
+        ) from e
+
+    return WeeklyReportResponse(
+        id=report_model.id,
+        user_id=report_model.user_id,
+        athlete_id=report_model.athlete_id,
+        report=report,
+        version=report_model.version,
+        is_active=report_model.is_active,
+        created_at=report_model.created_at,
+        updated_at=report_model.updated_at,
     )

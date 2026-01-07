@@ -62,6 +62,8 @@ def compute_activity_load(activity: Activity) -> float:
         - Pace-based fallback for running
         - Duration-based fallback for other activities
     """
+    if activity.duration_seconds is None:
+        return 0.0
     duration_hours = activity.duration_seconds / 3600.0
 
     # Extract raw data for intensity estimation
@@ -70,17 +72,17 @@ def compute_activity_load(activity: Activity) -> float:
     avg_power = raw_data.get("average_watts")
     max_hr = raw_data.get("max_heartrate")
 
-    activity_type = activity.type.lower()
+    activity_type = (activity.type or "unknown").lower()
 
     # Step 1: Calculate intensity_factor
     intensity_factor = _compute_intensity_factor(
         activity_type=activity_type,
         duration_hours=duration_hours,
-        distance_meters=activity.distance_meters,
+        distance_meters=activity.distance_meters or 0.0,
         avg_hr=avg_hr,
         max_hr=max_hr,
         avg_power=avg_power,
-        elevation_gain_meters=activity.elevation_gain_meters,
+        elevation_gain_meters=activity.elevation_gain_meters or 0.0,
     )
 
     # Step 2: Get modality_factor (sport normalization)
@@ -119,6 +121,8 @@ def compute_activity_tss(activity: Activity) -> float:
         - TSS 50-100 = moderate session
         - TSS > 100 = hard/long session
     """
+    if activity.duration_seconds is None:
+        return 0.0
     duration_hours = activity.duration_seconds / 3600.0
 
     # Extract raw data for intensity estimation
@@ -128,7 +132,7 @@ def compute_activity_tss(activity: Activity) -> float:
     max_hr = raw_data.get("max_heartrate")
     normalized_power = raw_data.get("weighted_average_watts")  # NP if available
 
-    activity_type = activity.type.lower()
+    activity_type = (activity.type or "unknown").lower()
 
     # Calculate Intensity Factor (IF)
     # IF ranges from 0.0 (rest) to 1.0+ (above threshold)
@@ -160,11 +164,11 @@ def compute_activity_tss(activity: Activity) -> float:
         intensity_factor = _compute_intensity_factor(
             activity_type=activity_type,
             duration_hours=duration_hours,
-            distance_meters=activity.distance_meters,
+            distance_meters=activity.distance_meters or 0.0,
             avg_hr=avg_hr,
             max_hr=max_hr,
             avg_power=avg_power,
-            elevation_gain_meters=activity.elevation_gain_meters,
+            elevation_gain_meters=activity.elevation_gain_meters or 0.0,
         )
         # Normalize to 0.0-1.0+ range for IF
         intensity_factor = min(intensity_factor / 1.5, 1.2)  # Normalize our intensity factor to IF range
@@ -179,11 +183,11 @@ def _compute_intensity_factor(
     *,
     activity_type: str,
     duration_hours: float,
-    distance_meters: float,
+    distance_meters: float | None,
     avg_hr: int | None,
     max_hr: int | None,
     avg_power: float | None,
-    elevation_gain_meters: float,
+    elevation_gain_meters: float | None,
 ) -> float:
     """Compute intensity factor from available metrics.
 
@@ -214,8 +218,9 @@ def _compute_intensity_factor(
         return _intensity_from_power(avg_power)
 
     # Pace-based intensity (running)
-    if activity_type in {"run", "trail run"} and distance_meters > 0 and duration_hours > 0:
-        return _intensity_from_pace(distance_meters, duration_hours, elevation_gain_meters)
+    if activity_type in {"run", "trail run"} and distance_meters is not None and distance_meters > 0 and duration_hours > 0:
+        elevation = elevation_gain_meters or 0.0
+        return _intensity_from_pace(distance_meters, duration_hours, elevation)
 
     # Duration-based fallback
     return _intensity_from_duration(duration_hours)

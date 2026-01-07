@@ -68,7 +68,13 @@ DO NOT:
 • Create aggressive week-over-week changes
 • Ignore fatigue, illness, or injury risk signals
 • Use unexplained jargon
-• Violate the SeasonPlan’s strategy
+• Violate the SeasonPlan's strategy
+
+EDGE CASE HANDLING:
+• If training_history shows extended gaps (>7 days), assume illness/break and be conservative
+• If recent_decisions show many missed workouts, reduce volume and intensity
+• If athlete_state shows high fatigue with low activity, prioritize recovery
+• When returning from breaks, start at 50% of previous volume and build gradually
 
 ----------------------------------------------------------------
 WEEKLY DECISION PRINCIPLES
@@ -149,6 +155,8 @@ explanation:
 • 100–1000 characters
 • Explain tradeoffs and rationale
 • Focus on restraint, sustainability, and alignment
+• If previous_week_intent is provided, explicitly explain what changed and why
+• Compare volume, focus, and risk changes from previous week
 • No metric definitions
 • No hedging language
 • No alarmism

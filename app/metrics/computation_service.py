@@ -122,15 +122,15 @@ def recompute_metrics_for_user(
 
         # Compute weekly summaries
         for week_start, week_activities in weekly_activities.items():
-            total_duration = sum(a.duration_seconds for a in week_activities)
-            total_distance = sum(a.distance_meters for a in week_activities)
-            total_elevation = sum(a.elevation_gain_meters for a in week_activities)
+            total_duration = sum((a.duration_seconds or 0) for a in week_activities)
+            total_distance = sum((a.distance_meters or 0.0) for a in week_activities)
+            total_elevation = sum((a.elevation_gain_meters or 0.0) for a in week_activities)
             activity_count = len(week_activities)
 
             # Compute intensity distribution (simplified: by activity type)
             type_distribution: dict[str, int] = {}
             for activity in week_activities:
-                activity_type = activity.type
+                activity_type = activity.type or "unknown"
                 type_distribution[activity_type] = type_distribution.get(activity_type, 0) + 1
 
             # Check if record exists

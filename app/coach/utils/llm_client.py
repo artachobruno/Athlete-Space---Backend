@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from pydantic_ai import Agent
 
 from app.coach.config.models import USER_FACING_MODEL
-from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.core.constraints import (
     validate_daily_decision,
     validate_season_plan,
@@ -278,3 +278,63 @@ class CoachLLMClient:
                 raise RuntimeError(f"Failed to generate daily decision: {type(e).__name__}: {e}") from e
 
         raise RuntimeError("Failed to generate daily decision after all retries")
+
+    def generate_weekly_report(self, context: dict[str, Any]) -> WeeklyReport:
+        """Generate a weekly report from LLM.
+
+        Args:
+            context: Context dictionary containing:
+                - weekly_intent: Current WeeklyIntent (what was planned)
+                - actual_training: Actual training completed during the week
+                - athlete_state: Current athlete state
+                - previous_week_intent: Previous week's intent (for comparison)
+                - week_context: Week number, time of year, upcoming events
+
+        Returns:
+            Validated WeeklyReport
+
+        Raises:
+            ValueError: If validation fails after all retries
+            RuntimeError: If LLM call fails
+        """
+        prompt_text = _load_prompt("weekly_report.txt")
+        agent = Agent(
+            model=self.model,
+            system_prompt=prompt_text,
+            output_type=WeeklyReport,
+        )
+
+        context_str = json.dumps(context, indent=2, default=str)
+
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                logger.info(f"Generating weekly report (attempt {attempt + 1}/{MAX_RETRIES + 1})")
+                result = agent.run_sync(f"Context:\n{context_str}")
+
+                # Basic validation (schema validation is handled by pydantic)
+                if not result.output.week_summary or len(result.output.week_summary) < 100:
+                    error_msg = "Week summary too short"
+                    if attempt < MAX_RETRIES:
+                        logger.warning(f"Weekly report validation failed: {error_msg}. Retrying...")
+                        context["validation_errors"] = error_msg
+                        context_str = json.dumps(context, indent=2, default=str)
+                        continue
+                    _raise_validation_error("Weekly report", error_msg)
+                else:
+                    logger.info("Weekly report generated successfully")
+                    return result.output
+
+            except ValidationError as e:
+                if attempt < MAX_RETRIES:
+                    logger.warning(f"Weekly report parsing failed: {e}. Retrying...")
+                    context["parsing_errors"] = str(e)
+                    context_str = json.dumps(context, indent=2, default=str)
+                    continue
+                raise ValueError(f"Weekly report parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
+            except Exception as e:
+                logger.error(f"Error generating weekly report: {type(e).__name__}: {e}", exc_info=True)
+                if attempt < MAX_RETRIES:
+                    continue
+                raise RuntimeError(f"Failed to generate weekly report: {type(e).__name__}: {e}") from e
+
+        raise RuntimeError("Failed to generate weekly report after all retries")

@@ -15,10 +15,12 @@ from app.api.activities.activities import router as activities_router
 from app.api.admin.admin_activities import router as admin_activities_router
 from app.api.admin.admin_ingestion_status import router as admin_ingestion_router
 from app.api.admin.admin_retry import router as admin_retry_router
+from app.api.admin.ingestion_reliability import router as ingestion_reliability_router
 from app.api.auth.auth import router as auth_router
 from app.api.auth.auth_strava import router as auth_strava_router
 from app.api.integrations.integrations_strava import router as integrations_strava_router
 from app.api.intelligence.intelligence import router as intelligence_router
+from app.api.intelligence.risks import router as risks_router
 from app.api.strava.strava import router as strava_router
 from app.api.training.state import router as state_router
 from app.api.training.training import router as training_router
@@ -242,6 +244,7 @@ app.include_router(activities_router)
 app.include_router(admin_retry_router)
 app.include_router(admin_ingestion_router)
 app.include_router(admin_activities_router)
+app.include_router(ingestion_reliability_router)
 app.include_router(analytics_router)
 app.include_router(auth_router)
 app.include_router(auth_strava_router)
@@ -251,6 +254,7 @@ app.include_router(coach_chat_router)
 app.include_router(ingestion_strava_router)
 app.include_router(integrations_strava_router)
 app.include_router(intelligence_router)
+app.include_router(risks_router)
 app.include_router(me_router)
 app.include_router(strava_router)
 app.include_router(state_router)

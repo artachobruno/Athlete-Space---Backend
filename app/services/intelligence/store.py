@@ -9,10 +9,11 @@ from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy import select
 
-from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.db.models import DailyDecision as DailyDecisionModel
 from app.db.models import SeasonPlan as SeasonPlanModel
 from app.db.models import WeeklyIntent as WeeklyIntentModel
+from app.db.models import WeeklyReport as WeeklyReportModel
 from app.db.session import get_session
 
 
@@ -374,3 +375,95 @@ class IntentStore:
                 query = query.where(DailyDecisionModel.is_active.is_(True))
 
             return session.execute(query.order_by(DailyDecisionModel.version.desc())).scalar_one_or_none()
+
+    @staticmethod
+    def save_weekly_report(
+        user_id: str,
+        athlete_id: int,
+        report: WeeklyReport,
+    ) -> str:
+        """Save a weekly report with versioning.
+
+        Args:
+            user_id: User ID
+            athlete_id: Athlete ID
+            report: WeeklyReport to save
+
+        Returns:
+            Report ID (UUID string)
+        """
+        with get_session() as session:
+            # Get next version
+            week_start_dt = datetime.combine(report.week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+            existing = (
+                session.execute(
+                    select(WeeklyReportModel)
+                    .where(
+                        WeeklyReportModel.athlete_id == athlete_id,
+                        WeeklyReportModel.week_start == week_start_dt,
+                    )
+                    .order_by(WeeklyReportModel.version.desc())
+                )
+            ).scalar_one_or_none()
+
+            next_version = (existing.version + 1) if existing else 1
+
+            # Deactivate previous active reports for this week
+            if existing:
+                existing.is_active = False
+                session.add(existing)
+
+            # Create new report
+            new_report = WeeklyReportModel(
+                user_id=user_id,
+                athlete_id=athlete_id,
+                report_data=report.model_dump(),
+                week_start=datetime.combine(report.week_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+                week_end=datetime.combine(report.week_end, datetime.min.time()).replace(tzinfo=timezone.utc),
+                version=next_version,
+                is_active=True,
+            )
+
+            session.add(new_report)
+            session.flush()
+
+            report_id = new_report.id
+            session.commit()
+
+            logger.info(
+                "Weekly report saved",
+                report_id=report_id,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                week_start=report.week_start.isoformat(),
+                version=next_version,
+            )
+
+            return report_id
+
+    @staticmethod
+    def get_latest_weekly_report(
+        athlete_id: int,
+        week_start: datetime,
+        active_only: bool = True,
+    ) -> WeeklyReportModel | None:
+        """Get the latest weekly report for a specific week.
+
+        Args:
+            athlete_id: Athlete ID
+            week_start: Week start date (Monday)
+            active_only: If True, only return active reports
+
+        Returns:
+            Latest WeeklyReportModel or None
+        """
+        with get_session() as session:
+            query = select(WeeklyReportModel).where(
+                WeeklyReportModel.athlete_id == athlete_id,
+                WeeklyReportModel.week_start == week_start,
+            )
+
+            if active_only:
+                query = query.where(WeeklyReportModel.is_active.is_(True))
+
+            return session.execute(query.order_by(WeeklyReportModel.version.desc())).scalar_one_or_none()

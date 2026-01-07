@@ -10,7 +10,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 
 # Example payloads for frontend reference
 
@@ -62,7 +62,7 @@ EXAMPLE_DAILY_DECISION = {
     "session_type": "Easy aerobic run",
     "risk_level": "low",
     "risk_notes": "Fatigue is slightly elevated. Keep intensity low and focus on aerobic work.",
-    "confidence": 0.85,
+    "confidence": {"score": 0.85, "explanation": "Based on current training state and recent activity patterns"},
     "explanation": (
         "Today is an easy aerobic day. Aim for 1.5 hours of Zone 2 running. "
         "Keep the effort conversational and relaxed. This supports aerobic development without adding stress. "

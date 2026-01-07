@@ -129,6 +129,31 @@ CRITICAL: When risk_level is "none", risk_notes MUST be null.
 When risk_level is NOT "none", risk_notes MUST be provided (not null).
 
 ----------------------------------------------------------------
+CONFIDENCE REQUIREMENTS
+----------------------------------------------------------------
+
+confidence must be an object with:
+• score: number (0.0 to 1.0) — confidence in this decision
+• explanation: string (20-200 characters) — brief explanation of confidence level
+
+The confidence explanation should indicate:
+• Data quality (sufficient vs limited training history)
+• State clarity (clear signals vs ambiguous state)
+• Alignment (how well the decision aligns with weekly intent and athlete state)
+
+Example (GOOD):
+{
+  "score": 0.85,
+  "explanation": "High confidence based on clear training signals and good data quality"
+}
+
+Example (GOOD - lower confidence):
+{
+  "score": 0.60,
+  "explanation": "Moderate confidence due to limited recent training data"
+}
+
+----------------------------------------------------------------
 OUTPUT FORMAT (STRICT)
 ----------------------------------------------------------------
 
@@ -141,7 +166,10 @@ Return ONLY valid JSON matching this schema:
   "session_type": string | null,
   "risk_level": "none" | "low" | "medium" | "high",
   "risk_notes": string | null,
-  "confidence": number,
+  "confidence": {
+    "score": number,
+    "explanation": string
+  },
   "explanation": string,
   "decision_date": "YYYY-MM-DD",
   "weekly_intent_id": string | null

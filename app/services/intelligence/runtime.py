@@ -10,7 +10,7 @@ from typing import Any
 
 from loguru import logger
 
-from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.coach.utils.llm_client import CoachLLMClient
 
 
@@ -188,9 +188,61 @@ class CoachRuntime:
                 athlete_id=athlete_id,
                 decision_date=decision.decision_date.isoformat(),
                 recommendation=decision.recommendation,
-                confidence=decision.confidence,
+                confidence_score=decision.confidence.score,
             )
             return decision
+
+    def run_weekly_report(
+        self,
+        user_id: str,
+        athlete_id: int,
+        context: dict[str, Any],
+    ) -> WeeklyReport:
+        """Generate a weekly report from LLM.
+
+        Args:
+            user_id: User ID
+            athlete_id: Athlete ID
+            context: Context dictionary containing:
+                - weekly_intent: Current WeeklyIntent (what was planned)
+                - actual_training: Actual training completed during the week
+                - athlete_state: Current athlete state
+                - previous_week_intent: Previous week's intent (for comparison)
+                - week_context: Week number, time of year, upcoming events
+
+        Returns:
+            Validated WeeklyReport
+
+        Raises:
+            ValueError: If validation fails after all retries
+            RuntimeError: If LLM call fails
+        """
+        logger.info(
+            "Generating weekly report",
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
+
+        try:
+            report = self.llm_client.generate_weekly_report(context)
+        except Exception as e:
+            logger.error(
+                "Failed to generate weekly report",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise
+        else:
+            logger.info(
+                "Weekly report generated successfully",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                week_start=report.week_start.isoformat(),
+                week_end=report.week_end.isoformat(),
+            )
+            return report
 
     @staticmethod
     def compute_context_hash(context: dict[str, Any]) -> str:

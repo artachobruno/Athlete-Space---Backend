@@ -11,6 +11,23 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class Confidence(BaseModel):
+    """Confidence score with explanation for a training decision."""
+
+    score: float = Field(
+        ...,
+        description="Confidence score (0.0 to 1.0)",
+        ge=0.0,
+        le=1.0,
+    )
+    explanation: str = Field(
+        ...,
+        description="Human-readable explanation of the confidence level. Must be calm and coach-like.",
+        min_length=20,
+        max_length=200,
+    )
+
+
 class SeasonPlan(BaseModel):
     """LLM-generated season-level training plan.
 
@@ -141,6 +158,50 @@ class WeeklyIntent(BaseModel):
     )
 
 
+class WeeklyReport(BaseModel):
+    """LLM-generated weekly coach report.
+
+    This represents a weekly summary explaining progress, changes, and next focus.
+    Generated automatically at the end of each week.
+    """
+
+    # Core report attributes
+    week_summary: str = Field(
+        ...,
+        description="High-level summary of the week's training and outcomes",
+        min_length=100,
+        max_length=500,
+    )
+    progress_highlights: list[str] = Field(
+        ...,
+        description="Key progress points from the week (2-4 items)",
+        min_length=2,
+        max_length=4,
+    )
+    changes_explained: str = Field(
+        ...,
+        description="Explanation of any changes made during the week and why",
+        min_length=50,
+        max_length=400,
+    )
+    next_focus: str = Field(
+        ...,
+        description="Primary focus for the upcoming week",
+        min_length=50,
+        max_length=300,
+    )
+    risk_observations: str | None = Field(
+        default=None,
+        description="Observations about risk or fatigue (if any)",
+        min_length=20,
+        max_length=300,
+    )
+
+    # Context
+    week_start: date = Field(..., description="Start date of the week (Monday)")
+    week_end: date = Field(..., description="End date of the week (Sunday)")
+
+
 class DailyDecision(BaseModel):
     """LLM-generated daily training decision.
 
@@ -184,11 +245,9 @@ class DailyDecision(BaseModel):
         min_length=10,
         max_length=300,
     )
-    confidence: float = Field(
+    confidence: Confidence = Field(
         ...,
-        description="Confidence in this daily decision (0.0 to 1.0)",
-        ge=0.0,
-        le=1.0,
+        description="Confidence in this daily decision with explanation",
     )
 
     # Explanation (first-class field)

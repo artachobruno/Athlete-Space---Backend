@@ -276,8 +276,10 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         session.add(activity)
         imported_count += 1
 
-    # Update last_sync_at on success
+    # Update last_sync_at and success tracking on success
     account.last_sync_at = int(now.timestamp())
+    account.sync_success_count = (account.sync_success_count or 0) + 1
+    account.last_sync_error = None
 
     # Commit all changes
     try:
@@ -403,7 +405,14 @@ def sync_user_activities(user_id: str, max_retries: int = 2) -> dict[str, int | 
                 logger.error(f"[SYNC] Rate limit exceeded for user_id={user_id} after {max_retries + 1} attempts")
                 return {"error": "Rate limit exceeded", "user_id": user_id}
             except TokenRefreshError as e:
-                # Token error: don't retry
+                # Token error: don't retry, track failure
+                with get_session() as error_session:
+                    account_result = error_session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+                    if account_result:
+                        error_account = account_result[0]
+                        error_account.sync_failure_count = (error_account.sync_failure_count or 0) + 1
+                        error_account.last_sync_error = str(e)
+                        error_session.commit()
                 logger.error(f"[SYNC] Token refresh failed for user_id={user_id}: {e!s}")
                 return {"error": "Token refresh failed. User must reconnect Strava.", "user_id": user_id}
             except SyncError as e:
@@ -416,10 +425,25 @@ def sync_user_activities(user_id: str, max_retries: int = 2) -> dict[str, int | 
                     time.sleep(wait_seconds)
                     last_error = e
                     continue
+                # Track failure
+                with get_session() as error_session:
+                    account_result = error_session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+                    if account_result:
+                        error_account = account_result[0]
+                        error_account.sync_failure_count = (error_account.sync_failure_count or 0) + 1
+                        error_account.last_sync_error = str(e)
+                        error_session.commit()
                 logger.error(f"[SYNC] Sync failed for user_id={user_id} after {max_retries + 1} attempts: {e!s}")
                 return {"error": f"Sync failed: {e!s}", "user_id": user_id}
             except Exception as e:
-                # Unexpected errors: log and return
+                # Track failure
+                with get_session() as error_session:
+                    account_result = error_session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+                    if account_result:
+                        error_account = account_result[0]
+                        error_account.sync_failure_count = (error_account.sync_failure_count or 0) + 1
+                        error_account.last_sync_error = str(e)
+                        error_session.commit()
                 logger.error(f"[SYNC] Unexpected error for user_id={user_id}: {e!s}", exc_info=True)
                 return {"error": f"Unexpected error: {e!s}", "user_id": user_id}
             else:

@@ -70,24 +70,47 @@ def _extract_today_metrics(metrics_result: dict[str, list[tuple[str, float]]]) -
     today_tsb = 0.0
     tsb_7d_avg = 0.0
 
-    if metrics_result.get("tsb"):
-        today_tsb_list = metrics_result["tsb"]
-        if today_tsb_list:
-            today_tsb = today_tsb_list[-1][1]
-            today_date = today_tsb_list[-1][0]
+    # Defensive check: ensure metrics_result is a dict
+    if not isinstance(metrics_result, dict):
+        logger.warning(f"[API] metrics_result is not a dict: {type(metrics_result)}")
+        return {
+            "today_ctl": 0.0,
+            "today_atl": 0.0,
+            "today_tsb": 0.0,
+            "tsb_7d_avg": 0.0,
+        }
+
+    # Get TSB list with defensive checks
+    tsb_list = metrics_result.get("tsb")
+    if tsb_list and isinstance(tsb_list, list) and len(tsb_list) > 0:
+        # Ensure last item is a tuple
+        last_item = tsb_list[-1]
+        if isinstance(last_item, (list, tuple)) and len(last_item) >= 2:
+            today_tsb = float(last_item[1]) if isinstance(last_item[1], (int, float)) else 0.0
+            today_date = str(last_item[0])
 
             # Find corresponding CTL and ATL
-            for date_val, ctl_val in metrics_result.get("ctl", []):
-                if date_val == today_date:
-                    today_ctl = ctl_val
-                    break
-            for date_val, atl_val in metrics_result.get("atl", []):
-                if date_val == today_date:
-                    today_atl = atl_val
-                    break
+            ctl_list = metrics_result.get("ctl", [])
+            if isinstance(ctl_list, list):
+                for date_val, ctl_val in ctl_list:
+                    if str(date_val) == today_date:
+                        today_ctl = float(ctl_val) if isinstance(ctl_val, (int, float)) else 0.0
+                        break
+
+            atl_list = metrics_result.get("atl", [])
+            if isinstance(atl_list, list):
+                for date_val, atl_val in atl_list:
+                    if str(date_val) == today_date:
+                        today_atl = float(atl_val) if isinstance(atl_val, (int, float)) else 0.0
+                        break
 
             # Calculate 7-day average of TSB
-            last_7_tsb = [val for _, val in today_tsb_list[-7:]]
+            last_7_tsb = []
+            for item in tsb_list[-7:]:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    val = item[1]
+                    if isinstance(val, (int, float)):
+                        last_7_tsb.append(float(val))
             if last_7_tsb:
                 tsb_7d_avg = sum(last_7_tsb) / len(last_7_tsb)
 
@@ -121,10 +144,26 @@ def _build_overview_response(
         values. The UI should display a "Limited data" badge to indicate the data
         quality status. This matches TrainingPeaks / WKO behavior.
     """
+    # Ensure metrics are always arrays (defensive check for frontend)
+    ctl_data = metrics_result.get("ctl", [])
+    atl_data = metrics_result.get("atl", [])
+    tsb_data = metrics_result.get("tsb", [])
+
+    # Convert to lists if not already (handles edge cases)
+    if not isinstance(ctl_data, list):
+        logger.warning(f"[API] CTL data is not a list: {type(ctl_data)}, converting to empty list")
+        ctl_data = []
+    if not isinstance(atl_data, list):
+        logger.warning(f"[API] ATL data is not a list: {type(atl_data)}, converting to empty list")
+        atl_data = []
+    if not isinstance(tsb_data, list):
+        logger.warning(f"[API] TSB data is not a list: {type(tsb_data)}, converting to empty list")
+        tsb_data = []
+
     metrics_data = {
-        "ctl": metrics_result["ctl"],
-        "atl": metrics_result["atl"],
-        "tsb": metrics_result["tsb"],
+        "ctl": ctl_data,
+        "atl": atl_data,
+        "tsb": tsb_data,
     }
     today_values = {
         "ctl": round(today_metrics["today_ctl"], 1),
@@ -376,7 +415,22 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
     data_quality_status = assess_data_quality(daily_rows)
     logger.info(f"[API] /me/overview: data_quality={data_quality_status} (requires >=14 days, got {len(daily_rows)} days)")
 
-    metrics_result = compute_training_load(daily_rows)
+    # Compute metrics with error handling
+    try:
+        metrics_result = compute_training_load(daily_rows)
+        # Ensure metrics_result is a dict with list values
+        if not isinstance(metrics_result, dict):
+            logger.error(f"[API] /me/overview: metrics_result is not a dict: {type(metrics_result)}")
+            metrics_result = {"ctl": [], "atl": [], "tsb": []}
+        # Ensure all values are lists
+        for key in ["ctl", "atl", "tsb"]:
+            if key not in metrics_result or not isinstance(metrics_result[key], list):
+                logger.warning(f"[API] /me/overview: {key} is not a list, setting to empty list")
+                metrics_result[key] = []
+    except Exception as e:
+        logger.error(f"[API] /me/overview: Error computing training load: {e}", exc_info=True)
+        metrics_result = {"ctl": [], "atl": [], "tsb": []}
+
     today_metrics = _extract_today_metrics(metrics_result)
 
     elapsed = time.time() - request_time

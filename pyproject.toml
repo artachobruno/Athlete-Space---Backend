@@ -141,6 +141,7 @@ pydocstyle = { convention = "google" }
 "**/*.ipynb" = ["ALL"]
 "ui/**/*.py" = ["UP017"]
 "app/**/*.py" = ["UP017"]
+"scripts/**/*.py" = ["E402"]  # Allow imports after sys.path modification
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

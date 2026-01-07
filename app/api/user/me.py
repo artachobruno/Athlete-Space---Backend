@@ -981,6 +981,27 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                 goals=profile.goals or [],
             )
     except Exception as e:
+        # Check if this is a database schema error (missing column)
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.error(
+                f"Database schema mismatch detected for profile endpoint. Missing column in database. Run migrations: {e!r}",
+                exc_info=True,
+            )
+            # Return empty profile instead of 500 - migrations will fix this
+            return AthleteProfileResponse(
+                name=None,
+                email=None,
+                gender=None,
+                date_of_birth=None,
+                weight_kg=None,
+                height_cm=None,
+                location=None,
+                unit_system="metric",
+                strava_connected=False,
+                target_event=None,
+                goals=[],
+            )
         logger.error(f"Error getting profile: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get profile: {e!s}") from e
 
@@ -1128,7 +1149,16 @@ def get_training_preferences(user_id: str = Depends(get_current_user_id)):
                 goal=settings.goal,
             )
     except Exception as e:
-        logger.error(f"Error getting training preferences: {e}", exc_info=True)
+        # Check if this is a database schema error (missing column)
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.error(
+                f"Database schema mismatch detected for training preferences. Missing column in database. Run migrations: {e!r}",
+                exc_info=True,
+            )
+            # Return defaults instead of 500 - migrations will fix this
+            return TrainingPreferencesResponse()
+        logger.error(f"Error getting training preferences: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get training preferences: {e!s}") from e
 
 
@@ -1234,7 +1264,20 @@ def get_privacy_settings(user_id: str = Depends(get_current_user_id)):
                 share_training_metrics=settings.share_training_metrics or False,
             )
     except Exception as e:
-        logger.error(f"Error getting privacy settings: {e}", exc_info=True)
+        # Check if this is a database schema error (missing column)
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.error(
+                f"Database schema mismatch detected for privacy settings. Missing column in database. Run migrations: {e!r}",
+                exc_info=True,
+            )
+            # Return defaults instead of 500 - migrations will fix this
+            return PrivacySettingsResponse(
+                profile_visibility="private",
+                share_activity_data=False,
+                share_training_metrics=False,
+            )
+        logger.error(f"Error getting privacy settings: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get privacy settings: {e!s}") from e
 
 
@@ -1319,7 +1362,25 @@ def get_notifications(user_id: str = Depends(get_current_user_id)):
                 coach_messages=settings.coach_messages if settings.coach_messages is not None else True,
             )
     except Exception as e:
-        logger.error(f"Error getting notifications: {e}", exc_info=True)
+        # Check if this is a database schema error (missing column)
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.error(
+                f"Database schema mismatch detected for notifications. Missing column in database. Run migrations: {e!r}",
+                exc_info=True,
+            )
+            # Return defaults instead of 500 - migrations will fix this
+            return NotificationsResponse(
+                email_notifications=True,
+                push_notifications=False,
+                workout_reminders=True,
+                training_load_alerts=True,
+                race_reminders=True,
+                weekly_summary=True,
+                goal_achievements=True,
+                coach_messages=True,
+            )
+        logger.error(f"Error getting notifications: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get notifications: {e!s}") from e
 
 

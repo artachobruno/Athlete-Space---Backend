@@ -20,6 +20,7 @@ from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
+from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
@@ -36,6 +37,7 @@ def run_all_migrations() -> None:
         ("activities id column (integer to UUID)", migrate_activities_id_to_uuid),
         ("activities schema (add missing columns)", migrate_activities_schema),
         ("activities user_id column", migrate_activities_user_id),
+        ("activities streams_data column", migrate_add_streams_data),
         ("daily_summary tables", migrate_daily_summary),
         ("history cursor fields", migrate_history_cursor),
         ("strava_accounts sync tracking columns", migrate_strava_accounts_sync_tracking),

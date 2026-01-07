@@ -20,6 +20,7 @@ from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
+from app.metrics.computation_service import trigger_recompute_on_new_activities
 
 
 class SyncError(Exception):
@@ -156,9 +157,7 @@ def _get_access_token_from_account(account: StravaAccount, session) -> str:
     return new_access_token
 
 
-def _sync_user_activities(  # noqa: C901, PLR0912, PLR0914
-    user_id: str, account: StravaAccount, session
-) -> dict[str, int | str]:
+def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict[str, int | str]:
     """Sync activities for a single user.
 
     Args:
@@ -342,8 +341,6 @@ def _sync_user_activities(  # noqa: C901, PLR0912, PLR0914
     if imported_count > 0:
         logger.info(f"[SYNC] Triggering metrics recomputation for user_id={user_id} ({imported_count} new activities)")
         try:
-            from app.metrics.computation_service import trigger_recompute_on_new_activities  # noqa: PLC0415
-
             trigger_recompute_on_new_activities(user_id)
         except Exception as e:
             logger.error(f"[SYNC] Failed to trigger metrics recomputation: {e!s}", exc_info=True)
@@ -356,9 +353,7 @@ def _sync_user_activities(  # noqa: C901, PLR0912, PLR0914
     }
 
 
-def sync_user_activities(  # noqa: PLR0911
-    user_id: str, max_retries: int = 2
-) -> dict[str, int | str]:
+def sync_user_activities(user_id: str, max_retries: int = 2) -> dict[str, int | str]:
     """Sync activities for a user with retry logic and exponential backoff.
 
     Args:

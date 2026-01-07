@@ -18,7 +18,7 @@ from app.metrics.load_computation import (
 )
 
 
-def recompute_metrics_for_user(  # noqa: PLR0914
+def recompute_metrics_for_user(
     user_id: str,
     since_date: date | None = None,
 ) -> dict[str, int]:

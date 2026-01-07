@@ -130,7 +130,7 @@ def _get_access_token_from_account(account: StravaAccount, session) -> str:
     return new_access_token
 
 
-def ingest_activities(  # noqa: C901, PLR0912, PLR0914
+def ingest_activities(
     user_id: str,
     since_days: int = 365,
 ) -> dict[str, int | str]:

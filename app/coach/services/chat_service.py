@@ -108,9 +108,10 @@ def dispatch_coach_chat(
 
     if not has_training_data:  # Error response
         error_type = state_result[0]
+        error_message = state_result[1]
         logger.warning(f"Failed to get athlete state: {error_type}")
         # Return error message - orchestrator should handle this
-        return state_result  # type: ignore[return-value]
+        return (error_type, error_message)
 
     # At this point, state_result[0] is None, so state_result[1] is AthleteState
     athlete_state = state_result[1]

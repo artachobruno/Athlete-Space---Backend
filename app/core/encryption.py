@@ -65,7 +65,7 @@ def _get_cipher() -> Fernet:
     Returns:
         Fernet cipher instance
     """
-    global _cipher  # noqa: PLW0603
+    global _cipher
     if _cipher is None:
         key = _get_encryption_key()
         _cipher = Fernet(key)

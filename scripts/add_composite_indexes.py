@@ -13,10 +13,10 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from loguru import logger  # noqa: E402
-from sqlalchemy import text  # noqa: E402
+from loguru import logger
+from sqlalchemy import text
 
-from app.db.session import engine  # noqa: E402
+from app.db.session import engine
 
 
 def _is_postgresql() -> bool:

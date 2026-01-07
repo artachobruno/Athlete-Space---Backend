@@ -49,7 +49,7 @@ class IntentStore:
                 session.execute(
                     select(SeasonPlanModel).where(
                         SeasonPlanModel.athlete_id == athlete_id,
-                        SeasonPlanModel.is_active == True,  # noqa: E712
+                        SeasonPlanModel.is_active.is_(True),
                     )
                 )
                 .scalars()
@@ -116,7 +116,7 @@ class IntentStore:
             )
 
             if active_only:
-                query = query.where(SeasonPlanModel.is_active == True)  # noqa: E712
+                query = query.where(SeasonPlanModel.is_active.is_(True))
 
             return session.execute(query.order_by(SeasonPlanModel.version.desc())).scalar_one_or_none()
 
@@ -148,7 +148,7 @@ class IntentStore:
                     select(WeeklyIntentModel).where(
                         WeeklyIntentModel.athlete_id == athlete_id,
                         WeeklyIntentModel.week_start == week_start_dt,
-                        WeeklyIntentModel.is_active == True,  # noqa: E712
+                        WeeklyIntentModel.is_active.is_(True),
                     )
                 )
                 .scalars()
@@ -223,7 +223,7 @@ class IntentStore:
             )
 
             if active_only:
-                query = query.where(WeeklyIntentModel.is_active == True)  # noqa: E712
+                query = query.where(WeeklyIntentModel.is_active.is_(True))
 
             return session.execute(query.order_by(WeeklyIntentModel.version.desc())).scalar_one_or_none()
 
@@ -255,7 +255,7 @@ class IntentStore:
                     select(DailyDecisionModel).where(
                         DailyDecisionModel.athlete_id == athlete_id,
                         DailyDecisionModel.decision_date == decision_date_dt,
-                        DailyDecisionModel.is_active == True,  # noqa: E712
+                        DailyDecisionModel.is_active.is_(True),
                     )
                 )
                 .scalars()
@@ -371,6 +371,6 @@ class IntentStore:
             )
 
             if active_only:
-                query = query.where(DailyDecisionModel.is_active == True)  # noqa: E712
+                query = query.where(DailyDecisionModel.is_active.is_(True))
 
             return session.execute(query.order_by(DailyDecisionModel.version.desc())).scalar_one_or_none()

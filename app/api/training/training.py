@@ -84,7 +84,7 @@ def _get_trend(ctl_values: list[float]) -> str:
 
 
 @router.get("/state", response_model=TrainingStateResponse)
-def get_training_state(user_id: str = Depends(get_current_user_id)):  # noqa: PLR0914
+def get_training_state(user_id: str = Depends(get_current_user_id)):
     """Get current training state and metrics from computed data.
 
     Args:
@@ -172,9 +172,7 @@ def get_training_state(user_id: str = Depends(get_current_user_id)):  # noqa: PL
 
 
 @router.get("/distribution", response_model=TrainingDistributionResponse)
-def get_training_distribution(  # noqa: C901, PLR0912
-    period: str = "week", user_id: str = Depends(get_current_user_id)
-):
+def get_training_distribution(period: str = "week", user_id: str = Depends(get_current_user_id)):
     """Get training distribution across zones and activity types from real data.
 
     Args:

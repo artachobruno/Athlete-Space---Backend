@@ -161,7 +161,7 @@ def _create_quality_workout(focus: str, quality_date: datetime, week_num: int) -
 def generate_race_build_sessions(
     race_date: datetime,
     race_distance: str,
-    target_time: str | None = None,  # noqa: ARG001
+    _target_time: str | None = None,
     start_date: datetime | None = None,
 ) -> list[dict]:
     """Generate training sessions for a race build.
@@ -225,7 +225,7 @@ def generate_race_build_sessions(
 def generate_season_sessions(
     season_start: datetime,
     season_end: datetime,
-    target_races: list[dict] | None = None,  # noqa: ARG001
+    _target_races: list[dict] | None = None,
 ) -> list[dict]:
     """Generate training sessions for a season plan.
 

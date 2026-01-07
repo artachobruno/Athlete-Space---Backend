@@ -48,7 +48,7 @@ def get_strava_client(athlete_id: int) -> StravaClient:
         return StravaClient(access_token=access_token)
 
 
-def execute_with_token_retry(  # noqa: UP047
+def execute_with_token_retry(
     athlete_id: int,
     operation: Callable[[StravaClient], T],
     *,

@@ -19,7 +19,7 @@ def _validate_postgresql_driver() -> None:
     """
     if "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower():
         try:
-            import psycopg2  # type: ignore[reportMissingModuleSource]  # noqa: F401, PLC0415
+            import psycopg2
 
             logger.info("PostgreSQL driver (psycopg2) is available")
         except ImportError as e:

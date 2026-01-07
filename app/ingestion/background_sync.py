@@ -189,6 +189,19 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         after_date = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc)
         # Add 1 second buffer to avoid missing activities
         after_date += timedelta(seconds=1)
+
+        # Detect large gaps (e.g., sync stopped for months)
+        # If last_sync_at is more than 7 days old, extend sync window to cover the gap
+        gap_days = (now - after_date).days
+        if gap_days > 7:
+            logger.info(
+                f"[SYNC] Large gap detected: {gap_days} days since last sync. Extending sync window to cover gap and ensure we catch up."
+            )
+            # Extend sync window to cover the gap, but cap at 90 days to avoid rate limits
+            # We'll progressively sync older data via history backfill
+            max_sync_window = now - timedelta(days=90)
+            after_date = max(after_date, max_sync_window)
+            logger.info(f"[SYNC] Extended sync window to {after_date.isoformat()} (covering {gap_days} day gap, capped at 90 days)")
     else:
         # First sync: fetch last 90 days to ensure we have enough data for metrics
         after_date = now - timedelta(days=90)

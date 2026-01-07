@@ -26,6 +26,7 @@ from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
+from scripts.migrate_user_auth_fields import migrate_user_auth_fields
 
 
 def run_all_migrations() -> None:
@@ -34,6 +35,7 @@ def run_all_migrations() -> None:
 
     migrations = [
         ("strava_accounts table", migrate_strava_accounts),
+        ("user authentication fields", migrate_user_auth_fields),
         ("athlete_profiles athlete_id column", migrate_add_athlete_id_to_profiles),
         ("planned_sessions athlete_id column", migrate_add_athlete_id_to_planned_sessions),
         ("activities id column (integer to UUID)", migrate_activities_id_to_uuid),

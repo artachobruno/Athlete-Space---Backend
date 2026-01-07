@@ -120,6 +120,9 @@ def migrate_onboarding_data_fields() -> None:
             _add_column(db, "athlete_profiles", "sources", "JSONB", nullable=True)
             _add_column(db, "athlete_profiles", "onboarding_completed", "BOOLEAN", nullable=False)
             _add_column(db, "athlete_profiles", "strava_athlete_id", "INTEGER", nullable=True)
+            _add_column(db, "athlete_profiles", "years_training", "INTEGER", nullable=True)
+            _add_column(db, "athlete_profiles", "primary_sport", "VARCHAR(255)", nullable=True)
+            _add_column(db, "athlete_profiles", "primary_goal", "VARCHAR(255)", nullable=True)
         else:
             _add_column(db, "athlete_profiles", "target_event", "JSON", nullable=True)
             _add_column(db, "athlete_profiles", "goals", "JSON", nullable=True)
@@ -132,6 +135,9 @@ def migrate_onboarding_data_fields() -> None:
             _add_column(db, "athlete_profiles", "sources", "JSON", nullable=True)
             _add_column(db, "athlete_profiles", "onboarding_completed", "BOOLEAN", nullable=False)
             _add_column(db, "athlete_profiles", "strava_athlete_id", "INTEGER", nullable=True)
+            _add_column(db, "athlete_profiles", "years_training", "INTEGER", nullable=True)
+            _add_column(db, "athlete_profiles", "primary_sport", "TEXT", nullable=True)
+            _add_column(db, "athlete_profiles", "primary_goal", "TEXT", nullable=True)
 
         # Set default values for boolean fields
         if _is_postgresql():

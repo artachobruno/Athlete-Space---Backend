@@ -1006,6 +1006,223 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
         raise HTTPException(status_code=500, detail=f"Failed to get profile: {e!s}") from e
 
 
+def _get_or_create_profile(session, user_id: str) -> AthleteProfile:
+    """Get existing profile or create new one, handling schema errors.
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        AthleteProfile instance
+    """
+    try:
+        profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.warning(f"[API] Database schema issue querying profile. Creating new profile: {e!r}")
+            profile = _create_new_profile(session, user_id)
+        else:
+            raise
+
+    if not profile:
+        profile = _create_new_profile(session, user_id)
+
+    return profile
+
+
+def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdateRequest) -> None:
+    """Update profile fields from request.
+
+    Args:
+        profile: AthleteProfile instance to update
+        request: Update request with fields to update
+    """
+    if profile.sources is None:
+        profile.sources = {}
+
+    if request.name is not None:
+        profile.name = request.name
+        profile.sources["name"] = "user"
+
+    if request.email is not None:
+        profile.email = request.email
+
+    if request.gender is not None:
+        profile.gender = request.gender
+        profile.sources["gender"] = "user"
+
+    if request.date_of_birth is not None:
+        try:
+            parsed_date = datetime.strptime(request.date_of_birth, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            profile.date_of_birth = parsed_date
+        except ValueError as e:
+            logger.warning(f"Failed to parse date_of_birth: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid date format: {request.date_of_birth}. Expected YYYY-MM-DD") from e
+
+    if request.weight_kg is not None:
+        profile.weight_kg = request.weight_kg
+        profile.sources["weight_kg"] = "user"
+
+    if request.height_cm is not None:
+        profile.height_cm = request.height_cm
+        profile.sources["height_cm"] = "user"
+
+    if request.location is not None:
+        profile.location = request.location
+        profile.sources["location"] = "user"
+
+    if request.unit_system is not None:
+        _validate_unit_system(request.unit_system)
+        profile.unit_system = request.unit_system
+
+    if request.target_event is not None:
+        profile.target_event = {
+            "name": request.target_event.name,
+            "date": request.target_event.date,
+            "distance": request.target_event.distance,
+        }
+
+    if request.goals is not None:
+        _validate_goals(request.goals)
+        profile.goals = request.goals
+
+    profile.updated_at = datetime.now(timezone.utc)
+
+
+def _parse_date_of_birth_from_profile(profile: AthleteProfile, request: AthleteProfileUpdateRequest) -> str | None:
+    """Parse date_of_birth from profile or request.
+
+    Args:
+        profile: AthleteProfile instance
+        request: Update request
+
+    Returns:
+        Date string or None
+    """
+    if request.date_of_birth:
+        return request.date_of_birth
+
+    if hasattr(profile, "date_of_birth") and profile.date_of_birth:
+        if hasattr(profile.date_of_birth, "date"):
+            return profile.date_of_birth.date().isoformat()
+        return str(profile.date_of_birth)
+
+    return None
+
+
+def _parse_target_event_from_profile(profile: AthleteProfile, request: AthleteProfileUpdateRequest) -> TargetEvent | None:
+    """Parse target_event from profile or request.
+
+    Args:
+        profile: AthleteProfile instance
+        request: Update request
+
+    Returns:
+        TargetEvent or None
+    """
+    if request.target_event:
+        return request.target_event
+
+    if hasattr(profile, "target_event") and profile.target_event:
+        if isinstance(profile.target_event, dict):
+            try:
+                return TargetEvent(**profile.target_event)
+            except Exception as e:
+                logger.warning(f"Failed to parse target_event in error handler: {e}")
+                return None
+        else:
+            return profile.target_event
+
+    return None
+
+
+def _build_response_from_profile(profile: AthleteProfile) -> AthleteProfileResponse:
+    """Build response from profile object.
+
+    Args:
+        profile: AthleteProfile instance
+
+    Returns:
+        AthleteProfileResponse
+    """
+    date_of_birth_str = None
+    if profile.date_of_birth:
+        date_of_birth_str = profile.date_of_birth.date().isoformat()
+
+    target_event_obj = None
+    if profile.target_event:
+        try:
+            target_event_obj = TargetEvent(**profile.target_event)
+        except Exception as e:
+            logger.warning(f"Failed to parse target_event: {e}")
+
+    return AthleteProfileResponse(
+        name=profile.name,
+        email=profile.email,
+        gender=profile.gender,
+        date_of_birth=date_of_birth_str,
+        weight_kg=profile.weight_kg,
+        height_cm=profile.height_cm,
+        location=profile.location,
+        unit_system=profile.unit_system or "metric",
+        strava_connected=profile.strava_connected,
+        target_event=target_event_obj,
+        goals=profile.goals or [],
+    )
+
+
+def _build_response_from_request(request: AthleteProfileUpdateRequest, profile: AthleteProfile | None = None) -> AthleteProfileResponse:
+    """Build response from request, with fallback to profile if available.
+
+    Args:
+        request: Update request
+        profile: Optional profile for fallback values
+
+    Returns:
+        AthleteProfileResponse
+    """
+    date_of_birth_str = (
+        _parse_date_of_birth_from_profile(profile, request)
+        if profile
+        else (request.date_of_birth if hasattr(request, "date_of_birth") and request.date_of_birth else None)
+    )
+    target_event_obj = (
+        _parse_target_event_from_profile(profile, request)
+        if profile
+        else (request.target_event if hasattr(request, "target_event") and request.target_event else None)
+    )
+
+    def get_value(field_name: str, default=None):
+        request_val = getattr(request, field_name, None)
+        if request_val is not None:
+            return request_val
+        if profile and hasattr(profile, field_name):
+            return getattr(profile, field_name)
+        return default
+
+    unit_system_val = get_value("unit_system", "metric")
+    unit_system_str: str = unit_system_val if isinstance(unit_system_val, str) else "metric"
+
+    goals_val = get_value("goals", [])
+    goals_list: list[str] = goals_val if isinstance(goals_val, list) else []
+
+    return AthleteProfileResponse(
+        name=get_value("name"),
+        email=get_value("email"),
+        gender=get_value("gender"),
+        date_of_birth=date_of_birth_str,
+        weight_kg=get_value("weight_kg"),
+        height_cm=get_value("height_cm"),
+        location=get_value("location"),
+        unit_system=unit_system_str,
+        strava_connected=profile.strava_connected if profile and hasattr(profile, "strava_connected") else False,
+        target_event=target_event_obj,
+        goals=goals_list,
+    )
+
+
 @router.put("/profile", response_model=AthleteProfileResponse)
 def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(get_current_user_id)):
     """Update athlete profile information.
@@ -1020,98 +1237,29 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
     logger.info(f"[API] /me/profile PUT endpoint called for user_id={user_id}")
     try:
         with get_session() as session:
-            profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
-
-            if not profile:
-                profile = _create_new_profile(session, user_id)
-
-            # Ensure sources dict exists
-            if profile.sources is None:
-                profile.sources = {}
-
-            # Update fields that are provided
-            if request.name is not None:
-                profile.name = request.name
-                profile.sources["name"] = "user"
-
-            if request.email is not None:
-                profile.email = request.email
-
-            if request.gender is not None:
-                profile.gender = request.gender
-                profile.sources["gender"] = "user"
-
-            if request.date_of_birth is not None:
-                try:
-                    # Parse YYYY-MM-DD format
-                    parsed_date = datetime.strptime(request.date_of_birth, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                    profile.date_of_birth = parsed_date
-                except ValueError as e:
-                    logger.warning(f"Failed to parse date_of_birth: {e}")
-                    raise HTTPException(status_code=400, detail=f"Invalid date format: {request.date_of_birth}. Expected YYYY-MM-DD") from e
-
-            if request.weight_kg is not None:
-                profile.weight_kg = request.weight_kg
-                profile.sources["weight_kg"] = "user"
-
-            if request.height_cm is not None:
-                profile.height_cm = request.height_cm
-                profile.sources["height_cm"] = "user"
-
-            if request.location is not None:
-                profile.location = request.location
-                profile.sources["location"] = "user"
-
-            if request.unit_system is not None:
-                _validate_unit_system(request.unit_system)
-                profile.unit_system = request.unit_system
-
-            if request.target_event is not None:
-                # Convert TargetEvent model to dict for storage
-                profile.target_event = {
-                    "name": request.target_event.name,
-                    "date": request.target_event.date,
-                    "distance": request.target_event.distance,
-                }
-
-            if request.goals is not None:
-                _validate_goals(request.goals)
-                profile.goals = request.goals
-
-            profile.updated_at = datetime.now(timezone.utc)
+            profile = _get_or_create_profile(session, user_id)
+            _update_profile_fields(profile, request)
             session.commit()
-            session.refresh(profile)
-            session.expunge(profile)
 
-            date_of_birth_str = None
-            if profile.date_of_birth:
-                date_of_birth_str = profile.date_of_birth.date().isoformat()
+            try:
+                session.refresh(profile)
+                session.expunge(profile)
+                logger.info(f"[API] Profile updated for user_id={user_id}")
+                return _build_response_from_profile(profile)
+            except Exception as refresh_error:
+                error_msg = str(refresh_error).lower()
+                if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+                    logger.warning(f"[API] Cannot refresh profile after update due to missing columns: {refresh_error!r}")
+                    return _build_response_from_request(request, profile)
+                raise
 
-            # Convert target_event from dict to TargetEvent model if present
-            target_event_obj = None
-            if profile.target_event:
-                try:
-                    target_event_obj = TargetEvent(**profile.target_event)
-                except Exception as e:
-                    logger.warning(f"Failed to parse target_event for user_id={user_id}: {e}")
-
-            logger.info(f"[API] Profile updated for user_id={user_id}")
-            return AthleteProfileResponse(
-                name=profile.name,
-                email=profile.email,
-                gender=profile.gender,
-                date_of_birth=date_of_birth_str,
-                weight_kg=profile.weight_kg,
-                height_cm=profile.height_cm,
-                location=profile.location,
-                unit_system=profile.unit_system or "metric",
-                strava_connected=profile.strava_connected,
-                target_event=target_event_obj,
-                goals=profile.goals or [],
-            )
     except HTTPException:
         raise
     except Exception as e:
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.error(f"Database schema mismatch detected for profile update. Missing column. Run migrations: {e!r}", exc_info=True)
+            return _build_response_from_request(request)
         logger.error(f"Error updating profile: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update profile: {e!s}") from e
 

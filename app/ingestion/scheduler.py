@@ -5,6 +5,7 @@ from loguru import logger
 
 from app.db.models import StravaAccount
 from app.db.session import get_session
+from app.ingestion.quota_manager import quota_manager
 from app.ingestion.tasks import backfill_task, history_backfill_task, incremental_task
 from app.models import StravaAuth
 
@@ -60,7 +61,12 @@ def _run_backfill_tasks(user_data: list[UserData], now: int) -> None:
 
 
 def _run_history_backfill_tasks() -> None:
-    """Run history backfill tasks for StravaAccount users."""
+    """Run history backfill tasks with dynamic quota allocation.
+
+    Dynamically allocates available API quota across users who need backfill.
+    As users complete, quota is redistributed to remaining users.
+    Maximizes throughput by using as much available quota as possible.
+    """
     with get_session() as session:
         accounts = session.query(StravaAccount).all()
 
@@ -68,23 +74,105 @@ def _run_history_backfill_tasks() -> None:
             logger.debug("[SCHEDULER] No StravaAccount users found for history backfill")
             return
 
-        logger.info(f"[SCHEDULER] Found {len(accounts)} StravaAccount user(s) for history backfill")
+        # Filter to only users who need backfill
+        users_needing_backfill = [account for account in accounts if not account.full_history_synced]
 
-        for account in accounts:
-            user_id = account.user_id
-            if account.full_history_synced:
-                logger.debug(f"[SCHEDULER] Skipping history backfill for user_id={user_id} (already synced)")
-                continue
+        if not users_needing_backfill:
+            logger.debug("[SCHEDULER] All users have completed history backfill")
+            return
 
-            try:
-                logger.info(f"[SCHEDULER] Running history backfill for user_id={user_id}")
-                history_backfill_task(user_id)
-                logger.info(f"[SCHEDULER] History backfill completed for user_id={user_id}")
-            except Exception as e:
-                logger.error(
-                    f"[SCHEDULER] History backfill failed for user_id={user_id}: {e}",
-                    exc_info=True,
+        logger.info(f"[SCHEDULER] Found {len(users_needing_backfill)} user(s) needing history backfill (out of {len(accounts)} total)")
+
+        # Process users with dynamic quota allocation
+        # Continue until quota is exhausted or all users are processed
+        processed_count = 0
+        completed_count = 0
+
+        while users_needing_backfill:
+            # Check available quota
+            max_requests = quota_manager.get_max_requests_available()
+
+            if max_requests <= 0:
+                logger.info(
+                    f"[SCHEDULER] Quota exhausted. Processed {processed_count} users, "
+                    f"{completed_count} completed, {len(users_needing_backfill)} remaining"
                 )
+                break
+
+            # Calculate how many requests to allocate per user
+            # Distribute available quota evenly across remaining users
+            users_remaining = len(users_needing_backfill)
+            requests_per_user = max(1, max_requests // users_remaining)
+
+            # But limit to reasonable per-user allocation to avoid one user consuming all quota
+            # Allow more requests per user if we have few users, but cap at 10 per user per cycle
+            requests_per_user = min(requests_per_user, 10)
+
+            logger.info(
+                f"[SCHEDULER] Allocating quota: {max_requests} available, "
+                f"{users_remaining} users remaining, ~{requests_per_user} requests per user"
+            )
+
+            # Process users, removing completed ones as we go
+            users_to_remove = []
+
+            for account in users_needing_backfill:
+                user_id = account.user_id
+
+                # Re-check if completed (may have been completed by another process)
+                session.refresh(account)
+                if account.full_history_synced:
+                    logger.debug(f"[SCHEDULER] User {user_id} already completed, skipping")
+                    users_to_remove.append(account)
+                    completed_count += 1
+                    continue
+
+                # Check quota before each request
+                if quota_manager.get_max_requests_available() <= 0:
+                    logger.info("[SCHEDULER] Quota exhausted during processing, stopping")
+                    break
+
+                try:
+                    logger.info(f"[SCHEDULER] Running history backfill for user_id={user_id}")
+                    history_backfill_task(user_id)
+                    processed_count += 1
+
+                    # Re-check if completed after this run
+                    session.refresh(account)
+                    if account.full_history_synced:
+                        logger.info(f"[SCHEDULER] History backfill completed for user_id={user_id}")
+                        users_to_remove.append(account)
+                        completed_count += 1
+                    else:
+                        logger.info(f"[SCHEDULER] History backfill progress for user_id={user_id} (not yet complete)")
+
+                except Exception as e:
+                    logger.error(
+                        f"[SCHEDULER] History backfill failed for user_id={user_id}: {e}",
+                        exc_info=True,
+                    )
+                    # Don't remove on error - user still needs backfill
+                    processed_count += 1
+
+            # Remove completed users from list
+            for account in users_to_remove:
+                users_needing_backfill.remove(account)
+
+            # If we processed all users but none completed, we've hit a limit
+            # Break to avoid infinite loop
+            if not users_to_remove and processed_count > 0:
+                logger.info(
+                    f"[SCHEDULER] Processed {processed_count} users but none completed. "
+                    f"May have hit rate limits or all users are at their cursor limits. "
+                    f"Stopping cycle."
+                )
+                break
+
+        logger.info(
+            f"[SCHEDULER] History backfill cycle complete: "
+            f"{processed_count} processed, {completed_count} completed, "
+            f"{len(users_needing_backfill)} remaining"
+        )
 
 
 def ingestion_tick() -> None:

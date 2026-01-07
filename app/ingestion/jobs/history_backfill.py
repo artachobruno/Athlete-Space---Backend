@@ -14,7 +14,7 @@ import time
 import httpx
 import requests
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.config.settings import settings
@@ -159,21 +159,39 @@ def _get_access_token_from_account(account: StravaAccount, session) -> str:
     return new_access_token
 
 
-def _determine_before_parameter(account: StravaAccount) -> int:
+def _determine_before_parameter(account: StravaAccount, session) -> int:
     """Determine the `before` parameter for API call.
+
+    Always checks the database for the oldest activity date to ensure we backfill
+    from the correct point, even if activities were added via incremental sync.
 
     Args:
         account: StravaAccount object
+        session: Database session
 
     Returns:
         Unix timestamp to use as `before` parameter
     """
-    if account.oldest_synced_at is None:
+    # Always check the actual oldest activity in the database
+    oldest_activity_result = session.execute(select(func.min(Activity.start_time)).where(Activity.user_id == account.user_id)).scalar()
+
+    if oldest_activity_result:
+        # Use the oldest activity date from database
+        oldest_activity_timestamp = int(oldest_activity_result.timestamp())
+        logger.info(
+            f"[HISTORY_BACKFILL] Found oldest activity in DB: {oldest_activity_result.isoformat()} (timestamp: {oldest_activity_timestamp})"
+        )
+        before = oldest_activity_timestamp
+    elif account.oldest_synced_at is not None:
+        # Fallback to cursor if no activities in DB yet
+        before = account.oldest_synced_at
+        logger.info(f"[HISTORY_BACKFILL] No activities in DB, using cursor: before={before}")
+    else:
+        # First time: start from current time
         before = int(time.time())
         logger.info(f"[HISTORY_BACKFILL] Initializing cursor: before={before} (current time)")
-    else:
-        before = account.oldest_synced_at
-        logger.info(f"[HISTORY_BACKFILL] Resuming cursor: before={before}")
+
+    logger.info(f"[HISTORY_BACKFILL] Using before parameter: {before} ({time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(before))} UTC)")
     return before
 
 
@@ -333,8 +351,8 @@ def backfill_user_history(user_id: str) -> None:
             logger.info(f"[HISTORY_BACKFILL] Full history already synced for user_id={user_id}, skipping")
             return
 
-        # Determine `before` parameter
-        before = _determine_before_parameter(account)
+        # Determine `before` parameter - always check database for oldest activity
+        before = _determine_before_parameter(account, session)
 
         # Get access token
         try:

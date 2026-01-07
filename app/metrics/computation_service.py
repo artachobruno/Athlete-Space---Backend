@@ -13,8 +13,8 @@ from sqlalchemy import select
 from app.db.models import Activity, DailyTrainingLoad, WeeklyTrainingSummary
 from app.db.session import get_session
 from app.metrics.load_computation import (
-    compute_ctl_atl_tsb_from_loads,
-    compute_daily_load_scores,
+    compute_ctl_atl_form_from_tss,
+    compute_daily_tss_load,
 )
 
 
@@ -61,18 +61,18 @@ def recompute_metrics_for_user(
             logger.info(f"[METRICS] No activities found for user_id={user_id}, skipping metrics computation")
             return {"daily_created": 0, "daily_updated": 0, "weekly_created": 0, "weekly_updated": 0}
 
-        # Compute daily load scores
-        daily_loads = compute_daily_load_scores(activity_list, since_date, end_date)
+        # Compute daily TSS loads (unified metric from spec)
+        daily_tss_loads = compute_daily_tss_load(activity_list, since_date, end_date)
 
-        # Compute CTL, ATL, TSB
-        metrics = compute_ctl_atl_tsb_from_loads(daily_loads, since_date, end_date)
+        # Compute CTL, ATL, Form (FSB) from TSS
+        metrics = compute_ctl_atl_form_from_tss(daily_tss_loads, since_date, end_date)
 
         # Update daily_training_load table
         daily_created = 0
         daily_updated = 0
 
-        for date_val, load_score in daily_loads.items():
-            metrics_for_date = metrics.get(date_val, {"ctl": 0.0, "atl": 0.0, "tsb": 0.0})
+        for date_val, tss_load in daily_tss_loads.items():
+            metrics_for_date = metrics.get(date_val, {"ctl": 0.0, "atl": 0.0, "fsb": 0.0})
 
             # Check if record exists
             existing = session.execute(
@@ -82,13 +82,16 @@ def recompute_metrics_for_user(
                 )
             ).first()
 
+            # Note: TSB column stores Form (FSB) value
+            form_value = metrics_for_date.get("fsb", 0.0)
+
             if existing:
                 # Update existing record
                 daily_load = existing[0]
                 daily_load.ctl = metrics_for_date["ctl"]
                 daily_load.atl = metrics_for_date["atl"]
-                daily_load.tsb = metrics_for_date["tsb"]
-                daily_load.load_score = load_score
+                daily_load.tsb = form_value  # Storing Form (FSB) in TSB column for backward compatibility
+                daily_load.load_score = tss_load  # Daily TSS load
                 daily_load.updated_at = datetime.now(timezone.utc)
                 daily_updated += 1
             else:
@@ -98,8 +101,8 @@ def recompute_metrics_for_user(
                     date=datetime.combine(date_val, datetime.min.time()).replace(tzinfo=timezone.utc),
                     ctl=metrics_for_date["ctl"],
                     atl=metrics_for_date["atl"],
-                    tsb=metrics_for_date["tsb"],
-                    load_score=load_score,
+                    tsb=form_value,  # Storing Form (FSB) in TSB column for backward compatibility
+                    load_score=tss_load,  # Daily TSS load
                 )
                 session.add(daily_load)
                 daily_created += 1

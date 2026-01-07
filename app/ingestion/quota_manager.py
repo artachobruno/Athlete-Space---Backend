@@ -47,6 +47,32 @@ class RedisStravaQuotaManager:
     def can_make_call(self) -> bool:
         return self._get_int(KEY_15M_USED) < self.SAFE_15M and self._get_int(KEY_DAILY_USED) < self.SAFE_DAILY
 
+    def get_available_quota(self) -> tuple[int, int]:
+        """Get available quota for both 15-minute and daily limits.
+
+        Returns:
+            Tuple of (available_15m, available_daily) requests
+        """
+        used_15m = self._get_int(KEY_15M_USED)
+        used_daily = self._get_int(KEY_DAILY_USED)
+
+        available_15m = max(0, self.SAFE_15M - used_15m)
+        available_daily = max(0, self.SAFE_DAILY - used_daily)
+
+        # Return the minimum (most restrictive limit)
+        # This ensures we don't exceed either limit
+        return (available_15m, available_daily)
+
+    def get_max_requests_available(self) -> int:
+        """Get maximum number of requests we can safely make right now.
+
+        Returns:
+            Maximum number of requests available (limited by both 15m and daily)
+        """
+        available_15m, available_daily = self.get_available_quota()
+        # Use the most restrictive limit
+        return min(available_15m, available_daily)
+
     def wait_for_slot(self) -> None:
         """Block until safely under Strava limits."""
         while not self.can_make_call():

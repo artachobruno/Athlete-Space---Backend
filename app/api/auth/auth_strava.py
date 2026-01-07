@@ -10,6 +10,7 @@ This module implements Step 3: Connection-only OAuth flow.
 from __future__ import annotations
 
 import secrets
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
@@ -129,24 +130,58 @@ def _resolve_or_create_user_id(athlete_id: str, user_id: str | None) -> str:
     Returns:
         Resolved or created user_id
     """
-    if user_id is not None:
-        return user_id
+    athlete_id_int = int(athlete_id)
 
     with get_session() as session:
+        # If user_id is provided (authenticated user linking Strava), use it
+        if user_id is not None:
+            # Update user with strava_athlete_id
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if user_result:
+                user = user_result[0]
+                if not user.strava_athlete_id:
+                    user.strava_athlete_id = athlete_id_int
+                    session.commit()
+                    logger.info(f"[STRAVA_OAUTH] Set strava_athlete_id={athlete_id_int} for user_id={user_id}")
+            return user_id
+
+        # Check if user exists by strava_athlete_id
+        existing_user = session.execute(select(User).where(User.strava_athlete_id == athlete_id_int)).first()
+
+        if existing_user:
+            resolved_user_id = existing_user[0].id
+            logger.info(f"[STRAVA_OAUTH] Found existing user by strava_athlete_id={athlete_id_int}, user_id={resolved_user_id}")
+            return resolved_user_id
+
+        # Check if StravaAccount exists (for backward compatibility)
         existing_account = session.execute(select(StravaAccount).where(StravaAccount.athlete_id == athlete_id)).first()
 
         if existing_account:
             resolved_user_id = existing_account[0].user_id
+            # Update user with strava_athlete_id if not set
+            user_result = session.execute(select(User).where(User.id == resolved_user_id)).first()
+            if user_result:
+                user = user_result[0]
+                if not user.strava_athlete_id:
+                    user.strava_athlete_id = athlete_id_int
+                    session.commit()
+                    logger.info(f"[STRAVA_OAUTH] Set strava_athlete_id={athlete_id_int} for existing user_id={resolved_user_id}")
             logger.info(f"[STRAVA_OAUTH] Found existing account for athlete_id={athlete_id}, user_id={resolved_user_id}")
             return resolved_user_id
 
-        resolved_user_id = f"user_{athlete_id}"
-        user_result = session.execute(select(User).where(User.id == resolved_user_id)).first()
-        if not user_result:
-            new_user = User(id=resolved_user_id, email=None)
-            session.add(new_user)
-            session.commit()
-            logger.info(f"[STRAVA_OAUTH] Created new user_id={resolved_user_id} for athlete_id={athlete_id}")
+        # Create new user
+        resolved_user_id = str(uuid.uuid4())
+        new_user = User(
+            id=resolved_user_id,
+            email=None,
+            password_hash=None,
+            strava_athlete_id=athlete_id_int,
+            created_at=datetime.now(timezone.utc),
+            last_login_at=None,
+        )
+        session.add(new_user)
+        session.commit()
+        logger.info(f"[STRAVA_OAUTH] Created new user_id={resolved_user_id} for athlete_id={athlete_id}")
 
         return resolved_user_id
 
@@ -358,6 +393,15 @@ def strava_callback(
         logger.info(f"[STRAVA_OAUTH] OAuth successful for user_id={user_id}, athlete_id={athlete_id}")
 
         _encrypt_and_store_tokens(user_id, athlete_id, access_token, refresh_token, expires_at)
+
+        # Update last_login_at
+        with get_session() as session:
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if user_result:
+                user = user_result[0]
+                user.last_login_at = datetime.now(timezone.utc)
+                session.commit()
+                logger.debug(f"[STRAVA_OAUTH] Updated last_login_at for user_id={user_id}")
 
         # Fetch and merge athlete profile from Strava
         try:

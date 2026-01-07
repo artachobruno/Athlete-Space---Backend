@@ -35,6 +35,7 @@ from app.core.logger import setup_logger
 from app.db.models import Base
 from app.db.session import engine
 from app.ingestion.api import router as ingestion_strava_router
+from app.ingestion.scheduler import ingestion_tick
 from app.ingestion.sync_scheduler import sync_tick
 from app.services.intelligence.scheduler import generate_daily_decisions_for_all_users
 from app.services.intelligence.weekly_report_metrics import update_all_recent_weekly_reports_for_all_users
@@ -56,6 +57,7 @@ from scripts.migrate_llm_metadata_fields import migrate_llm_metadata_fields
 from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
+from scripts.migrate_user_auth_fields import migrate_user_auth_fields
 
 # Initialize logger with level from settings (defaults to INFO, can be overridden via LOG_LEVEL env var)
 setup_logger(level=settings.log_level)
@@ -81,6 +83,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_strava_accounts: {e}")
     logger.error(f"Migration failed: migrate_strava_accounts - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: user authentication fields")
+    migrate_user_auth_fields()
+    logger.info("✓ Migration completed: user authentication fields")
+except Exception as e:
+    migration_errors.append(f"migrate_user_auth_fields: {e}")
+    logger.error(f"✗ Migration failed: migrate_user_auth_fields - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: athlete_profiles athlete_id column")
@@ -237,6 +247,17 @@ async def lifespan(_app: FastAPI):
         name="Strava Background Sync",
         replace_existing=True,
     )
+    # Run ingestion tasks (including history backfill) every 30 minutes
+    # Uses dynamic quota allocation: distributes available API quota across users
+    # Automatically stops when quota is exhausted, redistributes as users complete
+    # Maximizes throughput by using as much available quota as possible
+    scheduler.add_job(
+        ingestion_tick,
+        trigger=IntervalTrigger(minutes=30),
+        id="strava_ingestion_tick",
+        name="Strava Ingestion Tick (History Backfill - Dynamic Quota)",
+        replace_existing=True,
+    )
     # Run daily decision generation overnight at 2 AM UTC
     scheduler.add_job(
         generate_daily_decisions_for_all_users,
@@ -255,6 +276,7 @@ async def lifespan(_app: FastAPI):
     )
     scheduler.start()
     logger.info("[SCHEDULER] Started automatic background sync scheduler (runs every 6 hours)")
+    logger.info("[SCHEDULER] Started ingestion tick scheduler (runs every 30 minutes, dynamic quota allocation for history backfill)")
     logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
     logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
 
@@ -264,6 +286,13 @@ async def lifespan(_app: FastAPI):
         logger.info("[SCHEDULER] Initial background sync tick completed")
     except Exception as e:
         logger.exception("[SCHEDULER] Initial background sync tick failed: {}", e)
+
+    # Run initial ingestion tick to start history backfill
+    try:
+        ingestion_tick()
+        logger.info("[SCHEDULER] Initial ingestion tick completed")
+    except Exception as e:
+        logger.exception("[SCHEDULER] Initial ingestion tick failed: {}", e)
 
     # Yield control to FastAPI (use await to satisfy async requirement)
     await asyncio.sleep(0)

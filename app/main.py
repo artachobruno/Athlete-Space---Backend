@@ -37,6 +37,7 @@ from app.db.session import engine
 from app.ingestion.api import router as ingestion_strava_router
 from app.ingestion.sync_scheduler import sync_tick
 from app.services.intelligence.scheduler import generate_daily_decisions_for_all_users
+from app.services.intelligence.weekly_report_metrics import update_all_recent_weekly_reports_for_all_users
 from app.webhooks.strava import router as webhooks_router
 from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
@@ -48,6 +49,7 @@ from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_drop_activity_id import migrate_drop_activity_id
 from scripts.migrate_drop_obsolete_activity_columns import migrate_drop_obsolete_activity_columns
 from scripts.migrate_history_cursor import migrate_history_cursor
+from scripts.migrate_llm_metadata_fields import migrate_llm_metadata_fields
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 
@@ -164,6 +166,14 @@ except Exception as e:
     migration_errors.append(f"migrate_coach_messages_schema: {e}")
     logger.error(f"Migration failed: migrate_coach_messages_schema - {e}", exc_info=True)
 
+try:
+    logger.info("Running migration: LLM metadata fields and composite indexes")
+    migrate_llm_metadata_fields()
+    logger.info("✓ Migration completed: LLM metadata fields and composite indexes")
+except Exception as e:
+    migration_errors.append(f"migrate_llm_metadata_fields: {e}")
+    logger.error(f"Migration failed: migrate_llm_metadata_fields - {e}", exc_info=True)
+
 if migration_errors:
     logger.error(
         f"Some migrations failed ({len(migration_errors)} errors). "
@@ -199,9 +209,18 @@ async def lifespan(_app: FastAPI):
         name="Daily Decision Generation",
         replace_existing=True,
     )
+    # Run weekly report metrics update on Sundays at 3 AM UTC (after week ends)
+    scheduler.add_job(
+        update_all_recent_weekly_reports_for_all_users,
+        trigger=CronTrigger(day_of_week=6, hour=3, minute=0),  # Sunday 3 AM UTC
+        id="weekly_report_metrics_update",
+        name="Weekly Report Metrics Update",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info("[SCHEDULER] Started automatic background sync scheduler (runs every 6 hours)")
     logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
+    logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
 
     # Run initial sync tick
     try:
@@ -289,6 +308,36 @@ def root():
 def health():
     """Health check endpoint for monitoring and load balancers."""
     return {"status": "ok", "service": "Virtus AI Backend"}
+
+
+@app.get("/debug/headers")
+def debug_headers(request: Request):
+    """Debug endpoint to check what headers are being received.
+
+    This endpoint helps diagnose authentication issues by showing
+    what headers the frontend is actually sending.
+    """
+    headers_dict = dict(request.headers)
+    # Mask sensitive values
+    safe_headers = {}
+    for key, value in headers_dict.items():
+        if key.lower() == "authorization":
+            if value:
+                safe_headers[key] = f"{value[:20]}... (masked)" if len(value) > 20 else f"{value[:10]}... (masked)"
+            else:
+                safe_headers[key] = "NOT PRESENT"
+        else:
+            safe_headers[key] = value
+
+    return {
+        "method": request.method,
+        "path": request.url.path,
+        "origin": request.headers.get("Origin", "Not set"),
+        "authorization_header": "Present" if request.headers.get("Authorization") else "MISSING",
+        "authorization_value": safe_headers.get("Authorization", "NOT PRESENT"),
+        "all_headers": safe_headers,
+        "header_count": len(headers_dict),
+    }
 
 
 # Register all API routers

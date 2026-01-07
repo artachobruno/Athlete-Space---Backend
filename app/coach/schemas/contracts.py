@@ -127,3 +127,65 @@ class WeeklyReportResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+# Lightweight list response schemas (using metadata fields only)
+
+
+class SeasonPlanListItem(BaseModel):
+    """Lightweight season plan item for list views (uses metadata only)."""
+
+    id: str
+    plan_name: str | None
+    start_date: datetime | None
+    end_date: datetime | None
+    primary_race_date: datetime | None
+    primary_race_name: str | None
+    total_weeks: int | None
+    version: int
+    is_active: bool
+    created_at: datetime
+
+
+class WeeklyIntentListItem(BaseModel):
+    """Lightweight weekly intent item for list views (uses metadata only)."""
+
+    id: str
+    week_start: datetime
+    week_number: int
+    primary_focus: str | None
+    total_sessions: int | None
+    target_volume_hours: float | None
+    season_plan_id: str | None
+    version: int
+    is_active: bool
+    created_at: datetime
+
+
+class DailyDecisionListItem(BaseModel):
+    """Lightweight daily decision item for list views (uses metadata only)."""
+
+    id: str
+    decision_date: datetime
+    recommendation_type: str | None
+    recommended_intensity: str | None
+    has_workout: bool | None
+    weekly_intent_id: str | None
+    version: int
+    is_active: bool
+    created_at: datetime
+
+
+class WeeklyReportListItem(BaseModel):
+    """Lightweight weekly report item for list views (uses metadata only)."""
+
+    id: str
+    week_start: datetime
+    week_end: datetime
+    summary_score: float | None
+    key_insights_count: int | None
+    activities_completed: int | None
+    adherence_percentage: float | None
+    version: int
+    is_active: bool
+    created_at: datetime

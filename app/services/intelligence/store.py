@@ -4,8 +4,10 @@ Intent is data. Store it like a first-class entity.
 Never overwrite - append versions.
 """
 
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 
+from dateutil import parser as date_parser
 from loguru import logger
 from sqlalchemy import select
 
@@ -15,6 +17,126 @@ from app.db.models import SeasonPlan as SeasonPlanModel
 from app.db.models import WeeklyIntent as WeeklyIntentModel
 from app.db.models import WeeklyReport as WeeklyReportModel
 from app.db.session import get_session
+from app.services.intelligence.weekly_report_metrics import compute_weekly_report_metrics
+
+
+def _extract_date_from_race_string(race_str: str, season_start: date, season_end: date) -> date | None:
+    """Extract date from race string using various parsing strategies.
+
+    Args:
+        race_str: Race string (e.g., "Marathon - April 15, 2024" or "Spring Marathon - April 15")
+        season_start: Season start date (for year inference)
+        season_end: Season end date (for year inference)
+
+    Returns:
+        Parsed date or None if parsing fails
+    """
+    # Strategy 1: Try dateutil parser (handles many formats)
+    parsed_date = _try_dateutil_parse(race_str, season_start, season_end)
+    if parsed_date:
+        return parsed_date
+
+    # Strategy 2: Look for ISO date format (YYYY-MM-DD)
+    parsed_date = _try_iso_date_parse(race_str, season_start, season_end)
+    if parsed_date:
+        return parsed_date
+
+    # Strategy 3: Look for month/day patterns (e.g., "April 15", "Apr 15")
+    parsed_date = _try_month_day_parse(race_str, season_start, season_end)
+    if parsed_date:
+        return parsed_date
+
+    return None
+
+
+def _try_dateutil_parse(race_str: str, season_start: date, season_end: date) -> date | None:
+    """Try parsing date using dateutil parser."""
+    try:
+        default_dt = datetime(season_start.year, 1, 1, tzinfo=timezone.utc)
+        parsed_date = date_parser.parse(race_str, fuzzy=True, default=default_dt)
+        if parsed_date:
+            parsed_date_obj = parsed_date.date()
+            if season_start <= parsed_date_obj <= season_end:
+                return parsed_date_obj
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _try_iso_date_parse(race_str: str, season_start: date, season_end: date) -> date | None:
+    """Try parsing ISO date format (YYYY-MM-DD)."""
+    iso_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", race_str)
+    if iso_match:
+        try:
+            parsed_date_obj = datetime.fromisoformat(iso_match.group(1)).date()
+            if season_start <= parsed_date_obj <= season_end:
+                return parsed_date_obj
+        except ValueError:
+            pass
+    return None
+
+
+def _try_month_day_parse(race_str: str, season_start: date, season_end: date) -> date | None:
+    """Try parsing month/day patterns (e.g., "April 15", "Apr 15")."""
+    month_day_patterns = [
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})",
+        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+(\d{1,2})",
+    ]
+
+    # Map month name to number (no duplicate keys)
+    month_map = {
+        "january": 1,
+        "february": 2,
+        "march": 3,
+        "april": 4,
+        "may": 5,
+        "june": 6,
+        "july": 7,
+        "august": 8,
+        "september": 9,
+        "october": 10,
+        "november": 11,
+        "december": 12,
+        "jan": 1,
+        "feb": 2,
+        "mar": 3,
+        "apr": 4,
+        "jun": 6,
+        "jul": 7,
+        "aug": 8,
+        "sep": 9,
+        "oct": 10,
+        "nov": 11,
+        "dec": 12,
+    }
+
+    for pattern in month_day_patterns:
+        match = re.search(pattern, race_str, re.IGNORECASE)
+        if match:
+            month_str = match.group(1)
+            day = int(match.group(2))
+            month = month_map.get(month_str.lower())
+            if month:
+                # Try current season year first
+                parsed_date = _try_create_date(season_start.year, month, day, season_start, season_end)
+                if parsed_date:
+                    return parsed_date
+                # Try next year if current year doesn't work
+                parsed_date = _try_create_date(season_start.year + 1, month, day, season_start, season_end)
+                if parsed_date:
+                    return parsed_date
+    return None
+
+
+def _try_create_date(year: int, month: int, day: int, season_start: date, season_end: date) -> date | None:
+    """Try creating a date and validate it's within season range."""
+    try:
+        parsed_date_obj = date(year, month, day)
+        if season_start <= parsed_date_obj <= season_end:
+            return parsed_date_obj
+    except ValueError:
+        pass
+    return None
 
 
 class IntentStore:
@@ -72,6 +194,31 @@ class IntentStore:
 
             next_version = (max_version or 0) + 1
 
+            # Extract metadata fields for fast queries
+            start_date_dt = datetime.combine(plan.season_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+            end_date_dt = datetime.combine(plan.season_end, datetime.min.time()).replace(tzinfo=timezone.utc)
+            total_weeks = (plan.season_end - plan.season_start).days // 7
+
+            # Extract primary race info if available
+            primary_race_date = None
+            primary_race_name = None
+            if plan.target_races:
+                # Try to extract date from race strings and find the nearest/first race
+                for race_str in plan.target_races:
+                    # Try to parse date from race string (e.g., "Marathon - April 15, 2024")
+                    race_date = _extract_date_from_race_string(race_str, plan.season_start, plan.season_end)
+                    if race_date:
+                        primary_race_date = datetime.combine(race_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                        primary_race_name = race_str
+                        break  # Use first race with valid date
+
+                # If no date found, use first race as primary
+                if primary_race_name is None:
+                    primary_race_name = plan.target_races[0]
+
+            # Create plan name from focus
+            plan_name = plan.focus[:100] if len(plan.focus) > 100 else plan.focus
+
             # Create new plan
             # Use mode='json' to serialize dates/datetimes to strings for JSON storage
             plan_dict = plan.model_dump(mode="json")
@@ -79,6 +226,12 @@ class IntentStore:
             new_plan = SeasonPlanModel(
                 user_id=user_id,
                 athlete_id=athlete_id,
+                plan_name=plan_name,
+                start_date=start_date_dt,
+                end_date=end_date_dt,
+                primary_race_date=primary_race_date,
+                primary_race_name=primary_race_name,
+                total_weeks=total_weeks,
                 plan_data=plan_dict,
                 version=next_version,
                 is_active=True,
@@ -172,6 +325,22 @@ class IntentStore:
 
             next_version = (max_version or 0) + 1
 
+            # Extract metadata fields for fast queries
+            primary_focus = intent.focus[:100] if len(intent.focus) > 100 else intent.focus
+            target_volume_hours = intent.volume_target_hours
+
+            # Estimate total sessions from intensity_distribution
+            # Try to parse "X sessions" or "X hard, Y easy" patterns
+            total_sessions = None
+            intensity_dist = intent.intensity_distribution.lower()
+            # Look for patterns like "2 hard sessions, 4 easy sessions" = 6 total
+            session_counts = re.findall(r"(\d+)\s+(?:hard|easy|moderate|session)", intensity_dist)
+            if session_counts:
+                total_sessions = sum(int(count) for count in session_counts)
+            # Fallback: estimate from volume (rough heuristic: ~1.5 hours per session)
+            elif target_volume_hours:
+                total_sessions = int(target_volume_hours / 1.5) if target_volume_hours > 0 else None
+
             # Create new intent
             # Use mode='json' to serialize dates/datetimes to strings for JSON storage
             intent_dict = intent.model_dump(mode="json")
@@ -179,6 +348,9 @@ class IntentStore:
             new_intent = WeeklyIntentModel(
                 user_id=user_id,
                 athlete_id=athlete_id,
+                primary_focus=primary_focus,
+                total_sessions=total_sessions,
+                target_volume_hours=target_volume_hours,
                 intent_data=intent_dict,
                 season_plan_id=season_plan_id,
                 week_start=week_start_dt,
@@ -279,6 +451,11 @@ class IntentStore:
 
             next_version = (max_version or 0) + 1
 
+            # Extract metadata fields for fast queries
+            recommendation_type = decision.recommendation
+            recommended_intensity = decision.intensity_focus
+            has_workout = decision.recommendation != "rest"
+
             # Create new decision
             # Use mode='json' to serialize dates/datetimes to strings for JSON storage
             decision_dict = decision.model_dump(mode="json")
@@ -286,6 +463,9 @@ class IntentStore:
             new_decision = DailyDecisionModel(
                 user_id=user_id,
                 athlete_id=athlete_id,
+                recommendation_type=recommendation_type,
+                recommended_intensity=recommended_intensity,
+                has_workout=has_workout,
                 decision_data=decision_dict,
                 weekly_intent_id=weekly_intent_id,
                 decision_date=decision_date_dt,
@@ -413,10 +593,25 @@ class IntentStore:
                 existing.is_active = False
                 session.add(existing)
 
+            # Extract metadata fields for fast queries
+            key_insights_count = len(report.progress_highlights) if report.progress_highlights else None
+
+            # Compute metrics for the week
+            week_start_dt = datetime.combine(report.week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+            metrics = compute_weekly_report_metrics(athlete_id, week_start_dt)
+
+            summary_score = metrics["summary_score"]
+            activities_completed = metrics["activities_completed"]
+            adherence_percentage = metrics["adherence_percentage"]
+
             # Create new report
             new_report = WeeklyReportModel(
                 user_id=user_id,
                 athlete_id=athlete_id,
+                summary_score=summary_score,
+                key_insights_count=key_insights_count,
+                activities_completed=activities_completed,
+                adherence_percentage=adherence_percentage,
                 report_data=report.model_dump(),
                 week_start=datetime.combine(report.week_start, datetime.min.time()).replace(tzinfo=timezone.utc),
                 week_end=datetime.combine(report.week_end, datetime.min.time()).replace(tzinfo=timezone.utc),

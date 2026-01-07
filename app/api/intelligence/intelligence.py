@@ -12,10 +12,22 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from app.api.dependencies.auth import get_current_user_id
-from app.coach.schemas.contracts import DailyDecisionResponse, SeasonPlanResponse, WeeklyIntentResponse, WeeklyReportResponse
+from app.coach.schemas.contracts import (
+    DailyDecisionListItem,
+    DailyDecisionResponse,
+    SeasonPlanListItem,
+    SeasonPlanResponse,
+    WeeklyIntentListItem,
+    WeeklyIntentResponse,
+    WeeklyReportListItem,
+    WeeklyReportResponse,
+)
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.db.models import Activity, StravaAccount
 from app.db.models import DailyDecision as DailyDecisionModel
+from app.db.models import SeasonPlan as SeasonPlanModel
+from app.db.models import WeeklyIntent as WeeklyIntentModel
+from app.db.models import WeeklyReport as WeeklyReportModel
 from app.db.session import get_session
 from app.services.intelligence.context_builder import build_daily_decision_context
 from app.services.intelligence.failures import IntelligenceFailureHandler
@@ -417,3 +429,181 @@ def get_weekly_report(
         created_at=report_model.created_at,
         updated_at=report_model.updated_at,
     )
+
+
+# List endpoints (using metadata fields for fast queries)
+
+
+@router.get("/season/list", response_model=list[SeasonPlanListItem])
+def list_season_plans(
+    user_id: str = Depends(get_current_user_id),
+    limit: int = 10,
+    active_only: bool = True,
+):
+    """Get list of season plans (metadata only, fast query).
+
+    Args:
+        user_id: Current authenticated user ID
+        limit: Maximum number of plans to return (default: 10)
+        active_only: If True, only return active plans
+
+    Returns:
+        List of season plan metadata (no full JSON payload)
+    """
+    athlete_id = _get_athlete_id_from_user(user_id)
+    logger.info(f"Listing season plans for user_id={user_id}, athlete_id={athlete_id}, limit={limit}")
+
+    with get_session() as session:
+        query = select(SeasonPlanModel).where(SeasonPlanModel.athlete_id == athlete_id)
+
+        if active_only:
+            query = query.where(SeasonPlanModel.is_active.is_(True))
+
+        plans = session.execute(query.order_by(SeasonPlanModel.version.desc()).limit(limit)).scalars().all()
+
+        return [
+            SeasonPlanListItem(
+                id=plan.id,
+                plan_name=plan.plan_name,
+                start_date=plan.start_date,
+                end_date=plan.end_date,
+                primary_race_date=plan.primary_race_date,
+                primary_race_name=plan.primary_race_name,
+                total_weeks=plan.total_weeks,
+                version=plan.version,
+                is_active=plan.is_active,
+                created_at=plan.created_at,
+            )
+            for plan in plans
+        ]
+
+
+@router.get("/week/list", response_model=list[WeeklyIntentListItem])
+def list_weekly_intents(
+    user_id: str = Depends(get_current_user_id),
+    limit: int = 10,
+    active_only: bool = True,
+):
+    """Get list of weekly intents (metadata only, fast query).
+
+    Args:
+        user_id: Current authenticated user ID
+        limit: Maximum number of intents to return (default: 10)
+        active_only: If True, only return active intents
+
+    Returns:
+        List of weekly intent metadata (no full JSON payload)
+    """
+    athlete_id = _get_athlete_id_from_user(user_id)
+    logger.info(f"Listing weekly intents for user_id={user_id}, athlete_id={athlete_id}, limit={limit}")
+
+    with get_session() as session:
+        query = select(WeeklyIntentModel).where(WeeklyIntentModel.athlete_id == athlete_id)
+
+        if active_only:
+            query = query.where(WeeklyIntentModel.is_active.is_(True))
+
+        intents = session.execute(query.order_by(WeeklyIntentModel.week_start.desc()).limit(limit)).scalars().all()
+
+        return [
+            WeeklyIntentListItem(
+                id=intent.id,
+                week_start=intent.week_start,
+                week_number=intent.week_number,
+                primary_focus=intent.primary_focus,
+                total_sessions=intent.total_sessions,
+                target_volume_hours=intent.target_volume_hours,
+                season_plan_id=intent.season_plan_id,
+                version=intent.version,
+                is_active=intent.is_active,
+                created_at=intent.created_at,
+            )
+            for intent in intents
+        ]
+
+
+@router.get("/decisions/list", response_model=list[DailyDecisionListItem])
+def list_daily_decisions(
+    user_id: str = Depends(get_current_user_id),
+    limit: int = 30,
+    active_only: bool = True,
+):
+    """Get list of daily decisions (metadata only, fast query).
+
+    Args:
+        user_id: Current authenticated user ID
+        limit: Maximum number of decisions to return (default: 30)
+        active_only: If True, only return active decisions
+
+    Returns:
+        List of daily decision metadata (no full JSON payload)
+    """
+    athlete_id = _get_athlete_id_from_user(user_id)
+    logger.info(f"Listing daily decisions for user_id={user_id}, athlete_id={athlete_id}, limit={limit}")
+
+    with get_session() as session:
+        query = select(DailyDecisionModel).where(DailyDecisionModel.athlete_id == athlete_id)
+
+        if active_only:
+            query = query.where(DailyDecisionModel.is_active.is_(True))
+
+        decisions = session.execute(query.order_by(DailyDecisionModel.decision_date.desc()).limit(limit)).scalars().all()
+
+        return [
+            DailyDecisionListItem(
+                id=decision.id,
+                decision_date=decision.decision_date,
+                recommendation_type=decision.recommendation_type,
+                recommended_intensity=decision.recommended_intensity,
+                has_workout=decision.has_workout,
+                weekly_intent_id=decision.weekly_intent_id,
+                version=decision.version,
+                is_active=decision.is_active,
+                created_at=decision.created_at,
+            )
+            for decision in decisions
+        ]
+
+
+@router.get("/week-report/list", response_model=list[WeeklyReportListItem])
+def list_weekly_reports(
+    user_id: str = Depends(get_current_user_id),
+    limit: int = 10,
+    active_only: bool = True,
+):
+    """Get list of weekly reports (metadata only, fast query).
+
+    Args:
+        user_id: Current authenticated user ID
+        limit: Maximum number of reports to return (default: 10)
+        active_only: If True, only return active reports
+
+    Returns:
+        List of weekly report metadata (no full JSON payload)
+    """
+    athlete_id = _get_athlete_id_from_user(user_id)
+    logger.info(f"Listing weekly reports for user_id={user_id}, athlete_id={athlete_id}, limit={limit}")
+
+    with get_session() as session:
+        query = select(WeeklyReportModel).where(WeeklyReportModel.athlete_id == athlete_id)
+
+        if active_only:
+            query = query.where(WeeklyReportModel.is_active.is_(True))
+
+        reports = session.execute(query.order_by(WeeklyReportModel.week_start.desc()).limit(limit)).scalars().all()
+
+        return [
+            WeeklyReportListItem(
+                id=report.id,
+                week_start=report.week_start,
+                week_end=report.week_end,
+                summary_score=report.summary_score,
+                key_insights_count=report.key_insights_count,
+                activities_completed=report.activities_completed,
+                adherence_percentage=report.adherence_percentage,
+                version=report.version,
+                is_active=report.is_active,
+                created_at=report.created_at,
+            )
+            for report in reports
+        ]

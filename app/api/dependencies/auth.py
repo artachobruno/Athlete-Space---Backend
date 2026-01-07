@@ -32,11 +32,22 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
     """
     if not token:
         auth_header = request.headers.get("Authorization")
+        # Log all headers for debugging (but mask sensitive values)
+        all_headers = dict(request.headers)
+        sensitive_headers = {"authorization", "cookie"}
+        headers_log = {k: (v[:20] + "..." if len(v) > 20 else v) if k.lower() in sensitive_headers else v for k, v in all_headers.items()}
+
         logger.warning(
             f"Auth failed: Missing or invalid Authorization header. "
             f"Header value: {auth_header[:50] if auth_header else 'None'}, "
-            f"Path: {request.url.path}, Method: {request.method}"
+            f"Path: {request.url.path}, Method: {request.method}, "
+            f"Origin: {request.headers.get('Origin', 'None')}, "
+            f"All headers: {list(headers_log.keys())}"
         )
+
+        # Log full headers at debug level for detailed troubleshooting
+        logger.debug(f"Full request headers received for {request.method} {request.url.path}:\n  {dict(headers_log)}")
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated. Please provide a valid Bearer token in the Authorization header.",

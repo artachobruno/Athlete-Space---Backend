@@ -43,6 +43,7 @@ from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_source_default import migrate_activities_source_default
 from scripts.migrate_activities_user_id import migrate_activities_user_id
+from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
@@ -87,6 +88,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_add_athlete_id_to_profiles: {e}")
     logger.error(f"✗ Migration failed: migrate_add_athlete_id_to_profiles - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: planned_sessions athlete_id column")
+    migrate_add_athlete_id_to_planned_sessions()
+    logger.info("✓ Migration completed: planned_sessions athlete_id column")
+except Exception as e:
+    migration_errors.append(f"migrate_add_athlete_id_to_planned_sessions: {e}")
+    logger.error(f"✗ Migration failed: migrate_add_athlete_id_to_planned_sessions - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: activities id column (integer to UUID)")

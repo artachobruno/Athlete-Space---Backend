@@ -179,50 +179,82 @@ def get_week(user_id: str = Depends(get_current_user_id)):
     monday = now - timedelta(days=days_since_monday)
     sunday = monday + timedelta(days=6)
 
-    with get_session() as session:
-        # Get completed activities (optimized: uses composite index on user_id + start_time)
-        activities = (
-            session.execute(
-                select(Activity)
-                .where(
-                    Activity.user_id == user_id,
-                    Activity.start_time >= monday,
-                    Activity.start_time <= sunday,
+    try:
+        with get_session() as session:
+            # Get completed activities (optimized: uses composite index on user_id + start_time)
+            try:
+                activities = (
+                    session.execute(
+                        select(Activity)
+                        .where(
+                            Activity.user_id == user_id,
+                            Activity.start_time >= monday,
+                            Activity.start_time <= sunday,
+                        )
+                        .order_by(Activity.start_time)
+                    )
+                    .scalars()
+                    .all()
                 )
-                .order_by(Activity.start_time)
-            )
-            .scalars()
-            .all()
-        )
+                activity_sessions = [_activity_to_session(a) for a in activities]
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+                    logger.warning(f"[CALENDAR] Database schema issue querying activities. Missing column. Returning empty: {e!r}")
+                    activity_sessions = []
+                else:
+                    raise
 
-        activity_sessions = [_activity_to_session(a) for a in activities]
-
-        # Get planned sessions
-        planned_sessions = (
-            session.execute(
-                select(PlannedSession)
-                .where(
-                    PlannedSession.user_id == user_id,
-                    PlannedSession.date >= monday,
-                    PlannedSession.date <= sunday,
+            # Get planned sessions
+            try:
+                planned_sessions = (
+                    session.execute(
+                        select(PlannedSession)
+                        .where(
+                            PlannedSession.user_id == user_id,
+                            PlannedSession.date >= monday,
+                            PlannedSession.date <= sunday,
+                        )
+                        .order_by(PlannedSession.date)
+                    )
+                    .scalars()
+                    .all()
                 )
-                .order_by(PlannedSession.date)
-            )
-            .scalars()
-            .all()
+                planned_calendar_sessions = [_planned_session_to_calendar(p) for p in planned_sessions]
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+                    logger.warning(f"[CALENDAR] Database schema issue querying planned sessions. Missing column. Returning empty: {e!r}")
+                    planned_calendar_sessions = []
+                else:
+                    raise
+
+            # Combine and sort by date
+            sessions = activity_sessions + planned_calendar_sessions
+            sessions.sort(key=lambda s: (s.date, s.time or ""))
+
+        return CalendarWeekResponse(
+            week_start=monday.strftime("%Y-%m-%d"),
+            week_end=sunday.strftime("%Y-%m-%d"),
+            sessions=sessions,
         )
-
-        planned_calendar_sessions = [_planned_session_to_calendar(p) for p in planned_sessions]
-
-        # Combine and sort by date
-        sessions = activity_sessions + planned_calendar_sessions
-        sessions.sort(key=lambda s: (s.date, s.time or ""))
-
-    return CalendarWeekResponse(
-        week_start=monday.strftime("%Y-%m-%d"),
-        week_end=sunday.strftime("%Y-%m-%d"),
-        sessions=sessions,
-    )
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.error(
+                f"[CALENDAR] Database schema error in /calendar/week. Missing column. Returning empty week: {e!r}",
+                exc_info=True,
+            )
+            # Return empty week instead of 500 - migrations will fix this
+            return CalendarWeekResponse(
+                week_start=monday.strftime("%Y-%m-%d"),
+                week_end=sunday.strftime("%Y-%m-%d"),
+                sessions=[],
+            )
+        logger.error(f"[CALENDAR] Error in /calendar/week: {e!r}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get calendar week: {e!s}") from e
 
 
 @router.get("/today", response_model=CalendarTodayResponse)
@@ -244,45 +276,76 @@ def get_today(user_id: str = Depends(get_current_user_id)):
     today_end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
     today_str = today.strftime("%Y-%m-%d")
 
-    with get_session() as session:
-        # Get completed activities (optimized: uses composite index on user_id + start_time)
-        activities = (
-            session.execute(
-                select(Activity)
-                .where(
-                    Activity.user_id == user_id,
-                    Activity.start_time >= today_start,
-                    Activity.start_time <= today_end,
+    try:
+        with get_session() as session:
+            # Get completed activities (optimized: uses composite index on user_id + start_time)
+            try:
+                activities = (
+                    session.execute(
+                        select(Activity)
+                        .where(
+                            Activity.user_id == user_id,
+                            Activity.start_time >= today_start,
+                            Activity.start_time <= today_end,
+                        )
+                        .order_by(Activity.start_time)
+                    )
+                    .scalars()
+                    .all()
                 )
-                .order_by(Activity.start_time)
-            )
-            .scalars()
-            .all()
+                activity_sessions = [_activity_to_session(a) for a in activities]
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+                    logger.warning(f"[CALENDAR] Database schema issue querying activities. Missing column. Returning empty: {e!r}")
+                    activity_sessions = []
+                else:
+                    raise
+
+            # Get planned sessions
+            try:
+                planned_sessions = session.execute(
+                    select(PlannedSession)
+                    .where(
+                        PlannedSession.user_id == user_id,
+                        PlannedSession.date >= today_start,
+                        PlannedSession.date <= today_end,
+                    )
+                    .order_by(PlannedSession.date, PlannedSession.time)
+                ).all()
+                planned_calendar_sessions = [_planned_session_to_calendar(p[0]) for p in planned_sessions]
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+                    logger.warning(f"[CALENDAR] Database schema issue querying planned sessions. Missing column. Returning empty: {e!r}")
+                    planned_calendar_sessions = []
+                else:
+                    raise
+
+            # Combine and sort by time
+            sessions = activity_sessions + planned_calendar_sessions
+            sessions.sort(key=lambda s: s.time or "23:59")
+
+        return CalendarTodayResponse(
+            date=today_str,
+            sessions=sessions,
         )
-
-        activity_sessions = [_activity_to_session(a) for a in activities]
-
-        # Get planned sessions
-        planned_sessions = session.execute(
-            select(PlannedSession)
-            .where(
-                PlannedSession.user_id == user_id,
-                PlannedSession.date >= today_start,
-                PlannedSession.date <= today_end,
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.error(
+                f"[CALENDAR] Database schema error in /calendar/today. Missing column. Returning empty day: {e!r}",
+                exc_info=True,
             )
-            .order_by(PlannedSession.date, PlannedSession.time)
-        ).all()
-
-        planned_calendar_sessions = [_planned_session_to_calendar(p[0]) for p in planned_sessions]
-
-        # Combine and sort by time
-        sessions = activity_sessions + planned_calendar_sessions
-        sessions.sort(key=lambda s: s.time or "23:59")
-
-    return CalendarTodayResponse(
-        date=today_str,
-        sessions=sessions,
-    )
+            # Return empty day instead of 500 - migrations will fix this
+            return CalendarTodayResponse(
+                date=today_str,
+                sessions=[],
+            )
+        logger.error(f"[CALENDAR] Error in /calendar/today: {e!r}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get calendar today: {e!s}") from e
 
 
 @router.get("/sessions", response_model=CalendarSessionsResponse)

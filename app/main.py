@@ -53,6 +53,7 @@ from scripts.migrate_drop_activity_id import migrate_drop_activity_id
 from scripts.migrate_drop_obsolete_activity_columns import migrate_drop_obsolete_activity_columns
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_llm_metadata_fields import migrate_llm_metadata_fields
+from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 
@@ -184,6 +185,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_coach_messages_schema: {e}")
     logger.error(f"Migration failed: migrate_coach_messages_schema - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: onboarding data fields")
+    migrate_onboarding_data_fields()
+    logger.info("✓ Migration completed: onboarding data fields")
+except Exception as e:
+    migration_errors.append(f"migrate_onboarding_data_fields: {e}")
+    logger.error(f"Migration failed: migrate_onboarding_data_fields - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: LLM metadata fields and composite indexes")
@@ -404,7 +413,8 @@ def database_schema_error_handler(request: Request, exc: ProgrammingError):
     helpful error messages instead of generic 500 errors.
     """
     error_msg = str(exc)
-    logger.error(f"Database schema error: {error_msg!r}", exc_info=True)
+    # Use logger with explicit message formatting to avoid KeyError from SQL parameters in error message
+    logger.error("Database schema error: %s", error_msg, exc_info=True)
 
     # Check if this is a missing column error
     if "does not exist" in error_msg.lower() or "undefinedcolumn" in error_msg.lower():

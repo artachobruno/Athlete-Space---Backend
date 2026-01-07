@@ -22,6 +22,7 @@ from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
 from scripts.migrate_add_streams_data import migrate_add_streams_data
+from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
@@ -37,6 +38,7 @@ def run_all_migrations() -> None:
         ("strava_accounts table", migrate_strava_accounts),
         ("user authentication fields", migrate_user_auth_fields),
         ("athlete_profiles athlete_id column", migrate_add_athlete_id_to_profiles),
+        ("athlete_profiles target_races column", migrate_add_target_races),
         ("planned_sessions athlete_id column", migrate_add_athlete_id_to_planned_sessions),
         ("activities id column (integer to UUID)", migrate_activities_id_to_uuid),
         ("activities schema (add missing columns)", migrate_activities_schema),

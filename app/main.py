@@ -33,6 +33,7 @@ from app.coach.api_chat import router as coach_chat_router
 from app.config.settings import settings
 from app.core.logger import setup_logger
 from app.db.models import Base
+from app.db.schema_check import verify_schema
 from app.db.session import engine
 from app.ingestion.api import router as ingestion_strava_router
 from app.ingestion.scheduler import ingestion_tick
@@ -47,6 +48,7 @@ from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
 from scripts.migrate_add_streams_data import migrate_add_streams_data
+from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_daily_summary import migrate_daily_summary
@@ -99,6 +101,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_add_athlete_id_to_profiles: {e}")
     logger.error(f"✗ Migration failed: migrate_add_athlete_id_to_profiles - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: athlete_profiles target_races column")
+    migrate_add_target_races()
+    logger.info("✓ Migration completed: athlete_profiles target_races column")
+except Exception as e:
+    migration_errors.append(f"migrate_add_target_races: {e}")
+    logger.error(f"✗ Migration failed: migrate_add_target_races - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: planned_sessions athlete_id column")
@@ -228,6 +238,16 @@ if migration_errors:
     )
 else:
     logger.info("Database migrations completed successfully")
+
+# Verify schema after migrations (fail fast if columns are missing)
+try:
+    logger.info("Verifying database schema...")
+    verify_schema()
+    logger.info("✓ Database schema verification completed")
+except RuntimeError as e:
+    logger.error(f"Schema verification failed: {e}")
+    logger.error("Application startup aborted. Run migrations to fix schema issues.")
+    raise
 
 
 @asynccontextmanager

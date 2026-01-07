@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from loguru import logger
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 
 from app.api.dependencies.auth import get_current_user_id
 from app.api.schemas.schemas import (
@@ -980,28 +981,19 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                 target_event=target_event_obj,
                 goals=profile.goals or [],
             )
+    except ProgrammingError as e:
+        # Database schema error (missing column, table, etc.)
+        logger.error(
+            f"Database schema mismatch detected for profile endpoint. Missing column/table in database. Run migrations: {e!r}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Server configuration error: Database schema mismatch. Please contact support.",
+        ) from e
+    except HTTPException:
+        raise
     except Exception as e:
-        # Check if this is a database schema error (missing column)
-        error_msg = str(e).lower()
-        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-            logger.error(
-                f"Database schema mismatch detected for profile endpoint. Missing column in database. Run migrations: {e!r}",
-                exc_info=True,
-            )
-            # Return empty profile instead of 500 - migrations will fix this
-            return AthleteProfileResponse(
-                name=None,
-                email=None,
-                gender=None,
-                date_of_birth=None,
-                weight_kg=None,
-                height_cm=None,
-                location=None,
-                unit_system="metric",
-                strava_connected=False,
-                target_event=None,
-                goals=[],
-            )
         logger.error(f"Error getting profile: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get profile: {e!s}") from e
 

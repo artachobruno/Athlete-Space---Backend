@@ -14,8 +14,42 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import sys
 from argparse import ArgumentParser
+from pathlib import Path
+
+# Add project root to Python path (must be absolute for Render/production)
+# Try multiple methods to find project root for compatibility
+script_dir = Path(__file__).parent.resolve()
+project_root = script_dir.parent.resolve()
+
+# Verify project root contains app directory or pyproject.toml
+if not (project_root / "app").exists() and not (project_root / "pyproject.toml").exists():
+    # If parent doesn't have app/ or pyproject.toml, try current working directory
+    cwd = Path.cwd().resolve()
+    if (cwd / "app").exists() or (cwd / "pyproject.toml").exists():
+        project_root = cwd
+    else:
+        # Last resort: try going up one more level (for cases where script is in src/scripts/)
+        parent_parent = script_dir.parent.parent.resolve()
+        if (parent_parent / "app").exists() or (parent_parent / "pyproject.toml").exists():
+            project_root = parent_parent
+
+# Ensure project root is in path
+project_root_str = str(project_root)
+if project_root_str not in sys.path:
+    sys.path.insert(0, project_root_str)
+
+# Verify we can import app (will fail with clear error if path is wrong)
+try:
+    import app
+except ImportError as e:
+    print(f"ERROR: Cannot import 'app' module. Project root: {project_root_str}", file=sys.stderr)
+    print(f"ERROR: Script location: {__file__}", file=sys.stderr)
+    print(f"ERROR: Current working directory: {Path.cwd()}", file=sys.stderr)
+    print(f"ERROR: Python path: {sys.path[:3]}", file=sys.stderr)
+    raise ImportError(f"Cannot import 'app' module. Please ensure script is run from project root or scripts/ directory. {e}") from e
 
 from loguru import logger
 from sqlalchemy import text
@@ -196,6 +230,7 @@ def _analyze_legacy_strava_auth(session: Session) -> list[dict]:
     """Find legacy StravaAuth records without corresponding StravaAccount."""
     logger.info("Analyzing legacy StravaAuth records...")
 
+    # CAST works the same in both SQLite and PostgreSQL
     result = session.execute(
         text("""
             SELECT sa.athlete_id, sa.last_ingested_at
@@ -221,6 +256,7 @@ def _analyze_orphaned_coach_messages(session: Session) -> list[dict]:
     """Find coach_messages with athlete_id that can't be mapped to user_id."""
     logger.info("Analyzing orphaned coach_messages...")
 
+    # CAST works the same in both SQLite and PostgreSQL
     result = session.execute(
         text("""
             SELECT cm.id, cm.athlete_id, cm.timestamp
@@ -480,47 +516,90 @@ def clean_user_data(dry_run: bool = True, delete_orphaned: bool = False) -> int:
     elif delete_orphaned:
         logger.warning("⚠️  DELETION MODE: Orphaned records will be deleted!")
 
-    with get_session() as session:
-        # Analyze all data integrity issues
-        orphaned_activities = _analyze_orphaned_activities(session)
-        invalid_athlete_mappings = _analyze_invalid_athlete_mappings(session)
-        orphaned_training_load = _analyze_orphaned_training_load(session)
-        orphaned_weekly_summary = _analyze_orphaned_weekly_summary(session)
-        orphaned_athlete_profiles = _analyze_orphaned_athlete_profiles(session)
-        orphaned_planned_sessions = _analyze_orphaned_planned_sessions(session)
-        legacy_strava_auth = _analyze_legacy_strava_auth(session)
-        orphaned_coach_messages = _analyze_orphaned_coach_messages(session)
+    try:
+        with get_session() as session:
+            # Analyze all data integrity issues
+            try:
+                orphaned_activities = _analyze_orphaned_activities(session)
+            except Exception as e:
+                logger.error(f"Error analyzing orphaned activities: {e}", exc_info=True)
+                orphaned_activities = []
 
-        # Print summary report
-        _print_summary_report({
-            "orphaned_activities": orphaned_activities,
-            "invalid_athlete_mappings": invalid_athlete_mappings,
-            "orphaned_training_load": orphaned_training_load,
-            "orphaned_weekly_summary": orphaned_weekly_summary,
-            "orphaned_athlete_profiles": orphaned_athlete_profiles,
-            "orphaned_planned_sessions": orphaned_planned_sessions,
-            "legacy_strava_auth": legacy_strava_auth,
-            "orphaned_coach_messages": orphaned_coach_messages,
-        })
+            try:
+                invalid_athlete_mappings = _analyze_invalid_athlete_mappings(session)
+            except Exception as e:
+                logger.error(f"Error analyzing invalid athlete mappings: {e}", exc_info=True)
+                invalid_athlete_mappings = []
 
-        # Delete orphaned records if requested
-        if not dry_run and delete_orphaned:
-            logger.info("\n" + "=" * 80)
-            logger.info("DELETING ORPHANED RECORDS")
-            logger.info("=" * 80)
+            try:
+                orphaned_training_load = _analyze_orphaned_training_load(session)
+            except Exception as e:
+                logger.error(f"Error analyzing orphaned training load: {e}", exc_info=True)
+                orphaned_training_load = []
 
-            deleted_count = 0
-            deleted_count += _delete_orphaned_activities(session, orphaned_activities)
-            deleted_count += _delete_orphaned_training_load(session, orphaned_training_load)
-            deleted_count += _delete_orphaned_weekly_summary(session, orphaned_weekly_summary)
-            deleted_count += _delete_orphaned_athlete_profiles(session, orphaned_athlete_profiles)
-            deleted_count += _delete_orphaned_planned_sessions(session, orphaned_planned_sessions)
-            deleted_count += _delete_legacy_strava_auth(session, legacy_strava_auth)
-            deleted_count += _delete_orphaned_coach_messages(session, orphaned_coach_messages)
+            try:
+                orphaned_weekly_summary = _analyze_orphaned_weekly_summary(session)
+            except Exception as e:
+                logger.error(f"Error analyzing orphaned weekly summary: {e}", exc_info=True)
+                orphaned_weekly_summary = []
 
-            logger.info(f"\n✅ Deleted {deleted_count} orphaned records")
-        elif delete_orphaned:
-            logger.warning("⚠️  Cannot delete in dry-run mode. Run without --dry-run to delete.")
+            try:
+                orphaned_athlete_profiles = _analyze_orphaned_athlete_profiles(session)
+            except Exception as e:
+                logger.error(f"Error analyzing orphaned athlete profiles: {e}", exc_info=True)
+                orphaned_athlete_profiles = []
+
+            try:
+                orphaned_planned_sessions = _analyze_orphaned_planned_sessions(session)
+            except Exception as e:
+                logger.error(f"Error analyzing orphaned planned sessions: {e}", exc_info=True)
+                orphaned_planned_sessions = []
+
+            try:
+                legacy_strava_auth = _analyze_legacy_strava_auth(session)
+            except Exception as e:
+                logger.error(f"Error analyzing legacy StravaAuth: {e}", exc_info=True)
+                legacy_strava_auth = []
+
+            try:
+                orphaned_coach_messages = _analyze_orphaned_coach_messages(session)
+            except Exception as e:
+                logger.error(f"Error analyzing orphaned coach messages: {e}", exc_info=True)
+                orphaned_coach_messages = []
+
+            # Print summary report
+            _print_summary_report({
+                "orphaned_activities": orphaned_activities,
+                "invalid_athlete_mappings": invalid_athlete_mappings,
+                "orphaned_training_load": orphaned_training_load,
+                "orphaned_weekly_summary": orphaned_weekly_summary,
+                "orphaned_athlete_profiles": orphaned_athlete_profiles,
+                "orphaned_planned_sessions": orphaned_planned_sessions,
+                "legacy_strava_auth": legacy_strava_auth,
+                "orphaned_coach_messages": orphaned_coach_messages,
+            })
+
+            # Delete orphaned records if requested
+            if not dry_run and delete_orphaned:
+                logger.info("\n" + "=" * 80)
+                logger.info("DELETING ORPHANED RECORDS")
+                logger.info("=" * 80)
+
+                deleted_count = 0
+                deleted_count += _delete_orphaned_activities(session, orphaned_activities)
+                deleted_count += _delete_orphaned_training_load(session, orphaned_training_load)
+                deleted_count += _delete_orphaned_weekly_summary(session, orphaned_weekly_summary)
+                deleted_count += _delete_orphaned_athlete_profiles(session, orphaned_athlete_profiles)
+                deleted_count += _delete_orphaned_planned_sessions(session, orphaned_planned_sessions)
+                deleted_count += _delete_legacy_strava_auth(session, legacy_strava_auth)
+                deleted_count += _delete_orphaned_coach_messages(session, orphaned_coach_messages)
+
+                logger.info(f"\n✅ Deleted {deleted_count} orphaned records")
+            elif delete_orphaned:
+                logger.warning("⚠️  Cannot delete in dry-run mode. Run without --dry-run to delete.")
+    except Exception as e:
+        logger.error(f"Fatal error during data cleaning: {e}", exc_info=True)
+        return 1
 
     logger.info("Data cleaning analysis complete")
     return 0

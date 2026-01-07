@@ -266,37 +266,54 @@ def health():
 
 
 @app.exception_handler(Exception)
-def global_exception_handler(_request: Request, exc: Exception):
+def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler for unhandled exceptions.
 
-    FastAPI's CORSMiddleware will automatically add CORS headers to this response.
-    This handler only catches exceptions that aren't already handled by FastAPI
-    (like HTTPException which FastAPI handles automatically).
+    Ensures CORS headers are added to error responses even when exceptions occur.
     """
     # Don't handle HTTPException - FastAPI handles those automatically with CORS
     if isinstance(exc, HTTPException):
         raise exc
 
     logger.exception(f"Unhandled exception: {exc}")
-    return JSONResponse(
+
+    # Get origin from request to add appropriate CORS headers
+    origin = request.headers.get("origin")
+
+    # Build response
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error"},
     )
 
+    # Add CORS headers if origin is in allowed list
+    if origin and origin in cors_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, Accept, Origin, X-Requested-With"
+
+    return response
+
 
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all HTTP requests."""
-    logger.debug(f"Request: {request.method} {request.url.path}")
-    try:
-        response = await call_next(request)
-    except Exception as e:
-        logger.exception(f"Error processing request {request.method} {request.url.path}: {e}")
-        # Re-raise to let the exception handler deal with it
-        raise
-    else:
-        logger.debug(f"Response: {response.status_code} for {request.method} {request.url.path}")
-        return response
+async def ensure_cors_headers(request: Request, call_next):
+    """Middleware to ensure CORS headers are present on all responses.
+
+    This runs after CORS middleware and adds headers to responses that might
+    have bypassed the CORS middleware (e.g., from exception handlers).
+    """
+    origin = request.headers.get("origin")
+
+    response = await call_next(request)
+
+    # Ensure CORS headers are present if origin is provided and allowed
+    if origin and origin in cors_origins and "Access-Control-Allow-Origin" not in response.headers:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+
+    logger.debug(f"Response: {response.status_code} for {request.method} {request.url.path}")
+    return response
 
 
 @app.get("/", response_class=HTMLResponse)

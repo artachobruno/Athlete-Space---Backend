@@ -54,3 +54,10 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [commit]
+      - id: validate-schema
+        name: validate database schema
+        entry: python scripts/validate_schema.py --skip-if-no-db
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit]

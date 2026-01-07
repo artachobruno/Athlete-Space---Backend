@@ -8,6 +8,11 @@ or to apply migrations to a production database.
 """
 
 import sys
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 from loguru import logger
 
@@ -17,6 +22,7 @@ from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
+from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 
 
 def run_all_migrations() -> None:
@@ -30,6 +36,7 @@ def run_all_migrations() -> None:
         ("activities user_id column", migrate_activities_user_id),
         ("daily_summary tables", migrate_daily_summary),
         ("history cursor fields", migrate_history_cursor),
+        ("strava_accounts sync tracking columns", migrate_strava_accounts_sync_tracking),
     ]
 
     for migration_name, migration_func in migrations:

@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
+from sqlalchemy.exc import ProgrammingError
 
 from app.analytics.api import router as analytics_router
 from app.api.activities.activities import router as activities_router
@@ -42,11 +43,13 @@ from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_source_default import migrate_activities_source_default
 from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
+from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_drop_activity_id import migrate_drop_activity_id
 from scripts.migrate_drop_obsolete_activity_columns import migrate_drop_obsolete_activity_columns
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
+from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 
 # Initialize logger with level from settings (defaults to INFO, can be overridden via LOG_LEVEL env var)
 setup_logger(level=settings.log_level)
@@ -144,6 +147,22 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_history_cursor: {e}")
     logger.error(f"Migration failed: migrate_history_cursor - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: strava_accounts sync tracking columns")
+    migrate_strava_accounts_sync_tracking()
+    logger.info("✓ Migration completed: strava_accounts sync tracking columns")
+except Exception as e:
+    migration_errors.append(f"migrate_strava_accounts_sync_tracking: {e}")
+    logger.error(f"Migration failed: migrate_strava_accounts_sync_tracking - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: coach_messages schema update")
+    migrate_coach_messages_schema()
+    logger.info("✓ Migration completed: coach_messages schema update")
+except Exception as e:
+    migration_errors.append(f"migrate_coach_messages_schema: {e}")
+    logger.error(f"Migration failed: migrate_coach_messages_schema - {e}", exc_info=True)
 
 if migration_errors:
     logger.error(
@@ -299,6 +318,52 @@ logger.info("FastAPI application initialized")
 logger.info("Root endpoint available at: /")
 logger.info("Health check available at: /health")
 logger.info("API docs available at: /docs and /redoc")
+
+
+@app.exception_handler(ProgrammingError)
+def database_schema_error_handler(request: Request, exc: ProgrammingError):
+    """Handle database schema mismatch errors with clear error messages.
+
+    Catches SQLAlchemy ProgrammingError (e.g., missing columns) and provides
+    helpful error messages instead of generic 500 errors.
+    """
+    error_msg = str(exc)
+    logger.error(f"Database schema error: {error_msg}", exc_info=True)
+
+    # Check if this is a missing column error
+    if "does not exist" in error_msg.lower() or "undefinedcolumn" in error_msg.lower():
+        logger.error(
+            "Database schema mismatch detected. This usually means: "
+            "1. Model was updated but migration wasn't run, or "
+            "2. Migration failed to apply. "
+            "Run: python scripts/validate_schema.py to check, "
+            "then: python scripts/run_migrations.py to fix."
+        )
+        detail = (
+            "Database schema mismatch: Model expects columns that don't exist in database. "
+            "This is a deployment issue - migrations need to be run. "
+            "Contact support with this error message."
+        )
+    else:
+        detail = f"Database error: {error_msg}"
+
+    # Get origin from request to add appropriate CORS headers
+    origin = request.headers.get("origin")
+
+    # Build response
+    response = JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": detail, "error_type": "database_schema_mismatch"},
+    )
+
+    # Add CORS headers if origin is in allowed list
+    if origin and origin in cors_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, Accept, Origin, X-Requested-With"
+
+    return response
 
 
 @app.exception_handler(Exception)

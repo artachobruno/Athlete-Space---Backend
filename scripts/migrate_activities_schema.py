@@ -86,6 +86,7 @@ def _add_missing_columns(conn, existing_columns: set[str]) -> set[str]:
         "distance_meters": ("REAL", "REAL"),
         "elevation_gain_meters": ("REAL", "REAL"),
         "raw_json": ("JSONB", "JSON"),
+        "source": ("VARCHAR", "TEXT"),
         "created_at": ("TIMESTAMP", "DATETIME"),
     }
 
@@ -93,8 +94,26 @@ def _add_missing_columns(conn, existing_columns: set[str]) -> set[str]:
         if column_name not in existing_columns:
             column_type = pg_type if _is_postgresql() else sqlite_type
             print(f"Adding missing column: {column_name} ({column_type})")
-            alter_sql = f"ALTER TABLE activities ADD COLUMN {column_name} {column_type}"
+
+            # Add default value for source column
+            if column_name == "source":
+                if _is_postgresql():
+                    alter_sql = f"ALTER TABLE activities ADD COLUMN {column_name} {column_type} DEFAULT 'strava'"
+                else:
+                    # SQLite: Add column, then update existing rows
+                    alter_sql = f"ALTER TABLE activities ADD COLUMN {column_name} {column_type} DEFAULT 'strava'"
+            else:
+                alter_sql = f"ALTER TABLE activities ADD COLUMN {column_name} {column_type}"
+
             conn.execute(text(alter_sql))
+
+            # For source column, update existing NULL values
+            if column_name == "source":
+                result = conn.execute(text("UPDATE activities SET source = 'strava' WHERE source IS NULL"))
+                updated_count = result.rowcount
+                if updated_count > 0:
+                    print(f"Updated {updated_count} existing activities with NULL source to 'strava'")
+
             print(f"Added column: {column_name}")
 
     return existing_columns | set(required_columns.keys())

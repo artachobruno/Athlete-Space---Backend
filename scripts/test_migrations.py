@@ -21,6 +21,7 @@ try:
     from scripts.migrate_daily_summary import migrate_daily_summary
     from scripts.migrate_history_cursor import migrate_history_cursor
     from scripts.migrate_strava_accounts import migrate_strava_accounts
+    from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 
     print("✓ All migration functions imported successfully")
 except ImportError as e:
@@ -34,6 +35,7 @@ migrations = [
     ("migrate_daily_summary", migrate_daily_summary),
     ("migrate_history_cursor", migrate_history_cursor),
     ("migrate_strava_accounts", migrate_strava_accounts),
+    ("migrate_strava_accounts_sync_tracking", migrate_strava_accounts_sync_tracking),
 ]
 
 for name, func in migrations:

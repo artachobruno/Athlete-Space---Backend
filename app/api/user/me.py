@@ -981,7 +981,7 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                 goals=profile.goals or [],
             )
     except Exception as e:
-        logger.error(f"Error getting profile: {e}", exc_info=True)
+        logger.error(f"Error getting profile: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get profile: {e!s}") from e
 
 
@@ -1091,7 +1091,7 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating profile: {e}", exc_info=True)
+        logger.error(f"Error updating profile: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update profile: {e!s}") from e
 
 

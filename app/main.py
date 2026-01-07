@@ -395,7 +395,7 @@ def database_schema_error_handler(request: Request, exc: ProgrammingError):
     helpful error messages instead of generic 500 errors.
     """
     error_msg = str(exc)
-    logger.error(f"Database schema error: {error_msg}", exc_info=True)
+    logger.error(f"Database schema error: {error_msg!r}", exc_info=True)
 
     # Check if this is a missing column error
     if "does not exist" in error_msg.lower() or "undefinedcolumn" in error_msg.lower():

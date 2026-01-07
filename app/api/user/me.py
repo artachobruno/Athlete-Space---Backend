@@ -40,6 +40,29 @@ from app.metrics.training_load import compute_training_load
 router = APIRouter(prefix="/me", tags=["me"])
 
 
+@router.get("")
+def get_me(user_id: str = Depends(get_current_user_id)):
+    """Get current authenticated user info.
+
+    Simple endpoint that validates JWT token and returns user ID.
+    This is the contract endpoint - it must always return 200 OK if token is valid.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        {
+            "user_id": str,
+            "authenticated": bool
+        }
+    """
+    logger.info(f"[API] /me endpoint called for user_id={user_id}")
+    return {
+        "user_id": user_id,
+        "authenticated": True,
+    }
+
+
 def _validate_unit_system(unit_system: str) -> None:
     """Validate unit system value.
 

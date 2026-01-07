@@ -28,7 +28,7 @@ from app.ingestion.tasks import history_backfill_task
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.oauth import exchange_code_for_token
 from app.metrics.daily_aggregation import aggregate_daily_training
-from app.services.profile_service import merge_strava_profile
+from app.users.profile_service import merge_strava_profile
 
 router = APIRouter(prefix="/auth/strava", tags=["auth", "strava"])
 

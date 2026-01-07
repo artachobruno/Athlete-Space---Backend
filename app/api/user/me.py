@@ -23,6 +23,7 @@ from app.api.schemas.schemas import (
     NotificationsUpdateRequest,
     PrivacySettingsResponse,
     PrivacySettingsUpdateRequest,
+    TargetEvent,
     TrainingPreferencesResponse,
     TrainingPreferencesUpdateRequest,
 )
@@ -75,6 +76,76 @@ def _validate_profile_visibility(profile_visibility: str) -> None:
     """
     if profile_visibility not in {"public", "private", "coaches"}:
         raise HTTPException(status_code=400, detail="profile_visibility must be 'public', 'private', or 'coaches'")
+
+
+def _create_new_profile(session, user_id: str) -> AthleteProfile:
+    """Create a new profile for a user.
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        New AthleteProfile instance
+    """
+    # Try to get athlete_id from StravaAccount if available
+    athlete_id = 0
+    try:
+        strava_account = session.query(StravaAccount).filter_by(user_id=user_id).first()
+        if strava_account:
+            # Try to parse athlete_id as int, fallback to 0
+            try:
+                athlete_id = int(strava_account.athlete_id)
+            except (ValueError, TypeError):
+                athlete_id = 0
+    except Exception as e:
+        logger.debug(f"Could not get athlete_id for user {user_id}: {e}")
+
+    profile = AthleteProfile(user_id=user_id, athlete_id=athlete_id, sources={})
+    session.add(profile)
+    return profile
+
+
+def _validate_goals(goals: list[str]) -> None:
+    """Validate goals array.
+
+    Args:
+        goals: List of goal strings
+
+    Raises:
+        HTTPException: If validation fails
+    """
+    if len(goals) > 5:
+        raise HTTPException(status_code=400, detail="goals must have at most 5 items")
+    for goal in goals:
+        if len(goal) > 200:
+            raise HTTPException(status_code=400, detail="Each goal must be 200 characters or less")
+
+
+def _validate_injury_notes(injury_notes: str) -> None:
+    """Validate injury notes length.
+
+    Args:
+        injury_notes: Injury notes string
+
+    Raises:
+        HTTPException: If validation fails
+    """
+    if len(injury_notes) > 500:
+        raise HTTPException(status_code=400, detail="injury_notes must be 500 characters or less")
+
+
+def _validate_goal_text(goal: str) -> None:
+    """Validate goal text length.
+
+    Args:
+        goal: Goal text string
+
+    Raises:
+        HTTPException: If validation fails
+    """
+    if len(goal) > 200:
+        raise HTTPException(status_code=400, detail="goal must be 200 characters or less")
 
 
 def _validate_password_match(new_password: str, confirm_password: str) -> None:
@@ -877,6 +948,8 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                     location=None,
                     unit_system="metric",
                     strava_connected=False,
+                    target_event=None,
+                    goals=[],
                 )
 
             session.expunge(profile)
@@ -884,6 +957,14 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
             date_of_birth_str = None
             if profile.date_of_birth:
                 date_of_birth_str = profile.date_of_birth.date().isoformat()
+
+            # Convert target_event from dict to TargetEvent model if present
+            target_event_obj = None
+            if profile.target_event:
+                try:
+                    target_event_obj = TargetEvent(**profile.target_event)
+                except Exception as e:
+                    logger.warning(f"Failed to parse target_event for user_id={user_id}: {e}")
 
             logger.info(f"[API] Profile retrieved for user_id={user_id}")
             return AthleteProfileResponse(
@@ -896,6 +977,8 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                 location=profile.location,
                 unit_system=profile.unit_system or "metric",
                 strava_connected=profile.strava_connected,
+                target_event=target_event_obj,
+                goals=profile.goals or [],
             )
     except Exception as e:
         logger.error(f"Error getting profile: {e}", exc_info=True)
@@ -919,8 +1002,11 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
             profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
 
             if not profile:
-                profile = AthleteProfile(user_id=user_id)
-                session.add(profile)
+                profile = _create_new_profile(session, user_id)
+
+            # Ensure sources dict exists
+            if profile.sources is None:
+                profile.sources = {}
 
             # Update fields that are provided
             if request.name is not None:
@@ -959,6 +1045,18 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
                 _validate_unit_system(request.unit_system)
                 profile.unit_system = request.unit_system
 
+            if request.target_event is not None:
+                # Convert TargetEvent model to dict for storage
+                profile.target_event = {
+                    "name": request.target_event.name,
+                    "date": request.target_event.date,
+                    "distance": request.target_event.distance,
+                }
+
+            if request.goals is not None:
+                _validate_goals(request.goals)
+                profile.goals = request.goals
+
             profile.updated_at = datetime.now(timezone.utc)
             session.commit()
             session.refresh(profile)
@@ -967,6 +1065,14 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
             date_of_birth_str = None
             if profile.date_of_birth:
                 date_of_birth_str = profile.date_of_birth.date().isoformat()
+
+            # Convert target_event from dict to TargetEvent model if present
+            target_event_obj = None
+            if profile.target_event:
+                try:
+                    target_event_obj = TargetEvent(**profile.target_event)
+                except Exception as e:
+                    logger.warning(f"Failed to parse target_event for user_id={user_id}: {e}")
 
             logger.info(f"[API] Profile updated for user_id={user_id}")
             return AthleteProfileResponse(
@@ -979,6 +1085,8 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
                 location=profile.location,
                 unit_system=profile.unit_system or "metric",
                 strava_connected=profile.strava_connected,
+                target_event=target_event_obj,
+                goals=profile.goals or [],
             )
     except HTTPException:
         raise
@@ -1015,6 +1123,9 @@ def get_training_preferences(user_id: str = Depends(get_current_user_id)):
                 weekly_hours=settings.weekly_hours or 10.0,
                 training_focus=settings.training_focus or "general_fitness",
                 injury_history=settings.injury_history or False,
+                injury_notes=settings.injury_notes,
+                consistency=settings.consistency,
+                goal=settings.goal,
             )
     except Exception as e:
         logger.error(f"Error getting training preferences: {e}", exc_info=True)
@@ -1061,6 +1172,17 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
             if request.injury_history is not None:
                 settings.injury_history = request.injury_history
 
+            if request.injury_notes is not None:
+                _validate_injury_notes(request.injury_notes)
+                settings.injury_notes = request.injury_notes
+
+            if request.consistency is not None:
+                settings.consistency = request.consistency
+
+            if request.goal is not None:
+                _validate_goal_text(request.goal)
+                settings.goal = request.goal
+
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
             session.refresh(settings)
@@ -1074,6 +1196,9 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
                 weekly_hours=settings.weekly_hours or 10.0,
                 training_focus=settings.training_focus or "general_fitness",
                 injury_history=settings.injury_history or False,
+                injury_notes=settings.injury_notes,
+                consistency=settings.consistency,
+                goal=settings.goal,
             )
     except HTTPException:
         raise

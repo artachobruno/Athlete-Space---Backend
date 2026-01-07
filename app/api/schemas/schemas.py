@@ -234,6 +234,14 @@ class CoachAskResponse(BaseModel):
 # ============================================================================
 
 
+class TargetEvent(BaseModel):
+    """Target event information."""
+
+    name: str = Field(description="Event name, e.g., 'Boston Marathon'")
+    date: str = Field(description="ISO date, e.g., '2024-04-15'")
+    distance: str | None = Field(description="Optional distance, e.g., '26.2 miles'", default=None)
+
+
 class AthleteProfileResponse(BaseModel):
     """Response for GET /me/profile."""
 
@@ -246,6 +254,8 @@ class AthleteProfileResponse(BaseModel):
     location: str | None = Field(description="Location string", default=None)
     unit_system: str = Field(description="Unit system: imperial or metric", default="metric")
     strava_connected: bool = Field(description="Whether Strava is connected", default=False)
+    target_event: TargetEvent | None = Field(description="User's target race/event information", default=None)
+    goals: list[str] = Field(description="Array of user's training goals", default_factory=list)
 
 
 class AthleteProfileUpdateRequest(BaseModel):
@@ -259,6 +269,8 @@ class AthleteProfileUpdateRequest(BaseModel):
     height_cm: int | None = Field(description="Height in centimeters", default=None)
     location: str | None = Field(description="Location string", default=None)
     unit_system: str | None = Field(description="Unit system: imperial or metric", default=None)
+    target_event: TargetEvent | None = Field(description="User's target race/event information", default=None)
+    goals: list[str] | None = Field(description="Array of user's training goals (max 5 items, max 200 chars each)", default=None)
 
 
 class TrainingPreferencesResponse(BaseModel):
@@ -270,6 +282,13 @@ class TrainingPreferencesResponse(BaseModel):
     weekly_hours: float = Field(description="Weekly training hours", default=10.0)
     training_focus: str = Field(description="Training focus: race_focused or general_fitness", default="general_fitness")
     injury_history: bool = Field(description="Whether athlete has injury history", default=False)
+    injury_notes: str | None = Field(
+        description="Detailed description of injuries, limitations, or areas of concern",
+        default=None,
+        max_length=500,
+    )
+    consistency: str | None = Field(description="User's description of their training consistency level", default=None)
+    goal: str | None = Field(description="User's primary training goal in free text", default=None, max_length=200)
 
 
 class TrainingPreferencesUpdateRequest(BaseModel):
@@ -281,6 +300,13 @@ class TrainingPreferencesUpdateRequest(BaseModel):
     weekly_hours: float | None = Field(description="Weekly training hours", default=None, ge=3.0, le=25.0)
     training_focus: str | None = Field(description="Training focus: race_focused or general_fitness", default=None)
     injury_history: bool | None = Field(description="Whether athlete has injury history", default=None)
+    injury_notes: str | None = Field(
+        description="Detailed description of injuries, limitations, or areas of concern",
+        default=None,
+        max_length=500,
+    )
+    consistency: str | None = Field(description="User's description of their training consistency level", default=None)
+    goal: str | None = Field(description="User's primary training goal in free text", default=None, max_length=200)
 
 
 class PrivacySettingsResponse(BaseModel):

@@ -9,8 +9,10 @@ def make_activity(
     days_ago: int,
     duration_min: int = 60,
     avg_hr: int | None = 140,
+    athlete_id: int = 1,
 ) -> ActivityRecord:
     return ActivityRecord(
+        athlete_id=athlete_id,
         activity_id=f"a-{days_ago}",
         source="strava",
         sport="run",

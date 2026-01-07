@@ -21,6 +21,7 @@ from app.api.auth.auth_strava import router as auth_strava_router
 from app.api.integrations.integrations_strava import router as integrations_strava_router
 from app.api.intelligence.intelligence import router as intelligence_router
 from app.api.intelligence.risks import router as risks_router
+from app.api.onboarding.onboarding import router as onboarding_router
 from app.api.strava.strava import router as strava_router
 from app.api.training.state import router as state_router
 from app.api.training.training import router as training_router
@@ -240,6 +241,38 @@ app.add_middleware(
     max_age=3600,  # Cache preflight requests for 1 hour
 )
 
+
+# Register root and health endpoints first (before routers)
+@app.get("/", response_class=HTMLResponse)
+def root():
+    """Root endpoint - serves a simple HTML page with API information."""
+    return """
+    <html>
+        <head>
+            <title>Virtus AI</title>
+        </head>
+        <body>
+            <h1>Virtus AI</h1>
+            <p>Performance Intelligence & Coaching System</p>
+            <h2>Available Endpoints:</h2>
+            <ul>
+                <li><a href="/docs">API Documentation (Swagger)</a></li>
+                <li><a href="/redoc">API Documentation (ReDoc)</a></li>
+                <li><a href="/health">Health Check</a></li>
+                <li><a href="/auth/strava">Connect Strava</a></li>
+            </ul>
+        </body>
+    </html>
+    """
+
+
+@app.get("/health")
+def health():
+    """Health check endpoint for monitoring and load balancers."""
+    return {"status": "ok", "service": "Virtus AI Backend"}
+
+
+# Register all API routers
 app.include_router(activities_router)
 app.include_router(admin_retry_router)
 app.include_router(admin_ingestion_router)
@@ -256,17 +289,16 @@ app.include_router(integrations_strava_router)
 app.include_router(intelligence_router)
 app.include_router(risks_router)
 app.include_router(me_router)
+app.include_router(onboarding_router)
 app.include_router(strava_router)
 app.include_router(state_router)
 app.include_router(training_router)
 app.include_router(webhooks_router)
 
 logger.info("FastAPI application initialized")
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+logger.info("Root endpoint available at: /")
+logger.info("Health check available at: /health")
+logger.info("API docs available at: /docs and /redoc")
 
 
 @app.exception_handler(Exception)
@@ -318,24 +350,3 @@ async def ensure_cors_headers(request: Request, call_next):
 
     logger.debug(f"Response: {response.status_code} for {request.method} {request.url.path}")
     return response
-
-
-@app.get("/", response_class=HTMLResponse)
-def root():
-    return """
-    <html>
-        <head>
-            <title>Virtus AI</title>
-        </head>
-        <body>
-            <h1>Virtus AI</h1>
-            <p>Performance Intelligence & Coaching System</p>
-            <h2>Available Endpoints:</h2>
-            <ul>
-                <li><a href="/docs">API Documentation (Swagger)</a></li>
-                <li><a href="/redoc">API Documentation (ReDoc)</a></li>
-                <li><a href="/auth/strava">Connect Strava</a></li>
-            </ul>
-        </body>
-    </html>
-    """

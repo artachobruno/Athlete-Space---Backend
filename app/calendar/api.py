@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
@@ -327,3 +328,74 @@ def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_cu
         sessions=sessions,
         total=total,
     )
+
+
+class UpdateSessionStatusRequest(BaseModel):
+    """Request to update a planned session's status."""
+
+    status: str = Field(..., description="New status: planned | completed | skipped | cancelled")
+    completed_activity_id: str | None = Field(
+        default=None,
+        description="ID of the completed activity if status is 'completed'",
+    )
+
+
+@router.patch("/sessions/{session_id}/status", response_model=CalendarSession)
+def update_session_status(
+    session_id: str,
+    request: UpdateSessionStatusRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Update the status of a planned session.
+
+    This endpoint allows marking planned sessions as completed, skipped, or cancelled.
+    When marking as completed, you can optionally link it to an actual activity.
+
+    Args:
+        session_id: ID of the planned session to update
+        request: Update request with new status
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Updated CalendarSession
+    """
+    logger.info(f"[CALENDAR] PATCH /calendar/sessions/{session_id}/status called for user_id={user_id}")
+
+    valid_statuses = {"planned", "completed", "skipped", "cancelled"}
+    if request.status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}",
+        )
+
+    with get_session() as session:
+        # Find the planned session
+        planned_session = session.execute(
+            select(PlannedSession).where(
+                PlannedSession.id == session_id,
+                PlannedSession.user_id == user_id,
+            )
+        ).scalar_one_or_none()
+
+        if not planned_session:
+            raise HTTPException(status_code=404, detail="Planned session not found")
+
+        # Update status
+        planned_session.status = request.status
+
+        # If marking as completed, update completion fields
+        if request.status == "completed":
+            planned_session.completed = True
+            planned_session.completed_at = datetime.now(timezone.utc)
+            if request.completed_activity_id:
+                planned_session.completed_activity_id = request.completed_activity_id
+        else:
+            # Reset completion fields if status changes from completed
+            planned_session.completed = False
+            planned_session.completed_at = None
+            planned_session.completed_activity_id = None
+
+        session.commit()
+        session.refresh(planned_session)
+
+        return _planned_session_to_calendar(planned_session)

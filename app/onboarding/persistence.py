@@ -1,0 +1,153 @@
+"""Persistence logic for profile and training preferences during onboarding."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from loguru import logger
+from sqlalchemy.orm import Session
+
+from app.api.schemas.schemas import AthleteProfileUpdateRequest, TrainingPreferencesUpdateRequest
+from app.db.models import AthleteProfile, StravaAccount, UserSettings
+
+
+def persist_profile_data(
+    session: Session,
+    user_id: str,
+    profile_data: AthleteProfileUpdateRequest | None,
+) -> AthleteProfile:
+    """Persist profile data.
+
+    Args:
+        session: Database session
+        user_id: User ID
+        profile_data: Profile data to persist
+
+    Returns:
+        AthleteProfile instance
+    """
+    if not profile_data:
+        # Return existing profile or create empty one
+        profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+        if not profile:
+            strava_account = session.query(StravaAccount).filter_by(user_id=user_id).first()
+            athlete_id = int(strava_account.athlete_id) if strava_account else 0
+            profile = AthleteProfile(user_id=user_id, athlete_id=athlete_id, sources={})
+            session.add(profile)
+        return profile
+
+    profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+    if not profile:
+        strava_account = session.query(StravaAccount).filter_by(user_id=user_id).first()
+        athlete_id = int(strava_account.athlete_id) if strava_account else 0
+        profile = AthleteProfile(user_id=user_id, athlete_id=athlete_id, sources={})
+        session.add(profile)
+
+    # Update fields
+    if profile.sources is None:
+        profile.sources = {}
+
+    if profile_data.name is not None:
+        profile.name = profile_data.name
+        profile.sources["name"] = "user"
+
+    if profile_data.email is not None:
+        profile.email = profile_data.email
+
+    if profile_data.gender is not None:
+        profile.gender = profile_data.gender
+        profile.sources["gender"] = "user"
+
+    if profile_data.date_of_birth is not None:
+        try:
+            parsed_date = datetime.strptime(profile_data.date_of_birth, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            profile.date_of_birth = parsed_date
+        except ValueError:
+            pass  # Skip invalid dates
+
+    if profile_data.weight_kg is not None:
+        profile.weight_kg = profile_data.weight_kg
+        profile.sources["weight_kg"] = "user"
+
+    if profile_data.height_cm is not None:
+        profile.height_cm = profile_data.height_cm
+        profile.sources["height_cm"] = "user"
+
+    if profile_data.location is not None:
+        profile.location = profile_data.location
+        profile.sources["location"] = "user"
+
+    if profile_data.unit_system is not None:
+        profile.unit_system = profile_data.unit_system
+
+    if profile_data.target_event is not None:
+        profile.target_event = {
+            "name": profile_data.target_event.name,
+            "date": profile_data.target_event.date,
+            "distance": profile_data.target_event.distance,
+        }
+
+    if profile_data.goals is not None:
+        profile.goals = profile_data.goals
+
+    session.commit()
+    return profile
+
+
+def persist_training_preferences(
+    session: Session,
+    user_id: str,
+    preferences_data: TrainingPreferencesUpdateRequest | None,
+) -> UserSettings:
+    """Persist training preferences.
+
+    Args:
+        session: Database session
+        user_id: User ID
+        preferences_data: Training preferences to persist
+
+    Returns:
+        UserSettings instance
+    """
+    if not preferences_data:
+        settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+        if not settings:
+            settings = UserSettings(user_id=user_id)
+            session.add(settings)
+        return settings
+
+    settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+    if not settings:
+        settings = UserSettings(user_id=user_id)
+        session.add(settings)
+
+    # Update fields
+    if preferences_data.years_of_training is not None:
+        settings.years_of_training = preferences_data.years_of_training
+
+    if preferences_data.primary_sports is not None:
+        settings.primary_sports = preferences_data.primary_sports
+
+    if preferences_data.available_days is not None:
+        settings.available_days = preferences_data.available_days
+
+    if preferences_data.weekly_hours is not None:
+        settings.weekly_hours = preferences_data.weekly_hours
+
+    if preferences_data.training_focus is not None:
+        settings.training_focus = preferences_data.training_focus
+
+    if preferences_data.injury_history is not None:
+        settings.injury_history = preferences_data.injury_history
+
+    if preferences_data.injury_notes is not None:
+        settings.injury_notes = preferences_data.injury_notes
+
+    if preferences_data.consistency is not None:
+        settings.consistency = preferences_data.consistency
+
+    if preferences_data.goal is not None:
+        settings.goal = preferences_data.goal
+
+    session.commit()
+    return settings

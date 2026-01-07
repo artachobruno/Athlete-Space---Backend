@@ -131,8 +131,17 @@ def merge_strava_profile(
     profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
     if not profile:
         logger.info(f"[PROFILE_SERVICE] Creating new profile for user_id={user_id}")
+        # Get athlete_id from strava_athlete if available
+        athlete_id = 0
+        athlete_id_from_strava = strava_athlete.get("id")
+        if athlete_id_from_strava:
+            try:
+                athlete_id = int(athlete_id_from_strava)
+            except (ValueError, TypeError):
+                athlete_id = 0
         profile = AthleteProfile(
             user_id=user_id,
+            athlete_id=athlete_id,
             sources={},
         )
         session.add(profile)

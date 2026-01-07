@@ -40,7 +40,7 @@ def assert_users_exist() -> list[int]:
     return athlete_ids
 
 
-def test_lock(athlete_id: int):
+def check_lock(athlete_id: int):
     logger.info(f"Testing Redis lock for athlete={athlete_id}")
     key = f"lock:strava:user:{athlete_id}"
 
@@ -107,7 +107,7 @@ def main():
     athlete_ids = assert_users_exist()
 
     # Test locking on first user
-    test_lock(athlete_ids[0])
+    check_lock(athlete_ids[0])
 
     # Trigger ingestion
     trigger_ingestion()

@@ -1,10 +1,11 @@
 """Helper functions for generating and storing planned training sessions."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
 from sqlalchemy import select
 
+from app.coach.schemas.intent_schemas import SeasonPlan, WeeklyIntent
 from app.db.models import PlannedSession
 from app.db.session import get_session
 
@@ -377,3 +378,172 @@ def generate_season_sessions(
         week_num += 1
 
     return sessions
+
+
+def weekly_intent_to_sessions(weekly_intent: WeeklyIntent) -> list[dict]:
+    """Convert WeeklyIntent to planned sessions for the week.
+
+    Args:
+        weekly_intent: WeeklyIntent object
+
+    Returns:
+        List of session dictionaries for the week
+    """
+    sessions = []
+    week_start = weekly_intent.week_start
+
+    # Convert date to datetime for calculations
+    if isinstance(week_start, date):
+        week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+    else:
+        week_start_dt = week_start
+
+    # Parse intensity distribution to determine session types
+    intensity_lower = weekly_intent.intensity_distribution.lower()
+    volume_hours = weekly_intent.volume_target_hours
+
+    # Determine number of sessions based on intensity distribution
+    hard_count = 0
+    moderate_count = 0
+    easy_count = 0
+
+    if "hard" in intensity_lower or "intensity" in intensity_lower:
+        # Count hard sessions
+        for word in intensity_lower.split():
+            if word.isdigit():
+                hard_count = int(word)
+                break
+        if hard_count == 0:
+            hard_count = 1 if "hard" in intensity_lower else 0
+
+    if "moderate" in intensity_lower or "tempo" in intensity_lower:
+        moderate_count = 2
+
+    if "easy" in intensity_lower or "aerobic" in intensity_lower:
+        easy_count = 4
+
+    # Default distribution if parsing fails
+    if hard_count == 0 and moderate_count == 0 and easy_count == 0:
+        # Default: 1-2 quality sessions, rest easy
+        hard_count = 1 if volume_hours > 8 else 0
+        moderate_count = 1 if volume_hours > 10 else 0
+        easy_count = max(3, int(volume_hours / 1.5))  # ~1.5 hours per easy session
+
+    # Calculate session durations
+    total_sessions = hard_count + moderate_count + easy_count
+    if total_sessions == 0:
+        return sessions
+
+    # Distribute volume across sessions
+    # Hard sessions: ~1 hour, Moderate: ~1.5 hours, Easy: remaining volume
+    hard_duration = 60  # minutes
+    moderate_duration = 90  # minutes
+    remaining_hours = volume_hours - (hard_count * 1.0) - (moderate_count * 1.5)
+    easy_duration = int((remaining_hours * 60) / max(easy_count, 1)) if easy_count > 0 else 0
+    easy_duration = max(30, min(easy_duration, 120))  # Clamp between 30-120 min
+
+    # Distribute sessions across the week (Monday=0, Sunday=6)
+    # Use a smarter distribution: hard on Tue/Thu, moderate on Wed, easy on other days
+    used_days = set()
+
+    # Add hard sessions (typically Tuesday/Thursday)
+    hard_days = [1, 3]  # Tuesday, Thursday
+    for i, _ in enumerate(range(hard_count)):
+        if i < len(hard_days):
+            day = hard_days[i]
+            used_days.add(day)
+            session_date = week_start_dt + timedelta(days=day)
+            sessions.append({
+                "date": session_date,
+                "type": "Run",
+                "title": "Hard Workout",
+                "duration_minutes": hard_duration,
+                "intensity": "hard",
+                "notes": weekly_intent.focus,
+                "week_number": weekly_intent.week_number,
+            })
+
+    # Add moderate sessions (typically Wednesday)
+    moderate_days = [2]  # Wednesday
+    for i, _ in enumerate(range(moderate_count)):
+        if i < len(moderate_days):
+            day = moderate_days[i]
+            used_days.add(day)
+            session_date = week_start_dt + timedelta(days=day)
+            sessions.append({
+                "date": session_date,
+                "type": "Run",
+                "title": "Moderate Run",
+                "duration_minutes": moderate_duration,
+                "intensity": "moderate",
+                "notes": weekly_intent.adaptation_goal,
+                "week_number": weekly_intent.week_number,
+            })
+
+    # Add easy sessions (fill remaining days, prefer Mon/Fri/Sat)
+    easy_days = [0, 4, 5, 6]  # Monday, Friday, Saturday, Sunday
+    easy_day_idx = 0
+    for _ in range(easy_count):
+        # Find next available day
+        while easy_day_idx < len(easy_days) and easy_days[easy_day_idx] in used_days:
+            easy_day_idx += 1
+        if easy_day_idx < len(easy_days):
+            day = easy_days[easy_day_idx]
+            used_days.add(day)
+            session_date = week_start_dt + timedelta(days=day)
+            sessions.append({
+                "date": session_date,
+                "type": "Run",
+                "title": "Easy Run",
+                "duration_minutes": easy_duration,
+                "intensity": "easy",
+                "notes": weekly_intent.adaptation_goal,
+                "week_number": weekly_intent.week_number,
+            })
+            easy_day_idx += 1
+        else:
+            # If we run out of preferred days, use any available day
+            for d in range(7):
+                if d not in used_days:
+                    used_days.add(d)
+                    session_date = week_start_dt + timedelta(days=d)
+                    sessions.append({
+                        "date": session_date,
+                        "type": "Run",
+                        "title": "Easy Run",
+                        "duration_minutes": easy_duration,
+                        "intensity": "easy",
+                        "notes": weekly_intent.adaptation_goal,
+                        "week_number": weekly_intent.week_number,
+                    })
+                    break
+
+    return sessions
+
+
+def season_plan_to_sessions(season_plan: SeasonPlan) -> list[dict]:
+    """Convert SeasonPlan to planned sessions.
+
+    Args:
+        season_plan: SeasonPlan object
+
+    Returns:
+        List of session dictionaries for the season
+    """
+    # Convert dates to datetime
+    if isinstance(season_plan.season_start, date):
+        season_start = datetime.combine(season_plan.season_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+    else:
+        season_start = season_plan.season_start
+
+    if isinstance(season_plan.season_end, date):
+        season_end = datetime.combine(season_plan.season_end, datetime.min.time()).replace(tzinfo=timezone.utc)
+    else:
+        season_end = season_plan.season_end
+
+    # Use existing generate_season_sessions function
+    return generate_season_sessions(
+        season_start=season_start,
+        season_end=season_end,
+        _target_races=None,  # Could be enhanced to use season_plan.target_races
+    )

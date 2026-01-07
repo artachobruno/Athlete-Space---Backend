@@ -152,6 +152,9 @@ def get_season(user_id: str = Depends(get_current_user_id)):
 def get_week(user_id: str = Depends(get_current_user_id)):
     """Get calendar data for the current week from real activities.
 
+    **Data Source**: Reads from database (not from Strava API).
+    Activities are synced incrementally in the background and stored in the database.
+
     Args:
         user_id: Current authenticated user ID (from auth dependency)
 
@@ -166,31 +169,39 @@ def get_week(user_id: str = Depends(get_current_user_id)):
     sunday = monday + timedelta(days=6)
 
     with get_session() as session:
-        # Get completed activities
-        activities = session.execute(
-            select(Activity)
-            .where(
-                Activity.user_id == user_id,
-                Activity.start_time >= monday,
-                Activity.start_time <= sunday,
+        # Get completed activities (optimized: uses composite index on user_id + start_time)
+        activities = (
+            session.execute(
+                select(Activity)
+                .where(
+                    Activity.user_id == user_id,
+                    Activity.start_time >= monday,
+                    Activity.start_time <= sunday,
+                )
+                .order_by(Activity.start_time)
             )
-            .order_by(Activity.start_time)
-        ).all()
+            .scalars()
+            .all()
+        )
 
-        activity_sessions = [_activity_to_session(a[0]) for a in activities]
+        activity_sessions = [_activity_to_session(a) for a in activities]
 
         # Get planned sessions
-        planned_sessions = session.execute(
-            select(PlannedSession)
-            .where(
-                PlannedSession.user_id == user_id,
-                PlannedSession.date >= monday,
-                PlannedSession.date <= sunday,
+        planned_sessions = (
+            session.execute(
+                select(PlannedSession)
+                .where(
+                    PlannedSession.user_id == user_id,
+                    PlannedSession.date >= monday,
+                    PlannedSession.date <= sunday,
+                )
+                .order_by(PlannedSession.date)
             )
-            .order_by(PlannedSession.date)
-        ).all()
+            .scalars()
+            .all()
+        )
 
-        planned_calendar_sessions = [_planned_session_to_calendar(p[0]) for p in planned_sessions]
+        planned_calendar_sessions = [_planned_session_to_calendar(p) for p in planned_sessions]
 
         # Combine and sort by date
         sessions = activity_sessions + planned_calendar_sessions
@@ -207,6 +218,9 @@ def get_week(user_id: str = Depends(get_current_user_id)):
 def get_today(user_id: str = Depends(get_current_user_id)):
     """Get calendar data for today from real activities.
 
+    **Data Source**: Reads from database (not from Strava API).
+    Activities are synced incrementally in the background and stored in the database.
+
     Args:
         user_id: Current authenticated user ID (from auth dependency)
 
@@ -220,18 +234,22 @@ def get_today(user_id: str = Depends(get_current_user_id)):
     today_str = today.strftime("%Y-%m-%d")
 
     with get_session() as session:
-        # Get completed activities
-        activities = session.execute(
-            select(Activity)
-            .where(
-                Activity.user_id == user_id,
-                Activity.start_time >= today_start,
-                Activity.start_time <= today_end,
+        # Get completed activities (optimized: uses composite index on user_id + start_time)
+        activities = (
+            session.execute(
+                select(Activity)
+                .where(
+                    Activity.user_id == user_id,
+                    Activity.start_time >= today_start,
+                    Activity.start_time <= today_end,
+                )
+                .order_by(Activity.start_time)
             )
-            .order_by(Activity.start_time)
-        ).all()
+            .scalars()
+            .all()
+        )
 
-        activity_sessions = [_activity_to_session(a[0]) for a in activities]
+        activity_sessions = [_activity_to_session(a) for a in activities]
 
         # Get planned sessions
         planned_sessions = session.execute(
@@ -260,6 +278,9 @@ def get_today(user_id: str = Depends(get_current_user_id)):
 def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_current_user_id)):
     """Get list of calendar sessions from real activities.
 
+    **Data Source**: Reads from database (not from Strava API).
+    Activities are synced incrementally in the background and stored in the database.
+
     Args:
         limit: Maximum number of sessions to return (default: 50)
         offset: Number of sessions to skip (default: 0)
@@ -271,15 +292,19 @@ def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_cu
     logger.info(f"[CALENDAR] GET /calendar/sessions called for user_id={user_id}: limit={limit}, offset={offset}")
 
     with get_session() as session:
-        # Get activities
-        activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time.desc())).all()
-        activity_sessions = [_activity_to_session(a[0]) for a in activities]
+        # Get activities (optimized: uses composite index on user_id + start_time)
+        activities = (
+            session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time.desc())).scalars().all()
+        )
+        activity_sessions = [_activity_to_session(a) for a in activities]
 
         # Get planned sessions
-        planned_sessions = session.execute(
-            select(PlannedSession).where(PlannedSession.user_id == user_id).order_by(PlannedSession.date.desc())
-        ).all()
-        planned_calendar_sessions = [_planned_session_to_calendar(p[0]) for p in planned_sessions]
+        planned_sessions = (
+            session.execute(select(PlannedSession).where(PlannedSession.user_id == user_id).order_by(PlannedSession.date.desc()))
+            .scalars()
+            .all()
+        )
+        planned_calendar_sessions = [_planned_session_to_calendar(p) for p in planned_sessions]
 
         # Combine and sort by date (most recent first)
         all_sessions = activity_sessions + planned_calendar_sessions

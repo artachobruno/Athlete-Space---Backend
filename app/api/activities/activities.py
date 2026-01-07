@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.dependencies.auth import get_current_user_id
 from app.db.models import Activity, StravaAccount
@@ -103,6 +103,9 @@ def get_activities(
 ):
     """Get list of activities for current user (read-only, debug-only).
 
+    **Data Source**: Reads from database (not from Strava API).
+    Activities are synced incrementally in the background and stored in the database.
+
     Args:
         limit: Maximum number of activities to return (1-100, default: 50)
         offset: Number of activities to skip (default: 0)
@@ -114,9 +117,8 @@ def get_activities(
     logger.info(f"[ACTIVITIES] GET /activities called for user_id={user_id}, limit={limit}, offset={offset}")
 
     with get_session() as session:
-        # Get total count
-        total_result = session.execute(select(Activity).where(Activity.user_id == user_id))
-        total = len(list(total_result))
+        # Get total count (optimized: use COUNT instead of loading all records)
+        total = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
 
         # Get paginated activities
         activities_result = session.execute(
@@ -155,6 +157,9 @@ def get_activity(
     user_id: str = Depends(get_current_user_id),
 ):
     """Get single activity by ID (read-only, debug-only).
+
+    **Data Source**: Reads from database (not from Strava API).
+    Activity data is stored in the database during background sync.
 
     Args:
         activity_id: Activity UUID
@@ -301,6 +306,10 @@ def get_activity_streams(
     user_id: str = Depends(get_current_user_id),
 ):
     """Get formatted streams data for an activity (GPS, elevation, pace).
+
+    **Data Source**: Reads from database (not from Strava API).
+    Streams data must be fetched first using POST /activities/{activity_id}/fetch-streams
+    if not already available in the database.
 
     This endpoint returns time-series data formatted for frontend visualization:
     - GPS route points (latlng) for map display

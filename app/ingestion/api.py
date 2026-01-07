@@ -11,6 +11,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_user_id
 from app.config.settings import settings
@@ -129,7 +130,7 @@ def _get_access_token_from_account(account: StravaAccount, session) -> str:
     return new_access_token
 
 
-def ingest_activities(  # noqa: PLR0914
+def ingest_activities(  # noqa: C901, PLR0912, PLR0914
     user_id: str,
     since_days: int = 365,
 ) -> dict[str, int | str]:
@@ -137,6 +138,7 @@ def ingest_activities(  # noqa: PLR0914
 
     Fetches activities from Strava API and stores them in the database.
     Idempotent: running twice produces zero duplicates.
+    Incremental: uses last_sync_at to only fetch new activities.
 
     Args:
         user_id: Clerk user ID (string)
@@ -156,7 +158,23 @@ def ingest_activities(  # noqa: PLR0914
 
         # Calculate date range
         now = datetime.now(timezone.utc)
-        after_date = now - timedelta(days=since_days)
+        requested_after_date = now - timedelta(days=since_days)
+
+        # Use last_sync_at if available and more recent than requested date
+        # This ensures we only fetch new activities incrementally
+        if account.last_sync_at:
+            last_sync_date = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc)
+            # Use the more recent of the two dates (only fetch new activities)
+            after_date = max(last_sync_date, requested_after_date)
+            logger.info(
+                f"[INGESTION] Using incremental sync: last_sync_at={last_sync_date.isoformat()}, "
+                f"requested_after={requested_after_date.isoformat()}, using after={after_date.isoformat()}"
+            )
+        else:
+            # First sync: use requested date range
+            after_date = requested_after_date
+            logger.info(f"[INGESTION] First sync for user_id={user_id}, fetching from {after_date.isoformat()}")
+
         after_ts = after_date
 
         logger.info(f"[INGESTION] Fetching activities for user_id={user_id} from {after_date.isoformat()} to {now.isoformat()}")
@@ -190,11 +208,12 @@ def ingest_activities(  # noqa: PLR0914
         # Store activities in database (idempotent upsert)
         imported_count = 0
         skipped_count = 0
+        duplicate_count = 0
 
         for strava_activity in strava_activities:
             strava_id = str(strava_activity.id)
 
-            # Check if activity already exists
+            # Check if activity already exists (prevents duplicates)
             existing = session.execute(
                 select(Activity).where(
                     Activity.user_id == user_id,
@@ -238,19 +257,85 @@ def ingest_activities(  # noqa: PLR0914
             session.add(activity)
             imported_count += 1
 
-        # Update last_sync_at in StravaAccount
-        account.last_sync_at = int(now.timestamp())
+        # Update last_sync_at in StravaAccount only if we successfully fetched activities
+        # This ensures we track incremental progress
+        if len(strava_activities) > 0 or imported_count > 0:
+            account.last_sync_at = int(now.timestamp())
+            logger.info(f"[INGESTION] Updated last_sync_at to {now.isoformat()} for user_id={user_id}")
 
         # Commit all activities and last_sync_at update
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as e:
+            # Handle duplicate constraint violations (race condition: activity inserted between check and commit)
+            session.rollback()
+            logger.warning(
+                f"[INGESTION] IntegrityError during commit (duplicate detected): {e}. "
+                "This may indicate concurrent sync operations. Retrying with individual commits."
+            )
+            # Retry: commit activities one by one to identify which ones are duplicates
+            retry_imported = 0
+            retry_duplicate = 0
+            for strava_activity in strava_activities:
+                strava_id = str(strava_activity.id)
+                # Re-check if exists (may have been inserted by another process)
+                existing = session.execute(
+                    select(Activity).where(
+                        Activity.user_id == user_id,
+                        Activity.strava_activity_id == strava_id,
+                    )
+                ).first()
+                if existing:
+                    retry_duplicate += 1
+                    continue
+                # Re-create activity and try to save individually
+                start_time_raw = strava_activity.start_date
+                if isinstance(start_time_raw, datetime):
+                    start_time = start_time_raw
+                else:
+                    date_string = str(start_time_raw)
+                    if "Z" in date_string:
+                        date_string = date_string.replace("Z", "+00:00")
+                    start_time = datetime.fromisoformat(date_string)
+                raw_json = strava_activity.raw if strava_activity.raw else {}
+                try:
+                    activity = Activity(
+                        user_id=user_id,
+                        athlete_id=account.athlete_id,
+                        strava_activity_id=strava_id,
+                        source="strava",
+                        start_time=start_time,
+                        type=strava_activity.type,
+                        duration_seconds=strava_activity.elapsed_time,
+                        distance_meters=strava_activity.distance,
+                        elevation_gain_meters=strava_activity.total_elevation_gain,
+                        raw_json=raw_json,
+                    )
+                    session.add(activity)
+                    session.commit()
+                    retry_imported += 1
+                except IntegrityError:
+                    session.rollback()
+                    retry_duplicate += 1
+                    logger.debug(f"[INGESTION] Activity {strava_id} duplicate in retry, skipping")
+            # Update counts (retry_duplicate includes activities that were duplicates in retry)
+            imported_count = retry_imported
+            duplicate_count = retry_duplicate
+            skipped_count = 0  # Reset since we're retrying everything
+            # Update last_sync_at
+            account.last_sync_at = int(now.timestamp())
+            session.commit()
+
         logger.info(
-            f"[INGESTION] Ingestion complete: imported={imported_count}, skipped={skipped_count}, total_fetched={len(strava_activities)}"
+            f"[INGESTION] Ingestion complete: imported={imported_count}, skipped={skipped_count}, "
+            f"duplicates={duplicate_count}, total_fetched={len(strava_activities)}"
         )
-        logger.info(f"[INGESTION] Updated last_sync_at for user_id={user_id}")
 
         return {
             "imported": imported_count,
             "skipped": skipped_count,
+            "duplicates": duplicate_count,
+            "total_fetched": len(strava_activities),
             "range": f"{after_date.date().isoformat()} → {now.date().isoformat()}",
         }
 

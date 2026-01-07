@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
@@ -155,7 +156,7 @@ def _get_access_token_from_account(account: StravaAccount, session) -> str:
     return new_access_token
 
 
-def _sync_user_activities(  # noqa: C901, PLR0912
+def _sync_user_activities(  # noqa: C901, PLR0912, PLR0914
     user_id: str, account: StravaAccount, session
 ) -> dict[str, int | str]:
     """Sync activities for a single user.
@@ -216,11 +217,12 @@ def _sync_user_activities(  # noqa: C901, PLR0912
     # Store activities in database (idempotent upsert)
     imported_count = 0
     skipped_count = 0
+    duplicate_count = 0
 
     for strava_activity in strava_activities:
         strava_id = str(strava_activity.id)
 
-        # Check if activity already exists
+        # Check if activity already exists (prevents duplicates)
         existing = session.execute(
             select(Activity).where(
                 Activity.user_id == user_id,
@@ -268,11 +270,72 @@ def _sync_user_activities(  # noqa: C901, PLR0912
     account.last_sync_at = int(now.timestamp())
 
     # Commit all changes
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as e:
+        # Handle duplicate constraint violations (race condition: activity inserted between check and commit)
+        session.rollback()
+        logger.warning(
+            f"[SYNC] IntegrityError during commit (duplicate detected): {e}. "
+            "This may indicate concurrent sync operations. Retrying with individual commits."
+        )
+        # Retry: commit activities one by one to identify which ones are duplicates
+        retry_imported = 0
+        retry_duplicate = 0
+        for strava_activity in strava_activities:
+            strava_id = str(strava_activity.id)
+            # Re-check if exists (may have been inserted by another process)
+            existing = session.execute(
+                select(Activity).where(
+                    Activity.user_id == user_id,
+                    Activity.strava_activity_id == strava_id,
+                )
+            ).first()
+            if existing:
+                retry_duplicate += 1
+                continue
+            # Re-create activity and try to save individually
+            start_time_raw = strava_activity.start_date
+            if isinstance(start_time_raw, datetime):
+                start_time = start_time_raw
+            else:
+                date_string = str(start_time_raw)
+                if "Z" in date_string:
+                    date_string = date_string.replace("Z", "+00:00")
+                start_time = datetime.fromisoformat(date_string)
+            raw_json = strava_activity.raw if strava_activity.raw else {}
+            try:
+                activity = Activity(
+                    user_id=user_id,
+                    athlete_id=account.athlete_id,
+                    strava_activity_id=strava_id,
+                    source="strava",
+                    start_time=start_time,
+                    type=strava_activity.type,
+                    duration_seconds=strava_activity.elapsed_time,
+                    distance_meters=strava_activity.distance,
+                    elevation_gain_meters=strava_activity.total_elevation_gain,
+                    raw_json=raw_json,
+                )
+                session.add(activity)
+                session.commit()
+                retry_imported += 1
+            except IntegrityError:
+                session.rollback()
+                retry_duplicate += 1
+                logger.debug(f"[SYNC] Activity {strava_id} duplicate in retry, skipping")
+        # Update counts (retry_duplicate includes activities that were duplicates in retry)
+        imported_count = retry_imported
+        duplicate_count = retry_duplicate
+        skipped_count = 0  # Reset since we're retrying everything
+        # Update last_sync_at
+        account.last_sync_at = int(now.timestamp())
+        session.commit()
 
     logger.info(
         f"[SYNC] Sync complete for user_id={user_id}: "
-        f"imported={imported_count}, skipped={skipped_count}, total_fetched={len(strava_activities)}"
+        f"imported={imported_count}, skipped={skipped_count}, duplicates={duplicate_count}, "
+        f"total_fetched={len(strava_activities)}"
     )
 
     # Trigger metrics recomputation if new activities were imported

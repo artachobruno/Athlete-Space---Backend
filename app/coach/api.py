@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -19,6 +19,7 @@ from app.api.schemas.schemas import (
 from app.api.user.me import get_overview_data
 from app.coach.services.chat_service import dispatch_coach_chat
 from app.coach.services.coach_service import get_coach_advice
+from app.coach.utils.context_builder import build_coach_context
 from app.db.models import CoachMessage, StravaAccount, StravaAuth
 from app.db.session import get_session
 
@@ -112,6 +113,31 @@ def history(athlete_id: int = 23078584):
 # ============================================================================
 # All endpoints now use real LLM calls via get_coach_advice and dispatch_coach_chat
 # No mock data or hardcoded responses
+
+
+@router.get("/context")
+def get_coach_context(user_id: str = Depends(get_current_user_id)):
+    """Get coach context (backward compatibility endpoint).
+
+    DEPRECATED: This endpoint is kept for backward compatibility.
+    Frontend should use /me/overview instead and build context client-side.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Coach context dictionary built from overview data
+    """
+    logger.info(f"[API] /coach/context endpoint called for user_id={user_id}")
+    try:
+        overview = get_overview_data(user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting overview for coach context: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get overview: {e!s}") from e
+    else:
+        return build_coach_context(overview)
 
 
 @router.get("/summary", response_model=CoachSummaryResponse)

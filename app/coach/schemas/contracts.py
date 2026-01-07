@@ -114,3 +114,16 @@ class DailyDecisionResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class WeeklyReportResponse(BaseModel):
+    """API response for weekly report."""
+
+    id: str
+    user_id: str
+    athlete_id: int
+    report: WeeklyReport
+    version: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from loguru import logger
 from sqlalchemy import func, select
 
+from app.api.dependencies.auth import get_current_user_id
 from app.config.settings import settings
 from app.db.models import Activity, StravaAccount, StravaAuth
 from app.db.session import get_session
@@ -45,79 +47,56 @@ def strava_status():
 
 
 @router.get("/strava/sync-progress")
-def strava_sync_progress():
-    """Get sync progress information including activity count and sync status."""
-    logger.info("[API] /strava/sync-progress endpoint called")
+def strava_sync_progress(user_id: str = Depends(get_current_user_id)):
+    """Get sync progress information for the current user.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Dictionary with last_sync, sync_in_progress, and total_activities
+    """
+    logger.info(f"[API] /strava/sync-progress endpoint called for user_id={user_id}")
     try:
         with get_session() as session:
-            result = session.execute(select(StravaAuth)).first()
-            if not result:
-                logger.debug("Sync progress: No Strava auth found")
+            # Get StravaAccount for user
+            account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+            if not account_result:
+                logger.debug(f"Sync progress: No Strava account found for user_id={user_id}")
                 return {
-                    "connected": False,
-                    "activity_count": 0,
+                    "last_sync": None,
                     "sync_in_progress": False,
-                    "progress_percentage": 0,
+                    "total_activities": 0,
                 }
 
-            auth = result[0]
-            # Use func.count to avoid id column dependency
-            result_count = session.execute(select(func.count(Activity.id))).scalar()
-            activity_count = result_count if result_count is not None else 0
-            backfill_done = getattr(auth, "backfill_done", False)
-            last_sync_at = auth.last_successful_sync_at if hasattr(auth, "last_successful_sync_at") else None
+            account = account_result[0]
 
-            logger.debug(
-                f"Sync progress for athlete_id={auth.athlete_id}: "
-                f"activity_count={activity_count}, backfill_done={backfill_done}, "
-                f"last_sync_at={last_sync_at}"
-            )
+            # Count activities for this user
+            activity_count_result = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar()
+            total_activities = activity_count_result if activity_count_result is not None else 0
 
             # Determine if sync is in progress
-            # Check if backfill is not done or if last sync was recent
-            sync_in_progress = False
-            sync_reason = None
-            if hasattr(auth, "backfill_done") and not auth.backfill_done:
-                sync_in_progress = True
-                sync_reason = "backfill_not_done"
-            elif last_sync_at:
-                time_since_sync = time.time() - last_sync_at
-                # If last sync was less than 5 minutes ago, consider it in progress
-                if time_since_sync < 300:
-                    sync_in_progress = True
-                    sync_reason = f"recent_sync_{int(time_since_sync)}s_ago"
+            sync_in_progress = not account.full_history_synced
 
-            # Estimate progress based on activity count
-            # Rough estimate: 30 activities per day average, 14 days minimum = ~420 activities
-            # For full history, could be 1000+ activities
-            min_activities_needed = 14 * 2  # ~2 activities per day average
-            estimated_total = max(min_activities_needed, activity_count + 100)  # Conservative estimate
-            progress_percentage = min(100, int((activity_count / estimated_total) * 100)) if estimated_total > 0 else 0
+            # Format last_sync timestamp
+            last_sync = None
+            if account.last_sync_at:
+                last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat()
 
             logger.info(
-                f"Sync progress: athlete_id={auth.athlete_id}, "
-                f"activities={activity_count}, progress={progress_percentage}%, "
-                f"sync_in_progress={sync_in_progress}, reason={sync_reason}"
+                f"Sync progress for user_id={user_id}: "
+                f"total_activities={total_activities}, sync_in_progress={sync_in_progress}, "
+                f"last_sync={last_sync}"
             )
 
             return {
-                "connected": True,
-                "athlete_id": auth.athlete_id,
-                "activity_count": activity_count,
+                "last_sync": last_sync,
                 "sync_in_progress": sync_in_progress,
-                "progress_percentage": progress_percentage,
-                "backfill_done": backfill_done,
-                "last_sync_at": last_sync_at,
+                "total_activities": total_activities,
             }
     except Exception as e:
-        logger.exception("Error getting sync progress")
-        return {
-            "connected": False,
-            "activity_count": 0,
-            "sync_in_progress": False,
-            "progress_percentage": 0,
-            "error": str(e),
-        }
+        logger.exception(f"Error getting sync progress for user_id={user_id}")
+        raise HTTPException(status_code=500, detail=f"Failed to get sync progress: {e!s}") from e
 
 
 @router.post("/strava/sync")

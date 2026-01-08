@@ -87,10 +87,20 @@ def save_context_tool(arguments: dict) -> dict:
 
     Contract: save_context.json
     """
+    # Strictly validate arguments - only accept expected keys
     athlete_id = arguments.get("athlete_id")
     model_name = arguments.get("model_name")
     user_message = arguments.get("user_message")
     assistant_message = arguments.get("assistant_message")
+
+    # Log unexpected keys for debugging
+    allowed_keys = {"athlete_id", "model_name", "user_message", "assistant_message"}
+    unexpected_keys = set(arguments.keys()) - allowed_keys
+    if unexpected_keys:
+        logger.warning(
+            f"save_context received unexpected keys: {unexpected_keys}",
+            arguments_keys=list(arguments.keys()),
+        )
 
     # Validate inputs
     if athlete_id is None:
@@ -104,33 +114,61 @@ def save_context_tool(arguments: dict) -> dict:
     if not assistant_message or not isinstance(assistant_message, str):
         raise MCPError("INVALID_INPUT", "Missing or invalid assistant_message")
 
+    # Sanitize message content - ensure they're strings and not too large
+    user_message = str(user_message).strip()
+    assistant_message = str(assistant_message).strip()
+    max_content_length = 100000  # Reasonable limit for text content
+
+    if len(user_message) > max_content_length:
+        logger.warning(f"User message truncated from {len(user_message)} to {max_content_length} characters")
+        user_message = user_message[:max_content_length]
+    if len(assistant_message) > max_content_length:
+        logger.warning(f"Assistant message truncated from {len(assistant_message)} to {max_content_length} characters")
+        assistant_message = assistant_message[:max_content_length]
+
     try:
         # Convert athlete_id to user_id
         user_id = _get_user_id_from_athlete_id(athlete_id)
         if user_id is None:
             raise MCPError("USER_NOT_FOUND", f"No user_id found for athlete_id={athlete_id}")
 
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise MCPError("INVALID_INPUT", f"Invalid user_id returned for athlete_id={athlete_id}")
+
         with get_session() as db:
             # Save user message
             now = datetime.now(UTC)
-            user_msg = CoachMessage(
-                user_id=user_id,
-                role="user",
-                content=user_message,
-                created_at=now,
-            )
-            db.add(user_msg)
+            try:
+                user_msg = CoachMessage(
+                    user_id=user_id,
+                    role="user",
+                    content=user_message,
+                    created_at=now,
+                )
+                db.add(user_msg)
+            except Exception as e:
+                logger.error(f"Failed to create user message object: {e}", exc_info=True)
+                raise MCPError("DB_ERROR", f"Failed to create user message: {e!s}") from e
 
             # Save assistant message
-            assistant_msg = CoachMessage(
-                user_id=user_id,
-                role="assistant",
-                content=assistant_message,
-                created_at=now,
-            )
-            db.add(assistant_msg)
+            try:
+                assistant_msg = CoachMessage(
+                    user_id=user_id,
+                    role="assistant",
+                    content=assistant_message,
+                    created_at=now,
+                )
+                db.add(assistant_msg)
+            except Exception as e:
+                logger.error(f"Failed to create assistant message object: {e}", exc_info=True)
+                raise MCPError("DB_ERROR", f"Failed to create assistant message: {e!s}") from e
 
-            db.commit()
+            try:
+                db.commit()
+            except SQLAlchemyError as e:
+                db.rollback()
+                logger.error(f"Failed to commit messages to database: {e}", exc_info=True)
+                raise MCPError("DB_ERROR", f"Failed to save messages: {e!s}") from e
 
             logger.info(
                 "Saved conversation context",

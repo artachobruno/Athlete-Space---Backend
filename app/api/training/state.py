@@ -270,7 +270,7 @@ def debug_info():
 
 
 @router.get("/training-load")
-def training_load(days: int = 60, debug: bool = False):
+def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(get_current_user_id)):
     """Get training load metrics (CTL, ATL, TSB, TSS) normalized to -100 to 100 scale.
 
     All metrics (TSS, ATL, CTL, TSB) are normalized to a -100 to 100 scale for consistent visualization.
@@ -278,6 +278,7 @@ def training_load(days: int = 60, debug: bool = False):
     Args:
         days: Number of days to look back (default: 60)
         debug: If True, return raw query results for debugging
+        user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         Dictionary with:
@@ -307,17 +308,38 @@ def training_load(days: int = 60, debug: bool = False):
 
         All metrics are aligned by index with the dates array.
     """
-    logger.info(f"Training load requested: days={days}, debug={debug}")
+    logger.info(f"Training load requested: days={days}, debug={debug}, user_id={user_id}")
     db = SessionLocal()
 
     if debug:
         logger.debug("Debug mode: fetching raw activity data")
-        result = _get_debug_result(db, days)
-        logger.debug(f"Debug result: {result}")
-        return result
+        try:
+            result = _get_debug_result(db, days)
+            logger.debug(f"Debug result: {result}")
+        except Exception as e:
+            logger.error(f"Error in debug mode: {e}", exc_info=True)
+            return {"debug": {"error": str(e), "message": "Failed to fetch debug data"}}
+        else:
+            return result
+        finally:
+            db.close()
 
     since_str = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     logger.debug(f"Querying activities since: {since_str}")
+
+    # Default empty response structure
+    empty_response = {
+        "dates": [],
+        "daily_load": [],
+        "daily_tss": [],
+        "ctl": [],
+        "atl": [],
+        "tsb": [],
+        "weekly_dates": [],
+        "weekly_volume": [],
+        "weekly_rolling_avg": [],
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
 
     try:
         activities_query = db.execute(
@@ -333,15 +355,24 @@ def training_load(days: int = 60, debug: bool = False):
                     raw_json
                 FROM activities
                 WHERE start_time >= :since
+                  AND user_id = :user_id
                 ORDER BY start_time
                 """
             ),
-            {"since": since_str},
+            {"since": since_str, "user_id": user_id},
         ).fetchall()
 
-        logger.info(f"Found {len(activities_query)} activities")
+        logger.info(f"Found {len(activities_query)} activities for user {user_id}")
+
+        if not activities_query:
+            logger.info("No activities found, returning empty response")
+            return empty_response
 
         daily_data = _process_activities_for_tss(activities_query)
+        if not daily_data:
+            logger.info("No daily data after processing, returning empty response")
+            return empty_response
+
         dates = sorted(daily_data.keys())
         daily_load = [daily_data[date]["hours"] for date in dates]
         daily_tss = [daily_data[date]["tss"] for date in dates]
@@ -359,8 +390,10 @@ def training_load(days: int = 60, debug: bool = False):
             f"(all metrics on -100 to 100 scale)"
         )
     except Exception as e:
-        logger.error(f"Error calculating training load: {e}")
-        raise
+        logger.error(f"Error calculating training load: {e}", exc_info=True)
+        # Return empty response instead of raising 500
+        # Frontend can handle empty data gracefully
+        return empty_response
     else:
         return result
     finally:

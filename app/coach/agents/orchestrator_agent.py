@@ -804,6 +804,7 @@ async def run_conversation(
     )
 
     # Save conversation history via MCP
+    # This is non-critical - conversation can continue even if context save fails
     try:
         await call_tool(
             "save_context",
@@ -815,16 +816,37 @@ async def run_conversation(
             },
         )
     except MCPError as e:
+        # Context saving is non-critical - log but don't fail the conversation
         # USER_NOT_FOUND is expected when MCP server uses a different database (e.g., in tests)
-        # Log as warning instead of error to reduce noise in test output
         if e.code == "USER_NOT_FOUND":
             logger.warning(
                 f"Could not save context (user not found in MCP server database): {e.message}",
                 athlete_id=deps.athlete_id,
             )
+        elif e.code == "INVALID_INPUT":
+            logger.warning(
+                f"Could not save context (invalid input): {e.message}",
+                athlete_id=deps.athlete_id,
+            )
+        elif e.code == "DB_ERROR":
+            logger.warning(
+                f"Could not save context (database error): {e.message}",
+                athlete_id=deps.athlete_id,
+            )
         else:
-            logger.error(f"Failed to save context: {e.code}: {e.message}")
-        # Continue execution even if save fails
+            logger.warning(
+                f"Could not save context: {e.code}: {e.message}",
+                athlete_id=deps.athlete_id,
+            )
+        # Continue execution - context saving failure should never break chat
+    except Exception as e:
+        # Catch any other unexpected errors (network timeouts, etc.)
+        logger.warning(
+            f"Unexpected error saving context: {type(e).__name__}: {e!s}",
+            athlete_id=deps.athlete_id,
+            exc_info=True,
+        )
+        # Continue execution - context saving failure should never break chat
 
     logger.info(
         "Conversation completed",

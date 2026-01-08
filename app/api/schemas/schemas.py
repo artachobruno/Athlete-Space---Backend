@@ -5,7 +5,7 @@ These schemas define what the backend promises to return, enabling frontend deve
 with mock data before implementing real logic.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ============================================================================
 # Dashboard Schemas (/me/overview)
@@ -271,6 +271,20 @@ class AthleteProfileUpdateRequest(BaseModel):
     unit_system: str | None = Field(description="Unit system: imperial or metric", default=None)
     target_event: TargetEvent | None = Field(description="User's target race/event information", default=None)
     goals: list[str] | None = Field(description="Array of user's training goals (max 5 items, max 200 chars each)", default=None)
+
+    @field_validator("height_cm", mode="before")
+    @classmethod
+    def round_height_cm(cls, value: int | float | None) -> int | None:
+        """Round float values to int for height_cm.
+
+        Frontend may send floats (e.g., 180.5) but backend expects integers.
+        This validator rounds floats to the nearest integer.
+        """
+        if value is None:
+            return None
+        if isinstance(value, float):
+            return round(value)
+        return value
 
 
 class TrainingPreferencesResponse(BaseModel):

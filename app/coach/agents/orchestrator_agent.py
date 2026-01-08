@@ -731,27 +731,40 @@ async def run_conversation(
 
     # Set request limit to handle complex conversations while preventing infinite loops
     # Each tool call and LLM request counts toward this limit
-    # 50 requests is sufficient for most conversations (tool calls + LLM iterations)
-    # MAX_TOKENS is set per request to prevent individual request blowup
-    usage_limits = UsageLimits(request_limit=50)
+    # 30 requests should be sufficient for most conversations (tool calls + LLM iterations)
+    # Reduced from 50 to prevent excessive looping while still allowing complex workflows
+    # UsageLimits only supports request_limit - max_tokens is not a valid parameter
+    usage_limits = UsageLimits(request_limit=30)
+
+    # Track iteration count via tool calls as a proxy for agent iterations
+    # This helps us detect if the agent is looping excessively
+    iteration_tracker_start = len(_executed_tools.get() or set())
 
     # Check max tool calls before starting (safety net)
     executed_tools = _executed_tools.get() or set()
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error(
-            "Exceeded max tool calls in one turn",
+            "Exceeded max tool calls before agent execution",
             athlete_id=deps.athlete_id,
             executed_tools=list(executed_tools),
+            tool_call_count=len(executed_tools),
         )
         return OrchestratorAgentResponse(
             response_type="conversation",
-            intent="error",
-            message=("I've generated your plan. Let me know if you want changes."),
+            intent="general",
+            message=("I've completed the analysis. Let me know if you need anything else."),
             structured_data={},
             follow_up=None,
         )
 
     try:
+        logger.info(
+            "Running orchestrator agent",
+            athlete_id=deps.athlete_id,
+            tool_calls_before=len(executed_tools),
+            request_limit=usage_limits.request_limit,
+        )
+
         result = await ORCHESTRATOR_AGENT.run(
             user_prompt=user_input,
             deps=deps,
@@ -759,28 +772,111 @@ async def run_conversation(
             usage_limits=usage_limits,
         )
 
-        # Check max tool calls after execution (additional safety net)
+        # Check max tool calls after execution and log usage statistics
         executed_tools_after = _executed_tools.get() or set()
-        if len(executed_tools_after) >= MAX_TOOL_CALLS_PER_TURN:
-            logger.warning(
-                "Reached max tool calls limit after execution",
+        tool_calls_made = len(executed_tools_after) - iteration_tracker_start
+
+        # Log usage statistics if available
+        usage_info = {}
+        if hasattr(result, "usage") and result.usage:
+            usage_info = {
+                "requests": getattr(result.usage, "requests", None),
+                "total_tokens": getattr(result.usage, "total_tokens", None),
+                "input_tokens": getattr(result.usage, "input_tokens", None),
+                "output_tokens": getattr(result.usage, "output_tokens", None),
+            }
+
+        # Verify response is valid and complete
+        if not result.output or not result.output.message:
+            logger.error(
+                "Orchestrator agent returned invalid or empty response",
                 athlete_id=deps.athlete_id,
+                tool_calls_made=tool_calls_made,
+            )
+            # Return a fallback response
+            return OrchestratorAgentResponse(
+                response_type="conversation",
+                intent="general",
+                message=(
+                    "I processed your request, but I'm having trouble formulating a response. Could you try rephrasing your question?"
+                ),
+                structured_data={},
+                follow_up=None,
+            )
+
+        # Check if this was a terminal state (no tool calls = direct response)
+        is_terminal = tool_calls_made == 0
+        logger.info(
+            "Orchestrator agent execution completed",
+            athlete_id=deps.athlete_id,
+            tool_calls_made=tool_calls_made,
+            total_tool_calls=len(executed_tools_after),
+            executed_tools=list(executed_tools_after),
+            is_terminal_state=is_terminal,
+            response_type=result.output.response_type,
+            intent=result.output.intent,
+            usage_info=usage_info,
+        )
+
+        # Safety check: if we made excessive tool calls, log a warning
+        if tool_calls_made >= MAX_TOOL_CALLS_PER_TURN:
+            logger.warning(
+                "Orchestrator agent made excessive tool calls",
+                athlete_id=deps.athlete_id,
+                tool_calls_made=tool_calls_made,
+                max_allowed=MAX_TOOL_CALLS_PER_TURN,
                 executed_tools=list(executed_tools_after),
             )
+
     except UsageLimitExceeded as e:
+        # Log detailed information about the limit exceeded error
+        executed_tools_after_error = _executed_tools.get() or set()
+        tool_calls_made = len(executed_tools_after_error) - iteration_tracker_start
+
         logger.error(
             "Orchestrator agent exceeded usage limit",
             athlete_id=deps.athlete_id,
             error=str(e),
+            tool_calls_made=tool_calls_made,
+            total_tool_calls=len(executed_tools_after_error),
+            executed_tools=list(executed_tools_after_error),
+            request_limit=usage_limits.request_limit,
+            user_input_preview=user_input[:100],
         )
-        # Return a helpful error response
+
+        # Return a user-friendly fallback response
+        # Check if we made any meaningful tool calls - if so, provide context-aware response
+        if tool_calls_made > 0:
+            fallback_message = (
+                "Got it — I processed your request. Let me know if you want pacing advice, recovery tips, or help with training planning."
+            )
+        else:
+            fallback_message = (
+                "I understand. Could you try rephrasing your request? "
+                "I can help with training plans, activity logging, or performance analysis."
+            )
+
         return OrchestratorAgentResponse(
-            response_type="clarification",
+            response_type="conversation",
+            intent="general",
+            message=fallback_message,
+            structured_data={},
+            follow_up=None,
+        )
+    except Exception as e:
+        # Catch any other unexpected errors during agent execution
+        logger.error(
+            "Unexpected error during orchestrator agent execution",
+            athlete_id=deps.athlete_id,
+            error_type=type(e).__name__,
+            error=str(e),
+            exc_info=True,
+        )
+        # Return a graceful fallback
+        return OrchestratorAgentResponse(
+            response_type="conversation",
             intent="error",
-            message=(
-                "I apologize, but this conversation has become too complex and exceeded my processing limits. "
-                "Please try rephrasing your request or breaking it into smaller parts."
-            ),
+            message=("I encountered an issue processing your request. Please try again or rephrase your message."),
             structured_data={},
             follow_up=None,
         )

@@ -156,6 +156,8 @@ pydocstyle = { convention = "google" }
 "cli/**/*.py" = ["PLR0917", "S404", "S603", "S607"]  # Typer CLI commands require many parameters, subprocess is safe
 "scripts/create_test_user.py" = ["S106"]  # Test tokens are placeholders, not real credentials
 "mcp/db_server/tools/context.py" = ["TRY301"]  # Direct raise is appropriate here
+"mcp/db_server/main.py" = ["S104"]  # Binding to 0.0.0.0 is required for Render/cloud deployments
+"mcp/fs_server/main.py" = ["S104"]  # Binding to 0.0.0.0 is required for Render/cloud deployments
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

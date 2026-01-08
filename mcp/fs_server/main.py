@@ -166,7 +166,11 @@ if __name__ == "__main__":
 
     import uvicorn
 
-    # Host is configurable via environment variable
-    # Cloud Run sets SERVER_HOST=0.0.0.0, local dev defaults to 127.0.0.1
-    server_host = os.getenv("SERVER_HOST", "127.0.0.1")
-    uvicorn.run(app, host=server_host, port=8081)
+    # Render and other cloud platforms require binding to 0.0.0.0
+    # PORT is automatically set by Render - read it or default to 8081 for local dev
+    port = int(os.getenv("PORT", "8081"))
+    uvicorn.run(
+        app,
+        host="0.0.0.0",  # Must be 0.0.0.0 for Render/cloud platforms
+        port=port,
+    )

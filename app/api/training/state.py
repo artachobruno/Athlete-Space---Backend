@@ -12,7 +12,7 @@ from app.api.dependencies.auth import get_current_user_id
 from app.api.user.me import get_overview_data
 from app.coach.services.coach_service import get_coach_advice
 from app.config.settings import settings
-from app.db.models import Activity
+from app.db.models import Activity, DailyTrainingLoad
 from app.db.session import SessionLocal, get_session
 from app.metrics.load_computation import compute_activity_tss
 from app.metrics.training_load import calculate_ctl_atl_tsb
@@ -324,8 +324,9 @@ def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(ge
         finally:
             db.close()
 
-    since_str = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    logger.debug(f"Querying activities since: {since_str}")
+    since_date = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+    since_datetime = datetime.combine(since_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    logger.debug(f"Querying DailyTrainingLoad since: {since_datetime.isoformat()}")
 
     # Default empty response structure
     empty_response = {
@@ -342,55 +343,62 @@ def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(ge
     }
 
     try:
-        activities_query = db.execute(
-            text(
-                """
-                SELECT
-                    id,
-                    start_time,
-                    type,
-                    duration_seconds,
-                    distance_meters,
-                    elevation_gain_meters,
-                    raw_json
-                FROM activities
-                WHERE start_time >= :since
-                  AND user_id = :user_id
-                ORDER BY start_time
-                """
-            ),
-            {"since": since_str, "user_id": user_id},
-        ).fetchall()
+        # Read from DailyTrainingLoad table (single source of truth)
+        daily_rows = db.execute(
+            select(DailyTrainingLoad)
+            .where(
+                DailyTrainingLoad.user_id == user_id,
+                DailyTrainingLoad.date >= since_datetime,
+            )
+            .order_by(DailyTrainingLoad.date)
+        ).all()
 
-        logger.info(f"Found {len(activities_query)} activities for user {user_id}")
+        logger.info(f"Found {len(daily_rows)} daily training load records for user {user_id}")
 
-        if not activities_query:
-            logger.info("No activities found, returning empty response")
+        if not daily_rows:
+            logger.info("No daily training load records found, returning empty response")
             return empty_response
 
-        daily_data = _process_activities_for_tss(activities_query)
-        if not daily_data:
-            logger.info("No daily data after processing, returning empty response")
-            return empty_response
+        # Extract data from pre-computed DailyTrainingLoad table
+        dates: list[str] = []
+        daily_load: list[float] = []  # Daily training hours (we'll need to compute this from activities for now)
+        daily_tss: list[float] = []  # Use load_score as TSS
+        ctl_raw: list[float] = []
+        atl_raw: list[float] = []
+        tsb_raw: list[float] = []
 
-        dates = sorted(daily_data.keys())
-        daily_load = [daily_data[date]["hours"] for date in dates]
-        daily_tss = [daily_data[date]["tss"] for date in dates]
+        for row in daily_rows:
+            daily_load_record = row[0]  # Extract the model instance from the Row object
+            date_str = daily_load_record.date.date().isoformat()
+            dates.append(date_str)
+            daily_tss.append(daily_load_record.load_score)
+            ctl_raw.append(daily_load_record.ctl)
+            atl_raw.append(daily_load_record.atl)
+            tsb_raw.append(daily_load_record.tsb)
+            # For daily_load (hours), we'll approximate from load_score
+            # A typical TSS of 100 = ~1 hour at FTP, so hours ≈ load_score / 100
+            daily_load.append(daily_load_record.load_score / 100.0)
 
-        metrics = calculate_ctl_atl_tsb(daily_load)
-        normalized_metrics = _normalize_all_metrics(daily_tss, metrics)
+        # Normalize metrics to -100 to 100 scale
+        normalized_metrics = {
+            "tss": [_normalize_tss(tss) for tss in daily_tss],
+            "ctl": [_normalize_metric(ctl, max_value=100.0) for ctl in ctl_raw],
+            "atl": [_normalize_metric(atl, max_value=100.0) for atl in atl_raw],
+            "tsb": _normalize_tsb_range(tsb_raw),
+        }
+
         weekly_data = _calculate_weekly_volume(dates, daily_load)
         result = _build_training_load_response(dates, daily_load, normalized_metrics, weekly_data)
 
         tsb_norm_min = min(normalized_metrics["tsb"]) if normalized_metrics["tsb"] else 0.0
         tsb_norm_max = max(normalized_metrics["tsb"]) if normalized_metrics["tsb"] else 0.0
         logger.info(
-            f"Training load calculated: {len(dates)} days, "
+            f"Training load read from DailyTrainingLoad: {len(dates)} days, "
             f"TSB normalized range: {tsb_norm_min:.1f} to {tsb_norm_max:.1f} "
             f"(all metrics on -100 to 100 scale)"
         )
     except Exception as e:
-        logger.error(f"Error calculating training load: {e}", exc_info=True)
+        logger.error(f"Error reading training load from DailyTrainingLoad: {e}", exc_info=True)
         # Return empty response instead of raising 500
         # Frontend can handle empty data gracefully
         return empty_response

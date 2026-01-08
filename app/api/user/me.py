@@ -28,7 +28,7 @@ from app.api.schemas.schemas import (
     TrainingPreferencesResponse,
     TrainingPreferencesUpdateRequest,
 )
-from app.db.models import Activity, AthleteProfile, StravaAccount, UserSettings
+from app.db.models import Activity, AthleteProfile, DailyTrainingLoad, StravaAccount, UserSettings
 from app.db.session import get_session
 from app.ingestion.background_sync import sync_user_activities
 from app.ingestion.sla import SYNC_SLA_SECONDS
@@ -574,20 +574,46 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
     data_quality_status = assess_data_quality(daily_rows)
     logger.info(f"[API] /me/overview: data_quality={data_quality_status} (requires >=14 days, got {len(daily_rows)} days)")
 
-    # Compute metrics with error handling
+    # Read metrics from DailyTrainingLoad table (single source of truth)
     try:
-        metrics_result = compute_training_load(daily_rows)
-        # Ensure metrics_result is a dict with list values
-        if not isinstance(metrics_result, dict):
-            logger.error(f"[API] /me/overview: metrics_result is not a dict: {type(metrics_result)}")
-            metrics_result = {"ctl": [], "atl": [], "tsb": []}
-        # Ensure all values are lists
-        for key in ["ctl", "atl", "tsb"]:
-            if key not in metrics_result or not isinstance(metrics_result[key], list):
-                logger.warning(f"[API] /me/overview: {key} is not a list, setting to empty list")
-                metrics_result[key] = []
+        end_date = datetime.now(timezone.utc).date()
+        start_date = end_date - timedelta(days=days)
+        start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+        with get_session() as session:
+            daily_load_rows = session.execute(
+                select(DailyTrainingLoad)
+                .where(
+                    DailyTrainingLoad.user_id == user_id,
+                    DailyTrainingLoad.date >= start_datetime,
+                )
+                .order_by(DailyTrainingLoad.date)
+            ).all()
+
+        # Convert to (date, value) tuples format expected by frontend
+        ctl_data: list[tuple[str, float]] = []
+        atl_data: list[tuple[str, float]] = []
+        tsb_data: list[tuple[str, float]] = []
+
+        for row in daily_load_rows:
+            daily_load_record = row[0]  # Extract the model instance from the Row object
+            date_str = daily_load_record.date.date().isoformat()
+            ctl_data.append((date_str, daily_load_record.ctl))
+            atl_data.append((date_str, daily_load_record.atl))
+            tsb_data.append((date_str, daily_load_record.tsb))
+
+        metrics_result = {
+            "ctl": ctl_data,
+            "atl": atl_data,
+            "tsb": tsb_data,
+        }
+
+        logger.info(
+            f"[API] /me/overview: Read {len(daily_load_rows)} days from DailyTrainingLoad table "
+            f"(date range: {start_date.isoformat()} to {end_date.isoformat()})"
+        )
     except Exception as e:
-        logger.error(f"[API] /me/overview: Error computing training load: {e}", exc_info=True)
+        logger.error(f"[API] /me/overview: Error reading from DailyTrainingLoad: {e}", exc_info=True)
         metrics_result = {"ctl": [], "atl": [], "tsb": []}
 
     today_metrics = _extract_today_metrics(metrics_result)

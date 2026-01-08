@@ -75,6 +75,29 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
         return message_count == 0
 
 
+def _is_simple_acknowledgment(message: str) -> bool:
+    """Check if message is a simple activity acknowledgment that doesn't need agent processing.
+
+    Args:
+        message: User's message
+
+    Returns:
+        True if message is a simple acknowledgment that should be handled via fast-path
+    """
+    normalized = message.strip().lower()
+    simple_acks = {
+        "i ran yesterday",
+        "i ran today",
+        "i worked out",
+        "i trained today",
+        "ran yesterday",
+        "ran today",
+        "worked out",
+        "trained today",
+    }
+    return normalized in simple_acks
+
+
 @router.post("/chat", response_model=CoachChatResponse)
 async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     """Handle coach chat request using orchestrator agent."""
@@ -148,6 +171,27 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
 
         return CoachChatResponse(
             intent="cold_start",
+            reply=reply,
+        )
+
+    # Fast-path: Handle simple activity acknowledgments without invoking agent
+    # This prevents internal looping in pydantic_ai for trivial conversational inputs
+    if _is_simple_acknowledgment(req.message):
+        logger.info(
+            "Fast-path: Handling simple acknowledgment without agent",
+            message=req.message,
+            athlete_id=athlete_id,
+        )
+        reply = "Nice work 👍 Want feedback on recovery, pacing, or tomorrow's plan?"
+        # Save conversation history for fast-path responses
+        save_context(
+            athlete_id=athlete_id,
+            model_name=USER_FACING_MODEL,
+            user_message=req.message,
+            assistant_message=reply,
+        )
+        return CoachChatResponse(
+            intent="activity_ack",
             reply=reply,
         )
 

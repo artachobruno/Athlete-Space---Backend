@@ -647,6 +647,22 @@ logger.info(
 # ============================================================================
 
 
+def _validate_single_run(result) -> None:
+    """Validate that orchestrator agent completed in a single run.
+
+    Args:
+        result: Result from ORCHESTRATOR_AGENT.run()
+
+    Raises:
+        RuntimeError: If agent indicates it needs follow-up (should never happen)
+    """
+    if getattr(result, "needs_followup", False):
+        raise RuntimeError(
+            "Orchestrator attempted to continue after terminal response. "
+            "This should never happen - .run() must be called exactly once per request."
+        )
+
+
 async def run_conversation(
     user_input: str,
     deps: CoachDeps,
@@ -731,10 +747,13 @@ async def run_conversation(
 
     # Set request limit to handle complex conversations while preventing infinite loops
     # Each tool call and LLM request counts toward this limit
-    # 30 requests should be sufficient for most conversations (tool calls + LLM iterations)
-    # Reduced from 50 to prevent excessive looping while still allowing complex workflows
+    # 10 requests is sufficient for most conversations:
+    #   - 1-2 LLM calls to understand intent
+    #   - 0-3 tool calls if needed
+    #   - 1-2 LLM calls to generate response
+    # This prevents excessive looping while still allowing complex workflows
     # UsageLimits only supports request_limit - max_tokens is not a valid parameter
-    usage_limits = UsageLimits(request_limit=30)
+    usage_limits = UsageLimits(request_limit=10)
 
     # Track iteration count via tool calls as a proxy for agent iterations
     # This helps us detect if the agent is looping excessively
@@ -771,6 +790,12 @@ async def run_conversation(
             message_history=typed_message_history,
             usage_limits=usage_limits,
         )
+
+        # 🚨 ABSOLUTE STOP HERE 🚨
+        # No second run. No retry. No loop.
+        # The agent.run() call above is the ONLY execution point.
+        # pydantic_ai handles internal tool-calling loops, but we must NOT call .run() again.
+        _validate_single_run(result)
 
         # Check max tool calls after execution and log usage statistics
         executed_tools_after = _executed_tools.get() or set()

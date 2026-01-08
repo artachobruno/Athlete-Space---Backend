@@ -144,14 +144,18 @@ pydocstyle = { convention = "google" }
     "PL",
     "ARG",
     "ERA",
+    "E402",  # Allow imports after sys.path modification
 ]
 "__init__.py" = ["D"]
 "__main__.py" = ["T201"]
 "**/*.ipynb" = ["ALL"]
 "ui/**/*.py" = ["UP017"]
 "app/**/*.py" = ["UP017"]
-"scripts/**/*.py" = ["E402"]  # Allow imports after sys.path modification
+"scripts/**/*.py" = ["E402", "S404", "S603", "S607"]  # Allow imports after sys.path modification, subprocess is safe in scripts
 "app/db/session.py" = ["PLC0415"]  # Allow conditional import of psycopg2
+"cli/**/*.py" = ["PLR0917", "S404", "S603", "S607"]  # Typer CLI commands require many parameters, subprocess is safe
+"scripts/create_test_user.py" = ["S106"]  # Test tokens are placeholders, not real credentials
+"mcp/db_server/tools/context.py" = ["TRY301"]  # Direct raise is appropriate here
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
@@ -221,3 +225,6 @@ virtus-decisions = "scripts.run_decisions:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# Async test configuration (requires pytest-asyncio)
+# Install test dependencies with: pip install -e ".[test]" or uv sync --group test
+asyncio_mode = "auto"

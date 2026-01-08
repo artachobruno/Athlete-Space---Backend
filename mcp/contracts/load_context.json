@@ -1,0 +1,39 @@
+{
+  "name": "load_context",
+  "description": "Load recent conversation history for an athlete from the database.",
+  "input_schema": {
+    "athlete_id": "integer",
+    "limit": "integer"
+  },
+  "output_schema": {
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": ["role", "content"]
+      }
+    }
+  },
+  "error_cases": [
+    {
+      "code": "ATHLETE_NOT_FOUND",
+      "description": "Athlete ID does not exist in the database."
+    },
+    {
+      "code": "DB_ERROR",
+      "description": "Database query failed."
+    },
+    {
+      "code": "INVALID_LIMIT",
+      "description": "Limit must be a positive integer."
+    }
+  ]
+}

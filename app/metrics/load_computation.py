@@ -303,7 +303,7 @@ def _calculate_normalized_pace(
     distance_meters: float | None,
     streams_data: dict,
     elevation_gain_meters: float | None,
-    activity_type: str,  # noqa: ARG001
+    _activity_type: str,
 ) -> float | None:
     """Calculate normalized or grade-adjusted pace.
 
@@ -461,7 +461,7 @@ def _apply_multi_sensor_adjustment(
     return round(adjusted_tss, 1)
 
 
-def _apply_guardrails(tss: float, activity: Activity, duration_sec: float) -> float:  # noqa: ARG001
+def _apply_guardrails(tss: float, _activity: Activity, duration_sec: float) -> float:
     """Apply guardrails and data hygiene.
 
     - Hard caps on daily TSS spikes
@@ -671,7 +671,7 @@ def compute_ctl_atl_tsb_from_loads(
     daily_loads: dict[date, float],
     start_date: date,
     end_date: date,
-    normalize: bool = True,  # noqa: ARG001
+    _normalize: bool = True,
 ) -> dict[date, dict[str, float]]:
     """Legacy function: Compute CTL, ATL, TSB from daily loads.
 

@@ -1,0 +1,28 @@
+{
+  "name": "load_prompt",
+  "description": "Load a prompt file from the prompts directory by filename.",
+  "input_schema": {
+    "filename": "string"
+  },
+  "output_schema": {
+    "content": "string"
+  },
+  "error_cases": [
+    {
+      "code": "FILE_NOT_FOUND",
+      "description": "Prompt file not found in the prompts directory."
+    },
+    {
+      "code": "READ_ERROR",
+      "description": "Failed to read the prompt file from filesystem."
+    },
+    {
+      "code": "ENCODING_ERROR",
+      "description": "Failed to decode the prompt file (encoding issue)."
+    },
+    {
+      "code": "INVALID_FILENAME",
+      "description": "Filename is empty or contains invalid characters."
+    }
+  ]
+}

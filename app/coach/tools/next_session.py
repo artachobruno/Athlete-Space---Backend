@@ -2,91 +2,69 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import select
 
+from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.utils.llm_client import CoachLLMClient
-from app.db.models import Activity
-from app.db.session import get_session
 
 
-def _get_recent_activities(user_id: str, days: int = 7) -> list[Activity]:
-    """Get recent activities for a user.
+async def _get_recent_activities(user_id: str, days: int = 7) -> list[dict]:
+    """Get recent activities for a user via MCP.
 
     Args:
         user_id: User ID (Clerk string)
         days: Number of days to look back (default: 7)
 
     Returns:
-        List of Activity objects, ordered by start_time (most recent first)
+        List of activity dictionaries, ordered by start_time (most recent first)
     """
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    with get_session() as session:
-        activities = (
-            session.execute(
-                select(Activity)
-                .where(
-                    Activity.user_id == user_id,
-                    Activity.start_time >= since,
-                )
-                .order_by(Activity.start_time.desc())
-            )
-            .scalars()
-            .all()
-        )
-        return list(activities)
+    try:
+        result = await call_tool("get_recent_activities", {"user_id": user_id, "days": days})
+        return result.get("activities", [])
+    except MCPError as e:
+        logger.error(f"Failed to get recent activities: {e.code}: {e.message}")
+        return []
 
 
-def _get_yesterday_activities(user_id: str) -> list[Activity]:
-    """Get activities from yesterday.
+async def _get_yesterday_activities(user_id: str) -> list[dict]:
+    """Get activities from yesterday via MCP.
 
     Args:
         user_id: User ID (Clerk string)
 
     Returns:
-        List of Activity objects from yesterday
+        List of activity dictionaries from yesterday
     """
-    now = datetime.now(timezone.utc)
-    yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday_end = yesterday_start + timedelta(days=1)
-
-    with get_session() as session:
-        activities = (
-            session.execute(
-                select(Activity)
-                .where(
-                    Activity.user_id == user_id,
-                    Activity.start_time >= yesterday_start,
-                    Activity.start_time < yesterday_end,
-                )
-                .order_by(Activity.start_time.desc())
-            )
-            .scalars()
-            .all()
-        )
-        return list(activities)
+    try:
+        result = await call_tool("get_yesterday_activities", {"user_id": user_id})
+        return result.get("activities", [])
+    except MCPError as e:
+        logger.error(f"Failed to get yesterday activities: {e.code}: {e.message}")
+        return []
 
 
-def _format_activity_summary(activity: Activity) -> str:
+def _format_activity_summary(activity: dict) -> str:
     """Format a single activity for display.
 
     Args:
-        activity: Activity object
+        activity: Activity dictionary
 
     Returns:
         Formatted string describing the activity
     """
-    if activity.duration_seconds is None:
+    duration_seconds = activity.get("duration_seconds")
+    if duration_seconds is None:
         duration_min = 0
     else:
-        duration_min = activity.duration_seconds // 60
+        duration_min = duration_seconds // 60
 
-    if activity.distance_meters is None:
+    distance_meters = activity.get("distance_meters")
+    if distance_meters is None:
         distance_km = 0.0
     else:
-        distance_km = activity.distance_meters / 1000.0
+        distance_km = distance_meters / 1000.0
 
-    activity_type = activity.type or "Activity"
+    activity_type = activity.get("type") or "Activity"
 
     parts = [f"{activity_type}"]
     if duration_min > 0:
@@ -96,7 +74,7 @@ def _format_activity_summary(activity: Activity) -> str:
     return " • ".join(parts)
 
 
-def _build_context_string(yesterday_activities: list[Activity], recent_activities: list[Activity]) -> str:
+def _build_context_string(yesterday_activities: list[dict], recent_activities: list[dict]) -> str:
     """Build context string about recent training history.
 
     Args:
@@ -116,7 +94,13 @@ def _build_context_string(yesterday_activities: list[Activity], recent_activitie
         else:
             context_parts.append(f"Yesterday: {len(yesterday_activities)} sessions ({', '.join(yesterday_summaries[:2])})")
     elif recent_activities:
-        days_ago = (datetime.now(timezone.utc) - recent_activities[0].start_time).days
+        # Parse ISO datetime string
+        start_time_str = recent_activities[0].get("start_time", "")
+        if start_time_str:
+            start_time = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
+            days_ago = (datetime.now(timezone.utc) - start_time.replace(tzinfo=timezone.utc)).days
+        else:
+            days_ago = 0
         if days_ago == 0:
             context_parts.append("Today: Already completed activity")
         elif days_ago == 1:
@@ -126,7 +110,7 @@ def _build_context_string(yesterday_activities: list[Activity], recent_activitie
 
     # Recent pattern
     if recent_activities:
-        total_duration_seconds = sum((a.duration_seconds or 0) for a in recent_activities)
+        total_duration_seconds = sum((a.get("duration_seconds") or 0) for a in recent_activities)
         total_duration = total_duration_seconds / 3600.0
         activity_count = len(recent_activities)
         context_parts.append(f"Last 7 days: {activity_count} sessions, {total_duration:.1f} hours")
@@ -165,7 +149,7 @@ def _build_athlete_state_string(state: AthleteState) -> str:
     return athlete_state_str
 
 
-def _generate_daily_decision_recommendation(state: AthleteState, context_string: str) -> str:
+async def _generate_daily_decision_recommendation(state: AthleteState, context_string: str) -> str:
     """Generate session recommendation using daily_decision via llm_client.
 
     Args:
@@ -189,7 +173,7 @@ def _generate_daily_decision_recommendation(state: AthleteState, context_string:
             },
         }
 
-        decision = client.generate_daily_decision(context)
+        decision = await client.generate_daily_decision(context)
 
         # Format the decision as a recommendation string
         recommendation_parts = []
@@ -208,7 +192,7 @@ def _generate_daily_decision_recommendation(state: AthleteState, context_string:
         return "[CLARIFICATION] daily_decision_generation_failed"
 
 
-def recommend_next_session(state: AthleteState, user_id: str | None = None) -> str:
+async def recommend_next_session(state: AthleteState, user_id: str | None = None) -> str:
     """Recommend today's session using daily_decision via llm_client.
 
     Args:
@@ -230,15 +214,15 @@ def recommend_next_session(state: AthleteState, user_id: str | None = None) -> s
     context_string = ""
     if user_id:
         try:
-            yesterday_activities = _get_yesterday_activities(user_id)
-            recent_activities = _get_recent_activities(user_id, days=7)
+            yesterday_activities = await _get_yesterday_activities(user_id)
+            recent_activities = await _get_recent_activities(user_id, days=7)
             context_string = _build_context_string(yesterday_activities, recent_activities)
             logger.info(f"Found {len(yesterday_activities)} activities yesterday, {len(recent_activities)} activities in last 7 days")
         except Exception as e:
             logger.warning(f"Error fetching activities: {e}, proceeding without historical context")
 
     try:
-        recommendation = _generate_daily_decision_recommendation(state, context_string)
+        recommendation = await _generate_daily_decision_recommendation(state, context_string)
         logger.info("Generated session recommendation using daily_decision")
     except Exception as e:
         logger.error(f"Error generating session recommendation: {e}", exc_info=True)

@@ -33,7 +33,7 @@ def _get_interval_workout_message(workout_lower: str) -> str | None:
     return None
 
 
-def _parse_workout_details(workout_lower: str) -> tuple[str, str, int, str]:
+def parse_workout_details(workout_lower: str) -> tuple[str, str, int, str]:
     """Parse workout description to extract type, title, duration, and intensity.
 
     Args:
@@ -78,7 +78,7 @@ def _parse_workout_details(workout_lower: str) -> tuple[str, str, int, str]:
     return ("Workout", "moderate", 60, workout_type)
 
 
-def _extract_date_from_description(workout_lower: str) -> datetime | None:
+def extract_date_from_description(workout_lower: str) -> datetime | None:
     """Extract date from workout description.
 
     Args:
@@ -179,7 +179,7 @@ def _parse_workout_type(workout_lower: str, tsb: float, workout_description: str
     )
 
 
-def add_workout(
+async def add_workout(
     state: AthleteState,
     workout_description: str,
     user_id: str | None = None,
@@ -206,10 +206,10 @@ def add_workout(
     if user_id and athlete_id:
         try:
             # Extract workout details
-            title, intensity, duration_minutes, workout_type = _parse_workout_details(workout_lower)
+            title, intensity, duration_minutes, workout_type = parse_workout_details(workout_lower)
 
             # Determine date (default to tomorrow if not specified)
-            workout_date = _extract_date_from_description(workout_lower)
+            workout_date = extract_date_from_description(workout_lower)
             if workout_date is None:
                 # Default to tomorrow
                 tomorrow = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
@@ -225,8 +225,8 @@ def add_workout(
                 "notes": None,
             }
 
-            # Save session
-            saved_count = save_planned_sessions(
+            # Save session via MCP
+            saved_count = await save_planned_sessions(
                 user_id=user_id,
                 athlete_id=athlete_id,
                 sessions=[session_data],

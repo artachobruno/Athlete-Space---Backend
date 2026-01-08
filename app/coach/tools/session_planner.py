@@ -3,14 +3,12 @@
 from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
-from sqlalchemy import select
 
+from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.intent_schemas import SeasonPlan, WeeklyIntent
-from app.db.models import PlannedSession
-from app.db.session import get_session
 
 
-def save_planned_sessions(
+async def save_planned_sessions(
     user_id: str,
     athlete_id: int,
     sessions: list[dict],
@@ -42,57 +40,34 @@ def save_planned_sessions(
         logger.warning("No sessions to save")
         return 0
 
-    saved_count = 0
-    with get_session() as session:
-        for session_data in sessions:
-            # Parse date
-            if isinstance(session_data["date"], str):
-                date_obj = datetime.strptime(session_data["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            elif isinstance(session_data["date"], datetime):
-                date_obj = session_data["date"]
-                if date_obj.tzinfo is None:
-                    date_obj = date_obj.replace(tzinfo=timezone.utc)
-            else:
-                logger.error(f"Invalid date type: {type(session_data['date'])}")
-                continue
+    # Convert datetime objects to ISO strings for MCP
+    sessions_for_mcp = []
+    for session_data in sessions:
+        mcp_session = session_data.copy()
+        # Convert date to ISO string if it's a datetime
+        session_date = mcp_session.get("date")
+        if isinstance(session_date, (datetime, date)):
+            mcp_session["date"] = session_date.isoformat()
+        sessions_for_mcp.append(mcp_session)
 
-            # Check if session already exists
-            existing = session.execute(
-                select(PlannedSession).where(
-                    PlannedSession.user_id == user_id,
-                    PlannedSession.date == date_obj,
-                    PlannedSession.title == session_data["title"],
-                )
-            ).first()
-
-            if existing:
-                logger.debug(f"Session already exists: {session_data['title']} on {date_obj.date()}")
-                continue
-
-            planned_session = PlannedSession(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                date=date_obj,
-                time=session_data.get("time"),
-                type=session_data["type"],
-                title=session_data["title"],
-                duration_minutes=session_data.get("duration_minutes"),
-                distance_km=session_data.get("distance_km"),
-                intensity=session_data.get("intensity"),
-                notes=session_data.get("notes"),
-                plan_type=plan_type,
-                plan_id=plan_id,
-                week_number=session_data.get("week_number"),
-                status="planned",
-            )
-
-            session.add(planned_session)
-            saved_count += 1
-
-        session.commit()
-        logger.info(f"Saved {saved_count} planned sessions for user_id={user_id}, plan_type={plan_type}")
-
-    return saved_count
+    try:
+        result = await call_tool(
+            "save_planned_sessions",
+            {
+                "user_id": user_id,
+                "athlete_id": athlete_id,
+                "sessions": sessions_for_mcp,
+                "plan_type": plan_type,
+                "plan_id": plan_id,
+            },
+        )
+        saved_count = result.get("saved_count", 0)
+        logger.info(f"Saved {saved_count} planned sessions via MCP for user_id={user_id}, plan_type={plan_type}")
+    except MCPError as e:
+        logger.error(f"Failed to save planned sessions via MCP: {e.code}: {e.message}")
+        raise RuntimeError(f"Failed to save planned sessions: {e.message}") from e
+    else:
+        return saved_count
 
 
 def _get_race_build_params(race_distance: str) -> tuple[int, str]:

@@ -4,7 +4,6 @@ Main conversational agent that routes queries to appropriate coaching tools.
 """
 
 import asyncio
-from pathlib import Path
 from typing import cast
 
 from loguru import logger
@@ -14,6 +13,7 @@ from pydantic_ai.usage import UsageLimits
 
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.config.models import ORCHESTRATOR_MODEL
+from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.tools.add_workout import add_workout
 from app.coach.tools.adjust_load import adjust_training_load
@@ -24,18 +24,15 @@ from app.coach.tools.plan_season import plan_season
 from app.coach.tools.plan_week import plan_week
 from app.coach.tools.run_analysis import run_analysis
 from app.coach.tools.share_report import share_report
-from app.coach.utils.context_management import load_context, save_context
 from app.services.llm.model import get_model
 
 # ============================================================================
 # AGENT INSTRUCTIONS
 # ============================================================================
 
-PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
-
-def _load_orchestrator_prompt() -> str:
-    """Load orchestrator prompt from file.
+async def _load_orchestrator_prompt() -> str:
+    """Load orchestrator prompt via MCP.
 
     Returns:
         Prompt content as string
@@ -43,13 +40,18 @@ def _load_orchestrator_prompt() -> str:
     Raises:
         FileNotFoundError: If prompt file doesn't exist
     """
-    prompt_path = PROMPTS_DIR / "orchestrator.txt"
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-    return prompt_path.read_text(encoding="utf-8")
+    try:
+        result = await call_tool("load_orchestrator_prompt", {})
+        return result["content"]
+    except MCPError as e:
+        if e.code == "FILE_NOT_FOUND":
+            raise FileNotFoundError(f"Orchestrator prompt file not found: {e.message}") from e
+        raise RuntimeError(f"Failed to load orchestrator prompt: {e.message}") from e
 
 
-ORCHESTRATOR_INSTRUCTIONS = _load_orchestrator_prompt()
+# Load prompt synchronously at module level (will be replaced with async loading if needed)
+# For now, we'll load it lazily in run_conversation
+ORCHESTRATOR_INSTRUCTIONS = ""
 
 
 # ============================================================================
@@ -61,14 +63,14 @@ async def recommend_next_session_tool(deps: CoachDeps) -> str:
     """Tool wrapper for recommend_next_session."""
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    return await asyncio.to_thread(recommend_next_session, deps.athlete_state, deps.user_id)
+    return await recommend_next_session(deps.athlete_state, deps.user_id)
 
 
 async def add_workout_tool(workout_description: str, deps: CoachDeps) -> str:
     """Tool wrapper for add_workout."""
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    return await asyncio.to_thread(add_workout, deps.athlete_state, workout_description, deps.user_id, deps.athlete_id)
+    return await add_workout(deps.athlete_state, workout_description, deps.user_id, deps.athlete_id)
 
 
 async def adjust_training_load_tool(user_feedback: str, deps: CoachDeps) -> str:
@@ -108,8 +110,7 @@ async def plan_week_tool(deps: CoachDeps) -> str:
 
 async def plan_race_build_tool(race_description: str, deps: CoachDeps) -> str:
     """Tool wrapper for plan_race_build."""
-    return await asyncio.to_thread(
-        plan_race_build,
+    return await plan_race_build(
         race_description,
         deps.user_id,
         deps.athlete_id,
@@ -118,8 +119,7 @@ async def plan_race_build_tool(race_description: str, deps: CoachDeps) -> str:
 
 async def plan_season_tool(message: str, deps: CoachDeps) -> str:
     """Tool wrapper for plan_season."""
-    return await asyncio.to_thread(
-        plan_season,
+    return await plan_season(
         message if message else "",
         deps.user_id,
         deps.athlete_id,
@@ -147,22 +147,17 @@ def _get_orchestrator_tools() -> list:
 
 
 ORCHESTRATOR_AGENT_MODEL = get_model("openai", ORCHESTRATOR_MODEL)
-ORCHESTRATOR_AGENT = Agent(
-    instructions=ORCHESTRATOR_INSTRUCTIONS,
-    model=ORCHESTRATOR_AGENT_MODEL,
-    output_type=OrchestratorAgentResponse,
-    deps_type=CoachDeps,
-    tools=_get_orchestrator_tools(),
-    name="Virtus Coach Orchestrator",
-    instrument=True,
-)
+
+# Agent will be initialized with instructions in run_conversation
+# We need to load instructions asynchronously first
+ORCHESTRATOR_AGENT: Agent[CoachDeps, OrchestratorAgentResponse] | None = None
 
 
+# Agent initialization will happen in run_conversation after loading instructions
 logger.info(
-    "Orchestrator Agent initialized",
+    "Orchestrator Agent module loaded",
     agent_name="Virtus Coach Orchestrator",
     tools=[tool.__name__ for tool in _get_orchestrator_tools()],
-    instructions_length=len(ORCHESTRATOR_INSTRUCTIONS),
 )
 
 # ============================================================================
@@ -185,7 +180,27 @@ async def run_conversation(
     """
     logger.info("Starting conversation", user_input_preview=user_input[:100])
 
-    message_history = load_context(deps.athlete_id)
+    # Load orchestrator instructions via MCP (if not already loaded)
+    global ORCHESTRATOR_INSTRUCTIONS, ORCHESTRATOR_AGENT
+    if not ORCHESTRATOR_INSTRUCTIONS:
+        ORCHESTRATOR_INSTRUCTIONS = await _load_orchestrator_prompt()
+        ORCHESTRATOR_AGENT = Agent(
+            instructions=ORCHESTRATOR_INSTRUCTIONS,
+            model=ORCHESTRATOR_AGENT_MODEL,
+            output_type=OrchestratorAgentResponse,
+            deps_type=CoachDeps,
+            tools=_get_orchestrator_tools(),
+            name="Virtus Coach Orchestrator",
+            instrument=True,
+        )
+
+    # Load conversation history via MCP
+    try:
+        result = await call_tool("load_context", {"athlete_id": deps.athlete_id, "limit": 20})
+        message_history = result["messages"]
+    except MCPError as e:
+        logger.error(f"Failed to load context: {e.code}: {e.message}")
+        message_history = []
 
     # Log LLM model being called
     model_name = ORCHESTRATOR_AGENT_MODEL.model_name
@@ -212,6 +227,10 @@ async def run_conversation(
         user_input_length=len(user_input),
         full_prompt=full_prompt,
     )
+
+    # Ensure agent is initialized
+    if ORCHESTRATOR_AGENT is None:
+        raise RuntimeError("Orchestrator agent not initialized")
 
     # Run agent
     logger.debug(
@@ -255,13 +274,20 @@ async def run_conversation(
         athlete_id=deps.athlete_id,
     )
 
-    # Save conversation history
-    save_context(
-        athlete_id=deps.athlete_id,
-        model_name=ORCHESTRATOR_AGENT_MODEL.model_name,
-        user_message=user_input,
-        assistant_message=result.output.message,
-    )
+    # Save conversation history via MCP
+    try:
+        await call_tool(
+            "save_context",
+            {
+                "athlete_id": deps.athlete_id,
+                "model_name": ORCHESTRATOR_AGENT_MODEL.model_name,
+                "user_message": user_input,
+                "assistant_message": result.output.message,
+            },
+        )
+    except MCPError as e:
+        logger.error(f"Failed to save context: {e.code}: {e.message}")
+        # Continue execution even if save fails
 
     logger.info(
         "Conversation completed",

@@ -1,0 +1,22 @@
+{
+  "name": "load_orchestrator_prompt",
+  "description": "Load the orchestrator prompt file from the filesystem.",
+  "input_schema": {},
+  "output_schema": {
+    "content": "string"
+  },
+  "error_cases": [
+    {
+      "code": "FILE_NOT_FOUND",
+      "description": "Orchestrator prompt file not found in the expected location."
+    },
+    {
+      "code": "READ_ERROR",
+      "description": "Failed to read the prompt file from filesystem."
+    },
+    {
+      "code": "ENCODING_ERROR",
+      "description": "Failed to decode the prompt file (encoding issue)."
+    }
+  ]
+}

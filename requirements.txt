@@ -42,6 +42,8 @@ psycopg2-binary>=2.9.9  # PostgreSQL driver (required for production)
 # -------------------------------------------------
 loguru>=0.7.3,<1.0.0
 python-json-logger>=2.0.7,<3.0.0
+rich>=13.0.0
+typer>=0.20.0
 
 # -------------------------------------------------
 # Math / Analysis (Training State)

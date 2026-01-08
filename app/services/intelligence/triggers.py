@@ -4,6 +4,7 @@ Intelligence regenerates only when inputs change.
 Regeneration is explicit and idempotent.
 """
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -157,7 +158,7 @@ class RegenerationTriggers:
         )
 
         try:
-            intent = self.runtime.run_weekly_intent(user_id, athlete_id, context, previous_volume)
+            intent = asyncio.run(self.runtime.run_weekly_intent(user_id, athlete_id, context, previous_volume))
             intent_id = self.store.save_weekly_intent(
                 user_id=user_id,
                 athlete_id=athlete_id,
@@ -217,7 +218,7 @@ class RegenerationTriggers:
         )
 
         try:
-            decision = self.runtime.run_daily_decision(user_id, athlete_id, context)
+            decision = asyncio.run(self.runtime.run_daily_decision(user_id, athlete_id, context))
             decision_id = self.store.save_daily_decision(
                 user_id=user_id,
                 athlete_id=athlete_id,

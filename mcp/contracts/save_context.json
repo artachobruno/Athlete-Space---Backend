@@ -1,0 +1,28 @@
+{
+  "name": "save_context",
+  "description": "Save conversation messages (user and assistant) to the database for an athlete.",
+  "input_schema": {
+    "athlete_id": "integer",
+    "model_name": "string",
+    "user_message": "string",
+    "assistant_message": "string"
+  },
+  "output_schema": {
+    "success": "boolean",
+    "message": "string"
+  },
+  "error_cases": [
+    {
+      "code": "ATHLETE_NOT_FOUND",
+      "description": "Athlete ID does not exist in the database."
+    },
+    {
+      "code": "DB_ERROR",
+      "description": "Database insert failed."
+    },
+    {
+      "code": "INVALID_INPUT",
+      "description": "One or more required input fields are missing or invalid."
+    }
+  ]
+}

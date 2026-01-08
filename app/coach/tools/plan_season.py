@@ -6,7 +6,7 @@ from loguru import logger
 from app.coach.tools.session_planner import generate_season_sessions, save_planned_sessions
 
 
-def _parse_season_dates(message_lower: str) -> tuple[datetime, datetime]:
+def parse_season_dates(message_lower: str) -> tuple[datetime, datetime]:
     """Parse season start and end dates from message."""
     date_patterns = [
         r"(\d{4})-(\d{2})-(\d{2})",  # YYYY-MM-DD
@@ -56,7 +56,7 @@ def _parse_season_dates(message_lower: str) -> tuple[datetime, datetime]:
     return (season_start, season_start + timedelta(days=180))
 
 
-def _generate_season_plan_response(
+def generate_season_plan_response(
     season_start: datetime,
     season_end: datetime,
     saved_count: int,
@@ -81,7 +81,7 @@ def _generate_season_plan_response(
     )
 
 
-def plan_season(message: str = "", user_id: str | None = None, athlete_id: int | None = None) -> str:
+async def plan_season(message: str = "", user_id: str | None = None, athlete_id: int | None = None) -> str:
     """Generate a season training plan with sessions.
 
     Args:
@@ -96,7 +96,7 @@ def plan_season(message: str = "", user_id: str | None = None, athlete_id: int |
     message_lower = message.lower() if message else ""
 
     # Extract season dates
-    season_start, season_end = _parse_season_dates(message_lower)
+    season_start, season_end = parse_season_dates(message_lower)
 
     # Check if we need more info
     if not message or ("season" not in message_lower and "plan" not in message_lower):
@@ -120,7 +120,7 @@ def plan_season(message: str = "", user_id: str | None = None, athlete_id: int |
             )
 
             plan_id = f"season_{season_start.strftime('%Y%m%d')}_{season_end.strftime('%Y%m%d')}"
-            saved_count = save_planned_sessions(
+            saved_count = await save_planned_sessions(
                 user_id=user_id,
                 athlete_id=athlete_id,
                 sessions=sessions,
@@ -129,7 +129,7 @@ def plan_season(message: str = "", user_id: str | None = None, athlete_id: int |
             )
 
             weeks = (season_end - season_start).days // 7
-            return _generate_season_plan_response(season_start, season_end, saved_count, weeks)
+            return generate_season_plan_response(season_start, season_end, saved_count, weeks)
         except Exception as e:
             logger.error(f"Error generating season plan: {e}", exc_info=True)
             return (

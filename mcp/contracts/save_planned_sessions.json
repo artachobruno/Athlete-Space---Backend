@@ -1,0 +1,71 @@
+{
+  "name": "save_planned_sessions",
+  "description": "Save planned training sessions to the database. Skips sessions that already exist (duplicate check by user_id, date, and title).",
+  "input_schema": {
+    "user_id": "string",
+    "athlete_id": "integer",
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "duration_minutes": {
+            "type": "integer"
+          },
+          "distance_km": {
+            "type": "number"
+          },
+          "intensity": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "week_number": {
+            "type": "integer"
+          }
+        },
+        "required": ["date", "type", "title"]
+      }
+    },
+    "plan_type": "string",
+    "plan_id": "string"
+  },
+  "output_schema": {
+    "saved_count": "integer"
+  },
+  "error_cases": [
+    {
+      "code": "USER_NOT_FOUND",
+      "description": "User ID does not exist in the database."
+    },
+    {
+      "code": "ATHLETE_NOT_FOUND",
+      "description": "Athlete ID does not exist in the database."
+    },
+    {
+      "code": "DB_ERROR",
+      "description": "Database insert failed."
+    },
+    {
+      "code": "INVALID_SESSION_DATA",
+      "description": "One or more sessions have invalid or missing required fields."
+    },
+    {
+      "code": "INVALID_DATE_FORMAT",
+      "description": "Date must be in YYYY-MM-DD format or ISO datetime string."
+    }
+  ]
+}

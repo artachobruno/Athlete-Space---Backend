@@ -1,0 +1,42 @@
+{
+  "name": "plan_season",
+  "description": "Generate a season training plan with sessions. Extracts season dates from message and saves multiple planned sessions to the database.",
+  "input_schema": {
+    "message": "string",
+    "user_id": "string",
+    "athlete_id": "integer"
+  },
+  "output_schema": {
+    "success": "boolean",
+    "message": "string",
+    "saved_count": "integer",
+    "season_start": "string",
+    "season_end": "string"
+  },
+  "error_cases": [
+    {
+      "code": "USER_NOT_FOUND",
+      "description": "User ID does not exist in the database."
+    },
+    {
+      "code": "ATHLETE_NOT_FOUND",
+      "description": "Athlete ID does not exist in the database."
+    },
+    {
+      "code": "DB_ERROR",
+      "description": "Database insert failed."
+    },
+    {
+      "code": "MISSING_SEASON_INFO",
+      "description": "Season start or end date is missing from the message."
+    },
+    {
+      "code": "INVALID_SEASON_DATES",
+      "description": "Season dates are invalid or end date is before start date."
+    },
+    {
+      "code": "INVALID_MESSAGE",
+      "description": "Message is empty or invalid."
+    }
+  ]
+}

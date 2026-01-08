@@ -5,6 +5,8 @@ Handles the complete onboarding flow: persistence, extraction, and conditional p
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -29,6 +31,31 @@ from app.onboarding.persistence import persist_profile_data, persist_training_pr
 from app.onboarding.schemas import OnboardingCompleteRequest, OnboardingCompleteResponse
 from app.services.intelligence.runtime import CoachRuntime
 from app.state.api_helpers import get_training_data
+
+
+@dataclass
+class WeeklyIntentConfig:
+    """Configuration for weekly intent generation."""
+
+    user_id: str
+    athlete_id: int
+    profile: AthleteProfile
+    settings: UserSettings
+    extracted_attributes: dict[str, Any] | None
+    extracted_injury_attributes: dict[str, Any] | None
+    is_provisional: bool = False
+
+
+@dataclass
+class PlansConfig:
+    """Configuration for plan generation."""
+
+    user_id: str
+    athlete_id: int
+    profile: AthleteProfile
+    settings: UserSettings
+    extracted_attributes: ExtractedRaceAttributes | None
+    extracted_injury_attributes: ExtractedInjuryAttributes | None
 
 
 def should_generate_plan(
@@ -132,52 +159,42 @@ def extract_injury_attributes_from_settings(
         return None
 
 
-def generate_weekly_intent_for_onboarding(  # noqa: PLR0917
-    user_id: str,
-    athlete_id: int,
-    profile: AthleteProfile,
-    settings: UserSettings,
-    extracted_attributes: dict[str, Any] | None,
-    extracted_injury_attributes: dict[str, Any] | None,
-    is_provisional: bool = False,
+def generate_weekly_intent_for_onboarding(
+    config: WeeklyIntentConfig,
 ) -> WeeklyIntent | None:
     """Generate weekly intent for onboarding.
 
     Args:
-        user_id: User ID
-        athlete_id: Athlete ID
-        profile: Athlete profile
-        settings: User settings
-        extracted_attributes: Extracted race attributes
-        extracted_injury_attributes: Extracted injury attributes
-        is_provisional: Whether this is a provisional plan (data missing)
+        config: Weekly intent configuration
 
     Returns:
         WeeklyIntent or None if generation fails
     """
-    logger.info(f"Generating weekly intent for onboarding (user_id={user_id}, provisional={is_provisional})")
+    logger.info(f"Generating weekly intent for onboarding (user_id={config.user_id}, provisional={config.is_provisional})")
 
     try:
         # Build context
         context = _build_weekly_intent_context(
-            user_id=user_id,
-            profile=profile,
-            settings=settings,
-            extracted_attributes=extracted_attributes,
-            extracted_injury_attributes=extracted_injury_attributes,
-            is_provisional=is_provisional,
+            user_id=config.user_id,
+            profile=config.profile,
+            settings=config.settings,
+            extracted_attributes=config.extracted_attributes,
+            extracted_injury_attributes=config.extracted_injury_attributes,
+            is_provisional=config.is_provisional,
         )
 
         # Generate intent
         runtime = CoachRuntime()
-        intent = runtime.run_weekly_intent(
-            user_id=user_id,
-            athlete_id=athlete_id,
-            context=context,
+        intent = asyncio.run(
+            runtime.run_weekly_intent(
+                user_id=config.user_id,
+                athlete_id=config.athlete_id,
+                context=context,
+            )
         )
 
         # Mark as provisional if needed
-        if is_provisional:
+        if config.is_provisional:
             logger.info("Generated provisional weekly intent (insufficient data)")
 
     except Exception as e:
@@ -228,10 +245,12 @@ def generate_season_plan_for_onboarding(
 
         # Generate plan
         runtime = CoachRuntime()
-        plan = runtime.run_season_plan(
-            user_id=user_id,
-            athlete_id=athlete_id,
-            context=context,
+        plan = asyncio.run(
+            runtime.run_season_plan(
+                user_id=user_id,
+                athlete_id=athlete_id,
+                context=context,
+            )
         )
 
     except Exception as e:
@@ -275,12 +294,14 @@ def save_weekly_intent(
         sessions = weekly_intent_to_sessions(intent)
         if sessions:
             # Use a new session for planned sessions to avoid transaction issues
-            save_planned_sessions(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                sessions=sessions,
-                plan_type="weekly",
-                plan_id=intent_model.id,
+            asyncio.run(
+                save_planned_sessions(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    sessions=sessions,
+                    plan_type="weekly",
+                    plan_id=intent_model.id,
+                )
             )
             logger.info(f"Created {len(sessions)} planned sessions from weekly intent for user_id={user_id}")
     except Exception as e:
@@ -317,12 +338,14 @@ def save_season_plan(
         sessions = season_plan_to_sessions(plan)
         if sessions:
             # Use a new session for planned sessions to avoid transaction issues
-            save_planned_sessions(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                sessions=sessions,
-                plan_type="season",
-                plan_id=plan_model.id,
+            asyncio.run(
+                save_planned_sessions(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    sessions=sessions,
+                    plan_type="season",
+                    plan_id=plan_model.id,
+                )
             )
             logger.info(f"Created {len(sessions)} planned sessions from season plan for user_id={user_id}")
     except Exception as e:
@@ -628,25 +651,15 @@ def _format_training_history_for_season(daily_load: list[float]) -> str:
     return f"Recent training: {total_weeks} weeks, average {avg_weekly_hours:.1f} hours/week"
 
 
-def _generate_plans_for_onboarding(  # noqa: PLR0917
+def _generate_plans_for_onboarding(
     session: Session,
-    user_id: str,
-    athlete_id: int,
-    profile: AthleteProfile,
-    settings: UserSettings,
-    extracted_attributes: ExtractedRaceAttributes | None,
-    extracted_injury_attributes: ExtractedInjuryAttributes | None,
+    config: PlansConfig,
 ) -> tuple[dict | None, dict | None, bool, str | None]:
     """Generate plans for onboarding.
 
     Args:
         session: Database session
-        user_id: User ID
-        athlete_id: Athlete ID
-        profile: Athlete profile
-        settings: User settings
-        extracted_attributes: Extracted race attributes
-        extracted_injury_attributes: Extracted injury attributes
+        config: Plans configuration
 
     Returns:
         Tuple of (weekly_intent, season_plan, provisional, warning)
@@ -657,43 +670,44 @@ def _generate_plans_for_onboarding(  # noqa: PLR0917
     warning = None
 
     # Determine if provisional (insufficient data)
-    daily_rows = get_daily_rows(session, user_id, days=14)
+    daily_rows = get_daily_rows(session, config.user_id, days=14)
     days_with_training = sum(1 for row in daily_rows if row.get("load_score", 0.0) > 0.0)
     is_provisional = days_with_training < 14
 
     # Generate weekly intent (always try)
     try:
-        weekly_intent_obj = generate_weekly_intent_for_onboarding(
-            user_id=user_id,
-            athlete_id=athlete_id,
-            profile=profile,
-            settings=settings,
-            extracted_attributes=extracted_attributes.model_dump() if extracted_attributes else None,
-            extracted_injury_attributes=extracted_injury_attributes.model_dump() if extracted_injury_attributes else None,
+        weekly_intent_config = WeeklyIntentConfig(
+            user_id=config.user_id,
+            athlete_id=config.athlete_id,
+            profile=config.profile,
+            settings=config.settings,
+            extracted_attributes=config.extracted_attributes.model_dump() if config.extracted_attributes else None,
+            extracted_injury_attributes=config.extracted_injury_attributes.model_dump() if config.extracted_injury_attributes else None,
             is_provisional=is_provisional,
         )
+        weekly_intent_obj = generate_weekly_intent_for_onboarding(weekly_intent_config)
         if weekly_intent_obj:
             weekly_intent = weekly_intent_obj.model_dump()
             provisional = is_provisional
-            save_weekly_intent(session, user_id, athlete_id, weekly_intent_obj)
+            save_weekly_intent(session, config.user_id, config.athlete_id, weekly_intent_obj)
     except Exception as e:
         logger.error(f"Failed to generate weekly intent: {e}", exc_info=True)
         warning = "plan_generation_failed"
 
     # Generate season plan (only if race exists)
-    if extracted_attributes and extracted_attributes.event_date:
+    if config.extracted_attributes and config.extracted_attributes.event_date:
         try:
             season_plan_obj = generate_season_plan_for_onboarding(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                profile=profile,
-                settings=settings,
-                extracted_attributes=extracted_attributes.model_dump(),
-                extracted_injury_attributes=extracted_injury_attributes.model_dump() if extracted_injury_attributes else None,
+                user_id=config.user_id,
+                athlete_id=config.athlete_id,
+                profile=config.profile,
+                settings=config.settings,
+                extracted_attributes=config.extracted_attributes.model_dump(),
+                extracted_injury_attributes=config.extracted_injury_attributes.model_dump() if config.extracted_injury_attributes else None,
             )
             if season_plan_obj:
                 season_plan = season_plan_obj.model_dump()
-                save_season_plan(session, user_id, athlete_id, season_plan_obj)
+                save_season_plan(session, config.user_id, config.athlete_id, season_plan_obj)
         except Exception as e:
             logger.error(f"Failed to generate season plan: {e}", exc_info=True)
             if not warning:
@@ -757,14 +771,17 @@ def complete_onboarding_flow(
                 strava_account = session.query(StravaAccount).filter_by(user_id=user_id).first()
                 athlete_id = int(strava_account.athlete_id) if strava_account else 0
 
-                weekly_intent, season_plan, provisional, warning = _generate_plans_for_onboarding(
-                    session=session,
+                plans_config = PlansConfig(
                     user_id=user_id,
                     athlete_id=athlete_id,
                     profile=profile,
                     settings=settings,
                     extracted_attributes=extracted_attributes,
                     extracted_injury_attributes=extracted_injury_attributes,
+                )
+                weekly_intent, season_plan, provisional, warning = _generate_plans_for_onboarding(
+                    session=session,
+                    config=plans_config,
                 )
             else:
                 logger.info(f"Skipping plan generation: {reason}")

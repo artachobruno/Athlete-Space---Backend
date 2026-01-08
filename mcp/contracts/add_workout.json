@@ -1,0 +1,32 @@
+{
+  "name": "add_workout",
+  "description": "Add a specific workout to the training plan and save it to the calendar. Parses workout description to extract type, date, and details.",
+  "input_schema": {
+    "workout_description": "string",
+    "user_id": "string",
+    "athlete_id": "integer"
+  },
+  "output_schema": {
+    "success": "boolean",
+    "message": "string",
+    "saved_count": "integer"
+  },
+  "error_cases": [
+    {
+      "code": "USER_NOT_FOUND",
+      "description": "User ID does not exist in the database."
+    },
+    {
+      "code": "ATHLETE_NOT_FOUND",
+      "description": "Athlete ID does not exist in the database."
+    },
+    {
+      "code": "DB_ERROR",
+      "description": "Database insert failed."
+    },
+    {
+      "code": "INVALID_WORKOUT_DESCRIPTION",
+      "description": "Workout description is empty or invalid."
+    }
+  ]
+}

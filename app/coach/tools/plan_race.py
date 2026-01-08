@@ -34,7 +34,7 @@ class RaceInformation(BaseModel):
     )
 
 
-def _extract_race_information(message: str) -> RaceInformation:
+def extract_race_information(message: str) -> RaceInformation:
     """Extract race information from user message using simple parsing.
 
     Args:
@@ -115,7 +115,7 @@ def _extract_race_information(message: str) -> RaceInformation:
     return race_info
 
 
-def _build_clarification_message(distance: str | None, race_date: datetime | None) -> str:
+def build_clarification_message(distance: str | None, race_date: datetime | None) -> str:
     """Build clarification message when required information is missing.
 
     Args:
@@ -144,7 +144,7 @@ def _build_clarification_message(distance: str | None, race_date: datetime | Non
     return f"[CLARIFICATION] {clarification_msg}"
 
 
-def _create_and_save_plan(
+async def create_and_save_plan(
     race_date: datetime,
     distance: str,
     target_time: str | None,
@@ -174,7 +174,7 @@ def _create_and_save_plan(
 
         plan_id = f"race_{distance}_{race_date.strftime('%Y%m%d')}"
         logger.info(f"Saving {len(sessions)} planned sessions with plan_id={plan_id}")
-        saved_count = save_planned_sessions(
+        saved_count = await save_planned_sessions(
             user_id=user_id,
             athlete_id=athlete_id,
             sessions=sessions,
@@ -233,7 +233,7 @@ def _build_preview_plan(distance: str, race_date: datetime) -> str:
     )
 
 
-def _parse_date_string(date_str: str) -> datetime | None:
+def parse_date_string(date_str: str) -> datetime | None:
     """Parse date string in ISO format to datetime.
 
     Args:
@@ -248,7 +248,7 @@ def _parse_date_string(date_str: str) -> datetime | None:
         return None
 
 
-def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | None = None) -> str:
+async def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | None = None) -> str:
     """Plan a race build and generate training sessions.
 
     Args:
@@ -290,14 +290,14 @@ def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | 
         del _recent_calls[key]
 
     # Extract race information using LLM
-    race_info = _extract_race_information(message)
+    race_info = extract_race_information(message)
     distance = race_info.distance
-    race_date = _parse_date_string(race_info.date) if race_info.date else None
+    race_date = parse_date_string(race_info.date) if race_info.date else None
     target_time = race_info.target_time
 
     # Check if we have minimum required info
     if not distance or not race_date:
-        return _build_clarification_message(distance, race_date)
+        return build_clarification_message(distance, race_date)
 
     # Validate race date is in the future
     if race_date < datetime.now(timezone.utc):
@@ -309,7 +309,7 @@ def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | 
     # Generate sessions if we have user_id and athlete_id
     if user_id and athlete_id:
         logger.info(f"Creating and saving race plan: user_id={user_id}, athlete_id={athlete_id}, distance={distance}, date={race_date}")
-        return _create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
+        return await create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
 
     # Return plan details without saving
     logger.warning(f"Missing user_id or athlete_id - returning preview plan. user_id={user_id}, athlete_id={athlete_id}")

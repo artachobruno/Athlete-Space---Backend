@@ -30,7 +30,7 @@ class CoachRuntime:
         """Initialize the runtime."""
         self.llm_client = CoachLLMClient()
 
-    def run_season_plan(
+    async def run_season_plan(
         self,
         user_id: str,
         athlete_id: int,
@@ -62,7 +62,7 @@ class CoachRuntime:
         )
 
         try:
-            plan = self.llm_client.generate_season_plan(context)
+            plan = await self.llm_client.generate_season_plan(context)
         except Exception as e:
             logger.error(
                 "Failed to generate season plan",
@@ -82,7 +82,7 @@ class CoachRuntime:
             )
             return plan
 
-    def run_weekly_intent(
+    async def run_weekly_intent(
         self,
         user_id: str,
         athlete_id: int,
@@ -117,7 +117,7 @@ class CoachRuntime:
         )
 
         try:
-            intent = self.llm_client.generate_weekly_intent(context, previous_volume)
+            intent = await self.llm_client.generate_weekly_intent(context, previous_volume)
         except Exception as e:
             logger.error(
                 "Failed to generate weekly intent",
@@ -138,7 +138,7 @@ class CoachRuntime:
             )
             return intent
 
-    def run_daily_decision(
+    async def run_daily_decision(
         self,
         user_id: str,
         athlete_id: int,
@@ -171,7 +171,7 @@ class CoachRuntime:
         )
 
         try:
-            decision = self.llm_client.generate_daily_decision(context)
+            decision = await self.llm_client.generate_daily_decision(context)
         except Exception as e:
             logger.error(
                 "Failed to generate daily decision",
@@ -192,7 +192,7 @@ class CoachRuntime:
             )
             return decision
 
-    def run_weekly_report(
+    async def run_weekly_report(
         self,
         user_id: str,
         athlete_id: int,
@@ -224,7 +224,7 @@ class CoachRuntime:
         )
 
         try:
-            report = self.llm_client.generate_weekly_report(context)
+            report = await self.llm_client.generate_weekly_report(context)
         except Exception as e:
             logger.error(
                 "Failed to generate weekly report",

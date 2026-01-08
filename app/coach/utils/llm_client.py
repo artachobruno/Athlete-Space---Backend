@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from pydantic_ai import Agent
 
 from app.coach.config.models import USER_FACING_MODEL
+from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.core.constraints import (
     validate_daily_decision,
@@ -46,8 +47,8 @@ def _raise_validation_error(intent_type: str, error_msg: str) -> None:
     raise ValueError(f"{intent_type} validation failed after {MAX_RETRIES + 1} attempts: {error_msg}")
 
 
-def _load_prompt(filename: str) -> str:
-    """Load a prompt from the prompts directory.
+async def _load_prompt(filename: str) -> str:
+    """Load a prompt from the prompts directory via MCP.
 
     Args:
         filename: Name of the prompt file (e.g., "season_plan.txt")
@@ -58,10 +59,13 @@ def _load_prompt(filename: str) -> str:
     Raises:
         FileNotFoundError: If prompt file doesn't exist
     """
-    prompt_path = PROMPTS_DIR / filename
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-    return prompt_path.read_text(encoding="utf-8")
+    try:
+        result = await call_tool("load_prompt", {"filename": filename})
+        return result["content"]
+    except MCPError as e:
+        if e.code == "FILE_NOT_FOUND":
+            raise FileNotFoundError(f"Prompt file not found: {filename}") from e
+        raise RuntimeError(f"Failed to load prompt: {e.message}") from e
 
 
 def _get_model():
@@ -90,7 +94,7 @@ class CoachLLMClient:
         """Initialize the client."""
         self.model = _get_model()
 
-    def generate_season_plan(self, context: dict[str, Any]) -> SeasonPlan:
+    async def generate_season_plan(self, context: dict[str, Any]) -> SeasonPlan:
         """Generate a season plan from LLM.
 
         Args:
@@ -108,7 +112,7 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
-        prompt_text = _load_prompt("season_plan.txt")
+        prompt_text = await _load_prompt("season_plan.txt")
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
@@ -151,7 +155,7 @@ class CoachLLMClient:
 
         raise RuntimeError("Failed to generate season plan after all retries")
 
-    def generate_weekly_intent(
+    async def generate_weekly_intent(
         self,
         context: dict[str, Any],
         previous_volume: float | None = None,
@@ -174,7 +178,7 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
-        prompt_text = _load_prompt("weekly_intent.txt")
+        prompt_text = await _load_prompt("weekly_intent.txt")
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
@@ -217,7 +221,7 @@ class CoachLLMClient:
 
         raise RuntimeError("Failed to generate weekly intent after all retries")
 
-    def generate_daily_decision(self, context: dict[str, Any]) -> DailyDecision:
+    async def generate_daily_decision(self, context: dict[str, Any]) -> DailyDecision:
         """Generate a daily decision from LLM.
 
         Args:
@@ -236,7 +240,7 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
-        prompt_text = _load_prompt("daily_decision.txt")
+        prompt_text = await _load_prompt("daily_decision.txt")
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
@@ -279,7 +283,7 @@ class CoachLLMClient:
 
         raise RuntimeError("Failed to generate daily decision after all retries")
 
-    def generate_weekly_report(self, context: dict[str, Any]) -> WeeklyReport:
+    async def generate_weekly_report(self, context: dict[str, Any]) -> WeeklyReport:
         """Generate a weekly report from LLM.
 
         Args:
@@ -297,7 +301,7 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
-        prompt_text = _load_prompt("weekly_report.txt")
+        prompt_text = await _load_prompt("weekly_report.txt")
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,

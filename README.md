@@ -13,7 +13,7 @@ Virtus AI is an end-to-end endurance training intelligence platform that combine
 - Fatigue & readiness indicators
 - Automatic trend detection (load spikes, volatility, recovery windows)
 
-### 2. Virtus Coach (LLM-Powered)
+### 2. Coach (LLM-Powered)
 - Snapshot coaching insights (state-based)
 - Natural language chat with intent routing
 - Tool-based reasoning (no hallucinated metrics)
@@ -48,6 +48,11 @@ Athlete State Builder
 │ Virtus Coach  │
 │  (LLM + Tools)│
 └───────────────┘
+    ↓ (via MCP)
+┌───────────────┬───────────────┐
+│  MCP DB Server│  MCP FS Server│
+│  (Database)   │  (Prompts)    │
+└───────────────┴───────────────┘
 ↓
 FastAPI Backend (JSON)
 ↓
@@ -78,6 +83,7 @@ Streamlit UI (Chat + Viz)
 - Redis (Celery task queue)
 - Strava API
 - uvicorn
+- MCP Servers (Model Context Protocol - agentic tool routing)
 
 ---
 
@@ -115,11 +121,11 @@ User messages are routed to deterministic tools:
 
 | Intent | Example |
 |------|--------|
-| NEXT_SESSION | “Recommend today’s workout” |
-| EXPLAIN_STATE | “Why do I feel tired?” |
-| ADJUST_LOAD | “Yesterday felt too hard” |
-| PLAN_RACE | “Build me to a marathon” |
-| PLAN_SEASON | “Plan my year” |
+| NEXT_SESSION | "Recommend today's workout" |
+| EXPLAIN_STATE | "Why do I feel tired?" |
+| ADJUST_LOAD | "Yesterday felt too hard" |
+| PLAN_RACE | "Build me to a marathon" |
+| PLAN_SEASON | "Plan my year" |
 
 LLM is used for:
 - Intent classification
@@ -130,15 +136,89 @@ Metrics always come from code.
 
 ---
 
+## 🤖 MCP Architecture (Agentic Behavior)
+
+Virtus Coach uses **Model Context Protocol (MCP)** to enforce strict tool routing and enable provable agentic behavior. All database and filesystem operations are routed through dedicated MCP servers, ensuring the orchestrator never directly accesses resources.
+
+### MCP Servers
+
+**MCP DB Server** (`mcp/db_server/`)
+- Handles all database operations via HTTP
+- Tools: `load_context`, `save_context`, `get_recent_activities`, `save_planned_sessions`, etc.
+- Port: 8080
+- Ensures database access is always auditable and testable
+
+**MCP FS Server** (`mcp/fs_server/`)
+- Handles all filesystem operations (prompt loading)
+- Tools: `load_orchestrator_prompt`, `load_prompt`
+- Port: 8081
+- Isolates file access from orchestrator logic
+
+### Benefits
+
+✅ **Provable Routing**: Tests verify which MCP tools are called for given inputs
+✅ **No Silent Bypasses**: Orchestrator cannot access DB/FS without going through MCP
+✅ **Regression Protection**: Tests fail if wrong tools are called or MCP is bypassed
+✅ **Isolation**: Database and filesystem logic is separated from LLM orchestration
+✅ **Testability**: MCP calls are logged and verifiable in tests
+
+### Running MCP Servers Locally
+
+```bash
+# Terminal 1: DB Server
+cd mcp/db_server
+python main.py
+# Runs on http://localhost:8080
+
+# Terminal 2: FS Server
+cd mcp/fs_server
+python main.py
+# Runs on http://localhost:8081
+```
+
+Set environment variables:
+```bash
+export MCP_DB_SERVER_URL=http://localhost:8080
+export MCP_FS_SERVER_URL=http://localhost:8081
+```
+
+See `tests/mcp/README.md` for detailed testing instructions.
+
+---
+
 ## ▶️ Running Locally
 
-### 1. Backend
+### 1. MCP Servers (Required)
+
+Start both MCP servers in separate terminals:
+
+**Terminal 1: DB Server**
+```bash
+cd mcp/db_server
+python main.py
+# Runs on http://localhost:8080
+```
+
+**Terminal 2: FS Server**
+```bash
+cd mcp/fs_server
+python main.py
+# Runs on http://localhost:8081
+```
+
+Set environment variables:
+```bash
+export MCP_DB_SERVER_URL=http://localhost:8080
+export MCP_FS_SERVER_URL=http://localhost:8081
+```
+
+### 2. Backend
 ```bash
 export OPENAI_API_KEY=sk-...
 uvicorn app.main:app --reload
-````
+```
 
-### 2. UI
+### 3. UI
 
 ```bash
 streamlit run ui/app.py

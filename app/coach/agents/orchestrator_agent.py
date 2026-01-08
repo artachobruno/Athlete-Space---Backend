@@ -8,6 +8,7 @@ from typing import cast
 
 from loguru import logger
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.usage import UsageLimits
 
@@ -246,14 +247,33 @@ async def run_conversation(
 
     # Increase request limit to handle complex conversations with multiple tool calls
     # Default is 50, which can be exceeded in complex scenarios
-    usage_limits = UsageLimits(request_limit=200)
+    # Each tool call and LLM request counts toward this limit
+    usage_limits = UsageLimits(request_limit=500)
 
-    result = await ORCHESTRATOR_AGENT.run(
-        user_prompt=user_input,
-        deps=deps,
-        message_history=typed_message_history,
-        usage_limits=usage_limits,
-    )
+    try:
+        result = await ORCHESTRATOR_AGENT.run(
+            user_prompt=user_input,
+            deps=deps,
+            message_history=typed_message_history,
+            usage_limits=usage_limits,
+        )
+    except UsageLimitExceeded as e:
+        logger.error(
+            "Orchestrator agent exceeded usage limit",
+            athlete_id=deps.athlete_id,
+            error=str(e),
+        )
+        # Return a helpful error response
+        return OrchestratorAgentResponse(
+            response_type="clarification",
+            intent="error",
+            message=(
+                "I apologize, but this conversation has become too complex and exceeded my processing limits. "
+                "Please try rephrasing your request or breaking it into smaller parts."
+            ),
+            structured_data={},
+            follow_up=None,
+        )
 
     # Log response at debug level
     logger.debug(

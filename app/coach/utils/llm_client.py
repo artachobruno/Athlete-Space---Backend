@@ -124,7 +124,7 @@ class CoachLLMClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating season plan (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = agent.run_sync(f"Context:\n{context_str}")
+                result = await agent.run(f"Context:\n{context_str}")
 
                 # Validate against constraints
                 errors = validate_season_plan(result.output)
@@ -190,7 +190,7 @@ class CoachLLMClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating weekly intent (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = agent.run_sync(f"Context:\n{context_str}")
+                result = await agent.run(f"Context:\n{context_str}")
 
                 # Validate against constraints
                 errors = validate_weekly_intent(result.output, previous_volume)
@@ -252,7 +252,7 @@ class CoachLLMClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating daily decision (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = agent.run_sync(f"Context:\n{context_str}")
+                result = await agent.run(f"Context:\n{context_str}")
 
                 # Validate against constraints
                 errors = validate_daily_decision(result.output)
@@ -313,7 +313,7 @@ class CoachLLMClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating weekly report (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = agent.run_sync(f"Context:\n{context_str}")
+                result = await agent.run(f"Context:\n{context_str}")
 
                 # Basic validation (schema validation is handled by pydantic)
                 if not result.output.week_summary or len(result.output.week_summary) < 100:

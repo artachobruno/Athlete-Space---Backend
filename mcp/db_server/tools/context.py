@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 from loguru import logger
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 # Add parent directory to path
@@ -112,39 +112,23 @@ def save_context_tool(arguments: dict) -> dict:
 
         with get_session() as db:
             # Save user message
-            # Note: Database still requires athlete_id (NOT NULL) for backward compatibility
-            # We use raw SQL to insert with both user_id and athlete_id since the model doesn't have athlete_id
             now = datetime.now(UTC)
-            db.execute(
-                text("""
-                    INSERT INTO coach_messages (user_id, athlete_id, role, content, created_at, timestamp)
-                    VALUES (:user_id, :athlete_id, :role, :content, :created_at, :timestamp)
-                """),
-                {
-                    "user_id": user_id,
-                    "athlete_id": athlete_id,
-                    "role": "user",
-                    "content": user_message,
-                    "created_at": now,
-                    "timestamp": now,
-                },
+            user_msg = CoachMessage(
+                user_id=user_id,
+                role="user",
+                content=user_message,
+                created_at=now,
             )
+            db.add(user_msg)
 
             # Save assistant message
-            db.execute(
-                text("""
-                    INSERT INTO coach_messages (user_id, athlete_id, role, content, created_at, timestamp)
-                    VALUES (:user_id, :athlete_id, :role, :content, :created_at, :timestamp)
-                """),
-                {
-                    "user_id": user_id,
-                    "athlete_id": athlete_id,
-                    "role": "assistant",
-                    "content": assistant_message,
-                    "created_at": now,
-                    "timestamp": now,
-                },
+            assistant_msg = CoachMessage(
+                user_id=user_id,
+                role="assistant",
+                content=assistant_message,
+                created_at=now,
             )
+            db.add(assistant_msg)
 
             db.commit()
 

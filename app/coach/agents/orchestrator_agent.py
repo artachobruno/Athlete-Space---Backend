@@ -7,8 +7,8 @@ The orchestrator MUST NOT execute tools directly.
 All tools MUST be executed via MCP.
 """
 
-import os
 import asyncio
+import os
 from contextvars import ContextVar
 from typing import cast
 
@@ -26,7 +26,7 @@ from app.services.llm.model import get_model
 
 # Per-conversation tool execution tracking
 # This tracks which tools have been executed in the current conversation turn
-_executed_tools: ContextVar[set[str]] = ContextVar("executed_tools", default=set())
+_executed_tools: ContextVar[set[str] | None] = ContextVar("executed_tools", default=None)
 
 # Maximum number of tool calls per conversation turn (safety net)
 MAX_TOOL_CALLS_PER_TURN = 3
@@ -67,24 +67,24 @@ ORCHESTRATOR_INSTRUCTIONS = ""
 async def recommend_next_session_tool(deps: CoachDeps) -> str:
     """Tool wrapper for recommend_next_session - delegates to MCP."""
     tool_name = "recommend_next_session"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    
+
     # Architectural guardrail: ensure MCP is used
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -106,37 +106,41 @@ async def recommend_next_session_tool(deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
 
 
 async def add_workout_tool(workout_description: str, deps: CoachDeps) -> str:
     """Tool wrapper for add_workout - delegates to MCP."""
     tool_name = "add_workout"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    
+
     # Validate required parameters
     if not deps.user_id or not isinstance(deps.user_id, str):
         return "[CLARIFICATION] user_id_missing"
     if deps.athlete_id is None:
         return "[CLARIFICATION] athlete_id_missing"
-    
+
     # Architectural guardrail
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -159,31 +163,35 @@ async def add_workout_tool(workout_description: str, deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
 
 
 async def adjust_training_load_tool(user_feedback: str, deps: CoachDeps) -> str:
     """Tool wrapper for adjust_training_load - delegates to MCP."""
     tool_name = "adjust_training_load"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    
+
     # Architectural guardrail
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -205,31 +213,35 @@ async def adjust_training_load_tool(user_feedback: str, deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
 
 
 async def explain_training_state_tool(deps: CoachDeps) -> str:
     """Tool wrapper for explain_training_state - delegates to MCP."""
     tool_name = "explain_training_state"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    
+
     # Architectural guardrail
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -250,31 +262,35 @@ async def explain_training_state_tool(deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
 
 
 async def run_analysis_tool(deps: CoachDeps) -> str:
     """Tool wrapper for run_analysis - delegates to MCP."""
     tool_name = "run_analysis"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    
+
     # Architectural guardrail
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -295,31 +311,35 @@ async def run_analysis_tool(deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
 
 
 async def share_report_tool(deps: CoachDeps) -> str:
     """Tool wrapper for share_report - delegates to MCP."""
     tool_name = "share_report"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    
+
     # Architectural guardrail
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -340,37 +360,41 @@ async def share_report_tool(deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
 
 
 async def plan_week_tool(deps: CoachDeps) -> str:
     """Tool wrapper for plan_week - delegates to MCP."""
     tool_name = "plan_week"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     if deps.athlete_state is None:
         return "[CLARIFICATION] athlete_state_missing"
-    
+
     # Validate required parameters (plan_week needs these for idempotency check)
     if not deps.user_id or not isinstance(deps.user_id, str):
         return "[CLARIFICATION] user_id_missing"
     if deps.athlete_id is None:
         return "[CLARIFICATION] athlete_id_missing"
-    
+
     # Architectural guardrail
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -393,34 +417,38 @@ async def plan_week_tool(deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
 
 
 async def plan_race_build_tool(race_description: str, deps: CoachDeps) -> str:
     """Tool wrapper for plan_race_build - delegates to MCP."""
     tool_name = "plan_race_build"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     # Validate required parameters
     if not deps.user_id or not isinstance(deps.user_id, str):
         return "[CLARIFICATION] user_id_missing"
     if deps.athlete_id is None:
         return "[CLARIFICATION] athlete_id_missing"
-    
+
     # Architectural guardrail
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -443,34 +471,38 @@ async def plan_race_build_tool(race_description: str, deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
 
 
 async def plan_season_tool(message: str, deps: CoachDeps) -> str:
     """Tool wrapper for plan_season - delegates to MCP."""
     tool_name = "plan_season"
-    executed_tools = _executed_tools.get()
-    
+    executed_tools = _executed_tools.get() or set()
+
     # Check max tool calls
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error("Max tool calls exceeded in one turn")
         return "I've completed the plan. Let me know if you'd like changes."
-    
+
     if tool_name in executed_tools:
         logger.warning(f"Duplicate tool call blocked: {tool_name}")
         return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
-    
+
     # Validate required parameters
     if not deps.user_id or not isinstance(deps.user_id, str):
         return "[CLARIFICATION] user_id_missing"
     if deps.athlete_id is None:
         return "[CLARIFICATION] athlete_id_missing"
-    
+
     # Architectural guardrail
-    if os.getenv("MCP_TEST_MODE") == "1":
-        assert callable(getattr(call_tool, "__call__", None)), "MCP call_tool must be callable"
-    
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
     # Execute via MCP
     try:
         result = await call_tool(
@@ -493,8 +525,85 @@ async def plan_season_tool(message: str, deps: CoachDeps) -> str:
         _executed_tools.set(executed_tools)
         # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
         if e.code == "TOOL_NOT_FOUND":
-            return f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. Please provide a response without using this specific tool. Use general training knowledge instead."
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
         return f"[CLARIFICATION] {e.message}"
+
+
+async def get_planned_sessions_tool(deps: CoachDeps) -> str:
+    """Tool wrapper for get_planned_sessions - delegates to MCP (read-only)."""
+    tool_name = "get_planned_sessions"
+    executed_tools = _executed_tools.get() or set()
+
+    # Check max tool calls
+    if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
+        logger.error("Max tool calls exceeded in one turn")
+        return "I've already retrieved your planned workouts. Let me know if you need anything else."
+
+    if tool_name in executed_tools:
+        logger.warning(f"Duplicate tool call blocked: {tool_name}")
+        return f"[CLARIFICATION] Tool '{tool_name}' was already called this turn. Please provide a response without using this tool again."
+
+    # Validate required parameters
+    if not deps.user_id or not isinstance(deps.user_id, str):
+        return "[CLARIFICATION] user_id_missing"
+
+    # Architectural guardrail
+    if os.getenv("MCP_TEST_MODE") == "1" and not callable(call_tool):
+        raise RuntimeError("MCP call_tool must be callable")
+
+    # Execute via MCP
+    try:
+        result = await call_tool(
+            tool_name,
+            {
+                "user_id": deps.user_id,
+            },
+        )
+        # Only mark as executed if successful
+        executed_tools.add(tool_name)
+        _executed_tools.set(executed_tools)
+
+        # Format sessions for LLM response
+        sessions = result.get("sessions", [])
+        if not sessions:
+            return "You don't have any planned workouts yet. Would you like me to create a training plan for you?"
+
+        # Format sessions into readable text
+        sessions_text = []
+        for session in sessions:
+            date_str = session.get("date", "")[:10] if session.get("date") else "Unknown date"
+            title = session.get("title", "Workout")
+            session_type = session.get("type", "")
+            intensity = session.get("intensity", "")
+
+            session_line = f"- {date_str}: {title}"
+            if session_type:
+                session_line += f" ({session_type})"
+            if intensity:
+                session_line += f" - {intensity}"
+
+            sessions_text.append(session_line)
+
+        sessions_summary = "\n".join(sessions_text)
+    except MCPError as e:
+        logger.error(f"MCP error calling {tool_name}: {e.code}: {e.message}")
+        # Mark as executed to prevent infinite retry loops for permanent errors
+        executed_tools.add(tool_name)
+        _executed_tools.set(executed_tools)
+        # For TOOL_NOT_FOUND, return a clear message that tells LLM to stop trying this tool
+        if e.code == "TOOL_NOT_FOUND":
+            return (
+                f"[CLARIFICATION] Tool '{tool_name}' is not available on this server. "
+                "Please provide a response without using this specific tool. "
+                "Use general training knowledge instead."
+            )
+        return f"[CLARIFICATION] {e.message}"
+    else:
+        return f"Here are your planned workouts:\n\n{sessions_summary}"
 
 
 # ============================================================================
@@ -514,6 +623,7 @@ def _get_orchestrator_tools() -> list:
         plan_week_tool,
         plan_race_build_tool,
         plan_season_tool,
+        get_planned_sessions_tool,
     ]
 
 
@@ -550,7 +660,7 @@ async def run_conversation(
         OrchestratorAgentResponse
     """
     logger.info("Starting conversation", user_input_preview=user_input[:100])
-    
+
     # Initialize per-conversation tool execution tracking
     _executed_tools.set(set())
 
@@ -623,9 +733,9 @@ async def run_conversation(
     # Each tool call and LLM request counts toward this limit
     # 100 is a reasonable limit that allows complex workflows but prevents runaway loops
     usage_limits = UsageLimits(request_limit=100)
-    
+
     # Check max tool calls before starting (safety net)
-    executed_tools = _executed_tools.get()
+    executed_tools = _executed_tools.get() or set()
     if len(executed_tools) >= MAX_TOOL_CALLS_PER_TURN:
         logger.error(
             "Exceeded max tool calls in one turn",
@@ -635,9 +745,7 @@ async def run_conversation(
         return OrchestratorAgentResponse(
             response_type="conversation",
             intent="error",
-            message=(
-                "I've generated your plan. Let me know if you want changes."
-            ),
+            message=("I've generated your plan. Let me know if you want changes."),
             structured_data={},
             follow_up=None,
         )
@@ -649,9 +757,9 @@ async def run_conversation(
             message_history=typed_message_history,
             usage_limits=usage_limits,
         )
-        
+
         # Check max tool calls after execution (additional safety net)
-        executed_tools_after = _executed_tools.get()
+        executed_tools_after = _executed_tools.get() or set()
         if len(executed_tools_after) >= MAX_TOOL_CALLS_PER_TURN:
             logger.warning(
                 "Reached max tool calls limit after execution",

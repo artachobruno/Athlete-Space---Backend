@@ -34,6 +34,7 @@ except ImportError:
 
 from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import CoachDeps
+from app.config.settings import settings
 
 # Initialize Rich console for output
 console = Console()
@@ -110,8 +111,6 @@ def _validate_mcp_servers() -> None:
     Raises:
         RuntimeError: If MCP servers are not configured or not reachable
     """
-    from app.config.settings import settings
-
     db_url = settings.mcp_db_server_url
     fs_url = settings.mcp_fs_server_url
 

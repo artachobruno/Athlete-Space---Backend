@@ -23,6 +23,7 @@ MCP_TOOL_ROUTES: dict[str, str] = {
     "get_recent_activities": MCP_DB_SERVER_URL,
     "get_yesterday_activities": MCP_DB_SERVER_URL,
     "save_planned_sessions": MCP_DB_SERVER_URL,
+    "get_planned_sessions": MCP_DB_SERVER_URL,
     "add_workout": MCP_DB_SERVER_URL,
     "plan_race_build": MCP_DB_SERVER_URL,
     "plan_season": MCP_DB_SERVER_URL,

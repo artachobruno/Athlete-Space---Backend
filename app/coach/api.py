@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -51,9 +52,11 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
             if not result:
                 # No Strava auth, treat as cold start
                 return True
-            athlete_id = result[0].athlete_id
+            # StravaAuth.athlete_id is Mapped[int] (not nullable), so this is definitely int
+            athlete_id = cast(int, result[0].athlete_id)
 
         # Convert athlete_id to user_id
+        # Type narrowing: athlete_id is now definitely int (not None) after the above check/assignment
         user_id = get_user_id_from_athlete_id(athlete_id)
         if user_id is None:
             # No user_id found, treat as cold start

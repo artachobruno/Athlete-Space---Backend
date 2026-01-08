@@ -114,6 +114,10 @@ plan_race_build(race_description: str)
 plan_season()
 - Use for long-term or annual planning
 
+get_planned_sessions()
+- Use when athlete asks "What workouts do I have planned?", "Show my planned workouts", or "What's on my calendar?"
+- Read-only query - returns existing planned sessions without modification
+
 ----------------------------------------------------------------
 TOOL EXECUTION RULES (STRICT)
 ----------------------------------------------------------------

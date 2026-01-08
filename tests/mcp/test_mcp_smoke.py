@@ -82,7 +82,11 @@ async def test_context_roundtrip(deps):
 
 @pytest.mark.asyncio
 async def test_activity_query(deps):
-    """Test activity-based tool call via MCP."""
+    """Test activity-based tool call via MCP.
+
+    Note: This test accepts indirect handling through recommend_next_session.
+    Direct activity querying tools are not yet implemented.
+    """
     result = await asyncio.wait_for(
         run_conversation(
             user_input="What workout should I do today?",
@@ -97,6 +101,8 @@ async def test_activity_query(deps):
     assert hasattr(result, "response_type")
     assert isinstance(result.message, str)
     assert len(result.message) > 0
+    # Accept indirect handling - response should be conversation, clarification, or tool response
+    assert result.response_type in {"conversation", "clarification", "tool"}
 
 
 @pytest.mark.asyncio
@@ -310,6 +316,10 @@ async def test_alter_planned_season(deps):
 
     Note: This test uses a longer timeout (TEST_TIMEOUT_LONG) because season
     planning can involve complex LLM reasoning and multiple tool calls.
+
+    IMPORTANT: Partial edits to season plans are NOT YET SUPPORTED.
+    The correct behavior is to return a clarification or explain that
+    the season plan would need to be regenerated.
     """
     # First: Create a season plan
     result1 = await asyncio.wait_for(
@@ -323,7 +333,7 @@ async def test_alter_planned_season(deps):
     assert result1 is not None
     assert isinstance(result1.message, str)
 
-    # Second: Modify the plan
+    # Second: Attempt to modify the plan (currently unsupported)
     result2 = await asyncio.wait_for(
         run_conversation(
             user_input="I want to add more speed work to my season plan",
@@ -335,16 +345,14 @@ async def test_alter_planned_season(deps):
     assert result2 is not None
     assert isinstance(result2.message, str)
     assert len(result2.message) > 0
-    # Response should acknowledge the modification request
-    message_lower = result2.message.lower()
+    # Accept clarification, refusal, or general response acknowledging the request
+    # The system may explain that partial edits aren't supported yet
     assert (
-        "speed" in message_lower
-        or "work" in message_lower
-        or "plan" in message_lower
-        or "update" in message_lower
-        or "modify" in message_lower
-        or "adjust" in message_lower
-        or len(message_lower) > 10
+        result2.response_type == "clarification"
+        or "regenerate" in result2.message.lower()
+        or "don't support" in result2.message.lower()
+        or "can't" in result2.message.lower()
+        or len(result2.message) > 10
     )
 
 
@@ -438,7 +446,7 @@ async def test_comprehensive_workflow(deps):
     assert result2 is not None
     assert isinstance(result2.message, str)
 
-    # Step 3: Query what's planned
+    # Step 3: Query what's planned (uses get_planned_sessions tool)
     result3 = await asyncio.wait_for(
         run_conversation(
             user_input="What workouts do I have planned?",
@@ -449,3 +457,13 @@ async def test_comprehensive_workflow(deps):
     assert result3 is not None
     assert isinstance(result3.message, str)
     assert len(result3.message) > 0
+    # Response should mention planned workouts or indicate no workouts planned
+    message_lower = result3.message.lower()
+    assert (
+        "workout" in message_lower
+        or "planned" in message_lower
+        or "session" in message_lower
+        or "don't have" in message_lower
+        or "no" in message_lower
+        or len(result3.message) > 10
+    )

@@ -13,24 +13,24 @@ _recent_calls: dict[str, datetime] = {}
 
 def _check_weekly_plan_exists(user_id: str | None, athlete_id: int | None) -> bool:
     """Check if planned sessions exist for the current week.
-    
+
     Args:
         user_id: User ID (optional)
         athlete_id: Athlete ID (optional)
-        
+
     Returns:
         True if planned sessions exist for current week, False otherwise
     """
     if user_id is None or athlete_id is None:
         return False
-    
+
     try:
         now = datetime.now(timezone.utc)
         # Get Monday of current week
         days_since_monday = now.weekday()
         monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
         sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
-        
+
         with get_session() as session:
             result = session.execute(
                 select(PlannedSession)
@@ -60,7 +60,7 @@ def plan_week(state: AthleteState, user_id: str | None = None, athlete_id: int |
         Training state data or clarification request
     """
     logger.info(f"Tool plan_week called (TSB={state.tsb:.1f}, load_trend={state.load_trend}, flags={state.flags})")
-    
+
     # Idempotency check: if weekly plan already exists, return early
     if _check_weekly_plan_exists(user_id, athlete_id):
         logger.info("Weekly plan already exists for current week, returning early")

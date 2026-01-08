@@ -133,6 +133,7 @@ explain_training_state_tool = _coach_tools_module.explain_training_state_tool
 adjust_training_load_tool = _coach_tools_module.adjust_training_load_tool
 recommend_next_session_tool = _coach_tools_module.recommend_next_session_tool
 share_report_tool = _coach_tools_module.share_report_tool
+get_planned_sessions_tool = _coach_tools_module.get_planned_sessions_tool
 
 app = FastAPI(title="MCP DB Server", version="1.0.0")
 
@@ -190,6 +191,7 @@ async def call_tool(request: Request) -> JSONResponse:
             "adjust_training_load": adjust_training_load_tool,
             "recommend_next_session": recommend_next_session_tool,
             "share_report": share_report_tool,
+            "get_planned_sessions": get_planned_sessions_tool,
         }
 
         if tool_name not in tool_map:

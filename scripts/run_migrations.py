@@ -24,16 +24,17 @@ from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athle
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
+from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
+from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 from scripts.migrate_user_auth_fields import migrate_user_auth_fields
-from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 
 
 def run_all_migrations() -> None:
@@ -43,6 +44,7 @@ def run_all_migrations() -> None:
     migrations = [
         ("strava_accounts table", migrate_strava_accounts),
         ("user authentication fields", migrate_user_auth_fields),
+        ("Google OAuth fields", migrate_add_google_oauth_fields),
         ("user is_active field", migrate_add_user_is_active),
         ("athlete_profiles athlete_id column", migrate_add_athlete_id_to_profiles),
         ("athlete_profiles target_races column", migrate_add_target_races),

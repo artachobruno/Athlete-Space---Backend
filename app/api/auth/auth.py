@@ -19,7 +19,7 @@ from sqlalchemy import select
 from app.api.dependencies.auth import get_current_user_id
 from app.core.auth_jwt import create_access_token
 from app.core.password import hash_password, verify_password
-from app.db.models import User
+from app.db.models import AuthProvider, User
 from app.db.session import get_session
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -96,8 +96,8 @@ def signup(request: SignupRequest):
             logger.warning(f"[AUTH] Signup failed: password hashing error for email={normalized_email}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Password must be 8–72 characters",
-            )
+                detail="Password must be 8-72 characters",
+            ) from e
 
         # Create user with UUID-based ID
         user_id = str(uuid.uuid4())
@@ -105,6 +105,8 @@ def signup(request: SignupRequest):
             id=user_id,
             email=normalized_email,
             password_hash=password_hash,
+            auth_provider=AuthProvider.password,
+            google_sub=None,
             strava_athlete_id=None,
             created_at=datetime.now(timezone.utc),
             last_login_at=None,
@@ -129,7 +131,7 @@ def signup(request: SignupRequest):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create authentication token. Please try again.",
-            )
+            ) from e
 
         logger.info(f"[AUTH] Signup successful for user_id={user_id}, email={normalized_email}")
 
@@ -178,6 +180,20 @@ def login(request: LoginRequest):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account inactive. Please sign up again.",
+            )
+
+        # Check if user has password auth (not OAuth-only)
+        if user.auth_provider != AuthProvider.password:
+            logger.warning(
+                f"[AUTH] Login failed: user has auth_provider={user.auth_provider.value} for email={normalized_email}, "
+                "password login not allowed"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error": "invalid_auth_method",
+                    "message": "This account uses Google sign-in. Please sign in with Google instead.",
+                },
             )
 
         # Check if user has a password

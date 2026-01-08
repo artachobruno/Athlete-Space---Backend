@@ -20,7 +20,7 @@ def exchange_code_for_token(
         redirect_uri: Redirect URI used in authorization (must match exactly)
 
     Returns:
-        Token response dictionary containing access_token, refresh_token, expires_in, etc.
+        Token response dictionary containing access_token, refresh_token, expires_in, id_token, etc.
 
     Raises:
         requests.HTTPError: If token exchange fails
@@ -41,6 +41,11 @@ def exchange_code_for_token(
         resp.raise_for_status()
         token_data = resp.json()
         logger.info("Successfully exchanged Google code for token")
+        # Log if id_token is present (for future verification)
+        if "id_token" in token_data:
+            logger.debug("Google ID token received (can be verified for additional security)")
+        else:
+            logger.warning("Google ID token not present in token response")
     except requests.HTTPError as e:
         error_text = e.response.text if e.response else "No response text"
         logger.error(f"Google OAuth token exchange failed: {e.response.status_code if e.response else 'Unknown'} - {error_text}")
@@ -83,4 +88,3 @@ def get_user_info(access_token: str) -> dict:
         raise
     else:
         return user_info
-

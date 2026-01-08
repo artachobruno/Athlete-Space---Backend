@@ -21,8 +21,7 @@ from app.api.dependencies.auth import get_current_user_id, get_optional_user_id
 from app.config.settings import settings
 from app.core.auth_jwt import create_access_token
 from app.core.encryption import EncryptionError, encrypt_token
-from app.core.password import hash_password
-from app.db.models import GoogleAccount, User
+from app.db.models import AuthProvider, GoogleAccount, User
 from app.db.session import get_session
 from app.integrations.google.oauth import exchange_code_for_token, get_user_info
 
@@ -258,7 +257,7 @@ def google_callback(
     resolved_user_id: str | None = None
     try:
         # Exchange code for tokens
-        logger.info(f"[GOOGLE_OAUTH] Exchanging code for tokens")
+        logger.info("[GOOGLE_OAUTH] Exchanging code for tokens")
         token_data = exchange_code_for_token(
             client_id=settings.google_client_id,
             client_secret=settings.google_client_secret,
@@ -270,73 +269,89 @@ def google_callback(
         refresh_token = token_data.get("refresh_token", "")
         expires_in = token_data.get("expires_in", 3600)
         expires_at = int(datetime.now(timezone.utc).timestamp()) + expires_in
+        # Note: id_token is available in token_data but not verified yet
+        # Full ID token verification (signature, aud, exp, iss) would require
+        # fetching Google's public keys. For now, we verify email_verified from userinfo.
+        # TODO: Add full ID token verification using google-auth library for enhanced security
 
         # Get user info from Google
-        logger.info(f"[GOOGLE_OAUTH] Fetching user info from Google")
+        logger.info("[GOOGLE_OAUTH] Fetching user info from Google")
         user_info = get_user_info(access_token)
-        google_id = user_info["id"]
+        google_sub = user_info["id"]  # Google's 'id' is the same as 'sub' claim
         email = user_info.get("email", "").lower().strip()
-        name = user_info.get("name", "")
+        email_verified = user_info.get("verified_email", False)  # Google returns verified_email
 
         if not email:
             logger.error("[GOOGLE_OAUTH] No email in Google user info")
             return _create_error_html(redirect_url, "Google account must have an email address.")
 
+        if not email_verified:
+            logger.error("[GOOGLE_OAUTH] Email not verified in Google user info")
+            return _create_error_html(redirect_url, "Google account email must be verified.")
+
         # Resolve or create user
         with get_session() as session:
-            # Check if Google account is already linked
-            existing_google_account = session.execute(
-                select(GoogleAccount).where(GoogleAccount.google_id == google_id)
-            ).first()
+            # First, check if user exists by google_sub
+            user_by_google_sub = session.execute(select(User).where(User.google_sub == google_sub)).first()
 
-            if existing_google_account:
-                # Google account already linked to a user
-                existing_account = existing_google_account[0]
-                if user_id and existing_account.user_id != user_id:
-                    logger.warning(
-                        f"[GOOGLE_OAUTH] Google account already linked to different user: "
-                        f"existing={existing_account.user_id}, requested={user_id}"
-                    )
-                    return _create_error_html(redirect_url, "This Google account is already linked to another user.")
-                resolved_user_id = existing_account.user_id
-                logger.info(f"[GOOGLE_OAUTH] Google account already linked to user_id={resolved_user_id}")
+            if user_by_google_sub:
+                # User exists with this google_sub - login
+                resolved_user_id = user_by_google_sub[0].id
+                logger.info(f"[GOOGLE_OAUTH] Logging in existing user_id={resolved_user_id} by google_sub={google_sub}")
             else:
-                # Google account not linked - create or link to user
-                if user_id:
-                    # Authenticated flow: link to existing user
+                # Check if user exists by email (for account linking)
+                user_by_email = session.execute(select(User).where(User.email == email)).first()
+
+                if user_by_email:
+                    # User exists with this email - link Google account
+                    existing_user = user_by_email[0]
+                    if user_id and existing_user.id != user_id:
+                        logger.warning(
+                            f"[GOOGLE_OAUTH] Email already exists for different user: existing={existing_user.id}, requested={user_id}"
+                        )
+                        return _create_error_html(redirect_url, "This email is already associated with another account.")
+                    resolved_user_id = existing_user.id
+                    # Link Google account to existing user
+                    existing_user.google_sub = google_sub
+                    existing_user.auth_provider = AuthProvider.google
+                    # If user had password auth, keep it (allow both)
+                    # But if they're logging in with Google, we'll update auth_provider
+                    logger.info(f"[GOOGLE_OAUTH] Linking Google account to existing user_id={resolved_user_id}")
+                elif user_id:
+                    # Authenticated flow: link to existing user (shouldn't happen if email doesn't match)
                     user_result = session.execute(select(User).where(User.id == user_id)).first()
                     if not user_result:
                         logger.error(f"[GOOGLE_OAUTH] User not found: user_id={user_id}")
                         return _create_error_html(redirect_url, "User not found.")
                     resolved_user_id = user_id
+                    user = user_result[0]
+                    user.google_sub = google_sub
+                    user.auth_provider = AuthProvider.google
                     logger.info(f"[GOOGLE_OAUTH] Linking Google account to existing user_id={resolved_user_id}")
                 else:
-                    # Unauthenticated flow: create new user or login
-                    # Check if user with this email exists
-                    user_result = session.execute(select(User).where(User.email == email)).first()
-                    if user_result:
-                        # User exists - login
-                        resolved_user_id = user_result[0].id
-                        logger.info(f"[GOOGLE_OAUTH] Logging in existing user_id={resolved_user_id} with Google")
-                    else:
-                        # Create new user
-                        resolved_user_id = str(uuid.uuid4())
-                        # Generate a random password (user won't need it, but it's required by schema)
-                        password_hash = hash_password(secrets.token_urlsafe(32))
-                        new_user = User(
-                            id=resolved_user_id,
-                            email=email,
-                            password_hash=password_hash,
-                            strava_athlete_id=None,
-                            created_at=datetime.now(timezone.utc),
-                            last_login_at=None,
-                        )
-                        session.add(new_user)
-                        session.commit()
-                        logger.info(f"[GOOGLE_OAUTH] Created new user_id={resolved_user_id} with email={email}")
+                    # Unauthenticated flow: create new user
+                    resolved_user_id = str(uuid.uuid4())
+                    new_user = User(
+                        id=resolved_user_id,
+                        email=email,
+                        password_hash=None,  # OAuth users don't need passwords
+                        auth_provider=AuthProvider.google,
+                        google_sub=google_sub,
+                        strava_athlete_id=None,
+                        created_at=datetime.now(timezone.utc),
+                        last_login_at=None,
+                    )
+                    session.add(new_user)
+                    session.commit()
+                    logger.info(f"[GOOGLE_OAUTH] Created new user_id={resolved_user_id} with email={email}, auth_provider=google")
 
-            # Store tokens
-            _encrypt_and_store_tokens(resolved_user_id, google_id, access_token, refresh_token, expires_at)
+            # Ensure resolved_user_id is set before proceeding
+            if not resolved_user_id:
+                logger.error("[GOOGLE_OAUTH] resolved_user_id not set after processing")
+                return _create_error_html(redirect_url, "Failed to resolve user account.")
+
+            # Store tokens in GoogleAccount table (for future use if needed)
+            _encrypt_and_store_tokens(resolved_user_id, google_sub, access_token, refresh_token, expires_at)
 
             # Update last_login_at
             user_result = session.execute(select(User).where(User.id == resolved_user_id)).first()
@@ -346,11 +361,7 @@ def google_callback(
                 session.commit()
                 logger.debug(f"[GOOGLE_OAUTH] Updated last_login_at for user_id={resolved_user_id}")
 
-        if not resolved_user_id:
-            logger.error("[GOOGLE_OAUTH] resolved_user_id not set after processing")
-            return _create_error_html(redirect_url, "Failed to resolve user account.")
-
-        logger.info(f"[GOOGLE_OAUTH] Google connection completed for user_id={resolved_user_id}, google_id={google_id}")
+        logger.info(f"[GOOGLE_OAUTH] Google connection completed for user_id={resolved_user_id}, google_sub={google_sub}")
 
         # Issue JWT token for the user
         jwt_token = create_access_token(resolved_user_id)
@@ -399,4 +410,3 @@ def google_disconnect(user_id: str = Depends(get_current_user_id)):
         logger.info(f"[GOOGLE_OAUTH] Disconnected Google account for user_id={user_id}, google_id={google_id}")
 
     return {"success": True, "message": "Google account disconnected"}
-

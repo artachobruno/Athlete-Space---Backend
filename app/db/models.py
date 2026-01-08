@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -11,14 +12,23 @@ class Base(DeclarativeBase):
     """Base class for all database models."""
 
 
+class AuthProvider(enum.Enum):
+    """Authentication provider enum."""
+
+    password = "password"  # noqa: S105  # pragma: allowlist secret
+    google = "google"
+
+
 class User(Base):
     """User table for authentication and user context.
 
-    All users must have email and password credentials.
+    Users can authenticate via email/password or Google OAuth.
     Stores:
     - id: User ID (string UUID format)
     - email: User email (required, unique, indexed)
-    - password_hash: Hashed password (required)
+    - password_hash: Hashed password (nullable for OAuth users)
+    - auth_provider: Authentication provider (password or google)
+    - google_sub: Google user ID (sub claim, nullable, unique when set)
     - strava_athlete_id: Strava athlete ID (optional, nullable, unique when set)
     - created_at: Timestamp when user was created
     - last_login_at: Timestamp of last login (optional, nullable)
@@ -28,7 +38,9 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    auth_provider: Mapped[AuthProvider] = mapped_column(Enum(AuthProvider), nullable=False)
+    google_sub: Mapped[str | None] = mapped_column(String, nullable=True, unique=True, index=True)
     strava_athlete_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -36,6 +48,7 @@ class User(Base):
 
     __table_args__ = (
         Index("idx_users_email", "email", unique=False),  # Already unique, but explicit index
+        Index("idx_users_google_sub", "google_sub", unique=False),  # Already unique, but explicit index
         Index("idx_users_strava_athlete_id", "strava_athlete_id", unique=False),  # Already unique, but explicit index
     )
 

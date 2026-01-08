@@ -452,18 +452,21 @@ def strava_disconnect(user_id: str = Depends(get_current_user_id)):
         account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
 
         if not account:
-            logger.warning(f"[STRAVA_OAUTH] No Strava account found for user_id={user_id}")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Strava account not connected",
-            )
+            logger.info(f"[STRAVA_OAUTH] Strava already disconnected for user_id={user_id}")
+            return {
+                "connected": False,
+                "message": "Strava already disconnected",
+            }
 
         athlete_id = account[0].athlete_id
         session.delete(account[0])
         session.commit()
         logger.info(f"[STRAVA_OAUTH] Disconnected Strava account for user_id={user_id}, athlete_id={athlete_id}")
 
-    return {"success": True, "message": "Strava account disconnected"}
+    return {
+        "connected": False,
+        "message": "Strava disconnected",
+    }
 
 
 def _trigger_initial_sync(user_id: str, background_tasks: BackgroundTasks) -> None:

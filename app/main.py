@@ -51,6 +51,7 @@ from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athle
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
+from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
 from scripts.migrate_add_streams_data import migrate_add_streams_data
@@ -100,6 +101,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_user_auth_fields: {e}")
     logger.error(f"✗ Migration failed: migrate_user_auth_fields - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: Google OAuth fields")
+    migrate_add_google_oauth_fields()
+    logger.info("✓ Migration completed: Google OAuth fields")
+except Exception as e:
+    migration_errors.append(f"migrate_add_google_oauth_fields: {e}")
+    logger.error(f"✗ Migration failed: migrate_add_google_oauth_fields - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: add is_active to users table")

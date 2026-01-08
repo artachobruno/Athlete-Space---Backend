@@ -79,8 +79,77 @@ def get_me(user_id: str = Depends(get_current_user_id)):
             "user_id": user_id,
             "authenticated": True,
             "email": user.email,
+            "auth_provider": user.auth_provider.value if user.auth_provider else "password",
             "onboarding_complete": onboarding_complete,
         }
+
+
+@router.get("/strava")
+def get_strava_status(user_id: str = Depends(get_current_user_id)):
+    """Get Strava connection status for current user.
+
+    Always returns 200 OK with connection status.
+    Never returns 404, 204, or null.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        {
+            "connected": bool
+        }
+    """
+    logger.debug(f"[STRAVA_STATUS] Status check for user_id={user_id}")
+
+    with get_session() as session:
+        account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+
+        if not account:
+            logger.debug(f"[STRAVA_STATUS] Strava not connected for user_id={user_id}")
+            return {
+                "connected": False,
+            }
+
+        logger.debug(f"[STRAVA_STATUS] Strava connected for user_id={user_id}, athlete_id={account[0].athlete_id}")
+        return {
+            "connected": True,
+        }
+
+
+@router.delete("/strava")
+def disconnect_strava(user_id: str = Depends(get_current_user_id)):
+    """Disconnect user's Strava account.
+
+    Deletes the strava_accounts row for the current user.
+    Returns 200 OK even if Strava is already disconnected.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Response with connected status and message
+    """
+    logger.info(f"[STRAVA_DISCONNECT] Disconnect requested for user_id={user_id}")
+
+    with get_session() as session:
+        account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+
+        if not account:
+            logger.info(f"[STRAVA_DISCONNECT] Strava already disconnected for user_id={user_id}")
+            return {
+                "connected": False,
+                "message": "Strava already disconnected",
+            }
+
+        athlete_id = account[0].athlete_id
+        session.delete(account[0])
+        session.commit()
+        logger.info(f"[STRAVA_DISCONNECT] Disconnected Strava account for user_id={user_id}, athlete_id={athlete_id}")
+
+    return {
+        "connected": False,
+        "message": "Strava disconnected",
+    }
 
 
 def _validate_unit_system(unit_system: str) -> None:
@@ -227,7 +296,7 @@ def get_strava_account(user_id: str) -> StravaAccount:
     with get_session() as session:
         result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
         if not result:
-            logger.warning(f"No Strava account connected for user_id={user_id}")
+            logger.info(f"Strava already disconnected for user_id={user_id}")
             raise HTTPException(status_code=404, detail="No Strava account connected. Please complete OAuth at /auth/strava")
         account = result[0]
         # Detach object from session so it can be used after session closes

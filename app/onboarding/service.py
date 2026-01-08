@@ -789,8 +789,9 @@ def complete_onboarding_flow(
             # 5. Mark onboarding as complete
             profile.onboarding_completed = True
             session.commit()
+            session.refresh(profile)  # Refresh to ensure we have the latest state
 
-            logger.info(f"Onboarding completed successfully for user_id={user_id}")
+            logger.info(f"Onboarding completed successfully for user_id={user_id}, onboarding_completed={profile.onboarding_completed}")
 
             return OnboardingCompleteResponse(
                 status="ok",

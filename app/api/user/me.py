@@ -40,6 +40,45 @@ from app.metrics.training_load import compute_training_load
 router = APIRouter(prefix="/me", tags=["me"])
 
 
+def _infer_onboarding_complete_from_data(profile: AthleteProfile | None, settings: UserSettings | None) -> bool:
+    """Infer if onboarding was completed based on profile and settings data.
+
+    This is a fallback check when the onboarding_completed flag might be incorrect.
+    If the user has substantial onboarding data, we infer they completed onboarding.
+
+    Args:
+        profile: AthleteProfile instance or None
+        settings: UserSettings instance or None
+
+    Returns:
+        True if onboarding appears to be completed based on data
+    """
+    if not profile and not settings:
+        return False
+
+    # Check if profile has substantial data
+    has_profile_data = False
+    if profile:
+        has_profile_data = bool(
+            profile.name or profile.goals or profile.target_event or profile.weight_kg or profile.height_cm or profile.date_of_birth
+        )
+
+    # Check if settings have substantial data
+    has_settings_data = False
+    if settings:
+        has_settings_data = bool(
+            settings.years_of_training
+            or settings.primary_sports
+            or settings.available_days
+            or settings.weekly_hours
+            or settings.training_focus
+            or settings.goal
+        )
+
+    # If either has substantial data, infer onboarding was completed
+    return has_profile_data or has_settings_data
+
+
 @router.get("")
 def get_me(user_id: str = Depends(get_current_user_id)):
     """Get current authenticated user info.
@@ -71,9 +110,33 @@ def get_me(user_id: str = Depends(get_current_user_id)):
 
         # Get onboarding status from AthleteProfile
         profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
+        profile = profile_result[0] if profile_result else None
+
+        # Get UserSettings to check for onboarding data
+        settings_result = session.execute(select(UserSettings).where(UserSettings.user_id == user_id)).first()
+        settings = settings_result[0] if settings_result else None
+
         onboarding_complete = False
-        if profile_result:
-            onboarding_complete = profile_result[0].onboarding_completed
+        if profile:
+            onboarding_complete = bool(profile.onboarding_completed)
+            logger.info(
+                f"[API] /me: user_id={user_id}, profile_exists=True, "
+                f"onboarding_completed={profile.onboarding_completed}, "
+                f"returning onboarding_complete={onboarding_complete}"
+            )
+
+            # Fallback: if flag is False but user has substantial onboarding data, infer completion
+            if not onboarding_complete:
+                inferred_complete = _infer_onboarding_complete_from_data(profile, settings)
+                if inferred_complete:
+                    logger.warning(
+                        f"[API] /me: user_id={user_id}, onboarding_completed flag is False "
+                        f"but user has onboarding data. Inferring completion=True. "
+                        f"This suggests a data inconsistency that should be fixed."
+                    )
+                    onboarding_complete = True
+        else:
+            logger.info(f"[API] /me: user_id={user_id}, profile_exists=False, returning onboarding_complete=False")
 
         return {
             "user_id": user_id,

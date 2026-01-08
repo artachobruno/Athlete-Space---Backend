@@ -24,10 +24,12 @@ def hash_password(password: str) -> str:
         Hashed password string
 
     Raises:
-        ValueError: If password is empty
+        ValueError: If password is empty or exceeds bcrypt's 72-byte limit
     """
     if not password:
         raise ValueError("Password cannot be empty")
+    # bcrypt hard limit: 72 bytes
+    password = password[:72]
     return pwd_context.hash(password)
 
 

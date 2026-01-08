@@ -16,7 +16,8 @@ aiohttp>=3.10.0
 pyjwt>=2.8.0
 python-jose[cryptography]>=3.3.0
 cryptography>=41.0.0
-passlib[bcrypt]>=1.7.4
+bcrypt==4.1.2
+passlib[bcrypt]==1.7.4
 
 # -------------------------------------------------
 # LLM

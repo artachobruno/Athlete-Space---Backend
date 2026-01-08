@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
@@ -29,7 +29,7 @@ class SignupRequest(BaseModel):
     """Signup request model."""
 
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8, max_length=72)
 
     @field_validator("password")
     @classmethod
@@ -90,7 +90,14 @@ def signup(request: SignupRequest):
             )
 
         # Hash password
-        password_hash = hash_password(request.password)
+        try:
+            password_hash = hash_password(request.password)
+        except ValueError as e:
+            logger.warning(f"[AUTH] Signup failed: password hashing error for email={normalized_email}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password must be 8–72 characters",
+            )
 
         # Create user with UUID-based ID
         user_id = str(uuid.uuid4())

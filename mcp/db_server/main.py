@@ -9,6 +9,12 @@ Implements MCP-compliant tools for database operations:
 - add_workout
 - plan_race_build
 - plan_season
+- plan_week
+- run_analysis
+- explain_training_state
+- adjust_training_load
+- recommend_next_session
+- share_report
 """
 
 import asyncio
@@ -120,6 +126,14 @@ plan_race_build_tool = _sessions_module.plan_race_build_tool
 plan_season_tool = _sessions_module.plan_season_tool
 save_planned_sessions_tool = _sessions_module.save_planned_sessions_tool
 
+_coach_tools_module = _load_module_from_path("mcp_db_coach_tools", _tools_dir / "coach_tools.py")
+plan_week_tool = _coach_tools_module.plan_week_tool
+run_analysis_tool = _coach_tools_module.run_analysis_tool
+explain_training_state_tool = _coach_tools_module.explain_training_state_tool
+adjust_training_load_tool = _coach_tools_module.adjust_training_load_tool
+recommend_next_session_tool = _coach_tools_module.recommend_next_session_tool
+share_report_tool = _coach_tools_module.share_report_tool
+
 app = FastAPI(title="MCP DB Server", version="1.0.0")
 
 # Configure logger
@@ -170,6 +184,12 @@ async def call_tool(request: Request) -> JSONResponse:
             "add_workout": add_workout_tool,
             "plan_race_build": plan_race_build_tool,
             "plan_season": plan_season_tool,
+            "plan_week": plan_week_tool,
+            "run_analysis": run_analysis_tool,
+            "explain_training_state": explain_training_state_tool,
+            "adjust_training_load": adjust_training_load_tool,
+            "recommend_next_session": recommend_next_session_tool,
+            "share_report": share_report_tool,
         }
 
         if tool_name not in tool_map:

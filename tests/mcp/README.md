@@ -4,14 +4,18 @@ This guide explains how to run the MCP-aware smoke tests that verify tool routin
 
 ## Prerequisites
 
-1. **MCP Servers Running**: The tests require both MCP servers to be running
+1. **MCP Servers**: Either:
+   - **Local**: Both MCP servers running locally (see Step 1 below), OR
+   - **Render**: MCP servers running on Render (just set environment variables)
 2. **Environment Variables**: Set `MCP_DB_SERVER_URL` and `MCP_FS_SERVER_URL`
-3. **Database**: A test database with the required schema
+3. **Database**: A test database with the required schema (for DB server)
 4. **OpenAI API Key**: Required for LLM calls (set via `OPENAI_API_KEY`)
 
-## Step 1: Start MCP Servers
+## Step 1: Start MCP Servers (Only if Using Local Servers)
 
-You need to run both MCP servers in separate terminals:
+**Skip this step if you're using Render-hosted servers** - just set the environment variables in Step 2.
+
+If running locally, you need to run both MCP servers in separate terminals:
 
 ### Terminal 1: DB Server
 ```bash
@@ -29,6 +33,8 @@ Server runs on `http://localhost:8081`
 
 ## Step 2: Set Environment Variables
 
+### Option A: Use Local MCP Servers
+
 ```bash
 export MCP_DB_SERVER_URL=http://localhost:8080
 export MCP_FS_SERVER_URL=http://localhost:8081
@@ -41,6 +47,36 @@ MCP_DB_SERVER_URL=http://localhost:8080
 MCP_FS_SERVER_URL=http://localhost:8081
 OPENAI_API_KEY=sk-your-key-here
 ```
+
+### Option B: Use Render-Hosted MCP Servers (Recommended for Testing)
+
+If you have MCP servers already running on Render, you can use them directly:
+
+```bash
+export MCP_DB_SERVER_URL=https://athlete-space-mcp-db.onrender.com
+export MCP_FS_SERVER_URL=https://athlete-space-mcp-fs.onrender.com
+export OPENAI_API_KEY=sk-your-key-here
+```
+
+Or in a `.env` file:
+```bash
+MCP_DB_SERVER_URL=https://athlete-space-mcp-db.onrender.com
+MCP_FS_SERVER_URL=https://athlete-space-mcp-fs.onrender.com
+OPENAI_API_KEY=sk-your-key-here
+```
+
+**Note:** Replace the URLs above with your actual Render service URLs if they differ.
+
+**Benefits of using Render servers:**
+- ✅ No need to run servers locally
+- ✅ Faster test setup
+- ✅ Tests against production-like environment
+- ✅ No port conflicts
+
+**Considerations:**
+- ⚠️ Tests will hit your production Render services (ensure they're test-safe)
+- ⚠️ Network latency may be slightly higher than local
+- ⚠️ Make sure Render services are running and accessible
 
 ## Step 3: Run Tests
 
@@ -121,9 +157,10 @@ SKIPPED [1] tests/mcp/conftest.py:27: MCP tests skipped, missing env vars: ['MCP
 **Solution**: Set `MCP_DB_SERVER_URL` and `MCP_FS_SERVER_URL` environment variables.
 
 ### Tests Fail with Connection Errors
-**Solution**: Ensure both MCP servers are running:
-- DB server on port 8080
-- FS server on port 8081
+**Solution**: 
+- If using local servers: Ensure both MCP servers are running on ports 8080 and 8081
+- If using Render servers: Verify the URLs are correct and the Render services are running and accessible
+- Check network connectivity: `curl https://athlete-space-mcp-db.onrender.com/health` (or your Render URL)
 
 ### Tests Fail with "Tool not found"
 **Solution**: Check that MCP servers are running the latest version with all required tools.

@@ -297,7 +297,7 @@ def plan_season_tool(arguments: dict) -> dict:
         sessions = generate_season_sessions(
             season_start=season_start,
             season_end=season_end,
-            target_races=None,
+            _target_races=None,
         )
 
         plan_id = f"season_{season_start.strftime('%Y%m%d')}_{season_end.strftime('%Y%m%d')}"

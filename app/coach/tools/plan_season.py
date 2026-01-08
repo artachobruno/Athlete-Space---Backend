@@ -5,6 +5,9 @@ from loguru import logger
 
 from app.coach.tools.session_planner import generate_season_sessions, save_planned_sessions
 
+# Cache to prevent duplicate calls within a short time window
+_recent_calls: dict[str, datetime] = {}
+
 
 def parse_season_dates(message_lower: str) -> tuple[datetime, datetime]:
     """Parse season start and end dates from message."""
@@ -93,7 +96,33 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
         Response message with plan details or clarification questions
     """
     logger.info(f"Tool plan_season called (message_length={len(message)})")
-    message_lower = message.lower() if message else ""
+    message_lower = message.lower().strip() if message else ""
+
+    # Create a simple hash of the message for duplicate detection
+    message_hash = str(hash(message_lower[:100]))  # Use first 100 chars
+    now = datetime.now(timezone.utc)
+
+    # Check if we've been called recently with similar input (within last 10 seconds)
+    if message_hash in _recent_calls:
+        last_time = _recent_calls[message_hash]
+        if (now - last_time).total_seconds() < 10:
+            logger.warning("Duplicate plan_season tool call detected within 10 seconds, blocking repeat call")
+            return (
+                "I've already provided information about season planning. "
+                "**Please do not call this tool again with the same input.**\n\n"
+                "To create a season training plan, provide both the start and end dates in your message:\n\n"
+                "• **Season start date** (e.g., January 1, 2026)\n"
+                "• **Season end date** (e.g., December 31, 2026)\n\n"
+                'Example: "Plan my training season from January 1 to December 31, 2026"'
+            )
+
+    # Update cache
+    _recent_calls[message_hash] = now
+    # Clean old entries (older than 30 seconds) to prevent memory growth
+    cutoff = now - timedelta(seconds=30)
+    keys_to_remove = [k for k, v in _recent_calls.items() if v <= cutoff]
+    for key in keys_to_remove:
+        del _recent_calls[key]
 
     # Extract season dates
     season_start, season_end = parse_season_dates(message_lower)

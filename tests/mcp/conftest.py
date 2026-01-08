@@ -16,6 +16,8 @@ if str(_project_root) not in sys.path:
 
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.mcp_client import MCP_CALL_LOG
+from app.coach.services.state_builder import build_athlete_state
+from app.config.settings import settings
 from app.db.models import StravaAccount, User
 from app.db.session import get_session
 
@@ -27,12 +29,24 @@ TEST_ATHLETE_ID = 1
 def require_mcp_env():
     """Require MCP environment variables to be set.
 
+    Uses settings defaults if environment variables are not explicitly set.
     Skips all tests if MCP servers are not configured.
     """
-    missing = []
+    # Use settings defaults if env vars not set
+    db_url = os.getenv("MCP_DB_SERVER_URL") or settings.mcp_db_server_url
+    fs_url = os.getenv("MCP_FS_SERVER_URL") or settings.mcp_fs_server_url
+
+    # Set environment variables so they're available to the MCP client
     if not os.getenv("MCP_DB_SERVER_URL"):
-        missing.append("MCP_DB_SERVER_URL")
+        os.environ["MCP_DB_SERVER_URL"] = db_url
     if not os.getenv("MCP_FS_SERVER_URL"):
+        os.environ["MCP_FS_SERVER_URL"] = fs_url
+
+    # Verify we have valid URLs (not empty strings)
+    missing = []
+    if not db_url:
+        missing.append("MCP_DB_SERVER_URL")
+    if not fs_url:
         missing.append("MCP_FS_SERVER_URL")
 
     if missing:
@@ -45,6 +59,10 @@ def test_user_id():
 
     Creates a test user with athlete_id=1 if it doesn't exist.
     Returns the user_id for use in tests.
+
+    Note: This creates the user in the local test database. If the MCP server
+    uses a different database (e.g., Render-hosted), the USER_NOT_FOUND error
+    when saving context is expected and handled gracefully (logged as warning).
     """
     with get_session() as db:
         # Check if StravaAccount exists for athlete_id=1
@@ -92,11 +110,21 @@ def test_user_id():
 
 @pytest.fixture
 def deps(test_user_id: str):
-    """Create CoachDeps for testing."""
+    """Create CoachDeps for testing with a valid athlete_state."""
+    # Create a minimal athlete_state for testing
+    # This allows tools to run and call MCP functions
+    daily_load = [1.0] * 30  # 30 days of 1 hour training
+    athlete_state = build_athlete_state(
+        ctl=50.0,
+        atl=7.0,
+        tsb=43.0,
+        daily_load=daily_load,
+        days_to_race=None,
+    )
     return CoachDeps(
         athlete_id=TEST_ATHLETE_ID,
         user_id=test_user_id,
-        athlete_state=None,  # Will be populated by tools via MCP if needed
+        athlete_state=athlete_state,
         days=60,
         days_to_race=None,
     )

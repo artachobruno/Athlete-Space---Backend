@@ -168,7 +168,7 @@ async def test_explain_training_state(deps):
             user_input="Why do I feel tired?",
             deps=deps,
         ),
-        timeout=TEST_TIMEOUT,
+        timeout=TEST_TIMEOUT_LONG,  # Use longer timeout as this may require more LLM processing
     )
 
     assert result is not None

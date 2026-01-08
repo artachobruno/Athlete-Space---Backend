@@ -41,7 +41,7 @@ failure_handler = IntelligenceFailureHandler()
 triggers = RegenerationTriggers()
 
 
-def _generate_daily_decision_on_demand(
+async def _generate_daily_decision_on_demand(
     user_id: str,
     athlete_id: int,
     decision_date: date,
@@ -77,7 +77,7 @@ def _generate_daily_decision_on_demand(
         weekly_intent_id = weekly_intent_model.id if weekly_intent_model else None
 
         # Generate and save the decision
-        decision_id = triggers.maybe_regenerate_daily_decision(
+        decision_id = await triggers.maybe_regenerate_daily_decision(
             user_id=user_id,
             athlete_id=athlete_id,
             decision_date=decision_date,
@@ -292,7 +292,7 @@ def get_weekly_intent(
 
 
 @router.get("/today", response_model=DailyDecisionResponse)
-def get_daily_decision(
+async def get_daily_decision(
     user_id: str = Depends(get_current_user_id),
     decision_date: date | None = None,
 ):
@@ -322,7 +322,7 @@ def get_daily_decision(
         decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=False)
         if decision_model is None:
             # Generate on-demand if missing
-            decision_model = _generate_daily_decision_on_demand(
+            decision_model = await _generate_daily_decision_on_demand(
                 user_id=user_id,
                 athlete_id=athlete_id,
                 decision_date=decision_date,

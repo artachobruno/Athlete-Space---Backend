@@ -3,6 +3,7 @@
 Generates daily decisions for all active users on a schedule.
 """
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
@@ -15,7 +16,7 @@ from app.services.intelligence.store import IntentStore
 from app.services.intelligence.triggers import RegenerationTriggers
 
 
-def _process_user_daily_decision(
+async def _process_user_daily_decision(
     user_id: str,
     athlete_id: int,
     today: date,
@@ -52,7 +53,7 @@ def _process_user_daily_decision(
     weekly_intent_id = weekly_intent_model.id if weekly_intent_model else None
 
     # Generate decision
-    decision_id = triggers.maybe_regenerate_daily_decision(
+    decision_id = await triggers.maybe_regenerate_daily_decision(
         user_id=user_id,
         athlete_id=athlete_id,
         decision_date=today,
@@ -68,15 +69,8 @@ def _process_user_daily_decision(
     return False, True
 
 
-def generate_daily_decisions_for_all_users() -> None:
-    """Generate daily decisions for all users with connected Strava accounts.
-
-    This function is designed to run overnight (e.g., via scheduler) to pre-generate
-    daily decisions for all active users. This ensures decisions are available when
-    users check their dashboard in the morning.
-
-    Logs progress and errors but does not raise exceptions to avoid breaking the scheduler.
-    """
+async def _generate_daily_decisions_async() -> None:
+    """Async helper to generate daily decisions for all users."""
     logger.info("Starting overnight daily decision generation for all users")
 
     triggers = RegenerationTriggers()
@@ -97,7 +91,7 @@ def generate_daily_decisions_for_all_users() -> None:
 
     for user_id, athlete_id in user_accounts:
         try:
-            success, skipped = _process_user_daily_decision(user_id, athlete_id, today, triggers, store)
+            success, skipped = await _process_user_daily_decision(user_id, athlete_id, today, triggers, store)
             if success:
                 success_count += 1
             elif skipped:
@@ -113,3 +107,15 @@ def generate_daily_decisions_for_all_users() -> None:
         f"Completed overnight daily decision generation: "
         f"total={total_users}, success={success_count}, skipped={skipped_count}, errors={error_count}"
     )
+
+
+def generate_daily_decisions_for_all_users() -> None:
+    """Generate daily decisions for all users with connected Strava accounts.
+
+    This function is designed to run overnight (e.g., via scheduler) to pre-generate
+    daily decisions for all active users. This ensures decisions are available when
+    users check their dashboard in the morning.
+
+    Logs progress and errors but does not raise exceptions to avoid breaking the scheduler.
+    """
+    asyncio.run(_generate_daily_decisions_async())

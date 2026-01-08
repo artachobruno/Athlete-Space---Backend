@@ -69,6 +69,16 @@ class Settings(BaseSettings):
     strava_webhook_verify_token: str = Field(default="", validation_alias="STRAVA_WEBHOOK_VERIFY_TOKEN")
     admin_user_ids: str = Field(default="", validation_alias="ADMIN_USER_IDS")  # Comma-separated list
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    mcp_db_server_url: str = Field(
+        default="http://localhost:8080",
+        validation_alias="MCP_DB_SERVER_URL",
+        description="MCP Database Server URL",
+    )
+    mcp_fs_server_url: str = Field(
+        default="http://localhost:8081",
+        validation_alias="MCP_FS_SERVER_URL",
+        description="MCP Filesystem Server URL",
+    )
 
     @field_validator("log_level")
     @classmethod

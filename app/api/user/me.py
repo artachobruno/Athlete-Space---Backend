@@ -130,6 +130,21 @@ def _try_infer_completion_from_data(session, user_id: str) -> bool:
     Returns:
         True if onboarding appears complete based on data, False otherwise
     """
+    # Strong signal: If Strava is connected and has activities, onboarding is likely complete
+    try:
+        strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+        if strava_account:
+            activity_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
+            if activity_count > 0:
+                logger.warning(
+                    f"[API] /me: user_id={user_id}, onboarding_completed flag is False "
+                    f"but Strava is connected with {activity_count} activities. Inferring completion=True."
+                )
+                return True
+    except Exception as e:
+        logger.debug(f"[API] /me: Could not check Strava connection for inference: {e}")
+
+    # Fallback: Check profile and settings data
     profile = _get_profile_for_inference(session, user_id)
     if not profile:
         return False
@@ -245,10 +260,17 @@ def get_me(user_id: str = Depends(get_current_user_id)):
 
             # Get onboarding status from profile
             onboarding_complete = _get_onboarding_status(session, user_id)
+            logger.info(f"[API] /me: user_id={user_id}, initial onboarding_complete={onboarding_complete}")
 
             # If not complete, try to infer from data
             if not onboarding_complete:
-                onboarding_complete = _try_infer_completion_from_data(session, user_id)
+                logger.info(f"[API] /me: user_id={user_id}, trying to infer completion from data")
+                inferred = _try_infer_completion_from_data(session, user_id)
+                if inferred:
+                    onboarding_complete = True
+                    logger.info(f"[API] /me: user_id={user_id}, inferred onboarding_complete=True")
+                else:
+                    logger.info(f"[API] /me: user_id={user_id}, could not infer completion, returning False")
 
             return {
                 "user_id": user_id,

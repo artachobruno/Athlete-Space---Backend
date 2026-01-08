@@ -44,26 +44,31 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
             logger.debug("No athlete_id found, treating as cold start")
             return True
 
+    # Convert athlete_id to user_id
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.debug("No user_id found for athlete_id, treating as cold start", athlete_id=athlete_id)
+        return True
+
     with get_session() as db:
-        message_count = db.query(CoachMessage).filter(CoachMessage.athlete_id == athlete_id).count()
+        message_count = db.query(CoachMessage).filter(CoachMessage.user_id == user_id).count()
         logger.debug(
             "Checking coach message history",
             athlete_id=athlete_id,
-            athlete_id_type=type(athlete_id).__name__,
+            user_id=user_id,
             message_count=message_count,
             is_empty=message_count == 0,
         )
 
-        # Also check what athlete_ids actually exist in the table for debugging
+        # Also check what user_ids actually exist in the table for debugging
         if message_count == 0:
-            existing_athlete_ids = db.query(CoachMessage.athlete_id).distinct().all()
-            existing_ids_list = [row[0] for row in existing_athlete_ids] if existing_athlete_ids else []
+            existing_user_ids = db.query(CoachMessage.user_id).distinct().all()
+            existing_ids_list = [row[0] for row in existing_user_ids] if existing_user_ids else []
             logger.debug(
-                "No messages found for athlete_id, checking existing athlete_ids in table",
+                "No messages found for user_id, checking existing user_ids in table",
                 searched_athlete_id=athlete_id,
-                searched_athlete_id_type=type(athlete_id).__name__,
-                existing_athlete_ids=existing_ids_list,
-                existing_athlete_id_types=[type(row[0]).__name__ for row in existing_athlete_ids] if existing_athlete_ids else [],
+                searched_user_id=user_id,
+                existing_user_ids=existing_ids_list,
                 total_messages_in_table=db.query(CoachMessage).count(),
             )
 

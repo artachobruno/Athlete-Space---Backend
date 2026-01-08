@@ -22,6 +22,7 @@ from app.coach.services.coach_service import get_coach_advice
 from app.coach.utils.context_builder import build_coach_context
 from app.db.models import CoachMessage, StravaAccount, StravaAuth
 from app.db.session import get_session
+from app.state.api_helpers import get_user_id_from_athlete_id
 
 router = APIRouter(prefix="/coach", tags=["coach"])
 
@@ -52,8 +53,14 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
                 return True
             athlete_id = result[0].athlete_id
 
-        # Check if there are any messages for this athlete
-        message_count = db.query(CoachMessage).filter(CoachMessage.athlete_id == athlete_id).count()
+        # Convert athlete_id to user_id
+        user_id = get_user_id_from_athlete_id(athlete_id)
+        if user_id is None:
+            # No user_id found, treat as cold start
+            return True
+
+        # Check if there are any messages for this user
+        message_count = db.query(CoachMessage).filter(CoachMessage.user_id == user_id).count()
 
         return message_count == 0
 
@@ -84,9 +91,14 @@ def ask_coach(message: str, days: int = 60, athlete_id: int = 23078584):
     )
 
     # Save messages to database
-    with get_session() as db:
-        db.add(CoachMessage(athlete_id=athlete_id, role="user", content=message))
-        db.add(CoachMessage(athlete_id=athlete_id, role="assistant", content=reply))
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.warning(f"Cannot save messages: no user_id found for athlete_id={athlete_id}")
+    else:
+        with get_session() as db:
+            db.add(CoachMessage(user_id=user_id, role="user", content=message, created_at=datetime.now(timezone.utc)))
+            db.add(CoachMessage(user_id=user_id, role="assistant", content=reply, created_at=datetime.now(timezone.utc)))
+            db.commit()
 
     return {"reply": reply, "intent": intent}
 
@@ -96,13 +108,19 @@ def history(athlete_id: int = 23078584):
     """Get coach conversation history for an athlete."""
     logger.info(f"Coach history requested: athlete_id={athlete_id}")
 
+    # Convert athlete_id to user_id
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.warning(f"No user_id found for athlete_id={athlete_id}")
+        return []
+
     with get_session() as db:
-        msgs = db.query(CoachMessage).filter(CoachMessage.athlete_id == athlete_id).order_by(CoachMessage.timestamp).all()
+        msgs = db.query(CoachMessage).filter(CoachMessage.user_id == user_id).order_by(CoachMessage.created_at).all()
         return [
             {
                 "role": m.role,
                 "content": m.content,
-                "time": m.timestamp.isoformat() if isinstance(m.timestamp, datetime) else str(m.timestamp),
+                "time": m.created_at.isoformat() if isinstance(m.created_at, datetime) else str(m.created_at),
             }
             for m in msgs
         ]

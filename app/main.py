@@ -54,6 +54,7 @@ from scripts.migrate_add_planned_session_completion_fields import migrate_add_pl
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
+from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_daily_summary import migrate_daily_summary
@@ -98,6 +99,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_user_auth_fields: {e}")
     logger.error(f"✗ Migration failed: migrate_user_auth_fields - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: add is_active to users table")
+    migrate_add_user_is_active()
+    logger.info("✓ Migration completed: add is_active to users table")
+except Exception as e:
+    migration_errors.append(f"migrate_add_user_is_active: {e}")
+    logger.error(f"✗ Migration failed: migrate_add_user_is_active - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: athlete_profiles athlete_id column")

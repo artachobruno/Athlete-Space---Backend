@@ -28,7 +28,7 @@ from app.api.schemas.schemas import (
     TrainingPreferencesResponse,
     TrainingPreferencesUpdateRequest,
 )
-from app.db.models import Activity, AthleteProfile, DailyTrainingLoad, StravaAccount, UserSettings
+from app.db.models import Activity, AthleteProfile, DailyTrainingLoad, StravaAccount, User, UserSettings
 from app.db.session import get_session
 from app.ingestion.background_sync import sync_user_activities
 from app.ingestion.sla import SYNC_SLA_SECONDS
@@ -44,7 +44,7 @@ router = APIRouter(prefix="/me", tags=["me"])
 def get_me(user_id: str = Depends(get_current_user_id)):
     """Get current authenticated user info.
 
-    Simple endpoint that validates JWT token and returns user ID.
+    Returns user information including email and onboarding status.
     This is the contract endpoint - it must always return 200 OK if token is valid.
 
     Args:
@@ -53,14 +53,34 @@ def get_me(user_id: str = Depends(get_current_user_id)):
     Returns:
         {
             "user_id": str,
-            "authenticated": bool
+            "authenticated": bool,
+            "email": str,
+            "onboarding_complete": bool
         }
     """
     logger.info(f"[API] /me endpoint called for user_id={user_id}")
-    return {
-        "user_id": user_id,
-        "authenticated": True,
-    }
+
+    with get_session() as session:
+        # Get user info
+        user_result = session.execute(select(User).where(User.id == user_id)).first()
+        if not user_result:
+            logger.error(f"[API] User not found: user_id={user_id}")
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user = user_result[0]
+
+        # Get onboarding status from AthleteProfile
+        profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
+        onboarding_complete = False
+        if profile_result:
+            onboarding_complete = profile_result[0].onboarding_completed
+
+        return {
+            "user_id": user_id,
+            "authenticated": True,
+            "email": user.email,
+            "onboarding_complete": onboarding_complete,
+        }
 
 
 def _validate_unit_system(unit_system: str) -> None:

@@ -928,15 +928,35 @@ async def run_conversation(
     # Save conversation history via MCP
     # This is non-critical - conversation can continue even if context save fails
     try:
-        await call_tool(
-            "save_context",
-            {
+        # Normalize messages to strings - defensive validation to prevent payload shape bugs
+        # Extract user message - ensure it's a string
+        user_message = str(user_input).strip() if user_input else ""
+        if not user_message:
+            logger.warning("Skipping context save: empty user message", athlete_id=deps.athlete_id)
+        # Extract assistant message - ensure it's a string
+        elif not result.output.message:
+            logger.warning("Skipping context save: empty assistant message", athlete_id=deps.athlete_id)
+        elif not isinstance(deps.athlete_id, int):
+            logger.warning(
+                f"Skipping context save: invalid athlete_id type {type(deps.athlete_id)}",
+                athlete_id=deps.athlete_id,
+            )
+        elif not isinstance(ORCHESTRATOR_AGENT_MODEL.model_name, str):
+            logger.warning(
+                f"Skipping context save: invalid model_name type {type(ORCHESTRATOR_AGENT_MODEL.model_name)}",
+                athlete_id=deps.athlete_id,
+            )
+        else:
+            # Build payload explicitly - never pass lists or unpacked dicts
+            # Defensive validation - guarantee payload shape to prevent 'role__0' errors
+            assistant_message = str(result.output.message).strip()
+            payload = {
                 "athlete_id": deps.athlete_id,
                 "model_name": ORCHESTRATOR_AGENT_MODEL.model_name,
-                "user_message": user_input,
-                "assistant_message": result.output.message,
-            },
-        )
+                "user_message": user_message,
+                "assistant_message": assistant_message,
+            }
+            await call_tool("save_context", payload)
     except MCPError as e:
         # Context saving is non-critical - log but don't fail the conversation
         # USER_NOT_FOUND is expected when MCP server uses a different database (e.g., in tests)

@@ -72,20 +72,24 @@ def _process_activities_for_tss(activities_query: Sequence[Row]) -> dict[str, di
 
         daily_data[activity_date]["hours"] += row.duration_seconds / 3600.0
 
-        # Calculate TSS for this activity
-        activity_obj = Activity(
-            id=row.id,
-            user_id="",
-            athlete_id="",
-            strava_activity_id="",
-            start_time=row.start_time,
-            type=row.type or "Unknown",
-            duration_seconds=row.duration_seconds,
-            distance_meters=row.distance_meters or 0.0,
-            elevation_gain_meters=row.elevation_gain_meters or 0.0,
-            raw_json=row.raw_json,
-        )
-        activity_tss = compute_activity_tss(activity_obj)
+        # Use stored TSS if available, otherwise compute it
+        if hasattr(row, "tss") and row.tss is not None:
+            activity_tss = float(row.tss)
+        else:
+            # Fallback: Calculate TSS for this activity (backward compatibility)
+            activity_obj = Activity(
+                id=row.id,
+                user_id="",
+                athlete_id="",
+                strava_activity_id="",
+                start_time=row.start_time,
+                type=row.type or "Unknown",
+                duration_seconds=row.duration_seconds,
+                distance_meters=row.distance_meters or 0.0,
+                elevation_gain_meters=row.elevation_gain_meters or 0.0,
+                raw_json=row.raw_json,
+            )
+            activity_tss = compute_activity_tss(activity_obj)
         daily_data[activity_date]["tss"] += activity_tss
 
     return daily_data

@@ -158,6 +158,13 @@ def get_activities(
         activities = []
         for row in activities_result:
             activity = row[0]
+            # Log what the database actually has (after all transformations)
+            logger.info(
+                "[API OUT] activity_id=%s db_tss=%s version=%s",
+                activity.id,
+                activity.tss,
+                getattr(activity, "tss_version", None),
+            )
             activities.append({
                 "id": activity.id,
                 "user_id": activity.user_id,
@@ -167,6 +174,8 @@ def get_activities(
                 "duration_seconds": activity.duration_seconds,
                 "distance_meters": activity.distance_meters,
                 "elevation_gain_meters": activity.elevation_gain_meters,
+                "tss": activity.tss,
+                "tss_version": activity.tss_version,
                 "created_at": activity.created_at.isoformat(),
                 "has_raw_json": activity.raw_json is not None,
                 "has_streams": getattr(activity, "streams_data", None) is not None,
@@ -216,6 +225,14 @@ def get_activity(
 
         activity = activity_result[0]
 
+        # Log what the database actually has (after all transformations)
+        logger.info(
+            "[API OUT] activity_id=%s db_tss=%s version=%s",
+            activity.id,
+            activity.tss,
+            getattr(activity, "tss_version", None),
+        )
+
         # Return full activity including raw_json and streams_data
         return {
             "id": activity.id,
@@ -226,6 +243,8 @@ def get_activity(
             "duration_seconds": activity.duration_seconds,
             "distance_meters": activity.distance_meters,
             "elevation_gain_meters": activity.elevation_gain_meters,
+            "tss": activity.tss,
+            "tss_version": activity.tss_version,
             "raw_json": activity.raw_json,
             "streams_data": activity.streams_data,
             "created_at": activity.created_at.isoformat(),

@@ -33,6 +33,7 @@ from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 from scripts.migrate_user_auth_fields import migrate_user_auth_fields
+from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 
 
 def run_all_migrations() -> None:
@@ -42,6 +43,7 @@ def run_all_migrations() -> None:
     migrations = [
         ("strava_accounts table", migrate_strava_accounts),
         ("user authentication fields", migrate_user_auth_fields),
+        ("user is_active field", migrate_add_user_is_active),
         ("athlete_profiles athlete_id column", migrate_add_athlete_id_to_profiles),
         ("athlete_profiles target_races column", migrate_add_target_races),
         ("athlete_profiles extracted_race_attributes column", migrate_add_extracted_race_attributes),

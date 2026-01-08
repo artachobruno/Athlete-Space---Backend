@@ -47,21 +47,6 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class LinkEmailRequest(BaseModel):
-    """Link email to OAuth user request model."""
-
-    email: EmailStr
-    password: str
-
-    @field_validator("password")
-    @classmethod
-    def validate_password(cls, value: str) -> str:
-        """Validate password strength."""
-        if len(value) < 8:
-            raise ValueError("Password must be at least 8 characters long")
-        return value
-
-
 def _normalize_email(email: str) -> str:
     """Normalize email to lowercase."""
     return email.lower().strip()
@@ -70,6 +55,8 @@ def _normalize_email(email: str) -> str:
 @router.post("/signup")
 def signup(request: SignupRequest):
     """Sign up with email and password.
+
+    Email and password are mandatory. There is no anonymous account path.
 
     Args:
         request: Signup request containing email and password
@@ -80,6 +67,14 @@ def signup(request: SignupRequest):
     Raises:
         HTTPException: 409 if email already exists, 400 if invalid input
     """
+    # Validate that email and password are provided (Pydantic handles this, but explicit check)
+    if not request.email or not request.password:
+        logger.warning("[AUTH] Signup failed: email or password missing")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "missing_credentials", "message": "Email and password are required"},
+        )
+
     normalized_email = _normalize_email(request.email)
     logger.info(f"[AUTH] Signup requested for email={normalized_email}")
 
@@ -159,6 +154,14 @@ def login(request: LoginRequest):
 
         user = user_result[0]
 
+        # Check if user is active
+        if not user.is_active:
+            logger.warning(f"[AUTH] Login failed: inactive user for email={normalized_email}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account inactive. Please sign up again.",
+            )
+
         # Check if user has a password
         if not user.password_hash:
             logger.warning(f"[AUTH] Login failed: user has no password for email={normalized_email}")
@@ -189,71 +192,4 @@ def login(request: LoginRequest):
             "token_type": "bearer",
             "user_id": user.id,
             "email": user.email,
-        }
-
-
-@router.post("/link-email")
-def link_email(request: LinkEmailRequest, user_id: str = Depends(get_current_user_id)):
-    """Link email and password to an existing OAuth user.
-
-    Allows OAuth users (e.g., Strava) to add email/password authentication.
-
-    Args:
-        request: Link email request containing email and password
-        user_id: Current authenticated user ID (from JWT token)
-
-    Returns:
-        Success response
-
-    Raises:
-        HTTPException: 409 if email already exists, 400 if user already has email
-    """
-    normalized_email = _normalize_email(request.email)
-    logger.info(f"[AUTH] Link email requested for user_id={user_id}, email={normalized_email}")
-
-    with get_session() as session:
-        # Get current user
-        user_result = session.execute(select(User).where(User.id == user_id)).first()
-
-        if not user_result:
-            logger.warning(f"[AUTH] Link email failed: user not found user_id={user_id}")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": "user_not_found", "message": "User not found"},
-            )
-
-        user = user_result[0]
-
-        # Check if user already has email/password
-        if user.email and user.password_hash:
-            logger.warning(f"[AUTH] Link email failed: user already has email user_id={user_id}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "email_already_linked", "message": "This account already has an email and password"},
-            )
-
-        # Check if email is already taken by another user
-        existing_user = session.execute(select(User).where(User.email == normalized_email)).first()
-
-        if existing_user and existing_user[0].id != user_id:
-            logger.warning(f"[AUTH] Link email failed: email already exists={normalized_email}")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"error": "email_already_exists", "message": "An account with this email already exists"},
-            )
-
-        # Hash password
-        password_hash = hash_password(request.password)
-
-        # Update user
-        user.email = normalized_email
-        user.password_hash = password_hash
-        session.commit()
-
-        logger.info(f"[AUTH] Email linked successfully for user_id={user_id}, email={normalized_email}")
-
-        return {
-            "success": True,
-            "message": "Email and password linked successfully",
-            "email": normalized_email,
         }

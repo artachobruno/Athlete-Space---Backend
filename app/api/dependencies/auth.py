@@ -1,7 +1,7 @@
 """FastAPI authentication dependency for JWT-based auth.
 
 Provides get_current_user_id dependency that extracts and verifies JWT tokens
-from the Authorization header.
+from the Authorization header and checks if the user is active.
 """
 
 from __future__ import annotations
@@ -9,8 +9,11 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from loguru import logger
+from sqlalchemy import select
 
 from app.core.auth_jwt import decode_access_token
+from app.db.models import User
+from app.db.session import get_session
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 
@@ -18,7 +21,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 def get_current_user_id(request: Request, token: str | None = Depends(oauth2_scheme)) -> str:
     """FastAPI dependency to get current authenticated user ID from JWT token.
 
-    Extracts JWT token from Authorization header, verifies it, and returns user_id.
+    Extracts JWT token from Authorization header, verifies it, checks if user is active,
+    and returns user_id.
 
     Args:
         request: FastAPI request object (for logging)
@@ -29,6 +33,7 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
 
     Raises:
         HTTPException: 401 if token is missing, invalid, or expired
+        HTTPException: 403 if user account is inactive
     """
     if not token:
         auth_header = request.headers.get("Authorization")
@@ -55,7 +60,7 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
         )
 
     try:
-        return decode_access_token(token)
+        user_id = decode_access_token(token)
     except ValueError as e:
         logger.warning(
             f"Auth failed: {e}, Path: {request.url.path}, Method: {request.method}, Token preview: {token[:20]}..."
@@ -67,3 +72,24 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         ) from e
+
+    # Check if user is active
+    with get_session() as session:
+        user_result = session.execute(select(User).where(User.id == user_id)).first()
+        if not user_result:
+            logger.warning(f"Auth failed: User not found user_id={user_id}, Path: {request.url.path}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        user = user_result[0]
+        if not user.is_active:
+            logger.warning(f"Auth failed: Inactive user user_id={user_id}, Path: {request.url.path}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account inactive. Please sign up again.",
+            )
+
+    return user_id

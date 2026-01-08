@@ -14,11 +14,11 @@ class Base(DeclarativeBase):
 class User(Base):
     """User table for authentication and user context.
 
-    Unified user model supporting both email/password and OAuth authentication.
+    All users must have email and password credentials.
     Stores:
     - id: User ID (string UUID format)
-    - email: User email (optional, nullable, unique when set)
-    - password_hash: Hashed password (optional, nullable)
+    - email: User email (required, unique, indexed)
+    - password_hash: Hashed password (required)
     - strava_athlete_id: Strava athlete ID (optional, nullable, unique when set)
     - created_at: Timestamp when user was created
     - last_login_at: Timestamp of last login (optional, nullable)
@@ -27,9 +27,10 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
-    email: Mapped[str | None] = mapped_column(String, nullable=True, unique=True, index=True)
-    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
     strava_athlete_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

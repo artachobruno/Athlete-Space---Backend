@@ -120,70 +120,66 @@ def _validate_oauth_state(state: str, user_id: str) -> bool:
     return True
 
 
-def _resolve_or_create_user_id(athlete_id: str, user_id: str | None) -> str:
-    """Resolve or create user_id for athlete.
+def _resolve_or_create_user_id(athlete_id: str, user_id: str) -> str:
+    """Resolve user_id for athlete.
+
+    User must be authenticated (have credentials). This function only links Strava to existing users.
 
     Args:
         athlete_id: Strava athlete ID
-        user_id: Existing user_id from state (None if unauthenticated)
+        user_id: Authenticated user_id from state (required)
 
     Returns:
-        Resolved or created user_id
+        Resolved user_id
+
+    Raises:
+        HTTPException: If user_id is not provided or user doesn't exist
     """
+    if not user_id:
+        logger.error("[STRAVA_OAUTH] Cannot link Strava: user must be authenticated")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please sign up with email and password first.",
+        )
+
     athlete_id_int = int(athlete_id)
 
     with get_session() as session:
-        # If user_id is provided (authenticated user linking Strava), use it
-        if user_id is not None:
-            # Update user with strava_athlete_id
-            user_result = session.execute(select(User).where(User.id == user_id)).first()
-            if user_result:
-                user = user_result[0]
-                if not user.strava_athlete_id:
-                    user.strava_athlete_id = athlete_id_int
-                    session.commit()
-                    logger.info(f"[STRAVA_OAUTH] Set strava_athlete_id={athlete_id_int} for user_id={user_id}")
-            return user_id
+        # Verify user exists and has credentials
+        user_result = session.execute(select(User).where(User.id == user_id)).first()
+        if not user_result:
+            logger.error(f"[STRAVA_OAUTH] User not found: user_id={user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
 
-        # Check if user exists by strava_athlete_id
-        existing_user = session.execute(select(User).where(User.strava_athlete_id == athlete_id_int)).first()
+        user = user_result[0]
 
-        if existing_user:
-            resolved_user_id = existing_user[0].id
-            logger.info(f"[STRAVA_OAUTH] Found existing user by strava_athlete_id={athlete_id_int}, user_id={resolved_user_id}")
-            return resolved_user_id
+        # Verify user has credentials (email and password)
+        if not user.email or not user.password_hash:
+            logger.error(f"[STRAVA_OAUTH] User missing credentials: user_id={user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User must have email and password credentials. Please sign up first.",
+            )
 
-        # Check if StravaAccount exists (for backward compatibility)
-        existing_account = session.execute(select(StravaAccount).where(StravaAccount.athlete_id == athlete_id)).first()
+        # Update user with strava_athlete_id if not set
+        if not user.strava_athlete_id:
+            user.strava_athlete_id = athlete_id_int
+            session.commit()
+            logger.info(f"[STRAVA_OAUTH] Set strava_athlete_id={athlete_id_int} for user_id={user_id}")
+        # Verify this athlete_id matches the user's existing strava_athlete_id
+        elif user.strava_athlete_id != athlete_id_int:
+            logger.warning(
+                f"[STRAVA_OAUTH] Athlete ID mismatch: user_id={user_id}, existing={user.strava_athlete_id}, new={athlete_id_int}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This Strava account is already linked to another user",
+            )
 
-        if existing_account:
-            resolved_user_id = existing_account[0].user_id
-            # Update user with strava_athlete_id if not set
-            user_result = session.execute(select(User).where(User.id == resolved_user_id)).first()
-            if user_result:
-                user = user_result[0]
-                if not user.strava_athlete_id:
-                    user.strava_athlete_id = athlete_id_int
-                    session.commit()
-                    logger.info(f"[STRAVA_OAUTH] Set strava_athlete_id={athlete_id_int} for existing user_id={resolved_user_id}")
-            logger.info(f"[STRAVA_OAUTH] Found existing account for athlete_id={athlete_id}, user_id={resolved_user_id}")
-            return resolved_user_id
-
-        # Create new user
-        resolved_user_id = str(uuid.uuid4())
-        new_user = User(
-            id=resolved_user_id,
-            email=None,
-            password_hash=None,
-            strava_athlete_id=athlete_id_int,
-            created_at=datetime.now(timezone.utc),
-            last_login_at=None,
-        )
-        session.add(new_user)
-        session.commit()
-        logger.info(f"[STRAVA_OAUTH] Created new user_id={resolved_user_id} for athlete_id={athlete_id}")
-
-        return resolved_user_id
+        return user_id
 
 
 def _encrypt_and_store_tokens(
@@ -267,33 +263,20 @@ def _create_error_html(redirect_url: str, error_msg: str = "") -> str:
 
 
 @router.get("")
-def strava_connect(request: Request):
+def strava_connect(user_id: str = Depends(get_current_user_id)):
     """Initiate Strava OAuth flow.
 
-    Can be called with or without authentication. If authenticated, links Strava to existing user.
-    If not authenticated, creates new user after OAuth callback.
+    Requires authentication. Users must have credentials before linking Strava.
+    Links Strava to the authenticated user's existing account.
 
     Args:
-        request: FastAPI request object
+        user_id: Current authenticated user ID (required)
 
     Returns:
         JSON response with redirect_url, oauth_url, and url fields containing
         the Strava OAuth URL. Frontend should redirect to this URL.
     """
-    # Try to get user_id from auth header if present (optional)
-    user_id: str | None = None
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        try:
-            token = auth_header.replace("Bearer ", "").strip()
-            user_id = decode_access_token(token)
-            logger.info(f"[STRAVA_OAUTH] Connect initiated for authenticated user_id={user_id}")
-        except Exception:
-            # Invalid token - continue as unauthenticated
-            user_id = None
-            logger.info("[STRAVA_OAUTH] Connect initiated for unauthenticated user (will create user after OAuth)")
-    else:
-        logger.info("[STRAVA_OAUTH] Connect initiated for unauthenticated user (will create user after OAuth)")
+    logger.info(f"[STRAVA_OAUTH] Connect initiated for authenticated user_id={user_id}")
 
     # Validate Strava credentials are configured
     if not settings.strava_client_id or not settings.strava_client_secret:
@@ -311,7 +294,7 @@ def strava_connect(request: Request):
             detail="Strava redirect URI must point to /auth/strava/callback",
         )
 
-    # Generate CSRF-protected state
+    # Generate CSRF-protected state (user_id is always present since auth is required)
     state = _generate_oauth_state(user_id)
 
     # Build Strava OAuth URL
@@ -369,7 +352,14 @@ def strava_callback(
     is_valid, user_id = _validate_and_extract_state(state)
     if not is_valid:
         logger.error(f"[STRAVA_OAUTH] Invalid or expired state: {state[:16]}...")
-        return _create_error_html(redirect_url)
+        return _create_error_html(redirect_url, "Invalid or expired authorization request. Please try again.")
+
+    if not user_id:
+        logger.error(f"[STRAVA_OAUTH] Callback attempted without authentication: {state[:16]}...")
+        return _create_error_html(
+            redirect_url,
+            "Authentication required. Please sign up with email and password before connecting Strava.",
+        )
 
     logger.info(f"[STRAVA_OAUTH] Callback validated, user_id={user_id}")
     logger.debug(f"[STRAVA_OAUTH] Callback code: {code[:10]}... (truncated)")
@@ -389,6 +379,7 @@ def strava_callback(
         refresh_token = token_data["refresh_token"]
         expires_at = token_data["expires_at"]
 
+        # Resolve user_id (will verify user exists and has credentials)
         user_id = _resolve_or_create_user_id(athlete_id, user_id)
         logger.info(f"[STRAVA_OAUTH] OAuth successful for user_id={user_id}, athlete_id={athlete_id}")
 

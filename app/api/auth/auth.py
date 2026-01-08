@@ -120,16 +120,27 @@ def signup(request: SignupRequest):
         session.commit()
 
         # Create JWT token
-        token = create_access_token(user_id)
+        logger.debug(f"[AUTH] Creating JWT token for user_id={user_id}")
+        try:
+            token = create_access_token(user_id)
+            logger.info(f"[AUTH] JWT token created successfully for user_id={user_id}, token_length={len(token)}")
+        except Exception as e:
+            logger.error(f"[AUTH] Failed to create JWT token for user_id={user_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create authentication token. Please try again.",
+            )
 
         logger.info(f"[AUTH] Signup successful for user_id={user_id}, email={normalized_email}")
 
-        return {
+        response_data = {
             "access_token": token,
             "token_type": "bearer",
             "user_id": user_id,
             "email": normalized_email,
         }
+        logger.debug(f"[AUTH] Returning signup response with token for user_id={user_id}")
+        return response_data
 
 
 @router.post("/login")

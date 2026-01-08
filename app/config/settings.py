@@ -47,6 +47,12 @@ class Settings(BaseSettings):
         default="http://localhost:8000/auth/strava/callback",  # Default for local dev; MUST be set to backend URL in production
         validation_alias="STRAVA_REDIRECT_URI",
     )
+    google_client_id: str = Field(default="", validation_alias="GOOGLE_CLIENT_ID")
+    google_client_secret: str = Field(default="", validation_alias="GOOGLE_CLIENT_SECRET")
+    google_redirect_uri: str = Field(
+        default="http://localhost:8000/auth/google/callback",  # Default for local dev; MUST be set to backend URL in production
+        validation_alias="GOOGLE_REDIRECT_URI",
+    )
     backend_url: str = Field(
         default="http://localhost:8000",  # Default for local dev; MUST be set to backend URL in production
         validation_alias="BACKEND_URL",
@@ -112,6 +118,14 @@ class Settings(BaseSettings):
         """Validate that redirect URI points to /auth/strava/callback."""
         if value and "/auth/strava/callback" not in value:
             logger.warning(f"STRAVA_REDIRECT_URI should point to /auth/strava/callback, but got: {value}. This may cause OAuth failures.")
+        return value
+
+    @field_validator("google_redirect_uri")
+    @classmethod
+    def validate_google_redirect_uri(cls, value: str) -> str:
+        """Validate that redirect URI points to /auth/google/callback."""
+        if value and "/auth/google/callback" not in value:
+            logger.warning(f"GOOGLE_REDIRECT_URI should point to /auth/google/callback, but got: {value}. This may cause OAuth failures.")
         return value
 
 

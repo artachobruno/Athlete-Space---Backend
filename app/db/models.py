@@ -177,6 +177,31 @@ class StravaAccount(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
+class GoogleAccount(Base):
+    """Google OAuth account connection per user.
+
+    Stores encrypted OAuth tokens for each user's Google connection.
+    Enforces one Google account per user via unique constraint.
+
+    Fields:
+    - user_id: Foreign key to users.id
+    - google_id: Google user ID (string)
+    - access_token: Encrypted access token (encrypted at rest)
+    - refresh_token: Encrypted refresh token (encrypted at rest)
+    - expires_at: Token expiration timestamp (Unix epoch seconds)
+    - created_at: Account creation timestamp
+    """
+
+    __tablename__ = "google_accounts"
+
+    user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    google_id: Mapped[str] = mapped_column(String, nullable=False, index=True, unique=True)
+    access_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
+    refresh_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
+    expires_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class DailyTrainingLoad(Base):
     """Daily training load metrics (CTL, ATL, TSB).
 

@@ -93,3 +93,41 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
             )
 
     return user_id
+
+
+def get_optional_user_id(request: Request, token: str | None = Depends(oauth2_scheme)) -> str | None:
+    """FastAPI dependency to get current authenticated user ID from JWT token (optional).
+
+    Similar to get_current_user_id, but returns None if token is missing or invalid
+    instead of raising an exception. Useful for endpoints that support both
+    authenticated and unauthenticated access.
+
+    Args:
+        request: FastAPI request object (for logging)
+        token: JWT token (automatically extracted from Authorization header by FastAPI)
+
+    Returns:
+        User ID (string) from token if authenticated, None otherwise
+    """
+    if not token:
+        return None
+
+    try:
+        user_id = decode_access_token(token)
+    except ValueError:
+        logger.debug(f"Optional auth: Invalid token for path={request.url.path}")
+        return None
+
+    # Check if user is active
+    with get_session() as session:
+        user_result = session.execute(select(User).where(User.id == user_id)).first()
+        if not user_result:
+            logger.debug(f"Optional auth: User not found user_id={user_id}, Path: {request.url.path}")
+            return None
+
+        user = user_result[0]
+        if not user.is_active:
+            logger.debug(f"Optional auth: Inactive user user_id={user_id}, Path: {request.url.path}")
+            return None
+
+    return user_id

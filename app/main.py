@@ -18,6 +18,7 @@ from app.api.admin.admin_ingestion_status import router as admin_ingestion_route
 from app.api.admin.admin_retry import router as admin_retry_router
 from app.api.admin.ingestion_reliability import router as ingestion_reliability_router
 from app.api.auth.auth import router as auth_router
+from app.api.auth.auth_google import router as auth_google_router
 from app.api.auth.auth_strava import router as auth_strava_router
 from app.api.integrations.integrations_strava import router as integrations_strava_router
 from app.api.intelligence.intelligence import router as intelligence_router
@@ -487,6 +488,7 @@ app.include_router(admin_activities_router)
 app.include_router(ingestion_reliability_router)
 app.include_router(analytics_router)
 app.include_router(auth_router)
+app.include_router(auth_google_router)
 app.include_router(auth_strava_router)
 app.include_router(calendar_router)
 app.include_router(coach_router)

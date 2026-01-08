@@ -10,8 +10,6 @@ Also sets existing users to auth_provider='password'.
 
 from __future__ import annotations
 
-from contextlib import suppress
-
 from sqlalchemy import text
 
 from app.db.session import engine
@@ -65,6 +63,23 @@ def _index_exists(conn, table_name: str, index_name: str) -> bool:
     return result.fetchone() is not None
 
 
+def _enum_type_exists(conn, type_name: str) -> bool:
+    """Check if a PostgreSQL enum type exists."""
+    if not _is_postgresql():
+        return False
+    result = conn.execute(
+        text(
+            """
+            SELECT typname
+            FROM pg_type
+            WHERE typname = :type_name
+            """
+        ),
+        {"type_name": type_name},
+    )
+    return result.fetchone() is not None
+
+
 def migrate_add_google_oauth_fields() -> None:
     """Add Google OAuth fields to users table."""
     print("Starting migration: add Google OAuth fields to users table")
@@ -112,9 +127,12 @@ def migrate_add_google_oauth_fields() -> None:
             print("Adding auth_provider column to users table...")
             if _is_postgresql():
                 # Create enum type if it doesn't exist
-                with suppress(Exception):
-                    # Enum type may already exist, suppress error if so
+                if not _enum_type_exists(conn, "authprovider"):
+                    print("Creating authprovider enum type...")
                     conn.execute(text("CREATE TYPE authprovider AS ENUM ('password', 'google')"))
+                    print("✓ Created authprovider enum type")
+                else:
+                    print("authprovider enum type already exists, skipping")
                 conn.execute(text("ALTER TABLE users ADD COLUMN auth_provider authprovider NOT NULL DEFAULT 'password'"))
             else:
                 # SQLite doesn't support enums, use VARCHAR
@@ -135,7 +153,15 @@ def migrate_add_google_oauth_fields() -> None:
         if not _column_exists(conn, "users", "google_sub"):
             print("Adding google_sub column to users table...")
             if _is_postgresql():
-                conn.execute(text("ALTER TABLE users ADD COLUMN google_sub VARCHAR UNIQUE"))
+                # Add column first, then add unique constraint separately for better error handling
+                conn.execute(text("ALTER TABLE users ADD COLUMN google_sub VARCHAR"))
+                # Add unique constraint if not already exists
+                try:
+                    conn.execute(text("ALTER TABLE users ADD CONSTRAINT uq_users_google_sub UNIQUE (google_sub)"))
+                    print("✓ Added unique constraint on google_sub")
+                except Exception as e:
+                    # Constraint might already exist or there might be duplicates
+                    print(f"⚠ Could not add unique constraint on google_sub (may already exist or have duplicates): {e}")
             else:
                 conn.execute(text("ALTER TABLE users ADD COLUMN google_sub VARCHAR"))
             print("✓ Added google_sub column")

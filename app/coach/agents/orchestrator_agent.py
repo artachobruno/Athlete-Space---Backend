@@ -733,7 +733,7 @@ async def run_conversation(
     # Each tool call and LLM request counts toward this limit
     # 50 requests is sufficient for most conversations (tool calls + LLM iterations)
     # MAX_TOKENS is set per request to prevent individual request blowup
-    usage_limits = UsageLimits(request_limit=50, max_tokens=6000)
+    usage_limits = UsageLimits(request_limit=50)
 
     # Check max tool calls before starting (safety net)
     executed_tools = _executed_tools.get() or set()

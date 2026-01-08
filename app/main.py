@@ -45,6 +45,7 @@ from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_source_default import migrate_activities_source_default
 from scripts.migrate_activities_user_id import migrate_activities_user_id
+from scripts.migrate_add_activity_tss import migrate_add_activity_tss
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
@@ -265,6 +266,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_add_streams_data: {e}")
     logger.error(f"Migration failed: migrate_add_streams_data - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: add tss and tss_version columns to activities")
+    migrate_add_activity_tss()
+    logger.info("✓ Migration completed: add tss and tss_version columns to activities")
+except Exception as e:
+    migration_errors.append(f"migrate_add_activity_tss: {e}")
+    logger.error(f"Migration failed: migrate_add_activity_tss - {e}", exc_info=True)
 
 if migration_errors:
     logger.error(

@@ -20,6 +20,34 @@ from app.integrations.strava.service import get_strava_client
 router = APIRouter(prefix="/activities", tags=["activities", "debug"])
 
 
+def normalize_route_points(value: list | dict | None) -> list:
+    """Normalize route points to always return an array.
+
+    Handles heterogeneous formats stored in DB:
+    - Array format: [[lat, lng], ...] -> returns as-is
+    - Object format: {latlng: [...], data: [...], route_points: [...], points: [...]} -> extracts array
+    - None/empty -> returns empty array
+
+    Args:
+        value: Route points in various formats (array, object, or None)
+
+    Returns:
+        Always returns a list of [lat, lng] coordinates (empty list if invalid)
+    """
+    if not value:
+        return []
+
+    if isinstance(value, list):
+        return value
+
+    if isinstance(value, dict):
+        for key in ("latlng", "data", "route_points", "points"):
+            if key in value and isinstance(value[key], list):
+                return value[key]
+
+    return []
+
+
 def _format_streams_for_frontend(streams_data: dict | None) -> dict | None:
     """Format streams data for frontend consumption.
 
@@ -42,8 +70,10 @@ def _format_streams_for_frontend(streams_data: dict | None) -> dict | None:
     if not time_series:
         return None
 
-    # GPS route points (latlng)
-    latlng = streams_data.get("latlng", [])
+    # GPS route points (latlng) - normalize to handle both array and object formats
+    # Check multiple possible keys and normalize the result
+    route_points_raw = streams_data.get("latlng") or streams_data.get("route_points")
+    route_points = normalize_route_points(route_points_raw)
 
     # Elevation over time (altitude in meters)
     altitude = streams_data.get("altitude", [])
@@ -84,7 +114,7 @@ def _format_streams_for_frontend(streams_data: dict | None) -> dict | None:
 
     return {
         "time": time_series,  # Time in seconds from start
-        "route_points": latlng,  # GPS coordinates: [[lat, lng], ...]
+        "route_points": route_points,  # GPS coordinates: [[lat, lng], ...] (always array)
         "elevation": altitude,  # Elevation in meters
         "pace": pace_min_per_km,  # Pace in min/km (None for stopped periods)
         "heartrate": heartrate,  # Heart rate in bpm

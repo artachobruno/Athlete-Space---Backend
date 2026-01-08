@@ -140,6 +140,7 @@ def save_context_tool(arguments: dict) -> dict:
             now = datetime.now(UTC)
             try:
                 user_msg = CoachMessage(
+                    athlete_id=athlete_id,
                     user_id=user_id,
                     role="user",
                     content=user_message,
@@ -153,6 +154,7 @@ def save_context_tool(arguments: dict) -> dict:
             # Save assistant message
             try:
                 assistant_msg = CoachMessage(
+                    athlete_id=athlete_id,
                     user_id=user_id,
                     role="assistant",
                     content=assistant_message,

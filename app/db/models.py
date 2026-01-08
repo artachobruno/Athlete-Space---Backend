@@ -89,7 +89,10 @@ class Activity(Base):
     - distance_meters: Distance in meters
     - elevation_gain_meters: Elevation gain
     - raw_json: Full Strava API response (JSON)
+    - streams_data: Time-series streams data (GPS, HR, power, etc.)
     - source: Source system (default: "strava")
+    - tss: Training Stress Score (computed, nullable)
+    - tss_version: Version identifier for TSS computation method (nullable)
     - created_at: Record creation timestamp
 
     Constraints:
@@ -112,6 +115,8 @@ class Activity(Base):
     raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     streams_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     source: Mapped[str] = mapped_column(String, nullable=False, default="strava")
+    tss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tss_version: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
@@ -126,6 +131,7 @@ class CoachMessage(Base):
     __tablename__ = "coach_messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     role: Mapped[str] = mapped_column(String, nullable=False)  # "user" or "assistant"
     content: Mapped[str] = mapped_column(Text, nullable=False)

@@ -66,6 +66,7 @@ def save_context(
     with get_session() as db:
         # Save user message
         user_msg = CoachMessage(
+            athlete_id=athlete_id,
             user_id=user_id,
             role="user",
             content=user_message,
@@ -75,6 +76,7 @@ def save_context(
 
         # Save assistant message
         assistant_msg = CoachMessage(
+            athlete_id=athlete_id,
             user_id=user_id,
             role="assistant",
             content=assistant_message,

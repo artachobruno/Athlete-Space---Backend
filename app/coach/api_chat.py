@@ -9,7 +9,7 @@ from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.coach.utils.context_management import save_context
 from app.coach.utils.schemas import CoachChatRequest, CoachChatResponse
-from app.db.models import CoachMessage, StravaAuth
+from app.db.models import CoachMessage, StravaAccount, StravaAuth
 from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 
@@ -98,6 +98,22 @@ def _is_simple_acknowledgment(message: str) -> bool:
     return normalized in simple_acks
 
 
+def get_or_create_athlete_id(db, user_id: str) -> int | None:
+    """Get athlete_id from user_id via StravaAccount.
+
+    Args:
+        db: Database session
+        user_id: User ID to resolve athlete_id for
+
+    Returns:
+        Athlete ID as integer or None if not found
+    """
+    result = db.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+    if not result:
+        return None
+    return int(result[0].athlete_id)
+
+
 @router.post("/chat", response_model=CoachChatResponse)
 async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     """Handle coach chat request using orchestrator agent."""
@@ -182,6 +198,14 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
             message=req.message,
             athlete_id=athlete_id,
         )
+        # Resolve athlete_id from user_id before fast-path return
+        # This ensures athlete_id is always non-null when save_context is called
+        with get_session() as db:
+            resolved_athlete_id = get_or_create_athlete_id(db=db, user_id=user_id)
+            if not resolved_athlete_id:
+                raise RuntimeError("athlete_id could not be resolved in coach_chat fast-path")
+            athlete_id = resolved_athlete_id
+
         reply = "Nice work 👍 Want feedback on recovery, pacing, or tomorrow's plan?"
         # Save conversation history for fast-path responses
         save_context(

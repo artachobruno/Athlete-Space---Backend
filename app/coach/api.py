@@ -99,8 +99,25 @@ def ask_coach(message: str, days: int = 60, athlete_id: int = 23078584):
         logger.warning(f"Cannot save messages: no user_id found for athlete_id={athlete_id}")
     else:
         with get_session() as db:
-            db.add(CoachMessage(user_id=user_id, role="user", content=message, created_at=datetime.now(timezone.utc)))
-            db.add(CoachMessage(user_id=user_id, role="assistant", content=reply, created_at=datetime.now(timezone.utc)))
+            now = datetime.now(timezone.utc)
+            db.add(
+                CoachMessage(
+                    athlete_id=athlete_id,
+                    user_id=user_id,
+                    role="user",
+                    content=message,
+                    created_at=now,
+                )
+            )
+            db.add(
+                CoachMessage(
+                    athlete_id=athlete_id,
+                    user_id=user_id,
+                    role="assistant",
+                    content=reply,
+                    created_at=now,
+                )
+            )
             db.commit()
 
     return {"reply": reply, "intent": intent}

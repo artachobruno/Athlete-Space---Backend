@@ -137,7 +137,7 @@ def _create_quality_workout(focus: str, quality_date: datetime, week_num: int) -
 def generate_race_build_sessions(
     race_date: datetime,
     race_distance: str,
-    _target_time: str | None = None,
+    target_time: str | None = None,
     start_date: datetime | None = None,
 ) -> list[dict]:
     """Generate training sessions for a race build.
@@ -145,12 +145,14 @@ def generate_race_build_sessions(
     Args:
         race_date: Target race date
         race_distance: Race distance (5K, 10K, half, marathon, ultra)
-        target_time: Optional target finish time (e.g., "3:30:00")
+        target_time: Optional target finish time (e.g., "3:30:00") - reserved for future use
         start_date: Optional start date for training (defaults to 16 weeks before race)
 
     Returns:
         List of session dictionaries
     """
+    # target_time is reserved for future use to customize training intensity
+    _ = target_time
     weeks, focus = _get_race_build_params(race_distance)
     if start_date is None:
         start_date = race_date - timedelta(weeks=weeks)

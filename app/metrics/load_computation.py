@@ -303,7 +303,7 @@ def _calculate_normalized_pace(
     distance_meters: float | None,
     streams_data: dict,
     elevation_gain_meters: float | None,
-    _activity_type: str,
+    activity_type: str,
 ) -> float | None:
     """Calculate normalized or grade-adjusted pace.
 
@@ -315,11 +315,13 @@ def _calculate_normalized_pace(
         distance_meters: Distance in meters
         streams_data: Streams data (may contain pace/velocity_smooth)
         elevation_gain_meters: Elevation gain in meters
-        activity_type: Activity type
+        activity_type: Activity type - reserved for future activity-specific adjustments
 
     Returns:
         Normalized pace in m/s or None
     """
+    # activity_type is reserved for future activity-specific pace adjustments
+    _ = activity_type
     # Try to get grade-adjusted or normalized pace from streams
     if streams_data:
         # Look for velocity_smooth (m/s) or pace data

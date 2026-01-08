@@ -29,7 +29,8 @@ from app.services.llm.model import get_model
 _executed_tools: ContextVar[set[str] | None] = ContextVar("executed_tools", default=None)
 
 # Maximum number of tool calls per conversation turn (safety net)
-MAX_TOOL_CALLS_PER_TURN = 3
+# Increased from 3 to 12 to allow complex workflows while preventing runaway loops
+MAX_TOOL_CALLS_PER_TURN = 12
 
 # ============================================================================
 # AGENT INSTRUCTIONS
@@ -729,10 +730,10 @@ async def run_conversation(
     typed_message_history = cast(list[ModelMessage], message_history) if message_history else None
 
     # Set request limit to handle complex conversations while preventing infinite loops
-    # Default is 50, which can be exceeded in complex scenarios
     # Each tool call and LLM request counts toward this limit
-    # 100 is a reasonable limit that allows complex workflows but prevents runaway loops
-    usage_limits = UsageLimits(request_limit=100)
+    # 50 requests is sufficient for most conversations (tool calls + LLM iterations)
+    # MAX_TOKENS is set per request to prevent individual request blowup
+    usage_limits = UsageLimits(request_limit=50, max_tokens=6000)
 
     # Check max tool calls before starting (safety net)
     executed_tools = _executed_tools.get() or set()

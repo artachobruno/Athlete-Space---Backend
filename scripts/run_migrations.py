@@ -32,9 +32,11 @@ from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
+from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 from scripts.migrate_user_auth_fields import migrate_user_auth_fields
+from scripts.migrate_user_settings_fields import migrate_user_settings_fields
 
 
 def run_all_migrations() -> None:
@@ -51,6 +53,7 @@ def run_all_migrations() -> None:
         ("athlete_profiles extracted_race_attributes column", migrate_add_extracted_race_attributes),
         ("athlete_profiles extracted_injury_attributes column", migrate_add_extracted_injury_attributes),
         ("athlete_profiles health and constraint fields", migrate_add_profile_health_fields),
+        ("onboarding data fields (onboarding_completed, etc.)", migrate_onboarding_data_fields),
         ("planned_sessions athlete_id column", migrate_add_athlete_id_to_planned_sessions),
         ("planned_sessions completion tracking columns", migrate_add_planned_session_completion_fields),
         ("activities id column (integer to UUID)", migrate_activities_id_to_uuid),
@@ -61,6 +64,7 @@ def run_all_migrations() -> None:
         ("daily_summary tables", migrate_daily_summary),
         ("history cursor fields", migrate_history_cursor),
         ("strava_accounts sync tracking columns", migrate_strava_accounts_sync_tracking),
+        ("user_settings fields (units, timezone, notifications_enabled)", migrate_user_settings_fields),
     ]
 
     for migration_name, migration_func in migrations:

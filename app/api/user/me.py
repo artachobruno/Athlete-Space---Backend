@@ -40,6 +40,141 @@ from app.metrics.training_load import compute_training_load
 router = APIRouter(prefix="/me", tags=["me"])
 
 
+def _get_user_info(session, user_id: str) -> tuple[str, str]:
+    """Get user email and auth provider.
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        Tuple of (email, auth_provider)
+
+    Raises:
+        HTTPException: If user not found
+    """
+    user_result = session.execute(select(User).where(User.id == user_id)).first()
+    if not user_result:
+        logger.error(f"[API] User not found: user_id={user_id}")
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user = user_result[0]
+    email = user.email
+    auth_provider = user.auth_provider.value if user.auth_provider else "password"
+    return (email, auth_provider)
+
+
+def _get_onboarding_status(session, user_id: str) -> bool:
+    """Get onboarding completion status from profile.
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        True if onboarding is complete, False otherwise
+    """
+    try:
+        profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
+        profile = profile_result[0] if profile_result else None
+
+        if not profile:
+            logger.info(f"[API] /me: user_id={user_id}, profile_exists=False")
+            return False
+
+        try:
+            onboarding_complete = bool(profile.onboarding_completed)
+            logger.info(f"[API] /me: user_id={user_id}, profile_exists=True, onboarding_completed={onboarding_complete}")
+        except (AttributeError, ProgrammingError) as e:
+            error_msg = str(e).lower()
+            logger.warning(
+                f"[API] /me: onboarding_completed column missing or schema error for user_id={user_id}: {e!r}. Treating as incomplete."
+            )
+            return False
+        else:
+            return onboarding_complete
+    except ProgrammingError as e:
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.warning(
+                f"[API] /me: Database schema issue querying AthleteProfile for user_id={user_id}: {e!r}. Treating as no profile."
+            )
+            return False
+        raise
+
+
+def _get_profile_for_inference(session, user_id: str) -> AthleteProfile | None:
+    """Get profile for onboarding inference.
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        AthleteProfile instance or None
+    """
+    try:
+        profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
+        return profile_result[0] if profile_result else None
+    except ProgrammingError:
+        return None
+
+
+def _try_infer_completion_from_data(session, user_id: str) -> bool:
+    """Try to infer onboarding completion from profile and settings data.
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        True if onboarding appears complete based on data, False otherwise
+    """
+    profile = _get_profile_for_inference(session, user_id)
+    if not profile:
+        return False
+
+    inferred_complete = _try_infer_onboarding_from_data(session, user_id, profile)
+    if inferred_complete:
+        logger.warning(
+            f"[API] /me: user_id={user_id}, onboarding_completed flag is False "
+            f"but user has onboarding data. Inferring completion=True. "
+            f"This suggests a data inconsistency that should be fixed."
+        )
+    return inferred_complete
+
+
+def _try_infer_onboarding_from_data(session, user_id: str, profile: AthleteProfile) -> bool:
+    """Try to infer onboarding completion from profile and settings data.
+
+    Args:
+        session: Database session
+        user_id: User ID
+        profile: AthleteProfile instance
+
+    Returns:
+        True if onboarding appears complete based on data, False otherwise
+    """
+    try:
+        settings_result = session.execute(select(UserSettings).where(UserSettings.user_id == user_id)).first()
+        settings = settings_result[0] if settings_result else None
+
+        if not settings:
+            return False
+
+        try:
+            return _infer_onboarding_complete_from_data(profile, settings)
+        except Exception as e:
+            logger.debug(f"[API] /me: Could not infer onboarding completion: {e}")
+            return False
+    except ProgrammingError as e:
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.warning(f"[API] /me: Database schema issue querying UserSettings for user_id={user_id}: {e!r}. Skipping settings check.")
+            return False
+        raise
+
+
 def _infer_onboarding_complete_from_data(profile: AthleteProfile | None, settings: UserSettings | None) -> bool:
     """Infer if onboarding was completed based on profile and settings data.
 
@@ -99,52 +234,47 @@ def get_me(user_id: str = Depends(get_current_user_id)):
     """
     logger.info(f"[API] /me endpoint called for user_id={user_id}")
 
-    with get_session() as session:
-        # Get user info
-        user_result = session.execute(select(User).where(User.id == user_id)).first()
-        if not user_result:
-            logger.error(f"[API] User not found: user_id={user_id}")
-            raise HTTPException(status_code=404, detail="User not found")
+    # Store user info for exception handler
+    user_email = ""
+    user_auth_provider = "password"
 
-        user = user_result[0]
+    try:
+        with get_session() as session:
+            # Get user info
+            user_email, user_auth_provider = _get_user_info(session, user_id)
 
-        # Get onboarding status from AthleteProfile
-        profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
-        profile = profile_result[0] if profile_result else None
+            # Get onboarding status from profile
+            onboarding_complete = _get_onboarding_status(session, user_id)
 
-        # Get UserSettings to check for onboarding data
-        settings_result = session.execute(select(UserSettings).where(UserSettings.user_id == user_id)).first()
-        settings = settings_result[0] if settings_result else None
-
-        onboarding_complete = False
-        if profile:
-            onboarding_complete = bool(profile.onboarding_completed)
-            logger.info(
-                f"[API] /me: user_id={user_id}, profile_exists=True, "
-                f"onboarding_completed={profile.onboarding_completed}, "
-                f"returning onboarding_complete={onboarding_complete}"
-            )
-
-            # Fallback: if flag is False but user has substantial onboarding data, infer completion
+            # If not complete, try to infer from data
             if not onboarding_complete:
-                inferred_complete = _infer_onboarding_complete_from_data(profile, settings)
-                if inferred_complete:
-                    logger.warning(
-                        f"[API] /me: user_id={user_id}, onboarding_completed flag is False "
-                        f"but user has onboarding data. Inferring completion=True. "
-                        f"This suggests a data inconsistency that should be fixed."
-                    )
-                    onboarding_complete = True
-        else:
-            logger.info(f"[API] /me: user_id={user_id}, profile_exists=False, returning onboarding_complete=False")
+                onboarding_complete = _try_infer_completion_from_data(session, user_id)
 
-        return {
-            "user_id": user_id,
-            "authenticated": True,
-            "email": user.email,
-            "auth_provider": user.auth_provider.value if user.auth_provider else "password",
-            "onboarding_complete": onboarding_complete,
-        }
+            return {
+                "user_id": user_id,
+                "authenticated": True,
+                "email": user_email,
+                "auth_provider": user_auth_provider,
+                "onboarding_complete": onboarding_complete,
+            }
+    except HTTPException:
+        raise
+    except ProgrammingError as e:
+        # Catch any ProgrammingError that wasn't handled above
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.error(
+                f"[API] /me: Unhandled database schema error for user_id={user_id}: {e!r}. Returning default onboarding_complete=False."
+            )
+            # Return a valid response even on schema errors - this endpoint must always return 200 OK
+            return {
+                "user_id": user_id,
+                "authenticated": True,
+                "email": user_email,
+                "auth_provider": user_auth_provider,
+                "onboarding_complete": False,
+            }
+        raise
 
 
 @router.get("/strava")

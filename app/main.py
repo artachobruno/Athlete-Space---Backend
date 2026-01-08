@@ -68,6 +68,7 @@ from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_field
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 from scripts.migrate_user_auth_fields import migrate_user_auth_fields
+from scripts.migrate_user_settings_fields import migrate_user_settings_fields
 
 # Initialize logger with level from settings (defaults to INFO, can be overridden via LOG_LEVEL env var)
 setup_logger(level=settings.log_level)
@@ -269,6 +270,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_onboarding_data_fields: {e}")
     logger.error(f"Migration failed: migrate_onboarding_data_fields - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: user_settings fields")
+    migrate_user_settings_fields()
+    logger.info("✓ Migration completed: user_settings fields")
+except Exception as e:
+    migration_errors.append(f"migrate_user_settings_fields: {e}")
+    logger.error(f"Migration failed: migrate_user_settings_fields - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: LLM metadata fields and composite indexes")

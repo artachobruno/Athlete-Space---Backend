@@ -64,13 +64,15 @@ def save_context(
         return
 
     with get_session() as db:
+        now = datetime.now(timezone.utc)
         # Save user message
         user_msg = CoachMessage(
             athlete_id=athlete_id,
             user_id=user_id,
             role="user",
             content=user_message,
-            created_at=datetime.now(timezone.utc),
+            timestamp=now,
+            created_at=now,
         )
         db.add(user_msg)
 
@@ -80,7 +82,8 @@ def save_context(
             user_id=user_id,
             role="assistant",
             content=assistant_message,
-            created_at=datetime.now(timezone.utc),
+            timestamp=now,
+            created_at=now,
         )
         db.add(assistant_msg)
 

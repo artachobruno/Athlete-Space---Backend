@@ -106,6 +106,7 @@ def ask_coach(message: str, days: int = 60, athlete_id: int = 23078584):
                     user_id=user_id,
                     role="user",
                     content=message,
+                    timestamp=now,
                     created_at=now,
                 )
             )
@@ -115,6 +116,7 @@ def ask_coach(message: str, days: int = 60, athlete_id: int = 23078584):
                     user_id=user_id,
                     role="assistant",
                     content=reply,
+                    timestamp=now,
                     created_at=now,
                 )
             )

@@ -424,7 +424,8 @@ if cors_origins_env:
     cors_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
 else:
     cors_origins = [
-        "https://pace-ai.onrender.com",  # Production frontend
+        "https://pace-ai.onrender.com",  # Production frontend (legacy)
+        "https://virtus-ai.onrender.com",  # Production frontend
         settings.frontend_url,  # Frontend URL from settings
         "http://localhost:5173",  # Local dev (Vite default)
         "http://localhost:3000",  # Local dev (alternative port)

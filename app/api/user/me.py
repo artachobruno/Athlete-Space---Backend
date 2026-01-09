@@ -55,6 +55,15 @@ from app.services.training_preferences import extract_and_store_race_info
 router = APIRouter(prefix="/me", tags=["me"])
 
 
+@router.options("")
+async def options_me():
+    """Handle CORS preflight requests for /me endpoint.
+
+    This ensures OPTIONS requests are handled before auth dependencies run.
+    """
+    return Response(status_code=200)
+
+
 def _get_user_info(session, user_id: str) -> tuple[str, str]:
     """Get user email and auth provider.
 

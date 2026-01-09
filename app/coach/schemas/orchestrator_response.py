@@ -6,7 +6,17 @@ from pydantic import BaseModel, model_validator
 
 from app.coach.schemas.action_plan import ActionPlan
 
-ResponseType = Literal["greeting", "question", "explanation", "plan", "weekly_plan", "recommendation", "summary"]
+ResponseType = Literal[
+    "greeting",
+    "question",
+    "explanation",
+    "plan",
+    "weekly_plan",
+    "season_plan",
+    "session_plan",
+    "recommendation",
+    "summary",
+]
 
 
 class OrchestratorAgentResponse(BaseModel):
@@ -38,11 +48,30 @@ class OrchestratorAgentResponse(BaseModel):
     action_plan: ActionPlan | None = None
 
     @model_validator(mode="after")
-    def validate_show_plan_constraint(self) -> "OrchestratorAgentResponse":
-        """Validate that show_plan can only be True for specific response types."""
-        allowed_response_types = {"plan", "weekly_plan", "recommendation", "summary"}
-        if self.show_plan is True and self.response_type not in allowed_response_types:
+    def validate_plan_usage(self) -> "OrchestratorAgentResponse":
+        """Validate plan emission rules at schema level (hard gate).
+
+        Plans are only allowed for explicit planning tasks:
+        - plan, weekly_plan, season_plan, session_plan, recommendation, summary
+
+        All other response types (greeting, question, explanation) must not emit plans.
+        """
+        allowed_plan_types = {
+            "plan",
+            "weekly_plan",
+            "season_plan",
+            "session_plan",
+            "recommendation",
+            "summary",
+        }
+
+        if self.show_plan and self.response_type not in allowed_plan_types:
             raise ValueError(
-                f"show_plan can only be True for response_type in {allowed_response_types}. Got response_type='{self.response_type}'"
+                f"show_plan is not allowed for response_type={self.response_type}. Only {allowed_plan_types} can set show_plan=True."
             )
+
+        # If show_plan is False, ensure plan_items is None
+        if not self.show_plan:
+            self.plan_items = None
+
         return self

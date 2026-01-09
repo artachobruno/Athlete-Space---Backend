@@ -9,6 +9,8 @@ from loguru import logger
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
+from app.core.slot_extraction import extract_slots_for_intent, generate_clarification_for_missing_slots
+from app.core.tool_requirements import has_required_slots
 
 
 class CoachActionExecutor:
@@ -309,13 +311,37 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+            logger.info(
+                "Tool executed successfully",
+                tool=tool_name,
+                conversation_id=conversation_id,
+            )
             return result.get("message", "Recommendation generated.")
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.error(f"Error executing recommend_next_session: {e.code}: {e.message}")
-            return f"I encountered an issue generating your recommendation: {e.message}"
+            logger.exception(
+                "Tool execution failed",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                    "error_code": e.code,
+                },
+            )
+            return "Something went wrong while generating your recommendation. Please try again."
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
+            logger.exception(
+                "Tool execution failed with unexpected error",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            return "Something went wrong while generating your recommendation. Please try again."
 
     @staticmethod
     async def _execute_plan_week(
@@ -357,13 +383,37 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+            logger.info(
+                "Tool executed successfully",
+                tool=tool_name,
+                conversation_id=conversation_id,
+            )
             return result.get("message", "Weekly plan created.")
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.error(f"Error executing plan_week: {e.code}: {e.message}")
-            return f"I encountered an issue creating your weekly plan: {e.message}"
+            logger.exception(
+                "Tool execution failed",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                    "error_code": e.code,
+                },
+            )
+            return "Something went wrong while creating your weekly plan. Please try again."
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
+            logger.exception(
+                "Tool execution failed with unexpected error",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            return "Something went wrong while creating your weekly plan. Please try again."
 
     @staticmethod
     async def _execute_plan_race(
@@ -384,12 +434,41 @@ class CoachActionExecutor:
             race_description = decision.message
 
         tool_name = "plan_race_build"
+
+        # Extract slots BEFORE tool execution
+        slots = extract_slots_for_intent(
+            intent=decision.intent,
+            horizon=decision.horizon,
+            message=race_description,
+            structured_data=decision.structured_data,
+        )
+
+        logger.debug(
+            "Extracted slots for plan_race_build",
+            slots=slots,
+            intent=decision.intent,
+            horizon=decision.horizon,
+        )
+
+        # CRITICAL: Gate tool execution based on required slots
+        can_execute, missing_slots = has_required_slots(tool_name, slots)
+        if not can_execute:
+            logger.info(
+                "Tool gated due to missing slots",
+                tool=tool_name,
+                missing=missing_slots,
+                conversation_id=conversation_id,
+            )
+            # Generate clarification response instead of calling tool
+            return generate_clarification_for_missing_slots(tool_name, missing_slots)
+
         step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
 
         if conversation_id and step_info:
             step_id, label = step_info
             await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
 
+        # Tool execution is wrapped defensively - never surface errors to users
         try:
             result = await call_tool(
                 "plan_race_build",
@@ -402,13 +481,39 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+            logger.info(
+                "Tool executed successfully",
+                tool=tool_name,
+                conversation_id=conversation_id,
+            )
             return result.get("message", "Race plan created.")
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.error(f"Error executing plan_race_build: {e.code}: {e.message}")
-            return f"I encountered an issue creating your race plan: {e.message}"
+            logger.exception(
+                "Tool execution failed",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                    "error_code": e.code,
+                },
+            )
+            # Never surface tool errors to users
+            return "Something went wrong while generating your plan. Please try again."
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
+            logger.exception(
+                "Tool execution failed with unexpected error",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            # Never surface tool errors to users
+            return "Something went wrong while generating your plan. Please try again."
 
     @staticmethod
     async def _execute_plan_season(
@@ -446,13 +551,37 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+            logger.info(
+                "Tool executed successfully",
+                tool=tool_name,
+                conversation_id=conversation_id,
+            )
             return result.get("message", "Season plan created.")
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.error(f"Error executing plan_season: {e.code}: {e.message}")
-            return f"I encountered an issue creating your season plan: {e.message}"
+            logger.exception(
+                "Tool execution failed",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                    "error_code": e.code,
+                },
+            )
+            return "Something went wrong while creating your season plan. Please try again."
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
+            logger.exception(
+                "Tool execution failed with unexpected error",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            return "Something went wrong while creating your season plan. Please try again."
 
     @staticmethod
     async def _execute_adjust_training_load(
@@ -484,13 +613,37 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+            logger.info(
+                "Tool executed successfully",
+                tool=tool_name,
+                conversation_id=conversation_id,
+            )
             return result.get("message", "Training load adjusted.")
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.error(f"Error executing adjust_training_load: {e.code}: {e.message}")
-            return f"I encountered an issue adjusting your training load: {e.message}"
+            logger.exception(
+                "Tool execution failed",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                    "error_code": e.code,
+                },
+            )
+            return "Something went wrong while adjusting your training load. Please try again."
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
+            logger.exception(
+                "Tool execution failed with unexpected error",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            return "Something went wrong while adjusting your training load. Please try again."
 
     @staticmethod
     async def _execute_explain_training_state(
@@ -516,13 +669,37 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+            logger.info(
+                "Tool executed successfully",
+                tool=tool_name,
+                conversation_id=conversation_id,
+            )
             return result.get("message", "Training state explained.")
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.error(f"Error executing explain_training_state: {e.code}: {e.message}")
-            return f"I encountered an issue explaining your training state: {e.message}"
+            logger.exception(
+                "Tool execution failed",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                    "error_code": e.code,
+                },
+            )
+            return "Something went wrong while explaining your training state. Please try again."
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
+            logger.exception(
+                "Tool execution failed with unexpected error",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            return "Something went wrong while explaining your training state. Please try again."
 
     @staticmethod
     async def _execute_add_workout(
@@ -560,10 +737,34 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+            logger.info(
+                "Tool executed successfully",
+                tool=tool_name,
+                conversation_id=conversation_id,
+            )
             return result.get("message", "Workout added successfully.")
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.error(f"Error executing add_workout: {e.code}: {e.message}")
-            return f"I encountered an issue adding your workout: {e.message}"
+            logger.exception(
+                "Tool execution failed",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                    "error_code": e.code,
+                },
+            )
+            return "Something went wrong while adding your workout. Please try again."
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
+            logger.exception(
+                "Tool execution failed with unexpected error",
+                extra={
+                    "tool": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            return "Something went wrong while adding your workout. Please try again."

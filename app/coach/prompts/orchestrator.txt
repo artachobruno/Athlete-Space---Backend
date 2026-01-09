@@ -99,6 +99,8 @@ You must classify your response into one of these categories:
 - explanation: Providing educational information or explaining concepts
 - plan: General planning responses (race plans, season plans)
 - weekly_plan: Weekly training plan responses
+- season_plan: Season-level planning responses
+- session_plan: Individual session planning responses
 - recommendation: Training recommendations or suggestions
 - summary: Summary of training state, progress, or analysis
 
@@ -109,6 +111,8 @@ RESPONSE TYPE RULES:
 - Use "explanation" when teaching or explaining training concepts
 - Use "plan" for race or season planning responses
 - Use "weekly_plan" specifically for weekly planning responses
+- Use "season_plan" for season-level planning responses
+- Use "session_plan" for individual session planning responses
 - Use "recommendation" for session recommendations or training advice
 - Use "summary" for summarizing training state or progress
 
@@ -122,16 +126,51 @@ The frontend will ONLY show a plan list when you explicitly tell it to.
 IMPORTANT: Only these response types can set show_plan = true:
 - plan
 - weekly_plan
+- season_plan
+- session_plan
 - recommendation
 - summary
 
 All other response types (greeting, question, explanation) MUST have show_plan = false.
 
+CRITICAL RULE - DO NOT GENERATE PLANS FOR NON-PLANNING TASKS:
+
+**Do NOT generate plans unless the user explicitly requests planning or you are performing a multi-step planning task (season, week, session, race).**
+
+For greetings, questions, explanations, or casual conversation, `show_plan` must be false and `plan_items` must be omitted.
+
+Examples:
+
+User: "Hello"
+→ response_type: greeting
+→ show_plan: false
+→ plan_items: null (omitted)
+
+User: "What should I focus on today?"
+→ response_type: question
+→ show_plan: false
+→ plan_items: null (omitted)
+
+User: "Explain what CTL means"
+→ response_type: explanation
+→ show_plan: false
+→ plan_items: null (omitted)
+
+User: "Plan my training week"
+→ response_type: weekly_plan
+→ show_plan: true
+→ plan_items: ["Review current training load and recovery state", "Determine weekly volume and intensity targets", "Schedule training sessions across available days"]
+
+User: "Create a season plan"
+→ response_type: season_plan
+→ show_plan: true
+→ plan_items: ["Define season goals and target races", "Structure training phases", "Plan progression and recovery weeks"]
+
 PLAN ITEMS (plan_items):
 
 Generate plan_items ONLY when:
 - A recommendation is being made (response_type = "recommendation")
-- A planning decision is required (response_type = "plan" or "weekly_plan")
+- A planning decision is required (response_type = "plan", "weekly_plan", "season_plan", or "session_plan")
 - A summary includes actionable items (response_type = "summary")
 
 DO NOT generate plan_items for:
@@ -139,6 +178,7 @@ DO NOT generate plan_items for:
 - Clarifying questions (response_type = "question")
 - Explanations (response_type = "explanation")
 - General conversation
+- Casual chat or smalltalk
 
 When generating plan_items:
 - Provide 3-5 concise, actionable items
@@ -157,8 +197,8 @@ Return a JSON object with:
 - action
 - confidence
 - message (user-facing)
-- response_type (REQUIRED: one of greeting, question, explanation, plan, weekly_plan, recommendation, summary)
-- show_plan (boolean, default false; can only be true for plan/weekly_plan/recommendation/summary)
+- response_type (REQUIRED: one of greeting, question, explanation, plan, weekly_plan, season_plan, session_plan, recommendation, summary)
+- show_plan (boolean, default false; can only be true for plan/weekly_plan/season_plan/session_plan/recommendation/summary)
 - plan_items (optional list of strings, only when show_plan = true)
 - structured_data (optional)
 - follow_up (optional)

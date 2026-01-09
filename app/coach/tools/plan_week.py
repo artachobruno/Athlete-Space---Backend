@@ -283,38 +283,51 @@ async def plan_week(
         })
         session_count += 1
 
-    # Save sessions via MCP
+    # Save sessions via MCP (non-blocking - planning continues even if persistence fails)
     logger.info(
         "B8: Saving planned sessions",
         session_count=len(sessions),
         week_start=monday.date().isoformat(),
         week_end=sunday.date().isoformat(),
     )
-    try:
-        saved_count = await save_planned_sessions(
-            user_id=user_id,
-            athlete_id=athlete_id,
-            sessions=sessions,
-            plan_type="weekly",
-            plan_id=None,
-        )
+    saved_count = await save_planned_sessions(
+        user_id=user_id,
+        athlete_id=athlete_id,
+        sessions=sessions,
+        plan_type="weekly",
+        plan_id=None,
+    )
+
+    if saved_count > 0:
         logger.info(
             "B8: Planned sessions saved successfully",
             saved_count=saved_count,
             session_details=[{"date": s["date"], "title": s["title"], "intensity": s.get("intensity")} for s in sessions[:5]],
         )
-    except Exception as e:
-        logger.error(f"B8: Failed to save sessions: {e}", exc_info=True)
-        return f"[CLARIFICATION] Failed to save planned sessions: {e}"
+    else:
+        logger.warning(
+            "B8: Planned sessions could not be persisted, but plan generation succeeded",
+            session_count=len(sessions),
+        )
 
     # Generate response
+    if saved_count > 0:
+        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+    else:
+        save_status = "• ⚠️ Sessions generated but could not be saved to calendar (service may be temporarily unavailable)\n"
+
+    if saved_count > 0:
+        calendar_message = "Your planned sessions are now available in your calendar!"
+    else:
+        calendar_message = "The plan is ready, but you may need to retry saving to calendar later."
+
     return (
         f"✅ **Weekly Training Plan Created!**\n\n"
         f"I've generated a weekly plan from **{monday.date().isoformat()}** "
         f"to **{sunday.date().isoformat()}**.\n\n"
         f"**Plan Summary:**\n"
-        f"• **{saved_count} training sessions** added to your calendar\n"
+        f"{save_status}"
         f"• Target volume: {adjusted_volume_hours:.1f} hours\n"
         f"{'• Load adjusted based on your feedback' if load_adjustment else ''}\n\n"
-        f"Your planned sessions are now available in your calendar!"
+        f"{calendar_message}"
     )

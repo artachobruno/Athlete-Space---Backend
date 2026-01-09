@@ -64,10 +64,20 @@ async def save_planned_sessions(
         saved_count = result.get("saved_count", 0)
         logger.info(f"Saved {saved_count} planned sessions via MCP for user_id={user_id}, plan_type={plan_type}")
     except MCPError as e:
-        logger.error(f"Failed to save planned sessions via MCP: {e.code}: {e.message}")
-        raise RuntimeError(f"Failed to save planned sessions: {e.message}") from e
-    else:
-        return saved_count
+        logger.warning(
+            f"Failed to persist planned sessions via MCP — continuing without saving. Error: {e.code}: {e.message}",
+            exc_info=True,
+        )
+        # Return 0 to indicate no sessions were saved, but don't fail the planning operation
+        saved_count = 0
+    except Exception as e:
+        logger.warning(
+            f"Unexpected error persisting planned sessions — continuing without saving. Error: {type(e).__name__}: {e!s}",
+            exc_info=True,
+        )
+        # Return 0 to indicate no sessions were saved, but don't fail the planning operation
+        saved_count = 0
+    return saved_count
 
 
 def _get_race_build_params(race_distance: str) -> tuple[int, str]:

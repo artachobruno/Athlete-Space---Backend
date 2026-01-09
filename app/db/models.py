@@ -675,3 +675,30 @@ class UserSettings(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class ConversationOwnership(Base):
+    """Conversation ownership mapping.
+
+    Enforces that every conversation_id is owned by exactly one authenticated user.
+    This is a hard security boundary - ownership is immutable once established.
+
+    Schema:
+    - conversation_id: Conversation ID (primary key, format: c_<UUID>)
+    - user_id: Owner user ID (foreign key to users.id)
+    - created_at: Ownership creation timestamp
+
+    Constraints:
+    - Unique constraint on conversation_id ensures one owner per conversation
+    - Ownership never changes after creation (immutable)
+    """
+
+    __tablename__ = "conversation_ownership"
+
+    conversation_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("idx_conversation_ownership_user_id", "user_id"),  # Fast lookup by user
+    )

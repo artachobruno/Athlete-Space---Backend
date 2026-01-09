@@ -2,9 +2,11 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.coach.schemas.action_plan import ActionPlan
+
+ResponseType = Literal["greeting", "question", "explanation", "plan", "weekly_plan", "recommendation", "summary"]
 
 
 class OrchestratorAgentResponse(BaseModel):
@@ -25,6 +27,22 @@ class OrchestratorAgentResponse(BaseModel):
 
     message: str  # user-facing response
 
+    response_type: ResponseType  # Type of response for UI rendering
+
+    show_plan: bool = False  # Explicit signal to frontend about plan visibility
+
+    plan_items: list[str] | None = None  # Optional list of plan items to display
+
     structured_data: dict = {}
     follow_up: str | None = None
     action_plan: ActionPlan | None = None
+
+    @model_validator(mode="after")
+    def validate_show_plan_constraint(self) -> "OrchestratorAgentResponse":
+        """Validate that show_plan can only be True for specific response types."""
+        allowed_response_types = {"plan", "weekly_plan", "recommendation", "summary"}
+        if self.show_plan is True and self.response_type not in allowed_response_types:
+            raise ValueError(
+                f"show_plan can only be True for response_type in {allowed_response_types}. Got response_type='{self.response_type}'"
+            )
+        return self

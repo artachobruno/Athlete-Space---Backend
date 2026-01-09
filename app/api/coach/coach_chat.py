@@ -12,6 +12,7 @@ from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.coach.utils.context_management import save_context
 from app.coach.utils.schemas import CoachChatRequest, CoachChatResponse
+from app.core.message import normalize_message
 from app.db.models import AthleteProfile, CoachMessage, StravaAuth, UserSettings
 from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
@@ -95,6 +96,9 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         return CoachChatResponse(
             intent="error",
             reply="Please connect your Strava account first.",
+            response_type="explanation",
+            show_plan=False,
+            plan_items=None,
         )
 
     # Check if this is a cold start (empty history)
@@ -112,6 +116,9 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         return CoachChatResponse(
             intent="error",
             reply="Unable to find user account. Please reconnect your Strava account.",
+            response_type="explanation",
+            show_plan=False,
+            plan_items=None,
         )
 
     # Handle cold start
@@ -141,17 +148,47 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
             logger.warning("Cold start with no training data available", error=str(e))
             reply = welcome_new_user(None)
 
+        # Normalize messages before saving (legacy endpoint - no conversation_id available)
+        # Use placeholder conversation_id
+        placeholder_conversation_id = "c_00000000-0000-0000-0000-000000000000"
+        try:
+            normalized_user = normalize_message(
+                raw_input=req.message,
+                conversation_id=placeholder_conversation_id,
+                user_id=user_id,
+                role="user",
+            )
+            normalized_assistant = normalize_message(
+                raw_input=reply,
+                conversation_id=placeholder_conversation_id,
+                user_id=user_id,
+                role="assistant",
+            )
+        except ValueError as e:
+            logger.error(
+                "Failed to normalize messages in legacy endpoint",
+                athlete_id=athlete_id,
+                user_id=user_id,
+                error=str(e),
+            )
+            normalized_user = None
+            normalized_assistant = None
+
         # Save conversation history for cold start
         save_context(
             athlete_id=athlete_id,
             model_name="gpt-4o-mini",
-            user_message=req.message,
-            assistant_message=reply,
+            user_message=normalized_user.content if normalized_user else req.message,
+            assistant_message=normalized_assistant.content if normalized_assistant else reply,
+            conversation_id=placeholder_conversation_id,
         )
 
         return CoachChatResponse(
             intent="cold_start",
             reply=reply,
+            response_type="greeting",
+            show_plan=False,
+            plan_items=None,
         )
 
     # Build athlete state
@@ -249,4 +286,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     return CoachChatResponse(
         intent=decision.intent,
         reply=reply,
+        response_type=decision.response_type,
+        show_plan=decision.show_plan,
+        plan_items=decision.plan_items,
     )

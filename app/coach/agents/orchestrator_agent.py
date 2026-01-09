@@ -180,6 +180,9 @@ async def run_conversation(
                 message=(
                     "I processed your request, but I'm having trouble formulating a response. Could you try rephrasing your question?"
                 ),
+                response_type="question",
+                show_plan=False,
+                plan_items=None,
                 structured_data={},
                 follow_up=None,
             )
@@ -220,6 +223,9 @@ async def run_conversation(
                 "I understand. Could you try rephrasing your request? "
                 "I can help with training plans, activity logging, or performance analysis."
             ),
+            response_type="question",
+            show_plan=False,
+            plan_items=None,
             structured_data={},
             follow_up=None,
         )
@@ -237,6 +243,9 @@ async def run_conversation(
             action="NO_ACTION",
             confidence=0.0,
             message=("I encountered an issue processing your request. Please try again or rephrase your message."),
+            response_type="explanation",
+            show_plan=False,
+            plan_items=None,
             structured_data={},
             follow_up=None,
         )

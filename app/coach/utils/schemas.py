@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.coach.schemas.orchestrator_response import ResponseType
+
 
 class CoachChatRequest(BaseModel):
     message: str
@@ -14,6 +16,9 @@ class CoachChatResponse(BaseModel):
     intent: str
     reply: str
     conversation_id: str | None = None
+    response_type: ResponseType
+    show_plan: bool = False
+    plan_items: list[str] | None = None
 
 
 class ProgressEventResponse(BaseModel):

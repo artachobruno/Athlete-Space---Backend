@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from typing import Literal, cast
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from loguru import logger
 from sqlalchemy import select
 
@@ -21,6 +21,9 @@ from app.coach.utils.schemas import (
     ProgressResponse,
 )
 from app.core.conversation_id import get_conversation_id
+from app.core.conversation_ownership import validate_conversation_ownership
+from app.core.message import Message, normalize_message
+from app.core.redis_conversation_store import write_message
 from app.db.models import AthleteProfile, CoachMessage, CoachProgressEvent, StravaAccount, StravaAuth, UserSettings
 from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
@@ -127,23 +130,57 @@ def get_or_create_athlete_id(db, user_id: str) -> int | None:
 
 
 @router.post("/chat", response_model=CoachChatResponse)
-async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatResponse:
+async def coach_chat(
+    req: CoachChatRequest,
+    request: Request,
+    user_id: str = Depends(validate_conversation_ownership),
+) -> CoachChatResponse:
     """Handle coach chat request using orchestrator agent."""
     # Get conversation_id from request context (set by middleware)
+    # Ownership is validated by validate_conversation_ownership dependency
     conversation_id = get_conversation_id(request)
+
+    # Normalize user message before processing
+    try:
+        normalized_user_message = normalize_message(
+            raw_input=req.message,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="user",
+        )
+        # Write normalized user message to Redis (B26)
+        # This happens after normalization and token counting
+        write_message(normalized_user_message)
+    except ValueError as e:
+        logger.error(
+            "Failed to normalize user message",
+            conversation_id=conversation_id,
+            user_id=user_id,
+            error=str(e),
+        )
+        return CoachChatResponse(
+            intent="error",
+            reply="Invalid message format. Please try again.",
+            conversation_id=conversation_id,
+            response_type="explanation",
+            show_plan=False,
+            plan_items=None,
+        )
+
     logger.info(
         "Coach chat request",
-        message=req.message,
+        message=normalized_user_message.content,
         conversation_id=conversation_id,
     )
 
     # Get athlete ID
     athlete_id = _get_athlete_id()
+    athlete_id_type: str = type(athlete_id).__name__ if athlete_id is not None else "None"
     logger.debug(
         "Retrieved athlete_id for coach chat",
         conversation_id=conversation_id,
         athlete_id=athlete_id,
-        athlete_id_type=type(athlete_id).__name__ if athlete_id is not None else None,
+        athlete_id_type=athlete_id_type,
     )
     if athlete_id is None:
         logger.warning(
@@ -154,6 +191,9 @@ async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatRespon
             intent="error",
             reply="Please connect your Strava account first.",
             conversation_id=conversation_id,
+            response_type="explanation",
+            show_plan=False,
+            plan_items=None,
         )
 
     # Check if this is a cold start (empty history)
@@ -166,8 +206,11 @@ async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatRespon
     )
 
     # Get user_id from athlete_id
-    user_id = get_user_id_from_athlete_id(athlete_id)
-    if user_id is None:
+    # athlete_id is guaranteed to be non-None here due to check above
+    if athlete_id is None:
+        raise RuntimeError("athlete_id is None after validation check")
+    resolved_user_id = get_user_id_from_athlete_id(athlete_id)
+    if resolved_user_id is None:
         logger.warning(
             "Cannot find user_id for athlete_id",
             conversation_id=conversation_id,
@@ -177,7 +220,13 @@ async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatRespon
             intent="error",
             reply="Unable to find user account. Please reconnect your Strava account.",
             conversation_id=conversation_id,
+            response_type="explanation",
+            show_plan=False,
+            plan_items=None,
         )
+    # After None check, resolved_user_id is guaranteed to be str
+    # Use it for all subsequent operations to ensure consistency with athlete_id
+    user_id = resolved_user_id
 
     # Handle cold start
     if history_empty:
@@ -214,18 +263,43 @@ async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatRespon
             )
             reply = welcome_new_user(None)
 
+        # Normalize assistant message before saving
+        try:
+            normalized_assistant_message = normalize_message(
+                raw_input=reply,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="assistant",
+            )
+            # Write normalized assistant message to Redis (B26)
+            if normalized_assistant_message:
+                write_message(normalized_assistant_message)
+        except ValueError as e:
+            logger.error(
+                "Failed to normalize assistant message for cold start",
+                conversation_id=conversation_id,
+                user_id=user_id,
+                error=str(e),
+            )
+            # Continue with unnormalized message for now (will be fixed in context_management)
+            normalized_assistant_message = None
+
         # Save conversation history for cold start
         save_context(
             athlete_id=athlete_id,
             model_name=USER_FACING_MODEL,
-            user_message=req.message,
-            assistant_message=reply,
+            user_message=normalized_user_message.content,
+            assistant_message=normalized_assistant_message.content if normalized_assistant_message else reply,
+            conversation_id=conversation_id,
         )
 
         return CoachChatResponse(
             intent="cold_start",
             reply=reply,
             conversation_id=conversation_id,
+            response_type="greeting",
+            show_plan=False,
+            plan_items=None,
         )
 
     # Fast-path: Handle simple activity acknowledgments without invoking agent
@@ -246,16 +320,41 @@ async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatRespon
             athlete_id = resolved_athlete_id
 
         reply = "Nice work 👍 Want feedback on recovery, pacing, or tomorrow's plan?"
+
+        # Normalize assistant message before saving
+        try:
+            normalized_assistant_message = normalize_message(
+                raw_input=reply,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="assistant",
+            )
+            # Write normalized assistant message to Redis (B26)
+            if normalized_assistant_message:
+                write_message(normalized_assistant_message)
+        except ValueError as e:
+            logger.error(
+                "Failed to normalize assistant message for fast-path",
+                conversation_id=conversation_id,
+                user_id=user_id,
+                error=str(e),
+            )
+            normalized_assistant_message = None
+
         # Save conversation history for fast-path responses
         save_context(
             athlete_id=athlete_id,
             model_name=USER_FACING_MODEL,
-            user_message=req.message,
-            assistant_message=reply,
+            user_message=normalized_user_message.content,
+            assistant_message=normalized_assistant_message.content if normalized_assistant_message else reply,
+            conversation_id=conversation_id,
         )
         return CoachChatResponse(
             intent="activity_ack",
             reply=reply,
+            response_type="explanation",
+            show_plan=False,
+            plan_items=None,
         )
 
     # Build athlete state
@@ -344,9 +443,9 @@ async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatRespon
         days_to_race=req.days_to_race,
     )
 
-    # Get decision from orchestrator
+    # Get decision from orchestrator (use normalized content)
     decision = await run_conversation(
-        user_input=req.message,
+        user_input=normalized_user_message.content,
         deps=deps,
     )
 
@@ -384,25 +483,56 @@ async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatRespon
     # Execute action if needed
     reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
 
+    # Normalize assistant response before returning
+    try:
+        normalized_assistant_message = normalize_message(
+            raw_input=reply,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="assistant",
+        )
+        # Write normalized assistant message to Redis (B26)
+        write_message(normalized_assistant_message)
+        # Use normalized content for response
+        reply_content = normalized_assistant_message.content
+    except ValueError as e:
+        logger.error(
+            "Failed to normalize assistant response",
+            conversation_id=conversation_id,
+            user_id=user_id,
+            error=str(e),
+        )
+        # Fallback to original reply if normalization fails
+        reply_content = reply
+
     return CoachChatResponse(
         intent=decision.intent,
-        reply=reply,
+        reply=reply_content,
         conversation_id=conversation_id,
+        response_type=decision.response_type,
+        show_plan=decision.show_plan,
+        plan_items=decision.plan_items,
     )
 
 
 @router.get("/conversations/{conversation_id}/progress", response_model=ProgressResponse)
-async def get_conversation_progress(conversation_id: str, request: Request) -> ProgressResponse:
+async def get_conversation_progress(
+    conversation_id: str,
+    request: Request,
+    _user_id: str = Depends(validate_conversation_ownership),
+) -> ProgressResponse:
     """Get progress events for a conversation.
 
     Args:
         conversation_id: Conversation ID from path parameter
         request: FastAPI request object (for context validation)
+        _user_id: Authenticated user ID (from ownership validation, unused but required for validation)
 
     Returns:
         ProgressResponse with steps and events
     """
     # Validate that path parameter matches context (optional validation)
+    # Ownership is validated by validate_conversation_ownership dependency
     context_conversation_id = get_conversation_id(request)
     if context_conversation_id != conversation_id:
         logger.warning(

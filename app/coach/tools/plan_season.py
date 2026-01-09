@@ -66,12 +66,21 @@ def generate_season_plan_response(
     weeks: int,
 ) -> str:
     """Generate success response for season plan creation."""
+    if saved_count > 0:
+        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+        calendar_note = (
+            "Your planned sessions are now available in your calendar! You can view them in the calendar view and track your progress."
+        )
+    else:
+        save_status = "• ⚠️ Sessions generated but could not be saved to calendar (service may be temporarily unavailable)\n"
+        calendar_note = "The plan is ready, but you may need to retry saving to calendar later."
+
     return (
         f"✅ **Season Training Plan Created!**\n\n"
         f"I've generated a {weeks}-week season training plan from **{season_start.strftime('%B %d, %Y')}** "
         f"to **{season_end.strftime('%B %d, %Y')}**.\n\n"
         f"**Plan Summary:**\n"
-        f"• **{saved_count} training sessions** added to your calendar\n"
+        f"{save_status}"
         f"• Season duration: {weeks} weeks\n"
         f"• Phases: Base → Build → Peak → Recovery\n\n"
         f"**Training Structure:**\n"
@@ -79,8 +88,7 @@ def generate_season_plan_response(
         f"• **Build Phase**: Race-specific intensity, structured workouts\n"
         f"• **Peak Phase**: Maximum specificity, race preparation\n"
         f"• **Recovery Phase**: Active recovery, reset\n\n"
-        f"Your planned sessions are now available in your calendar! "
-        f"You can view them in the calendar view and track your progress."
+        f"{calendar_note}"
     )
 
 
@@ -157,13 +165,20 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
                 plan_id=plan_id,
             )
 
+            if saved_count > 0:
+                logger.info(f"Successfully saved {saved_count} planned sessions for season plan")
+            else:
+                logger.warning(
+                    "Season plan generated successfully but sessions could not be persisted (service may be temporarily unavailable)"
+                )
+
             weeks = (season_end - season_start).days // 7
             return generate_season_plan_response(season_start, season_end, saved_count, weeks)
         except Exception as e:
             logger.error(f"Error generating season plan: {e}", exc_info=True)
             return (
                 f"I've prepared a season training plan from **{season_start.strftime('%B %d, %Y')}** "
-                f"to **{season_end.strftime('%B %d, %Y')}**, but encountered an error saving it. "
+                f"to **{season_end.strftime('%B %d, %Y')}**, but encountered an error generating it. "
                 f"Please try again or contact support."
             )
     else:

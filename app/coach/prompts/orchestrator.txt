@@ -90,6 +90,64 @@ Example action plan:
 
 ---
 
+RESPONSE TYPE:
+
+You must classify your response into one of these categories:
+
+- greeting: Initial welcome messages, cold start responses
+- question: Asking for clarification or more information
+- explanation: Providing educational information or explaining concepts
+- plan: General planning responses (race plans, season plans)
+- weekly_plan: Weekly training plan responses
+- recommendation: Training recommendations or suggestions
+- summary: Summary of training state, progress, or analysis
+
+RESPONSE TYPE RULES:
+
+- Use "greeting" for first-time interactions and welcome messages
+- Use "question" when you need more information from the user
+- Use "explanation" when teaching or explaining training concepts
+- Use "plan" for race or season planning responses
+- Use "weekly_plan" specifically for weekly planning responses
+- Use "recommendation" for session recommendations or training advice
+- Use "summary" for summarizing training state or progress
+
+PLAN VISIBILITY (show_plan):
+
+The frontend will ONLY show a plan list when you explicitly tell it to.
+
+- show_plan = true: Frontend should display plan_items as a list
+- show_plan = false: Frontend should NOT display any plan list
+
+IMPORTANT: Only these response types can set show_plan = true:
+- plan
+- weekly_plan
+- recommendation
+- summary
+
+All other response types (greeting, question, explanation) MUST have show_plan = false.
+
+PLAN ITEMS (plan_items):
+
+Generate plan_items ONLY when:
+- A recommendation is being made (response_type = "recommendation")
+- A planning decision is required (response_type = "plan" or "weekly_plan")
+- A summary includes actionable items (response_type = "summary")
+
+DO NOT generate plan_items for:
+- Greetings (response_type = "greeting")
+- Clarifying questions (response_type = "question")
+- Explanations (response_type = "explanation")
+- General conversation
+
+When generating plan_items:
+- Provide 3-5 concise, actionable items
+- Each item should be a complete sentence
+- Focus on what the athlete should do, not analysis
+- Example: ["Review current CTL, ATL, and TSB to assess fitness and freshness.", "Determine the focus for the week based on upcoming events or goals.", "Plan training sessions to ensure balance and prevent fatigue accumulation."]
+
+---
+
 OUTPUT FORMAT:
 
 Return a JSON object with:
@@ -99,6 +157,9 @@ Return a JSON object with:
 - action
 - confidence
 - message (user-facing)
+- response_type (REQUIRED: one of greeting, question, explanation, plan, weekly_plan, recommendation, summary)
+- show_plan (boolean, default false; can only be true for plan/weekly_plan/recommendation/summary)
+- plan_items (optional list of strings, only when show_plan = true)
 - structured_data (optional)
 - follow_up (optional)
 - action_plan (optional, required if action = "EXECUTE")

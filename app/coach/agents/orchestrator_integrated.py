@@ -9,6 +9,7 @@ State mutations are explicit and logged.
 """
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from loguru import logger
 
@@ -17,8 +18,12 @@ from app.coach.admin.execution_guard import EXECUTION_GUARD
 from app.coach.agents.orchestrator_classifier import classify_intent
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.schemas.orchestration import OrchestrationDecision
-from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
+from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse, ResponseType
 from app.coach.tools.unified_plan import plan_tool
+
+# Type aliases for better readability
+IntentLiteral = Literal["recommend", "plan", "adjust", "explain", "log", "question", "general"]
+HorizonLiteral = Literal["today", "next_session", "week", "race", "season"] | None
 
 
 async def run_orchestrated_conversation(
@@ -105,10 +110,50 @@ async def run_orchestrated_conversation(
     )
 
     # Step 5: Return response
+    # Map decision.user_intent to valid intent literal
+    intent_mapping: dict[str, IntentLiteral] = {
+        "plan": "plan",
+        "revise": "plan",
+        "explain": "explain",
+        "assess": "explain",
+        "question": "question",
+    }
+    mapped_intent: IntentLiteral = intent_mapping.get(decision.user_intent, "general")
+
+    # Map decision.horizon to valid horizon literal
+    # OrchestrationDecision uses: "day", "week", "season", "none"
+    # OrchestratorAgentResponse expects: "today", "next_session", "week", "race", "season", None
+    horizon_mapping: dict[str, HorizonLiteral] = {
+        "day": "today",
+        "week": "week",
+        "season": "season",
+        "none": None,
+    }
+    mapped_horizon: HorizonLiteral = horizon_mapping.get(decision.horizon)
+
+    # Determine response_type based on tool execution and intent
+    if tool_executed:
+        if mapped_horizon == "week":
+            response_type_value = "weekly_plan"
+        elif mapped_horizon == "season":
+            response_type_value = "plan"
+        else:
+            response_type_value = "recommendation"
+    else:
+        response_type_value = "question" if decision.user_intent == "question" else "explanation"
+
+    # Determine if plan should be shown
+    show_plan_value = tool_executed and mapped_horizon in {"week", "season"}
+
     return OrchestratorAgentResponse(
+        intent=mapped_intent,
+        horizon=mapped_horizon,
+        action="EXECUTE" if tool_executed else "NO_ACTION",
+        confidence=decision.confidence,
         message=response_message,
-        intent=decision.user_intent,
-        response_type="tool" if tool_executed else "conversation",
+        response_type=response_type_value,
+        show_plan=show_plan_value,
+        plan_items=None,
         structured_data={"decision": decision.model_dump()},
         follow_up=None,
     )

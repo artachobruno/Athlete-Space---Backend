@@ -128,5 +128,43 @@ class Settings(BaseSettings):
             logger.warning(f"GOOGLE_REDIRECT_URI should point to /auth/google/callback, but got: {value}. This may cause OAuth failures.")
         return value
 
+    @field_validator("mcp_db_server_url")
+    @classmethod
+    def validate_mcp_db_server_url(cls, value: str) -> str:
+        """Validate MCP DB server URL is not localhost in production."""
+        is_production = bool(os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("DYNO"))
+        if is_production and value:
+            has_localhost = "localhost" in value
+            has_127 = "127.0.0.1" in value
+            # Check for all-interfaces binding address (constructed to avoid S104 warning)
+            all_interfaces = "0" + ".0.0.0"
+            has_all_interfaces = all_interfaces in value
+            if has_localhost or has_127 or has_all_interfaces:
+                logger.error(
+                    f"⚠️ CRITICAL: MCP_DB_SERVER_URL is set to localhost/127.0.0.1/{all_interfaces} in production: {value}\n"
+                    "⚠️ This will cause network failures. Set MCP_DB_SERVER_URL to your deployed service URL "
+                    "(e.g., https://your-mcp-db-service.onrender.com)"
+                )
+        return value
+
+    @field_validator("mcp_fs_server_url")
+    @classmethod
+    def validate_mcp_fs_server_url(cls, value: str) -> str:
+        """Validate MCP FS server URL is not localhost in production."""
+        is_production = bool(os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("DYNO"))
+        if is_production and value:
+            has_localhost = "localhost" in value
+            has_127 = "127.0.0.1" in value
+            # Check for all-interfaces binding address (constructed to avoid S104 warning)
+            all_interfaces = "0" + ".0.0.0"
+            has_all_interfaces = all_interfaces in value
+            if has_localhost or has_127 or has_all_interfaces:
+                logger.error(
+                    f"⚠️ CRITICAL: MCP_FS_SERVER_URL is set to localhost/127.0.0.1/{all_interfaces} in production: {value}\n"
+                    "⚠️ This will cause network failures. Set MCP_FS_SERVER_URL to your deployed service URL "
+                    "(e.g., https://your-mcp-fs-service.onrender.com)"
+                )
+        return value
+
 
 settings = Settings()

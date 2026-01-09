@@ -181,18 +181,30 @@ async def create_and_save_plan(
             plan_type="race",
             plan_id=plan_id,
         )
-        logger.info(f"Successfully saved {saved_count} planned sessions")
+
+        if saved_count > 0:
+            logger.info(f"Successfully saved {saved_count} planned sessions")
+        else:
+            logger.warning("Race plan generated successfully but sessions could not be persisted (service may be temporarily unavailable)")
 
         weeks = len({s.get("week_number", 0) for s in sessions})
         start_date = (race_date - timedelta(weeks=weeks)).strftime("%B %d, %Y")
         race_date_str = race_date.strftime("%B %d, %Y")
         target_time_str = f"\nTarget time: {target_time}" if target_time else ""
+
+        if saved_count > 0:
+            save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+            calendar_note = "Your planned sessions are now available in your calendar!"
+        else:
+            save_status = "• ⚠️ Sessions generated but could not be saved to calendar (service may be temporarily unavailable)\n"
+            calendar_note = "The plan is ready, but you may need to retry saving to calendar later."
+
     except Exception as e:
         logger.error(f"Error generating race plan: {e}", exc_info=True)
         race_date_str = race_date.strftime("%B %d, %Y")
         return (
             f"I've prepared a training plan for your **{distance}** race on **{race_date_str}**, "
-            f"but encountered an error saving it. Please try again or contact support."
+            f"but encountered an error generating it. Please try again or contact support."
         )
     else:
         return (
@@ -200,7 +212,7 @@ async def create_and_save_plan(
             f"I've generated a {weeks}-week training plan for your **{distance}** "
             f"race on **{race_date_str}**.\n\n"
             f"**Plan Summary:**\n"
-            f"• **{saved_count} training sessions** added to your calendar\n"
+            f"{save_status}"
             f"• Training starts: {start_date}\n"
             f"• Race date: {race_date_str}\n\n"
             f"**Training Structure:**\n"
@@ -208,7 +220,7 @@ async def create_and_save_plan(
             f"• Progressive intensity increases\n"
             f"• Race-specific workouts\n"
             f"• Taper period before race\n\n"
-            f"Your planned sessions are now available in your calendar!{target_time_str}\n\n"
+            f"{calendar_note}{target_time_str}\n\n"
             f"**The plan is complete and ready to use. No further action needed.**"
         )
 

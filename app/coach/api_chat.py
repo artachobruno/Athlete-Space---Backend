@@ -1,8 +1,7 @@
-import uuid
 from datetime import date, datetime, timezone
 from typing import Literal, cast
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from loguru import logger
 from sqlalchemy import select
 
@@ -21,6 +20,7 @@ from app.coach.utils.schemas import (
     ProgressEventResponse,
     ProgressResponse,
 )
+from app.core.conversation_id import get_conversation_id
 from app.db.models import AthleteProfile, CoachMessage, CoachProgressEvent, StravaAccount, StravaAuth, UserSettings
 from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
@@ -127,28 +127,40 @@ def get_or_create_athlete_id(db, user_id: str) -> int | None:
 
 
 @router.post("/chat", response_model=CoachChatResponse)
-async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
+async def coach_chat(req: CoachChatRequest, request: Request) -> CoachChatResponse:
     """Handle coach chat request using orchestrator agent."""
-    logger.info(f"Coach chat request: {req.message}")
+    # Get conversation_id from request context (set by middleware)
+    conversation_id = get_conversation_id(request)
+    logger.info(
+        "Coach chat request",
+        message=req.message,
+        conversation_id=conversation_id,
+    )
 
     # Get athlete ID
     athlete_id = _get_athlete_id()
     logger.debug(
         "Retrieved athlete_id for coach chat",
+        conversation_id=conversation_id,
         athlete_id=athlete_id,
         athlete_id_type=type(athlete_id).__name__ if athlete_id is not None else None,
     )
     if athlete_id is None:
-        logger.warning("No athlete ID found, cannot process coach chat")
+        logger.warning(
+            "No athlete ID found, cannot process coach chat",
+            conversation_id=conversation_id,
+        )
         return CoachChatResponse(
             intent="error",
             reply="Please connect your Strava account first.",
+            conversation_id=conversation_id,
         )
 
     # Check if this is a cold start (empty history)
     history_empty = _is_history_empty(athlete_id)
     logger.debug(
         "Cold start check result",
+        conversation_id=conversation_id,
         athlete_id=athlete_id,
         history_empty=history_empty,
     )
@@ -156,15 +168,23 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     # Get user_id from athlete_id
     user_id = get_user_id_from_athlete_id(athlete_id)
     if user_id is None:
-        logger.warning(f"Cannot find user_id for athlete_id={athlete_id}")
+        logger.warning(
+            "Cannot find user_id for athlete_id",
+            conversation_id=conversation_id,
+            athlete_id=athlete_id,
+        )
         return CoachChatResponse(
             intent="error",
             reply="Unable to find user account. Please reconnect your Strava account.",
+            conversation_id=conversation_id,
         )
 
     # Handle cold start
     if history_empty:
-        logger.info("Cold start detected - providing welcome message")
+        logger.info(
+            "Cold start detected - providing welcome message",
+            conversation_id=conversation_id,
+        )
         try:
             training_data = get_training_data(user_id=user_id, days=req.days)
             athlete_state = build_athlete_state(
@@ -176,6 +196,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
             )
             logger.debug(
                 "Cold start with training data",
+                conversation_id=conversation_id,
                 athlete_id=athlete_id,
                 ctl=athlete_state.ctl,
                 atl=athlete_state.atl,
@@ -186,7 +207,11 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
             )
             reply = welcome_new_user(athlete_state)
         except RuntimeError as e:
-            logger.warning("Cold start with no training data available", error=str(e))
+            logger.warning(
+                "Cold start with no training data available",
+                conversation_id=conversation_id,
+                error=str(e),
+            )
             reply = welcome_new_user(None)
 
         # Save conversation history for cold start
@@ -200,6 +225,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         return CoachChatResponse(
             intent="cold_start",
             reply=reply,
+            conversation_id=conversation_id,
         )
 
     # Fast-path: Handle simple activity acknowledgments without invoking agent
@@ -207,6 +233,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     if _is_simple_acknowledgment(req.message):
         logger.info(
             "Fast-path: Handling simple acknowledgment without agent",
+            conversation_id=conversation_id,
             message=req.message,
             athlete_id=athlete_id,
         )
@@ -242,7 +269,10 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
             days_to_race=req.days_to_race,
         )
     except RuntimeError:
-        logger.warning("No training data available for orchestrator")
+        logger.warning(
+            "No training data available for orchestrator",
+            conversation_id=conversation_id,
+        )
         athlete_state = None
 
     # Load athlete profile, training preferences, and race profile
@@ -314,9 +344,6 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         days_to_race=req.days_to_race,
     )
 
-    # Generate conversation ID for this request
-    conversation_id = str(uuid.uuid4())
-
     # Get decision from orchestrator
     decision = await run_conversation(
         user_input=req.message,
@@ -365,16 +392,29 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
 
 
 @router.get("/conversations/{conversation_id}/progress", response_model=ProgressResponse)
-async def get_conversation_progress(conversation_id: str) -> ProgressResponse:
+async def get_conversation_progress(conversation_id: str, request: Request) -> ProgressResponse:
     """Get progress events for a conversation.
 
     Args:
-        conversation_id: Conversation ID
+        conversation_id: Conversation ID from path parameter
+        request: FastAPI request object (for context validation)
 
     Returns:
         ProgressResponse with steps and events
     """
-    logger.info("Fetching conversation progress", conversation_id=conversation_id)
+    # Validate that path parameter matches context (optional validation)
+    context_conversation_id = get_conversation_id(request)
+    if context_conversation_id != conversation_id:
+        logger.warning(
+            "Conversation ID mismatch between path and context",
+            path_conversation_id=conversation_id,
+            context_conversation_id=context_conversation_id,
+        )
+    logger.info(
+        "Fetching conversation progress",
+        conversation_id=conversation_id,
+        context_conversation_id=context_conversation_id,
+    )
     with get_session() as db:
         # Fetch all events for this conversation
         events_query = (

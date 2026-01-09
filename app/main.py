@@ -32,6 +32,7 @@ from app.calendar.api import router as calendar_router
 from app.coach.api import router as coach_router
 from app.coach.api_chat import router as coach_chat_router
 from app.config.settings import settings
+from app.core.conversation_id import conversation_id_middleware
 from app.core.logger import setup_logger
 from app.db.models import Base
 from app.db.schema_check import verify_schema
@@ -407,6 +408,15 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Virtus AI", lifespan=lifespan)
 
+
+# Register conversation ID middleware FIRST (before CORS, auth, rate limiting, logging)
+# This ensures conversation_id is available to all downstream middleware and handlers
+@app.middleware("http")
+async def conversation_id_middleware_wrapper(request: Request, call_next):
+    """Wrapper to register conversation_id_middleware."""
+    return await conversation_id_middleware(request, call_next)
+
+
 # Configure CORS
 # Get allowed origins from environment variable or use defaults
 cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
@@ -442,6 +452,7 @@ app.add_middleware(
         "Origin",
         "X-Requested-With",
         "X-CSRFToken",
+        "X-Conversation-Id",
         "Access-Control-Request-Method",
         "Access-Control-Request-Headers",
     ],
@@ -582,7 +593,9 @@ def database_schema_error_handler(request: Request, exc: ProgrammingError):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, Accept, Origin, X-Requested-With"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
+        )
 
     return response
 
@@ -613,7 +626,9 @@ def global_exception_handler(request: Request, exc: Exception):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, Accept, Origin, X-Requested-With"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
+        )
 
     return response
 

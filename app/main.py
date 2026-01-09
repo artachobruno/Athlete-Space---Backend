@@ -411,6 +411,9 @@ else:
         "http://localhost:3000",  # Local dev (alternative port)
         "http://localhost:8080",  # Local dev (alternative port)
         "http://localhost:8501",  # Streamlit default
+        "capacitor://localhost",  # Capacitor iOS/Android
+        "ionic://localhost",  # Ionic (alternative)
+        "http://localhost",  # Android localhost
     ]
 
 # Remove duplicates and filter out empty strings

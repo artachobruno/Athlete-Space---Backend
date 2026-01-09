@@ -159,6 +159,7 @@ pydocstyle = { convention = "google" }
 "mcp/db_server/tools/context.py" = ["TRY301"]  # Direct raise is appropriate here
 "mcp/db_server/main.py" = ["S104"]  # Binding to 0.0.0.0 is required for Render/cloud deployments
 "mcp/fs_server/main.py" = ["S104"]  # Binding to 0.0.0.0 is required for Render/cloud deployments
+"app/api/auth/auth_google.py" = ["TRY300"]  # RET505 correctly flags unnecessary else; TRY300 conflicts
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

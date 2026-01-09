@@ -29,54 +29,57 @@ router = APIRouter(prefix="/auth/google", tags=["auth", "google"])
 
 # In-memory state storage for OAuth flow (CSRF protection)
 # In production, consider using Redis or database-backed storage
-# state -> (user_id | None, timestamp) - user_id is None for unauthenticated users
-_oauth_states: dict[str, tuple[str | None, float]] = {}
+# state -> (user_id | None, platform, timestamp) - user_id is None for unauthenticated users
+# platform: "web" | "mobile" - determines callback behavior
+_oauth_states: dict[str, tuple[str | None, str, float]] = {}
 
 
-def _generate_oauth_state(user_id: str | None = None) -> str:
+def _generate_oauth_state(user_id: str | None = None, platform: str = "web") -> str:
     """Generate a secure OAuth state token tied to user session.
 
     Args:
         user_id: Current authenticated user ID (None for unauthenticated users)
+        platform: Platform identifier ("web" or "mobile")
 
     Returns:
         Secure random state token
     """
     state = secrets.token_urlsafe(32)
     timestamp = datetime.now(timezone.utc).timestamp()
-    _oauth_states[state] = (user_id, timestamp)
-    logger.debug(f"Generated Google OAuth state for user_id={user_id}: {state[:16]}...")
+    _oauth_states[state] = (user_id, platform, timestamp)
+    logger.debug(f"Generated Google OAuth state for user_id={user_id}, platform={platform}: {state[:16]}...")
     return state
 
 
-def _validate_and_extract_state(state: str) -> tuple[bool, str | None]:
-    """Validate OAuth state and extract user_id.
+def _validate_and_extract_state(state: str) -> tuple[bool, str | None, str]:
+    """Validate OAuth state and extract user_id and platform.
 
     Args:
         state: OAuth state token from callback
 
     Returns:
-        Tuple of (is_valid, user_id)
+        Tuple of (is_valid, user_id, platform)
         - is_valid: True if state is valid (not expired, exists)
         - user_id: user_id if state is valid, None otherwise
+        - platform: "web" or "mobile"
     """
     if state not in _oauth_states:
         logger.warning(f"Invalid Google OAuth state: {state[:16]}... (not found)")
-        return (False, None)
+        return (False, None, "web")
 
-    stored_user_id, timestamp = _oauth_states[state]
+    stored_user_id, platform, timestamp = _oauth_states[state]
     current_time = datetime.now(timezone.utc).timestamp()
 
     # State expires after 10 minutes
     if current_time - timestamp > 600:
         logger.warning(f"Google OAuth state expired: {state[:16]}...")
         del _oauth_states[state]
-        return (False, None)
+        return (False, None, "web")
 
     # Clean up used state
     del _oauth_states[state]
-    logger.debug(f"Extracted user_id={stored_user_id} from Google OAuth state")
-    return (True, stored_user_id)
+    logger.debug(f"Extracted user_id={stored_user_id}, platform={platform} from Google OAuth state")
+    return (True, stored_user_id, platform)
 
 
 def _encrypt_and_store_tokens(
@@ -158,9 +161,74 @@ def _create_error_html(redirect_url: str, error_msg: str = "") -> str:
     """
 
 
+@router.get("/login")
+def google_login(
+    platform: str = "web",
+    user_id: str | None = Depends(get_optional_user_id),
+):
+    """Initiate Google OAuth login flow (React-compatible).
+
+    This endpoint is called by React frontend (web + mobile) and redirects directly to Google.
+    Supports platform parameter to determine callback behavior:
+    - platform=web: Sets cookie on callback
+    - platform=mobile: Returns token via deep link
+
+    Args:
+        platform: Platform identifier ("web" or "mobile")
+        user_id: Current authenticated user ID (optional)
+
+    Returns:
+        RedirectResponse to Google OAuth consent screen
+    """
+    # Normalize platform
+    platform = platform.lower()
+    if platform not in {"web", "mobile"}:
+        platform = "web"
+        logger.warning(f"[GOOGLE_OAUTH] Invalid platform '{platform}', defaulting to 'web'")
+
+    logger.info(f"[GOOGLE_OAUTH] Login initiated for user_id={user_id or 'unauthenticated'}, platform={platform}")
+
+    # Validate Google credentials are configured
+    if not settings.google_client_id or not settings.google_client_secret:
+        logger.error("[GOOGLE_OAUTH] Google credentials not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google integration not configured",
+        )
+
+    # Validate redirect URI
+    if not settings.google_redirect_uri or "/auth/google/callback" not in settings.google_redirect_uri:
+        logger.error(f"[GOOGLE_OAUTH] Invalid redirect URI: {settings.google_redirect_uri}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google redirect URI must point to /auth/google/callback",
+        )
+
+    # Generate CSRF-protected state with platform
+    state = _generate_oauth_state(user_id, platform)
+
+    # Build Google OAuth URL
+    oauth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={settings.google_client_id}"
+        "&response_type=code"
+        f"&redirect_uri={settings.google_redirect_uri}"
+        "&scope=openid email profile"
+        f"&state={state}"
+        "&access_type=offline"  # Required to get refresh token
+        "&prompt=consent"  # Force consent screen to get refresh token
+    )
+
+    logger.info(f"[GOOGLE_OAUTH] Redirecting to Google OAuth for user_id={user_id or 'unauthenticated'}, platform={platform}")
+    logger.debug(f"[GOOGLE_OAUTH] OAuth URL: {oauth_url[:100]}...")
+
+    # Redirect directly to Google (React expects this)
+    return RedirectResponse(url=oauth_url)
+
+
 @router.get("")
 def google_connect(user_id: str | None = Depends(get_optional_user_id)):
-    """Initiate Google OAuth flow.
+    """Initiate Google OAuth flow (legacy endpoint for account linking).
 
     Supports both authenticated and unauthenticated flows:
     - If authenticated: Links Google to existing account
@@ -191,8 +259,8 @@ def google_connect(user_id: str | None = Depends(get_optional_user_id)):
             detail="Google redirect URI must point to /auth/google/callback",
         )
 
-    # Generate CSRF-protected state
-    state = _generate_oauth_state(user_id)
+    # Generate CSRF-protected state (default to web for legacy endpoint)
+    state = _generate_oauth_state(user_id, "web")
 
     # Build Google OAuth URL
     oauth_url = (
@@ -246,12 +314,13 @@ def google_callback(
         elif host and not host.startswith("localhost"):
             redirect_url = f"https://{host}"
 
-    is_valid, user_id = _validate_and_extract_state(state)
+    is_valid, user_id, platform = _validate_and_extract_state(state)
     if not is_valid:
         logger.error(f"[GOOGLE_OAUTH] Invalid or expired state: {state[:16]}...")
         return _create_error_html(redirect_url, "Invalid or expired authorization request. Please try again.")
 
-    logger.info(f"[GOOGLE_OAUTH] Callback validated, user_id={user_id or 'unauthenticated'}")
+    logger.info(f"[GOOGLE_OAUTH] Callback validated, user_id={user_id or 'unauthenticated'}, platform={platform}")
+
     logger.debug(f"[GOOGLE_OAUTH] Callback code: {code[:10]}... (truncated)")
 
     resolved_user_id: str | None = None
@@ -367,10 +436,24 @@ def google_callback(
         jwt_token = create_access_token(resolved_user_id)
         logger.info(f"[GOOGLE_OAUTH] JWT token issued for user_id={resolved_user_id}")
 
-        # Redirect to frontend with JWT token in URL query parameter
-        redirect_with_token = f"{redirect_url}?token={jwt_token}"
-        logger.info(f"[GOOGLE_OAUTH] Redirecting to frontend with token for user_id={resolved_user_id}")
-        return RedirectResponse(url=redirect_with_token)
+        # Branch by platform: web sets cookie, mobile deep links with token
+        if platform == "mobile":
+            # Mobile: Redirect to Capacitor deep link with token in URL
+            mobile_redirect = f"capacitor://localhost/auth/callback?token={jwt_token}"
+            logger.info(f"[GOOGLE_OAUTH] Redirecting to mobile deep link for user_id={resolved_user_id}")
+            return RedirectResponse(url=mobile_redirect)
+        # Web: Set cookie and redirect to frontend with token in URL (React extracts from URL)
+        response = RedirectResponse(url=f"{redirect_url}?token={jwt_token}")
+        response.set_cookie(
+            key="session",
+            value=jwt_token,
+            httponly=True,
+            secure=True,  # HTTPS only in production
+            samesite="none",  # Required for cross-origin cookie
+            max_age=30 * 24 * 60 * 60,  # 30 days
+        )
+        logger.info(f"[GOOGLE_OAUTH] Redirecting to web frontend with cookie and token for user_id={resolved_user_id}")
+        return response
 
     except HTTPException:
         raise

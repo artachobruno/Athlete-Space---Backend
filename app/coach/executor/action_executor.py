@@ -440,7 +440,7 @@ class CoachActionExecutor:
             intent=decision.intent,
             horizon=decision.horizon,
             message=race_description,
-            structured_data=decision.structured_data,
+            _structured_data=decision.structured_data,
         )
 
         logger.debug(

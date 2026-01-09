@@ -1,3 +1,4 @@
+import os
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter
@@ -6,6 +7,7 @@ from sqlalchemy import select
 
 from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
+from app.coach.executor.action_executor import CoachActionExecutor
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.coach.utils.context_management import save_context
@@ -235,13 +237,16 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         days_to_race=req.days_to_race,
     )
 
-    # Run orchestrator
-    result = await run_conversation(
+    # Get decision from orchestrator
+    decision = await run_conversation(
         user_input=req.message,
         deps=deps,
     )
 
+    # Execute action if needed
+    reply = await CoachActionExecutor.execute(decision, deps)
+
     return CoachChatResponse(
-        intent=result.intent,
-        reply=result.message,
+        intent=decision.intent,
+        reply=reply,
     )

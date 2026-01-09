@@ -34,8 +34,10 @@ MCP_TOOL_ROUTES: dict[str, str] = {
     "adjust_training_load": MCP_DB_SERVER_URL,
     "recommend_next_session": MCP_DB_SERVER_URL,
     "share_report": MCP_DB_SERVER_URL,
+    "emit_progress_event": MCP_DB_SERVER_URL,
     # Filesystem tools
     "load_orchestrator_prompt": MCP_FS_SERVER_URL,
+    "load_orchestrator_classifier_prompt": MCP_FS_SERVER_URL,
     "load_prompt": MCP_FS_SERVER_URL,
 }
 

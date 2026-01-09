@@ -1,4 +1,6 @@
+import uuid
 from datetime import date, datetime, timezone
+from typing import Literal, cast
 
 from fastapi import APIRouter
 from loguru import logger
@@ -7,11 +9,19 @@ from sqlalchemy import select
 from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
 from app.coach.config.models import USER_FACING_MODEL
+from app.coach.executor.action_executor import CoachActionExecutor
+from app.coach.mcp_client import MCPError, call_tool
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.coach.utils.context_management import save_context
-from app.coach.utils.schemas import CoachChatRequest, CoachChatResponse
-from app.db.models import AthleteProfile, CoachMessage, StravaAccount, StravaAuth, UserSettings
+from app.coach.utils.schemas import (
+    ActionStepResponse,
+    CoachChatRequest,
+    CoachChatResponse,
+    ProgressEventResponse,
+    ProgressResponse,
+)
+from app.db.models import AthleteProfile, CoachMessage, CoachProgressEvent, StravaAccount, StravaAuth, UserSettings
 from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 
@@ -304,13 +314,117 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         days_to_race=req.days_to_race,
     )
 
-    # Run orchestrator
-    result = await run_conversation(
+    # Generate conversation ID for this request
+    conversation_id = str(uuid.uuid4())
+
+    # Get decision from orchestrator
+    decision = await run_conversation(
         user_input=req.message,
         deps=deps,
     )
 
+    # Emit planned events if action plan exists
+    if decision.action_plan:
+        logger.info(
+            "Emitting planned events for action plan",
+            conversation_id=conversation_id,
+            step_count=len(decision.action_plan.steps),
+        )
+        for step in decision.action_plan.steps:
+            try:
+                await call_tool(
+                    "emit_progress_event",
+                    {
+                        "conversation_id": conversation_id,
+                        "step_id": step.id,
+                        "label": step.label,
+                        "status": "planned",
+                    },
+                )
+                logger.info(
+                    "Planned event emitted",
+                    conversation_id=conversation_id,
+                    step_id=step.id,
+                    step_label=step.label,
+                )
+            except MCPError as e:
+                logger.warning(
+                    f"Failed to emit planned event for step {step.id}: {e.code}: {e.message}",
+                    conversation_id=conversation_id,
+                    step_id=step.id,
+                )
+
+    # Execute action if needed
+    reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
+
     return CoachChatResponse(
-        intent=result.intent,
-        reply=result.message,
+        intent=decision.intent,
+        reply=reply,
+        conversation_id=conversation_id,
     )
+
+
+@router.get("/conversations/{conversation_id}/progress", response_model=ProgressResponse)
+async def get_conversation_progress(conversation_id: str) -> ProgressResponse:
+    """Get progress events for a conversation.
+
+    Args:
+        conversation_id: Conversation ID
+
+    Returns:
+        ProgressResponse with steps and events
+    """
+    logger.info("Fetching conversation progress", conversation_id=conversation_id)
+    with get_session() as db:
+        # Fetch all events for this conversation
+        events_query = (
+            db.query(CoachProgressEvent)
+            .filter(CoachProgressEvent.conversation_id == conversation_id)
+            .order_by(CoachProgressEvent.timestamp)
+        )
+
+        events = events_query.all()
+
+        logger.info(
+            "Retrieved progress events",
+            conversation_id=conversation_id,
+            event_count=len(events),
+        )
+
+        # Extract unique steps from events
+        steps_dict: dict[str, str] = {}
+        for event in events:
+            if event.step_id not in steps_dict:
+                steps_dict[event.step_id] = event.label
+
+        # Build response
+        steps = [ActionStepResponse(id=step_id, label=label) for step_id, label in steps_dict.items()]
+
+        # Type-safe status values
+        valid_statuses = {"planned", "in_progress", "completed", "failed", "skipped"}
+        event_responses = []
+        for event in events:
+            # Validate and cast status to Literal type
+            if event.status in valid_statuses:
+                event_responses.append(
+                    ProgressEventResponse(
+                        conversation_id=event.conversation_id,
+                        step_id=event.step_id,
+                        label=event.label,
+                        status=cast(
+                            Literal["planned", "in_progress", "completed", "failed", "skipped"],
+                            event.status,
+                        ),
+                        timestamp=event.timestamp,
+                        message=event.message,
+                    )
+                )
+            else:
+                logger.warning(
+                    "Invalid status value in progress event",
+                    conversation_id=event.conversation_id,
+                    step_id=event.step_id,
+                    status=event.status,
+                )
+
+        return ProgressResponse(steps=steps, events=event_responses)

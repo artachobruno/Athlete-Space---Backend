@@ -135,6 +135,9 @@ recommend_next_session_tool = _coach_tools_module.recommend_next_session_tool
 share_report_tool = _coach_tools_module.share_report_tool
 get_planned_sessions_tool = _coach_tools_module.get_planned_sessions_tool
 
+_progress_events_module = _load_module_from_path("mcp_db_progress_events", _tools_dir / "progress_events.py")
+emit_progress_event_tool = _progress_events_module.emit_progress_event_tool
+
 app = FastAPI(title="MCP DB Server", version="1.0.0")
 
 # Configure logger
@@ -192,6 +195,7 @@ async def call_tool(request: Request) -> JSONResponse:
             "recommend_next_session": recommend_next_session_tool,
             "share_report": share_report_tool,
             "get_planned_sessions": get_planned_sessions_tool,
+            "emit_progress_event": emit_progress_event_tool,
         }
 
         if tool_name not in tool_map:

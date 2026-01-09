@@ -153,6 +153,24 @@ class CoachMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
+class CoachProgressEvent(Base):
+    """Progress events for coach orchestrator observability.
+
+    Tracks step-by-step progress of coach actions without exposing internal reasoning.
+    Each event represents a state transition for a step in an action plan.
+    """
+
+    __tablename__ = "coach_progress_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    step_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)  # "planned", "in_progress", "completed", "failed", "skipped"
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class StravaAccount(Base):
     """Strava OAuth account connection per user.
 

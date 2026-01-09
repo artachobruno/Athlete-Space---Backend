@@ -245,28 +245,34 @@ class TargetEvent(BaseModel):
 class AthleteProfileResponse(BaseModel):
     """Response for GET /me/profile."""
 
-    name: str | None = Field(description="Full name", default=None)
-    email: str | None = Field(description="Email address", default=None)
-    gender: str | None = Field(description="Gender (M/F)", default=None)
+    full_name: str | None = Field(description="Full name", default=None)
+    email: str | None = Field(description="Email address (from auth, read-only)", default=None)
+    gender: str | None = Field(description="Gender", default=None)
     date_of_birth: str | None = Field(description="Date of birth (YYYY-MM-DD)", default=None)
     weight_kg: float | None = Field(description="Weight in kilograms", default=None)
     height_cm: int | None = Field(description="Height in centimeters", default=None)
+    weight_lbs: float | None = Field(description="Weight in pounds (raw float, no rounding)", default=None)
+    height_inches: int | None = Field(description="Height in total inches (integer)", default=None)
     location: str | None = Field(description="Location string", default=None)
-    unit_system: str = Field(description="Unit system: imperial or metric", default="metric")
+    unit_system: str = Field(description="Unit system: imperial or metric", default="imperial")
     strava_connected: bool = Field(description="Whether Strava is connected", default=False)
     target_event: TargetEvent | None = Field(description="User's target race/event information", default=None)
     goals: list[str] = Field(description="Array of user's training goals", default_factory=list)
 
 
 class AthleteProfileUpdateRequest(BaseModel):
-    """Request for PUT /me/profile."""
+    """Request for PUT /me/profile.
 
-    name: str | None = Field(description="Full name", default=None)
-    email: str | None = Field(description="Email address", default=None)
-    gender: str | None = Field(description="Gender (M/F)", default=None)
+    Full object overwrite - all fields must be provided.
+    """
+
+    full_name: str | None = Field(description="Full name", default=None)
+    gender: str | None = Field(description="Gender", default=None)
     date_of_birth: str | None = Field(description="Date of birth (YYYY-MM-DD)", default=None)
     weight_kg: float | None = Field(description="Weight in kilograms", default=None)
     height_cm: int | None = Field(description="Height in centimeters", default=None)
+    weight_lbs: float | None = Field(description="Weight in pounds (raw float, no rounding)", default=None)
+    height_inches: int | None = Field(description="Height in total inches (integer)", default=None)
     location: str | None = Field(description="Location string", default=None)
     unit_system: str | None = Field(description="Unit system: imperial or metric", default=None)
     target_event: TargetEvent | None = Field(description="User's target race/event information", default=None)
@@ -274,28 +280,47 @@ class AthleteProfileUpdateRequest(BaseModel):
 
     @field_validator("height_cm", mode="before")
     @classmethod
-    def round_height_cm(cls, value: int | float | None) -> int | None:
-        """Round float values to int for height_cm.
+    def convert_height_cm(cls, value: int | float | None) -> int | None:
+        """Convert float values to int for height_cm.
 
         Frontend may send floats (e.g., 180.5) but backend expects integers.
-        This validator rounds floats to the nearest integer.
         """
         if value is None:
             return None
         if isinstance(value, float):
             return round(value)
-        return value
+        return value if isinstance(value, int) else None
+
+    @field_validator("height_inches", mode="before")
+    @classmethod
+    def convert_height_inches(cls, value: int | float | None) -> int | None:
+        """Convert to integer for height_inches.
+
+        Args:
+            value: Height in total inches
+
+        Returns:
+            Integer height in inches or None
+        """
+        if value is None:
+            return None
+        if isinstance(value, float):
+            return round(value)
+        return value if isinstance(value, int) else None
 
 
 class TrainingPreferencesResponse(BaseModel):
-    """Response for GET /me/training-preferences."""
+    """Response for GET /me/training-preferences.
 
-    years_of_training: int = Field(description="Years of structured training", default=0)
-    primary_sports: list[str] = Field(description="List of primary sports", default_factory=list)
-    available_days: list[str] = Field(description="Available training days", default_factory=list)
-    weekly_hours: float = Field(description="Weekly training hours", default=10.0)
-    training_focus: str = Field(description="Training focus: race_focused or general_fitness", default="general_fitness")
-    injury_history: bool = Field(description="Whether athlete has injury history", default=False)
+    Returns stored values exactly as persisted - no inference of defaults.
+    """
+
+    years_of_training: int | None = Field(description="Years of structured training", default=None)
+    primary_sports: list[str] | None = Field(description="List of primary sports", default=None)
+    available_days: list[str] | None = Field(description="Available training days", default=None)
+    weekly_hours: float | None = Field(description="Weekly training hours", default=None)
+    training_focus: str | None = Field(description="Training focus: race_focused or general_fitness", default=None)
+    injury_history: bool | None = Field(description="Whether athlete has injury history", default=None)
     injury_notes: str | None = Field(
         description="Detailed description of injuries, limitations, or areas of concern",
         default=None,
@@ -324,11 +349,14 @@ class TrainingPreferencesUpdateRequest(BaseModel):
 
 
 class PrivacySettingsResponse(BaseModel):
-    """Response for GET /me/privacy-settings."""
+    """Response for GET /me/privacy-settings.
 
-    profile_visibility: str = Field(description="Profile visibility: public, private, or coaches", default="private")
-    share_activity_data: bool = Field(description="Allow sharing anonymized activity data", default=False)
-    share_training_metrics: bool = Field(description="Allow sharing training metrics with coaches", default=False)
+    Returns stored values exactly as persisted - no inference of defaults.
+    """
+
+    profile_visibility: str | None = Field(description="Profile visibility: public, private, or coaches", default=None)
+    share_activity_data: bool | None = Field(description="Allow sharing anonymized activity data", default=None)
+    share_training_metrics: bool | None = Field(description="Allow sharing training metrics with coaches", default=None)
 
 
 class PrivacySettingsUpdateRequest(BaseModel):
@@ -340,16 +368,19 @@ class PrivacySettingsUpdateRequest(BaseModel):
 
 
 class NotificationsResponse(BaseModel):
-    """Response for GET /me/notifications."""
+    """Response for GET /me/notifications.
 
-    email_notifications: bool = Field(description="Receive email notifications", default=True)
-    push_notifications: bool = Field(description="Receive push notifications", default=True)
-    workout_reminders: bool = Field(description="Receive workout reminders", default=True)
-    training_load_alerts: bool = Field(description="Receive training load alerts", default=True)
-    race_reminders: bool = Field(description="Receive race reminders", default=True)
-    weekly_summary: bool = Field(description="Receive weekly summary", default=True)
-    goal_achievements: bool = Field(description="Receive goal achievement notifications", default=True)
-    coach_messages: bool = Field(description="Receive coach message notifications", default=True)
+    Returns stored values exactly as persisted - no inference of defaults.
+    """
+
+    email_notifications: bool | None = Field(description="Receive email notifications", default=None)
+    push_notifications: bool | None = Field(description="Receive push notifications", default=None)
+    workout_reminders: bool | None = Field(description="Receive workout reminders", default=None)
+    training_load_alerts: bool | None = Field(description="Receive training load alerts", default=None)
+    race_reminders: bool | None = Field(description="Receive race reminders", default=None)
+    weekly_summary: bool | None = Field(description="Receive weekly summary", default=None)
+    goal_achievements: bool | None = Field(description="Receive goal achievement notifications", default=None)
+    coach_messages: bool | None = Field(description="Receive coach message notifications", default=None)
 
 
 class NotificationsUpdateRequest(BaseModel):
@@ -371,3 +402,10 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(description="Current password")
     new_password: str = Field(description="New password (min 8 characters)", min_length=8)
     confirm_password: str = Field(description="Confirm new password", min_length=8)
+
+
+class ChangeEmailRequest(BaseModel):
+    """Request for POST /auth/change-email."""
+
+    password: str = Field(description="Current password for verification")
+    new_email: str = Field(description="New email address")

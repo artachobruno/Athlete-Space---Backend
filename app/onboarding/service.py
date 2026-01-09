@@ -6,6 +6,7 @@ Handles the complete onboarding flow: persistence, extraction, and conditional p
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -30,6 +31,7 @@ from app.onboarding.extraction import (
 from app.onboarding.persistence import persist_profile_data, persist_training_preferences
 from app.onboarding.schemas import OnboardingCompleteRequest, OnboardingCompleteResponse
 from app.services.intelligence.runtime import CoachRuntime
+from app.services.training_preferences import extract_and_store_race_info
 from app.state.api_helpers import get_training_data
 
 
@@ -743,18 +745,33 @@ def complete_onboarding_flow(
             profile = persist_profile_data(session, user_id, request.profile)
             settings = persist_training_preferences(session, user_id, request.training_preferences)
 
-            # 2. Extract race attributes from goals
-            extracted_attributes = extract_race_attributes(profile, settings)
+            # 2. Extract race attributes from goals using the same service as preference updates
+            extract_and_store_race_info(session, user_id, settings, profile)
+
+            # Get extracted race attributes from profile (stored by extract_and_store_race_info)
+            # Refresh profile to get latest extracted_race_attributes
+            session.refresh(profile)
+            extracted_attributes_dict = profile.extracted_race_attributes if profile else None
+
+            # Convert dict to ExtractedRaceAttributes object if available
+            extracted_attributes_obj = None
+            if extracted_attributes_dict and isinstance(extracted_attributes_dict, dict):
+                with contextlib.suppress(Exception):
+                    extracted_attributes_obj = ExtractedRaceAttributes(
+                        event_type=extracted_attributes_dict.get("event_type"),
+                        event_date=extracted_attributes_dict.get("event_date"),
+                        goal_time=extracted_attributes_dict.get("target_time"),
+                        distance=extracted_attributes_dict.get("distance"),
+                        location=extracted_attributes_dict.get("location"),
+                    )
+                    # If conversion fails, leave as None (suppressed by contextlib)
 
             # 3. Extract injury attributes from injury notes
             extracted_injury_attributes = extract_injury_attributes_from_settings(settings)
 
-            # 4. Store extracted attributes on profile
-            if extracted_attributes:
-                profile.extracted_race_attributes = extracted_attributes.model_dump()
+            # 4. Store extracted injury attributes on profile
             if extracted_injury_attributes:
                 profile.extracted_injury_attributes = extracted_injury_attributes.model_dump()
-            if extracted_attributes or extracted_injury_attributes:
                 session.commit()
 
             # 4. Conditionally generate plans
@@ -776,7 +793,7 @@ def complete_onboarding_flow(
                     athlete_id=athlete_id,
                     profile=profile,
                     settings=settings,
-                    extracted_attributes=extracted_attributes,
+                    extracted_attributes=extracted_attributes_obj,
                     extracted_injury_attributes=extracted_injury_attributes,
                 )
                 weekly_intent, season_plan, provisional, warning = _generate_plans_for_onboarding(

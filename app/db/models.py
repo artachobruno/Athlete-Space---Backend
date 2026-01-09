@@ -562,6 +562,8 @@ class AthleteProfile(Base):
     date_of_birth: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    height_in: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weight_lbs: Mapped[float | None] = mapped_column(Float, nullable=True)
     location: Mapped[str | None] = mapped_column(String, nullable=True)
     unit_system: Mapped[str | None] = mapped_column(String, nullable=True)
     strava_connected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

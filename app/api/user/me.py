@@ -6,11 +6,14 @@ overview. No ingestion logic is performed here - all data comes from the databas
 
 from __future__ import annotations
 
+import csv
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
+from io import StringIO
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError
@@ -19,6 +22,7 @@ from app.api.dependencies.auth import get_current_user_id
 from app.api.schemas.schemas import (
     AthleteProfileResponse,
     AthleteProfileUpdateRequest,
+    ChangeEmailRequest,
     ChangePasswordRequest,
     NotificationsResponse,
     NotificationsUpdateRequest,
@@ -28,7 +32,17 @@ from app.api.schemas.schemas import (
     TrainingPreferencesResponse,
     TrainingPreferencesUpdateRequest,
 )
-from app.db.models import Activity, AthleteProfile, DailyTrainingLoad, StravaAccount, User, UserSettings
+from app.core.password import hash_password, verify_password
+from app.db.models import (
+    Activity,
+    AthleteProfile,
+    AuthProvider,
+    CoachMessage,
+    DailyTrainingLoad,
+    StravaAccount,
+    User,
+    UserSettings,
+)
 from app.db.session import get_session
 from app.ingestion.background_sync import sync_user_activities
 from app.ingestion.sla import SYNC_SLA_SECONDS
@@ -36,6 +50,7 @@ from app.ingestion.tasks import history_backfill_task
 from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
 from app.metrics.data_quality import assess_data_quality
 from app.metrics.training_load import compute_training_load
+from app.services.training_preferences import extract_and_store_race_info
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -231,10 +246,12 @@ def _infer_onboarding_complete_from_data(profile: AthleteProfile | None, setting
 
 @router.get("")
 def get_me(user_id: str = Depends(get_current_user_id)):
-    """Get current authenticated user info.
+    """Get current authenticated user info with aggregated data.
 
-    Returns user information including email and onboarding status.
+    Returns user information including email, onboarding status, profile,
+    training preferences, notifications, and privacy settings.
     This is the contract endpoint - it must always return 200 OK if token is valid.
+    This endpoint NEVER mutates state - it only reads and aggregates.
 
     Args:
         user_id: Current authenticated user ID (from auth dependency)
@@ -244,7 +261,11 @@ def get_me(user_id: str = Depends(get_current_user_id)):
             "user_id": str,
             "authenticated": bool,
             "email": str,
-            "onboarding_complete": bool
+            "onboarding_complete": bool,
+            "profile": {...},
+            "training_preferences": {...},
+            "notifications": {...},
+            "privacy": {...}
         }
     """
     logger.info(f"[API] /me endpoint called for user_id={user_id}")
@@ -272,12 +293,77 @@ def get_me(user_id: str = Depends(get_current_user_id)):
                 else:
                     logger.info(f"[API] /me: user_id={user_id}, could not infer completion, returning False")
 
+            # Aggregate profile data
+            profile_response = None
+            try:
+                profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+                if profile:
+                    session.expunge(profile)
+                    profile_response = _build_response_from_profile(profile, user_email).model_dump()
+            except Exception as e:
+                logger.warning(f"[API] /me: Failed to load profile: {e}")
+
+            # Aggregate training preferences
+            training_prefs_response = None
+            try:
+                settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                if settings:
+                    session.expunge(settings)
+                    training_prefs_response = TrainingPreferencesResponse(
+                        years_of_training=settings.years_of_training or 0,
+                        primary_sports=settings.primary_sports or [],
+                        available_days=settings.available_days or [],
+                        weekly_hours=settings.weekly_hours or 10.0,
+                        training_focus=settings.training_focus or "general_fitness",
+                        injury_history=settings.injury_history or False,
+                        injury_notes=settings.injury_notes,
+                        consistency=settings.consistency,
+                        goal=settings.goal,
+                    ).model_dump()
+            except Exception as e:
+                logger.warning(f"[API] /me: Failed to load training preferences: {e}")
+
+            # Aggregate notifications
+            notifications_response = None
+            try:
+                settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                if settings:
+                    notifications_response = NotificationsResponse(
+                        email_notifications=settings.email_notifications if settings.email_notifications is not None else True,
+                        push_notifications=settings.push_notifications if settings.push_notifications is not None else True,
+                        workout_reminders=settings.workout_reminders if settings.workout_reminders is not None else True,
+                        training_load_alerts=settings.training_load_alerts if settings.training_load_alerts is not None else True,
+                        race_reminders=settings.race_reminders if settings.race_reminders is not None else True,
+                        weekly_summary=settings.weekly_summary if settings.weekly_summary is not None else True,
+                        goal_achievements=settings.goal_achievements if settings.goal_achievements is not None else True,
+                        coach_messages=settings.coach_messages if settings.coach_messages is not None else True,
+                    ).model_dump()
+            except Exception as e:
+                logger.warning(f"[API] /me: Failed to load notifications: {e}")
+
+            # Aggregate privacy settings
+            privacy_response = None
+            try:
+                settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                if settings:
+                    privacy_response = PrivacySettingsResponse(
+                        profile_visibility=settings.profile_visibility or "private",
+                        share_activity_data=settings.share_activity_data or False,
+                        share_training_metrics=settings.share_training_metrics or False,
+                    ).model_dump()
+            except Exception as e:
+                logger.warning(f"[API] /me: Failed to load privacy settings: {e}")
+
             return {
                 "user_id": user_id,
                 "authenticated": True,
                 "email": user_email,
                 "auth_provider": user_auth_provider,
                 "onboarding_complete": onboarding_complete,
+                "profile": profile_response,
+                "training_preferences": training_prefs_response,
+                "notifications": notifications_response,
+                "privacy": privacy_response,
             }
     except HTTPException:
         raise
@@ -295,6 +381,10 @@ def get_me(user_id: str = Depends(get_current_user_id)):
                 "email": user_email,
                 "auth_provider": user_auth_provider,
                 "onboarding_complete": False,
+                "profile": None,
+                "training_preferences": None,
+                "notifications": None,
+                "privacy": None,
             }
         raise
 
@@ -1292,15 +1382,20 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
 
             if not profile:
                 logger.info(f"[API] No profile found for user_id={user_id}, returning empty profile")
+                # Get email from auth user
+                user_result = session.execute(select(User).where(User.id == user_id)).first()
+                user_email = user_result[0].email if user_result else None
                 return AthleteProfileResponse(
-                    name=None,
-                    email=None,
+                    full_name=None,
+                    email=user_email,
                     gender=None,
                     date_of_birth=None,
                     weight_kg=None,
                     height_cm=None,
+                    weight_lbs=None,
+                    height_inches=None,
                     location=None,
-                    unit_system="metric",
+                    unit_system="imperial",
                     strava_connected=False,
                     target_event=None,
                     goals=[],
@@ -1321,15 +1416,26 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                     logger.warning(f"Failed to parse target_event for user_id={user_id}: {e}")
 
             logger.info(f"[API] Profile retrieved for user_id={user_id}")
+            # Get email from auth user, not profile
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            user_email = user_result[0].email if user_result else None
+
+            # Convert height_in (float) to height_inches (int) for API
+            height_inches_int = None
+            if profile.height_in is not None:
+                height_inches_int = round(float(profile.height_in))
+
             return AthleteProfileResponse(
-                name=profile.name,
-                email=profile.email,
+                full_name=profile.name,  # Map name -> full_name
+                email=user_email,  # From auth user
                 gender=profile.gender,
                 date_of_birth=date_of_birth_str,
                 weight_kg=profile.weight_kg,
                 height_cm=profile.height_cm,
+                weight_lbs=profile.weight_lbs,  # Raw float, no rounding
+                height_inches=height_inches_int,  # Converted to int
                 location=profile.location,
-                unit_system=profile.unit_system or "metric",
+                unit_system=profile.unit_system or "imperial",
                 strava_connected=profile.strava_connected,
                 target_event=target_event_obj,
                 goals=profile.goals or [],
@@ -1380,6 +1486,8 @@ def _get_or_create_profile(session, user_id: str) -> AthleteProfile:
 def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdateRequest) -> None:
     """Update profile fields from request.
 
+    Full object overwrite - all provided fields are set, None values clear fields.
+
     Args:
         profile: AthleteProfile instance to update
         request: Update request with fields to update
@@ -1387,15 +1495,16 @@ def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdat
     if profile.sources is None:
         profile.sources = {}
 
-    if request.name is not None:
-        profile.name = request.name
+    # Full object overwrite - set all fields from request
+    profile.name = request.full_name  # Map full_name -> name
+    if request.full_name is not None:
         profile.sources["name"] = "user"
 
-    if request.email is not None:
-        profile.email = request.email
+    # Email is read-only - it comes from auth user, not profile
+    # Do not update profile.email
 
+    profile.gender = request.gender
     if request.gender is not None:
-        profile.gender = request.gender
         profile.sources["gender"] = "user"
 
     if request.date_of_birth is not None:
@@ -1405,22 +1514,39 @@ def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdat
         except ValueError as e:
             logger.warning(f"Failed to parse date_of_birth: {e}")
             raise HTTPException(status_code=400, detail=f"Invalid date format: {request.date_of_birth}. Expected YYYY-MM-DD") from e
+    elif request.date_of_birth is None and hasattr(request, "date_of_birth"):
+        # Explicit None clears the field
+        profile.date_of_birth = None
 
+    profile.weight_kg = request.weight_kg
     if request.weight_kg is not None:
-        profile.weight_kg = request.weight_kg
         profile.sources["weight_kg"] = "user"
 
+    profile.height_cm = request.height_cm
     if request.height_cm is not None:
-        profile.height_cm = request.height_cm
         profile.sources["height_cm"] = "user"
 
+    # Store weight_lbs as raw float (no rounding)
+    profile.weight_lbs = request.weight_lbs
+    if request.weight_lbs is not None:
+        profile.sources["weight_lbs"] = "user"
+
+    # Convert height_inches (int) to height_in (float) for database
+    if request.height_inches is not None:
+        profile.height_in = float(request.height_inches)
+        profile.sources["height_in"] = "user"
+    elif request.height_inches is None and hasattr(request, "height_inches"):
+        profile.height_in = None
+
+    profile.location = request.location
     if request.location is not None:
-        profile.location = request.location
         profile.sources["location"] = "user"
 
     if request.unit_system is not None:
         _validate_unit_system(request.unit_system)
         profile.unit_system = request.unit_system
+    elif request.unit_system is None and hasattr(request, "unit_system"):
+        profile.unit_system = "imperial"  # Default only on creation, but handle None
 
     if request.target_event is not None:
         profile.target_event = {
@@ -1428,10 +1554,14 @@ def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdat
             "date": request.target_event.date,
             "distance": request.target_event.distance,
         }
+    elif request.target_event is None and hasattr(request, "target_event"):
+        profile.target_event = None
 
     if request.goals is not None:
         _validate_goals(request.goals)
         profile.goals = request.goals
+    elif request.goals is None and hasattr(request, "goals"):
+        profile.goals = []
 
     profile.updated_at = datetime.now(timezone.utc)
 
@@ -1483,11 +1613,12 @@ def _parse_target_event_from_profile(profile: AthleteProfile, request: AthletePr
     return None
 
 
-def _build_response_from_profile(profile: AthleteProfile) -> AthleteProfileResponse:
+def _build_response_from_profile(profile: AthleteProfile, user_email: str | None = None) -> AthleteProfileResponse:
     """Build response from profile object.
 
     Args:
         profile: AthleteProfile instance
+        user_email: Email from auth user (optional, will fetch if not provided)
 
     Returns:
         AthleteProfileResponse
@@ -1503,68 +1634,63 @@ def _build_response_from_profile(profile: AthleteProfile) -> AthleteProfileRespo
         except Exception as e:
             logger.warning(f"Failed to parse target_event: {e}")
 
+    # Convert height_in (float) to height_inches (int)
+    height_inches_int = None
+    if profile.height_in is not None:
+        height_inches_int = round(float(profile.height_in))
+
     return AthleteProfileResponse(
-        name=profile.name,
-        email=profile.email,
+        full_name=profile.name,  # Map name -> full_name
+        email=user_email or profile.email,  # Prefer auth email
         gender=profile.gender,
         date_of_birth=date_of_birth_str,
         weight_kg=profile.weight_kg,
         height_cm=profile.height_cm,
+        weight_lbs=profile.weight_lbs,  # Raw float, no rounding
+        height_inches=height_inches_int,  # Converted to int
         location=profile.location,
-        unit_system=profile.unit_system or "metric",
+        unit_system=profile.unit_system or "imperial",
         strava_connected=profile.strava_connected,
         target_event=target_event_obj,
         goals=profile.goals or [],
     )
 
 
-def _build_response_from_request(request: AthleteProfileUpdateRequest, profile: AthleteProfile | None = None) -> AthleteProfileResponse:
+def _build_response_from_request(
+    request: AthleteProfileUpdateRequest,
+    profile: AthleteProfile | None = None,
+    user_email: str | None = None,
+) -> AthleteProfileResponse:
     """Build response from request, with fallback to profile if available.
 
     Args:
         request: Update request
         profile: Optional profile for fallback values
+        user_email: Email from auth user
 
     Returns:
         AthleteProfileResponse
     """
-    date_of_birth_str = (
-        _parse_date_of_birth_from_profile(profile, request)
-        if profile
-        else (request.date_of_birth if hasattr(request, "date_of_birth") and request.date_of_birth else None)
-    )
-    target_event_obj = (
-        _parse_target_event_from_profile(profile, request)
-        if profile
-        else (request.target_event if hasattr(request, "target_event") and request.target_event else None)
-    )
+    date_of_birth_str = request.date_of_birth if request.date_of_birth else None
+    target_event_obj = request.target_event if request.target_event else None
 
-    def get_value(field_name: str, default=None):
-        request_val = getattr(request, field_name, None)
-        if request_val is not None:
-            return request_val
-        if profile and hasattr(profile, field_name):
-            return getattr(profile, field_name)
-        return default
-
-    unit_system_val = get_value("unit_system", "metric")
-    unit_system_str: str = unit_system_val if isinstance(unit_system_val, str) else "metric"
-
-    goals_val = get_value("goals", [])
-    goals_list: list[str] = goals_val if isinstance(goals_val, list) else []
+    # Convert height_inches (int) to height_in (float) for comparison, but return as int
+    height_inches_val = request.height_inches
 
     return AthleteProfileResponse(
-        name=get_value("name"),
-        email=get_value("email"),
-        gender=get_value("gender"),
+        full_name=request.full_name,  # Map full_name
+        email=user_email,  # From auth user
+        gender=request.gender,
         date_of_birth=date_of_birth_str,
-        weight_kg=get_value("weight_kg"),
-        height_cm=get_value("height_cm"),
-        location=get_value("location"),
-        unit_system=unit_system_str,
+        weight_kg=request.weight_kg,
+        height_cm=request.height_cm,
+        weight_lbs=request.weight_lbs,  # Raw float, no rounding
+        height_inches=height_inches_val,  # Integer
+        location=request.location,
+        unit_system=request.unit_system or "imperial",
         strava_connected=profile.strava_connected if profile and hasattr(profile, "strava_connected") else False,
         target_event=target_event_obj,
-        goals=goals_list,
+        goals=request.goals or [],
     )
 
 
@@ -1590,12 +1716,17 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
                 session.refresh(profile)
                 session.expunge(profile)
                 logger.info(f"[API] Profile updated for user_id={user_id}")
-                return _build_response_from_profile(profile)
+                # Get email from auth user
+                user_result = session.execute(select(User).where(User.id == user_id)).first()
+                user_email = user_result[0].email if user_result else None
+                return _build_response_from_profile(profile, user_email)
             except Exception as refresh_error:
                 error_msg = str(refresh_error).lower()
                 if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
                     logger.warning(f"[API] Cannot refresh profile after update due to missing columns: {refresh_error!r}")
-                    return _build_response_from_request(request, profile)
+                    user_result = session.execute(select(User).where(User.id == user_id)).first()
+                    user_email = user_result[0].email if user_result else None
+                    return _build_response_from_request(request, profile, user_email)
                 raise
 
     except HTTPException:
@@ -1604,7 +1735,10 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
             logger.error(f"Database schema mismatch detected for profile update. Missing column. Run migrations: {e!r}", exc_info=True)
-            return _build_response_from_request(request)
+            with get_session() as session:
+                user_result = session.execute(select(User).where(User.id == user_id)).first()
+                user_email = user_result[0].email if user_result else None
+            return _build_response_from_request(request, None, user_email)
         logger.error(f"Error updating profile: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update profile: {e!s}") from e
 
@@ -1625,18 +1759,30 @@ def get_training_preferences(user_id: str = Depends(get_current_user_id)):
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
 
             if not settings:
-                logger.info(f"[API] No settings found for user_id={user_id}, returning defaults")
-                return TrainingPreferencesResponse()
+                logger.info(f"[API] No settings found for user_id={user_id}, returning null values")
+                # Return null values, not defaults - frontend handles defaults
+                return TrainingPreferencesResponse(
+                    years_of_training=None,
+                    primary_sports=None,
+                    available_days=None,
+                    weekly_hours=None,
+                    training_focus=None,
+                    injury_history=None,
+                    injury_notes=None,
+                    consistency=None,
+                    goal=None,
+                )
 
             session.expunge(settings)
 
+            # Return stored values exactly as persisted (no inference)
             return TrainingPreferencesResponse(
-                years_of_training=settings.years_of_training or 0,
-                primary_sports=settings.primary_sports or [],
-                available_days=settings.available_days or [],
-                weekly_hours=settings.weekly_hours or 10.0,
-                training_focus=settings.training_focus or "general_fitness",
-                injury_history=settings.injury_history or False,
+                years_of_training=settings.years_of_training,
+                primary_sports=settings.primary_sports,
+                available_days=settings.available_days,
+                weekly_hours=settings.weekly_hours,
+                training_focus=settings.training_focus,
+                injury_history=settings.injury_history,
                 injury_notes=settings.injury_notes,
                 consistency=settings.consistency,
                 goal=settings.goal,
@@ -1659,8 +1805,11 @@ def get_training_preferences(user_id: str = Depends(get_current_user_id)):
 def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_id: str = Depends(get_current_user_id)):
     """Update training preferences.
 
+    Full object overwrite - all fields are set from request.
+    None values clear fields (except where defaults apply).
+
     Args:
-        request: Training preferences update request
+        request: Training preferences update request (full object)
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
@@ -1669,56 +1818,65 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
     logger.info(f"[API] /me/training-preferences PUT endpoint called for user_id={user_id}")
     try:
         with get_session() as session:
-            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+            old_settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+            old_goal = old_settings.goal if old_settings else None
 
-            if not settings:
+            if not old_settings:
                 settings = UserSettings(user_id=user_id)
                 session.add(settings)
+            else:
+                settings = old_settings
 
-            # Update fields that are provided
-            if request.years_of_training is not None:
-                settings.years_of_training = request.years_of_training
-
-            if request.primary_sports is not None:
-                settings.primary_sports = request.primary_sports
-
-            if request.available_days is not None:
-                settings.available_days = request.available_days
-
-            if request.weekly_hours is not None:
-                settings.weekly_hours = request.weekly_hours
+            # Full object overwrite - set all fields from request
+            settings.years_of_training = request.years_of_training
+            settings.primary_sports = request.primary_sports
+            settings.available_days = request.available_days
+            settings.weekly_hours = request.weekly_hours
 
             if request.training_focus is not None:
                 _validate_training_focus(request.training_focus)
-                settings.training_focus = request.training_focus
+            settings.training_focus = request.training_focus
 
-            if request.injury_history is not None:
-                settings.injury_history = request.injury_history
+            settings.injury_history = request.injury_history
 
             if request.injury_notes is not None:
                 _validate_injury_notes(request.injury_notes)
-                settings.injury_notes = request.injury_notes
+            settings.injury_notes = request.injury_notes
 
-            if request.consistency is not None:
-                settings.consistency = request.consistency
+            settings.consistency = request.consistency
 
             if request.goal is not None:
                 _validate_goal_text(request.goal)
-                settings.goal = request.goal
+            settings.goal = request.goal
 
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
+
+            # Trigger race extraction if goal field changed or was set
+            should_extract = request.goal is not None and old_goal != request.goal
+            if should_extract:
+                logger.info(f"Goal field changed for user_id={user_id}, triggering race extraction")
+
+            if should_extract:
+                try:
+                    profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+                    extract_and_store_race_info(session, user_id, settings, profile)
+                except Exception as e:
+                    logger.error(f"Failed to extract race info during preference update: {e}", exc_info=True)
+                    # Don't fail the request if extraction fails
+
             session.refresh(settings)
             session.expunge(settings)
 
             logger.info(f"[API] Training preferences updated for user_id={user_id}")
+            # Return stored values exactly as persisted (no inference)
             return TrainingPreferencesResponse(
-                years_of_training=settings.years_of_training or 0,
-                primary_sports=settings.primary_sports or [],
-                available_days=settings.available_days or [],
-                weekly_hours=settings.weekly_hours or 10.0,
-                training_focus=settings.training_focus or "general_fitness",
-                injury_history=settings.injury_history or False,
+                years_of_training=settings.years_of_training,
+                primary_sports=settings.primary_sports,
+                available_days=settings.available_days,
+                weekly_hours=settings.weekly_hours,
+                training_focus=settings.training_focus,
+                injury_history=settings.injury_history,
                 injury_notes=settings.injury_notes,
                 consistency=settings.consistency,
                 goal=settings.goal,
@@ -1746,15 +1904,21 @@ def get_privacy_settings(user_id: str = Depends(get_current_user_id)):
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
 
             if not settings:
-                logger.info(f"[API] No settings found for user_id={user_id}, returning defaults")
-                return PrivacySettingsResponse()
+                logger.info(f"[API] No settings found for user_id={user_id}, returning null values")
+                # Return null values, not defaults - frontend handles defaults
+                return PrivacySettingsResponse(
+                    profile_visibility=None,
+                    share_activity_data=None,
+                    share_training_metrics=None,
+                )
 
             session.expunge(settings)
 
+            # Return stored values exactly as persisted (no inference)
             return PrivacySettingsResponse(
-                profile_visibility=settings.profile_visibility or "private",
-                share_activity_data=settings.share_activity_data or False,
-                share_training_metrics=settings.share_training_metrics or False,
+                profile_visibility=settings.profile_visibility,
+                share_activity_data=settings.share_activity_data,
+                share_training_metrics=settings.share_training_metrics,
             )
     except Exception as e:
         # Check if this is a database schema error (missing column)
@@ -1794,16 +1958,12 @@ def update_privacy_settings(request: PrivacySettingsUpdateRequest, user_id: str 
                 settings = UserSettings(user_id=user_id)
                 session.add(settings)
 
-            # Update fields that are provided
+            # Full object overwrite - set all fields from request
             if request.profile_visibility is not None:
                 _validate_profile_visibility(request.profile_visibility)
-                settings.profile_visibility = request.profile_visibility
-
-            if request.share_activity_data is not None:
-                settings.share_activity_data = request.share_activity_data
-
-            if request.share_training_metrics is not None:
-                settings.share_training_metrics = request.share_training_metrics
+            settings.profile_visibility = request.profile_visibility
+            settings.share_activity_data = request.share_activity_data
+            settings.share_training_metrics = request.share_training_metrics
 
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -1811,10 +1971,11 @@ def update_privacy_settings(request: PrivacySettingsUpdateRequest, user_id: str 
             session.expunge(settings)
 
             logger.info(f"[API] Privacy settings updated for user_id={user_id}")
+            # Return stored values exactly as persisted (no inference)
             return PrivacySettingsResponse(
-                profile_visibility=settings.profile_visibility or "private",
-                share_activity_data=settings.share_activity_data or False,
-                share_training_metrics=settings.share_training_metrics or False,
+                profile_visibility=settings.profile_visibility,
+                share_activity_data=settings.share_activity_data,
+                share_training_metrics=settings.share_training_metrics,
             )
     except HTTPException:
         raise
@@ -1839,20 +2000,31 @@ def get_notifications(user_id: str = Depends(get_current_user_id)):
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
 
             if not settings:
-                logger.info(f"[API] No settings found for user_id={user_id}, returning defaults")
-                return NotificationsResponse()
+                logger.info(f"[API] No settings found for user_id={user_id}, returning null values")
+                # Return null values, not defaults - frontend handles defaults
+                return NotificationsResponse(
+                    email_notifications=None,
+                    push_notifications=None,
+                    workout_reminders=None,
+                    training_load_alerts=None,
+                    race_reminders=None,
+                    weekly_summary=None,
+                    goal_achievements=None,
+                    coach_messages=None,
+                )
 
             session.expunge(settings)
 
+            # Return stored values exactly as persisted (no inference)
             return NotificationsResponse(
-                email_notifications=settings.email_notifications if settings.email_notifications is not None else True,
-                push_notifications=settings.push_notifications if settings.push_notifications is not None else True,
-                workout_reminders=settings.workout_reminders if settings.workout_reminders is not None else True,
-                training_load_alerts=settings.training_load_alerts if settings.training_load_alerts is not None else True,
-                race_reminders=settings.race_reminders if settings.race_reminders is not None else True,
-                weekly_summary=settings.weekly_summary if settings.weekly_summary is not None else True,
-                goal_achievements=settings.goal_achievements if settings.goal_achievements is not None else True,
-                coach_messages=settings.coach_messages if settings.coach_messages is not None else True,
+                email_notifications=settings.email_notifications,
+                push_notifications=settings.push_notifications,
+                workout_reminders=settings.workout_reminders,
+                training_load_alerts=settings.training_load_alerts,
+                race_reminders=settings.race_reminders,
+                weekly_summary=settings.weekly_summary,
+                goal_achievements=settings.goal_achievements,
+                coach_messages=settings.coach_messages,
             )
     except Exception as e:
         # Check if this is a database schema error (missing column)
@@ -1897,30 +2069,15 @@ def update_notifications(request: NotificationsUpdateRequest, user_id: str = Dep
                 settings = UserSettings(user_id=user_id)
                 session.add(settings)
 
-            # Update fields that are provided
-            if request.email_notifications is not None:
-                settings.email_notifications = request.email_notifications
-
-            if request.push_notifications is not None:
-                settings.push_notifications = request.push_notifications
-
-            if request.workout_reminders is not None:
-                settings.workout_reminders = request.workout_reminders
-
-            if request.training_load_alerts is not None:
-                settings.training_load_alerts = request.training_load_alerts
-
-            if request.race_reminders is not None:
-                settings.race_reminders = request.race_reminders
-
-            if request.weekly_summary is not None:
-                settings.weekly_summary = request.weekly_summary
-
-            if request.goal_achievements is not None:
-                settings.goal_achievements = request.goal_achievements
-
-            if request.coach_messages is not None:
-                settings.coach_messages = request.coach_messages
+            # Full object overwrite - set all fields from request
+            settings.email_notifications = request.email_notifications
+            settings.push_notifications = request.push_notifications
+            settings.workout_reminders = request.workout_reminders
+            settings.training_load_alerts = request.training_load_alerts
+            settings.race_reminders = request.race_reminders
+            settings.weekly_summary = request.weekly_summary
+            settings.goal_achievements = request.goal_achievements
+            settings.coach_messages = request.coach_messages
 
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -1928,19 +2085,287 @@ def update_notifications(request: NotificationsUpdateRequest, user_id: str = Dep
             session.expunge(settings)
 
             logger.info(f"[API] Notifications updated for user_id={user_id}")
+            # Return stored values exactly as persisted (no inference)
             return NotificationsResponse(
-                email_notifications=settings.email_notifications if settings.email_notifications is not None else True,
-                push_notifications=settings.push_notifications if settings.push_notifications is not None else True,
-                workout_reminders=settings.workout_reminders if settings.workout_reminders is not None else True,
-                training_load_alerts=settings.training_load_alerts if settings.training_load_alerts is not None else True,
-                race_reminders=settings.race_reminders if settings.race_reminders is not None else True,
-                weekly_summary=settings.weekly_summary if settings.weekly_summary is not None else True,
-                goal_achievements=settings.goal_achievements if settings.goal_achievements is not None else True,
-                coach_messages=settings.coach_messages if settings.coach_messages is not None else True,
+                email_notifications=settings.email_notifications,
+                push_notifications=settings.push_notifications,
+                workout_reminders=settings.workout_reminders,
+                training_load_alerts=settings.training_load_alerts,
+                race_reminders=settings.race_reminders,
+                weekly_summary=settings.weekly_summary,
+                goal_achievements=settings.goal_achievements,
+                coach_messages=settings.coach_messages,
             )
     except Exception as e:
         logger.error(f"Error updating notifications: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update notifications: {e!s}") from e
+
+
+@router.delete("")
+def delete_account(user_id: str = Depends(get_current_user_id)):
+    """Delete user account and all associated data.
+
+    Performs hard delete of:
+    - User account
+    - Athlete profile
+    - User settings (preferences, notifications, privacy)
+    - Activities
+    - Training data
+    - All other user-related data
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Success message
+
+    Warning:
+        This operation is irreversible.
+    """
+    logger.info(f"[API] /me DELETE endpoint called for user_id={user_id} (account deletion)")
+
+    try:
+        with get_session() as session:
+            # Delete activities
+            activity_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
+            session.execute(select(Activity).where(Activity.user_id == user_id)).scalars().delete(synchronize_session=False)
+            logger.info(f"[API] Deleted {activity_count} activities for user_id={user_id}")
+
+            # Delete daily training load
+            session.execute(select(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id)).scalars().delete(
+                synchronize_session=False
+            )
+
+            # Delete profile
+            profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+            if profile:
+                session.delete(profile)
+
+            # Delete settings
+            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+            if settings:
+                session.delete(settings)
+
+            # Delete Strava account
+            strava_account = session.query(StravaAccount).filter_by(user_id=user_id).first()
+            if strava_account:
+                session.delete(strava_account)
+
+            # Delete user (this will cascade to other related data if foreign keys are set up)
+            user = session.query(User).filter_by(id=user_id).first()
+            if user:
+                session.delete(user)
+
+            session.commit()
+
+            logger.info(f"[API] Account deleted successfully for user_id={user_id}")
+
+            return {
+                "success": True,
+                "message": "Account and all associated data have been deleted",
+            }
+    except Exception as e:
+        logger.error(f"Error deleting account: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete account: {e!s}") from e
+
+
+@router.get("/export")
+def export_data(
+    format: str = Query(default="json", description="Export format: json or csv"),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Export user data.
+
+    Exports all user data in the requested format.
+    Respects privacy settings - only exports data user has permission to share.
+
+    Args:
+        format: Export format ("json" or "csv")
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        JSON or CSV data export
+
+    Raises:
+        HTTPException: 400 if format is invalid
+    """
+    logger.info(f"[API] /me/export endpoint called for user_id={user_id}, format={format}")
+
+    if format not in {"json", "csv"}:
+        raise HTTPException(status_code=400, detail="Format must be 'json' or 'csv'")
+
+    def _raise_user_not_found() -> None:
+        """Raise HTTPException for user not found."""
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        with get_session() as session:
+            # Get user data
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                _raise_user_not_found()
+
+            profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+            settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+
+            # Get activities
+            activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time)).scalars().all()
+
+            if format == "json":
+                # Build JSON export
+                export_data_dict = {
+                    "user": {
+                        "user_id": user.id,
+                        "email": user.email,
+                        "created_at": user.created_at.isoformat() if user.created_at else None,
+                    },
+                    "profile": _build_response_from_profile(profile, user.email).model_dump() if profile else None,
+                    "settings": {
+                        "training_preferences": TrainingPreferencesResponse(
+                            years_of_training=settings.years_of_training or 0,
+                            primary_sports=settings.primary_sports or [],
+                            available_days=settings.available_days or [],
+                            weekly_hours=settings.weekly_hours or 10.0,
+                            training_focus=settings.training_focus or "general_fitness",
+                            injury_history=settings.injury_history or False,
+                            injury_notes=settings.injury_notes,
+                            consistency=settings.consistency,
+                            goal=settings.goal,
+                        ).model_dump()
+                        if settings
+                        else None,
+                        "notifications": (
+                            NotificationsResponse(
+                                email_notifications=(
+                                    settings.email_notifications if settings and settings.email_notifications is not None else True
+                                ),
+                                push_notifications=(
+                                    settings.push_notifications if settings and settings.push_notifications is not None else True
+                                ),
+                                workout_reminders=(
+                                    settings.workout_reminders if settings and settings.workout_reminders is not None else True
+                                ),
+                                training_load_alerts=(
+                                    settings.training_load_alerts if settings and settings.training_load_alerts is not None else True
+                                ),
+                                race_reminders=(settings.race_reminders if settings and settings.race_reminders is not None else True),
+                                weekly_summary=(settings.weekly_summary if settings and settings.weekly_summary is not None else True),
+                                goal_achievements=(
+                                    settings.goal_achievements if settings and settings.goal_achievements is not None else True
+                                ),
+                                coach_messages=(settings.coach_messages if settings and settings.coach_messages is not None else True),
+                            ).model_dump()
+                            if settings
+                            else None
+                        ),
+                        "privacy": PrivacySettingsResponse(
+                            profile_visibility=settings.profile_visibility or "private" if settings else "private",
+                            share_activity_data=settings.share_activity_data or False if settings else False,
+                            share_training_metrics=settings.share_training_metrics or False if settings else False,
+                        ).model_dump()
+                        if settings
+                        else None,
+                    },
+                    "activities": [
+                        {
+                            "id": str(act.id),
+                            "type": act.type,
+                            "start_time": act.start_time.isoformat() if act.start_time else None,
+                            "duration_seconds": act.duration_seconds,
+                            "distance_meters": act.distance_meters,
+                            "elevation_gain_meters": act.elevation_gain_meters,
+                        }
+                        for act in activities
+                    ],
+                    "exported_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+                return JSONResponse(content=export_data_dict)
+
+            # CSV format
+            output = StringIO()
+            writer = csv.writer(output)
+
+            # Write header
+            writer.writerow(["Date", "Type", "Duration (s)", "Distance (m)", "Elevation (m)"])
+
+            # Write activities
+            for act in activities:
+                writer.writerow([
+                    act.start_time.date().isoformat() if act.start_time else "",
+                    act.type or "",
+                    act.duration_seconds or "",
+                    act.distance_meters or "",
+                    act.elevation_gain_meters or "",
+                ])
+
+            export_date = datetime.now(timezone.utc).date().isoformat()
+            filename = f"athlete_data_{user_id}_{export_date}.csv"
+            return Response(
+                content=output.getvalue(),
+                media_type="text/csv",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to export data: {e!s}") from e
+
+
+@router.delete("/data")
+def delete_local_data(user_id: str = Depends(get_current_user_id)):
+    """Delete all training data while keeping account.
+
+    Deletes:
+    - Activities
+    - Daily training load
+    - Training summaries
+    - Coach messages
+    - All training-related data
+
+    Keeps:
+    - User account
+    - Profile
+    - Settings/preferences
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Success message
+    """
+    logger.info(f"[API] /me/data DELETE endpoint called for user_id={user_id} (delete training data)")
+
+    try:
+        with get_session() as session:
+            # Delete activities
+            activity_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
+            session.execute(select(Activity).where(Activity.user_id == user_id)).scalars().delete(synchronize_session=False)
+            logger.info(f"[API] Deleted {activity_count} activities for user_id={user_id}")
+
+            # Delete daily training load
+            session.execute(select(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id)).scalars().delete(
+                synchronize_session=False
+            )
+
+            # Delete coach messages
+            coach_messages = session.execute(select(CoachMessage).where(CoachMessage.user_id == user_id)).scalars().all()
+            for msg in coach_messages:
+                session.delete(msg)
+
+            session.commit()
+
+            logger.info(f"[API] Training data deleted successfully for user_id={user_id}")
+
+            return {
+                "success": True,
+                "message": "All training data has been deleted. Your account and preferences remain intact.",
+            }
+    except Exception as e:
+        logger.error(f"Error deleting training data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete training data: {e!s}") from e
 
 
 @router.post("/change-password")
@@ -1954,22 +2379,68 @@ def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_c
     Returns:
         Success message
 
-    Note:
-        This is a placeholder endpoint. Password management should be implemented
-        based on your authentication system (e.g., Clerk, Auth0, etc.).
+    Raises:
+        HTTPException: 401 if current password is incorrect, 400 if validation fails
     """
     logger.info(f"[API] /me/change-password endpoint called for user_id={user_id}")
+
+    def _raise_user_not_found() -> None:
+        """Raise HTTPException for user not found."""
+        raise HTTPException(status_code=404, detail="User not found")
+
+    def _raise_oauth_account() -> None:
+        """Raise HTTPException for OAuth account password change."""
+        raise HTTPException(status_code=400, detail="Password change not available for OAuth accounts")
+
+    def _raise_no_password_set() -> None:
+        """Raise HTTPException for no password set."""
+        raise HTTPException(status_code=400, detail="No password set for this account")
+
+    def _raise_incorrect_password() -> None:
+        """Raise HTTPException for incorrect current password."""
+        logger.warning(f"[API] Password change failed: incorrect current password for user_id={user_id}")
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
     try:
         # Validate passwords match
         _validate_password_match(request.new_password, request.confirm_password)
 
-        # TODO: Implement password change logic based on your auth system
-        # This is a placeholder - actual implementation depends on authentication provider
-        logger.warning(f"[API] Password change requested for user_id={user_id} - not yet implemented")
+        with get_session() as session:
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if not user_result:
+                _raise_user_not_found()
+
+            user = user_result[0]
+
+            # Check if user has password auth
+            if user.auth_provider != AuthProvider.password:
+                _raise_oauth_account()
+
+            # Verify current password
+            if not user.password_hash:
+                _raise_no_password_set()
+
+            if not verify_password(request.current_password, user.password_hash):
+                _raise_incorrect_password()
+
+            # Hash new password
+            try:
+                new_password_hash = hash_password(request.new_password)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Password must be 8-72 characters",
+                ) from e
+
+            # Update password
+            user.password_hash = new_password_hash
+            session.commit()
+
+            logger.info(f"[API] Password changed successfully for user_id={user_id}")
+
+            return {"success": True, "message": "Password changed successfully"}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error changing password: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to change password: {e!s}") from e
-    else:
-        return {"success": True, "message": "Password change functionality to be implemented"}

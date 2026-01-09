@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas.schemas import AthleteProfileUpdateRequest, TrainingPreferencesUpdateRequest
 from app.db.models import AthleteProfile, StravaAccount, UserSettings
+from app.services.training_preferences import extract_and_store_race_info
 
 
 def persist_profile_data(
@@ -72,6 +73,14 @@ def persist_profile_data(
     if profile_data.height_cm is not None:
         profile.height_cm = profile_data.height_cm
         profile.sources["height_cm"] = "user"
+
+    if profile_data.weight_lbs is not None:
+        profile.weight_lbs = round(float(profile_data.weight_lbs), 1)
+        profile.sources["weight_lbs"] = "user"
+
+    if profile_data.height_in is not None:
+        profile.height_in = round(float(profile_data.height_in), 1)
+        profile.sources["height_in"] = "user"
 
     if profile_data.location is not None:
         profile.location = profile_data.location
@@ -150,4 +159,14 @@ def persist_training_preferences(
         settings.goal = preferences_data.goal
 
     session.commit()
+
+    # Trigger race extraction if goal field was set or changed
+    if preferences_data.goal is not None:
+        try:
+            profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
+            extract_and_store_race_info(session, user_id, settings, profile)
+        except Exception as e:
+            logger.error(f"Failed to extract race info during onboarding: {e}", exc_info=True)
+            # Don't fail onboarding if extraction fails
+
     return settings

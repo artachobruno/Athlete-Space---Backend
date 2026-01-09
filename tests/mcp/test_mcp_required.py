@@ -47,6 +47,7 @@ def deps(test_user_id: str):
         athlete_id=TEST_ATHLETE_ID,
         user_id=test_user_id,
         athlete_state=None,
+        athlete_profile=None,
         days=60,
         days_to_race=None,
     )
@@ -124,6 +125,7 @@ async def test_orchestrator_fails_without_mcp_fs_server(monkeypatch, deps: Coach
 @pytest.mark.asyncio
 async def test_orchestrator_fails_without_both_mcp_servers(monkeypatch, deps: CoachDeps, test_user_id: str):
     """Test that orchestrator fails when both MCP servers are invalid."""
+
     # Mock call_tool to raise MCPError for all tools
     def mock_call_tool(tool_name: str, arguments: dict):
         """Mock call_tool that fails for all tools."""

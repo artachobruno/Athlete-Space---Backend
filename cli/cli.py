@@ -255,6 +255,7 @@ async def _run_client_async(config: ClientConfig) -> None:
         athlete_id=config.athlete_id,
         user_id=config.user_id,
         athlete_state=None,  # Will be populated by tools via MCP if needed
+        athlete_profile=None,
         days=config.days,
         days_to_race=config.days_to_race,
     )

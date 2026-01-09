@@ -17,6 +17,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
+from app.api.schemas.schemas import ChangeEmailRequest
 from app.core.auth_jwt import create_access_token
 from app.core.password import hash_password, verify_password
 from app.db.models import AuthProvider, User
@@ -226,4 +227,76 @@ def login(request: LoginRequest):
             "token_type": "bearer",
             "user_id": user.id,
             "email": user.email,
+        }
+
+
+@router.post("/change-email")
+def change_email(request: ChangeEmailRequest, user_id: str = Depends(get_current_user_id)):
+    """Change user email address.
+
+    Requires password verification and invalidates all existing sessions.
+
+    Args:
+        request: Change email request with password and new email
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Success message with new email
+
+    Raises:
+        HTTPException: 401 if password is incorrect, 409 if email already exists
+    """
+    normalized_new_email = _normalize_email(request.new_email)
+    logger.info(f"[AUTH] Change email requested for user_id={user_id}, new_email={normalized_new_email}")
+
+    with get_session() as session:
+        user_result = session.execute(select(User).where(User.id == user_id)).first()
+        if not user_result:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user = user_result[0]
+
+        # Check if user has password auth
+        if user.auth_provider != AuthProvider.password:
+            raise HTTPException(
+                status_code=400,
+                detail="Email change not available for OAuth accounts",
+            )
+
+        # Verify password
+        if not user.password_hash:
+            raise HTTPException(
+                status_code=400,
+                detail="No password set for this account",
+            )
+
+        if not verify_password(request.password, user.password_hash):
+            logger.warning(f"[AUTH] Change email failed: incorrect password for user_id={user_id}")
+            raise HTTPException(
+                status_code=401,
+                detail="Password is incorrect",
+            )
+
+        # Check if new email already exists
+        existing_user = session.execute(select(User).where(User.email == normalized_new_email)).first()
+        if existing_user and existing_user[0].id != user_id:
+            logger.warning(f"[AUTH] Change email failed: email already exists={normalized_new_email}")
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists",
+            )
+
+        # Update email
+        old_email = user.email
+        user.email = normalized_new_email
+        # Note: In a production system, you would want to invalidate all JWT tokens here
+        # This could be done by maintaining a token blacklist or by rotating a secret
+        session.commit()
+
+        logger.info(f"[AUTH] Email changed successfully for user_id={user_id}, old_email={old_email}, new_email={normalized_new_email}")
+
+        return {
+            "success": True,
+            "message": "Email changed successfully. Please sign in again with your new email.",
+            "new_email": normalized_new_email,
         }

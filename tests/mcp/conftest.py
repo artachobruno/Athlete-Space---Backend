@@ -125,6 +125,7 @@ def deps(test_user_id: str):
         athlete_id=TEST_ATHLETE_ID,
         user_id=test_user_id,
         athlete_state=athlete_state,
+        athlete_profile=None,
         days=60,
         days_to_race=None,
     )

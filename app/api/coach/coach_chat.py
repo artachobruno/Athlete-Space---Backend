@@ -1,14 +1,16 @@
+from datetime import date, datetime, timezone
+
 from fastapi import APIRouter
 from loguru import logger
 from sqlalchemy import select
 
 from app.coach.agents.orchestrator_agent import run_conversation
-from app.coach.agents.orchestrator_deps import CoachDeps
+from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.coach.utils.context_management import save_context
 from app.coach.utils.schemas import CoachChatRequest, CoachChatResponse
-from app.db.models import CoachMessage, StravaAuth
+from app.db.models import AthleteProfile, CoachMessage, StravaAuth, UserSettings
 from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 
@@ -164,11 +166,71 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
         logger.warning("No training data available for orchestrator")
         athlete_state = None
 
+    # Load athlete profile, training preferences, and race profile
+    athlete_profile = None
+    training_preferences = None
+    race_profile = None
+    with get_session() as db:
+        profile = db.query(AthleteProfile).filter_by(user_id=user_id).first()
+        if profile:
+            # Calculate age from date_of_birth
+            age = None
+            if profile.date_of_birth:
+                today = datetime.now(timezone.utc).date()
+                dob = profile.date_of_birth.date()
+                age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+            # Round weight_lbs and height_in to 1 decimal place
+            weight_lbs_rounded = None
+            if profile.weight_lbs is not None:
+                weight_lbs_rounded = round(float(profile.weight_lbs), 1)
+            height_in_rounded = None
+            if profile.height_in is not None:
+                height_in_rounded = round(float(profile.height_in), 1)
+
+            athlete_profile = AthleteProfileData(
+                gender=profile.gender,
+                age=age,
+                weight_lbs=weight_lbs_rounded,
+                height_in=height_in_rounded,
+                unit_system=profile.unit_system or "imperial",
+            )
+
+            # Load race profile from extracted_race_attributes
+            if profile.extracted_race_attributes and isinstance(profile.extracted_race_attributes, dict):
+                race_attrs = profile.extracted_race_attributes
+                race_profile = RaceProfileData(
+                    event_name=race_attrs.get("event_name"),
+                    event_type=race_attrs.get("event_type"),
+                    event_date=race_attrs.get("event_date"),
+                    target_time=race_attrs.get("target_time"),
+                    distance=race_attrs.get("distance"),
+                    location=race_attrs.get("location"),
+                    raw_text=race_attrs.get("raw_text"),
+                )
+
+        # Load training preferences from UserSettings
+        settings = db.query(UserSettings).filter_by(user_id=user_id).first()
+        if settings:
+            training_preferences = TrainingPreferencesData(
+                training_consistency=settings.consistency,
+                years_structured=settings.years_of_training,
+                primary_sports=settings.primary_sports or [],
+                available_days=settings.available_days or [],
+                weekly_training_hours=settings.weekly_hours,
+                primary_training_goal=settings.goal,
+                training_focus=settings.training_focus,
+                injury_flag=settings.injury_history or False,
+            )
+
     # Create dependencies
     deps = CoachDeps(
         athlete_id=athlete_id,
         user_id=user_id,
         athlete_state=athlete_state,
+        athlete_profile=athlete_profile,
+        training_preferences=training_preferences,
+        race_profile=race_profile,
         days=req.days,
         days_to_race=req.days_to_race,
     )

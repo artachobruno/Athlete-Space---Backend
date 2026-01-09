@@ -52,6 +52,7 @@ from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
+from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
 from scripts.migrate_add_streams_data import migrate_add_streams_data
@@ -158,6 +159,14 @@ try:
 except Exception as e:
     migration_errors.append(f"migrate_add_profile_health_fields: {e}")
     logger.error(f"✗ Migration failed: migrate_add_profile_health_fields - {e}", exc_info=True)
+
+try:
+    logger.info("Running migration: athlete_profiles imperial fields (height_in, weight_lbs)")
+    migrate_add_imperial_profile_fields()
+    logger.info("✓ Migration completed: athlete_profiles imperial fields")
+except Exception as e:
+    migration_errors.append(f"migrate_add_imperial_profile_fields: {e}")
+    logger.error(f"✗ Migration failed: migrate_add_imperial_profile_fields - {e}", exc_info=True)
 
 try:
     logger.info("Running migration: planned_sessions athlete_id column")

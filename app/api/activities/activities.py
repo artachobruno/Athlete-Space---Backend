@@ -6,16 +6,22 @@ These endpoints are for debugging only - no UI dependency.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from datetime import date, datetime, timedelta, timezone
+from hashlib import sha256
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from loguru import logger
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_user_id
 from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
 from app.ingestion.fetch_streams import fetch_and_save_streams
+from app.ingestion.file_parser import parse_activity_file
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.service import get_strava_client
+from app.metrics.computation_service import trigger_recompute_on_new_activities
 
 router = APIRouter(prefix="/activities", tags=["activities", "debug"])
 
@@ -434,3 +440,242 @@ def get_activity_streams(
             )
 
         return formatted_streams
+
+
+# File upload constants
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+ALLOWED_EXTENSIONS = {".fit", ".gpx", ".tcx"}
+MAX_UPLOADS_PER_DAY = 20
+
+
+@router.post("/upload")
+def upload_activity_file(
+    file: UploadFile = File(...),  # noqa: B008
+    user_id: str = Depends(get_current_user_id),
+):
+    """Upload and ingest a single activity file (FIT, GPX, or TCX).
+
+    Uploaded activities are stored identically to Strava-ingested activities:
+    - Same database table
+    - Same metrics computation
+    - Same coach agent visibility
+    - Automatic deduplication
+
+    Args:
+        file: Activity file (FIT, GPX, or TCX format)
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Response with activity_id and deduplicated flag
+
+    Raises:
+        HTTPException: 400 if file is invalid
+        HTTPException: 413 if file is too large
+        HTTPException: 422 if parsing fails
+        HTTPException: 429 if rate limit exceeded
+        HTTPException: 500 if internal error
+    """
+    logger.info(f"[UPLOAD] Upload request for user_id={user_id}, filename={file.filename}")
+
+    # Validate file extension
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No filename provided",
+        )
+
+    file_ext = None
+    for ext in ALLOWED_EXTENSIONS:
+        if file.filename.lower().endswith(ext):
+            file_ext = ext
+            break
+
+    if not file_ext:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+
+    # Read file into memory
+    try:
+        file_bytes = file.file.read()
+    except Exception as e:
+        logger.error(f"[UPLOAD] Failed to read file: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to read file: {e!s}",
+        ) from e
+
+    # Validate file size
+    if len(file_bytes) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size: {MAX_FILE_SIZE / (1024 * 1024):.0f}MB",
+        )
+
+    if len(file_bytes) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is empty",
+        )
+
+    # Generate upload hash for deduplication
+    upload_hash = sha256(file_bytes).hexdigest()
+    logger.debug(f"[UPLOAD] Generated hash: {upload_hash[:16]}...")
+
+    # Check rate limit (20 uploads per day)
+    with get_session() as session:
+        today = datetime.now(timezone.utc).date()
+        today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+        upload_count = (
+            session.execute(
+                select(func.count(Activity.id)).where(
+                    Activity.user_id == user_id,
+                    Activity.source == "upload",
+                    Activity.created_at >= today_start,
+                )
+            ).scalar()
+            or 0
+        )
+
+        if upload_count >= MAX_UPLOADS_PER_DAY:
+            logger.warning(f"[UPLOAD] Rate limit exceeded for user_id={user_id}: {upload_count} uploads today")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Rate limit exceeded. Maximum {MAX_UPLOADS_PER_DAY} uploads per day.",
+            )
+
+    # Parse file
+    try:
+        parsed = parse_activity_file(file_bytes, file.filename)
+        logger.info(
+            f"[UPLOAD] Parsed activity: type={parsed.activity_type}, "
+            f"start_time={parsed.start_time}, duration={parsed.duration_seconds}s, "
+            f"distance={parsed.distance_meters}m"
+        )
+    except ValueError as e:
+        logger.warning(f"[UPLOAD] Parse failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse activity file: {e!s}",
+        ) from e
+    except Exception as e:
+        logger.error(f"[UPLOAD] Unexpected parse error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to parse activity file",
+        ) from e
+
+    # Check for duplicates (hash + time window)
+    with get_session() as session:
+        # Check by hash
+        existing_by_hash = session.execute(
+            select(Activity).where(
+                Activity.user_id == user_id,
+                Activity.strava_activity_id == upload_hash,
+            )
+        ).first()
+
+        if existing_by_hash:
+            logger.info(f"[UPLOAD] Duplicate detected by hash: {upload_hash[:16]}...")
+            existing_activity = existing_by_hash[0]
+            return {
+                "status": "ok",
+                "activity_id": existing_activity.id,
+                "deduplicated": True,
+            }
+
+        # Check by time window (within 2 minutes)
+        time_window_start = parsed.start_time - timedelta(seconds=120)
+        time_window_end = parsed.start_time + timedelta(seconds=120)
+
+        existing_by_time = session.execute(
+            select(Activity).where(
+                Activity.user_id == user_id,
+                Activity.start_time >= time_window_start,
+                Activity.start_time <= time_window_end,
+            )
+        ).first()
+
+        if existing_by_time:
+            logger.info(
+                f"[UPLOAD] Duplicate detected by time window: "
+                f"parsed_start={parsed.start_time}, existing_start={existing_by_time[0].start_time}"
+            )
+            existing_activity = existing_by_time[0]
+            return {
+                "status": "ok",
+                "activity_id": existing_activity.id,
+                "deduplicated": True,
+            }
+
+        # Get athlete_id (use user_id for uploads since there's no Strava account)
+        # For users with Strava, we could use their athlete_id, but for simplicity
+        # and to avoid requiring Strava connection, we use user_id
+        athlete_id = user_id
+
+        # Create new activity
+        try:
+            activity = Activity(
+                user_id=user_id,
+                athlete_id=athlete_id,
+                strava_activity_id=upload_hash,  # Use hash as source_activity_id
+                source="upload",
+                start_time=parsed.start_time,
+                type=parsed.activity_type,
+                duration_seconds=parsed.duration_seconds,
+                distance_meters=parsed.distance_meters,
+                elevation_gain_meters=parsed.elevation_gain_meters,
+                raw_json=None,  # No raw JSON for uploads
+                streams_data=None,  # No streams data for uploads
+            )
+            session.add(activity)
+            session.commit()
+            session.refresh(activity)
+
+            logger.info(f"[UPLOAD] Activity created: id={activity.id}, hash={upload_hash[:16]}...")
+
+            # Trigger metrics recomputation
+            try:
+                trigger_recompute_on_new_activities(user_id)
+                logger.info(f"[UPLOAD] Metrics recomputation triggered for user_id={user_id}")
+            except Exception as e:
+                logger.error(f"[UPLOAD] Failed to trigger metrics recomputation: {e}", exc_info=True)
+                # Don't fail the upload if metrics recomputation fails
+
+        except IntegrityError as e:
+            session.rollback()
+            # Check if it's a duplicate constraint violation
+            if "uq_activity_user_strava_id" in str(e) or "unique" in str(e).lower():
+                logger.info(f"[UPLOAD] Duplicate detected by constraint: {upload_hash[:16]}...")
+                # Fetch the existing activity
+                existing = session.execute(
+                    select(Activity).where(
+                        Activity.user_id == user_id,
+                        Activity.strava_activity_id == upload_hash,
+                    )
+                ).first()
+                if existing:
+                    return {
+                        "status": "ok",
+                        "activity_id": existing[0].id,
+                        "deduplicated": True,
+                    }
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save activity",
+            ) from e
+        except Exception as e:
+            session.rollback()
+            logger.error(f"[UPLOAD] Failed to save activity: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save activity",
+            ) from e
+        else:
+            return {
+                "status": "ok",
+                "activity_id": activity.id,
+                "deduplicated": False,
+            }

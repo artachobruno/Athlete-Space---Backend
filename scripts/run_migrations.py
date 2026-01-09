@@ -25,6 +25,7 @@ from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
+from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
 from scripts.migrate_add_streams_data import migrate_add_streams_data
@@ -53,6 +54,7 @@ def run_all_migrations() -> None:
         ("athlete_profiles extracted_race_attributes column", migrate_add_extracted_race_attributes),
         ("athlete_profiles extracted_injury_attributes column", migrate_add_extracted_injury_attributes),
         ("athlete_profiles health and constraint fields", migrate_add_profile_health_fields),
+        ("athlete_profiles imperial fields (height_in, weight_lbs)", migrate_add_imperial_profile_fields),
         ("onboarding data fields (onboarding_completed, etc.)", migrate_onboarding_data_fields),
         ("planned_sessions athlete_id column", migrate_add_athlete_id_to_planned_sessions),
         ("planned_sessions completion tracking columns", migrate_add_planned_session_completion_fields),

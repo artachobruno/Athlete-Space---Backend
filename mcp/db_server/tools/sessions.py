@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from app.coach.services.conversation_progress import get_conversation_progress
 from app.coach.tools.add_workout import (
     extract_date_from_description,
     parse_workout_details,
@@ -22,6 +23,7 @@ from app.coach.tools.plan_race import (
     create_and_save_plan,
     extract_race_information,
     parse_date_string,
+    plan_race_build,
 )
 from app.coach.tools.plan_season import (
     generate_season_plan_response,
@@ -197,10 +199,12 @@ def plan_race_build_tool(arguments: dict) -> dict:
     """Plan a race build and generate training sessions.
 
     Contract: plan_race_build.json
+    Uses stateful slot extraction with cumulative accumulation.
     """
     message = arguments.get("message")
     user_id = arguments.get("user_id")
     athlete_id = arguments.get("athlete_id")
+    conversation_id = arguments.get("conversation_id")  # Optional for backward compatibility
 
     # Validate inputs
     if not message or not isinstance(message, str):
@@ -211,52 +215,64 @@ def plan_race_build_tool(arguments: dict) -> dict:
         raise MCPError("INVALID_INPUT", "Missing or invalid athlete_id")
 
     try:
+        # Call the stateful plan_race_build function
+        # This handles slot extraction, merging, and awaited slot resolution
+        result_message = asyncio.run(
+            plan_race_build(
+                message=message,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                conversation_id=conversation_id,
+            )
+        )
+
+        # Check if this is a clarification message
+        if result_message.startswith("[CLARIFICATION]"):
+            # Extract the message without the prefix
+            clarification = result_message.replace("[CLARIFICATION] ", "")
+            _raise_missing_race_info(clarification)
+
+        # If we got here, the plan was created successfully
+        # Extract race info to return in response
         race_info = extract_race_information(message)
         distance = race_info.distance
         race_date = parse_date_string(race_info.date) if race_info.date else None
-        target_time = race_info.target_time
 
-        # Check if we have minimum required info
-        if distance is None:
-            clarification = build_clarification_message(distance, race_date)
-            _raise_missing_race_info(clarification)
-        if race_date is None:
-            clarification = build_clarification_message(distance, race_date)
-            _raise_missing_race_info(clarification)
+        # Try to get from conversation progress if available
+        if conversation_id:
+            progress = get_conversation_progress(conversation_id)
+            if progress:
+                distance = progress.slots.get("race_distance") or distance
+                race_date_val = progress.slots.get("race_date")
+                if race_date_val and isinstance(race_date_val, datetime):
+                    race_date = race_date_val
 
-        # Type narrowing: after the checks above, we know distance and race_date are not None
-        # Validate race date is in the future
-        if race_date < datetime.now(UTC):
-            _raise_invalid_race_date(race_date)
-
-        # Generate and save plan
-        result_message = asyncio.run(create_and_save_plan(race_date, distance, target_time, user_id, athlete_id))
-
-        # Extract saved_count from message (this is a bit hacky but matches existing behavior)
-        # The _create_and_save_plan function doesn't return saved_count directly
-        # We'll need to call save_planned_sessions separately to get the count
-        sessions = generate_race_build_sessions(
-            race_date=race_date,
-            race_distance=distance,
-            target_time=target_time,
-        )
-        plan_id = f"race_{distance}_{race_date.strftime('%Y%m%d')}"
-        saved_count = asyncio.run(
-            save_sessions_impl(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                sessions=sessions,
-                plan_type="race",
-                plan_id=plan_id,
+        # Generate sessions to get saved_count
+        if distance and race_date:
+            sessions = generate_race_build_sessions(
+                race_date=race_date,
+                race_distance=distance,
+                target_time=race_info.target_time,
             )
-        )
+            plan_id = f"race_{distance}_{race_date.strftime('%Y%m%d')}"
+            saved_count = asyncio.run(
+                save_sessions_impl(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    sessions=sessions,
+                    plan_type="race",
+                    plan_id=plan_id,
+                )
+            )
+        else:
+            saved_count = 0
 
         return {
             "success": True,
             "message": result_message,
             "saved_count": saved_count,
-            "race_distance": distance,
-            "race_date": race_date.isoformat(),
+            "race_distance": distance or "",
+            "race_date": race_date.isoformat() if race_date else "",
         }
 
     except MCPError:

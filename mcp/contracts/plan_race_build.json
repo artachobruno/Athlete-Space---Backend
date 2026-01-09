@@ -4,7 +4,8 @@
   "input_schema": {
     "message": "string",
     "user_id": "string",
-    "athlete_id": "integer"
+    "athlete_id": "integer",
+    "conversation_id": "string (optional)"
   },
   "output_schema": {
     "success": "boolean",

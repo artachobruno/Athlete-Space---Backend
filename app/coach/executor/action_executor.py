@@ -470,14 +470,16 @@ class CoachActionExecutor:
 
         # Tool execution is wrapped defensively - never surface errors to users
         try:
-            result = await call_tool(
-                "plan_race_build",
-                {
-                    "message": race_description,
-                    "user_id": deps.user_id,
-                    "athlete_id": deps.athlete_id,
-                },
-            )
+            tool_args = {
+                "message": race_description,
+                "user_id": deps.user_id,
+                "athlete_id": deps.athlete_id,
+            }
+            # Add conversation_id if available for stateful slot tracking
+            if conversation_id:
+                tool_args["conversation_id"] = conversation_id
+
+            result = await call_tool("plan_race_build", tool_args)
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")

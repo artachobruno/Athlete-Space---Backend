@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from typing import Literal, cast
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from loguru import logger
 from sqlalchemy import select
 
@@ -24,6 +24,7 @@ from app.core.conversation_id import get_conversation_id
 from app.core.conversation_ownership import validate_conversation_ownership
 from app.core.message import Message, normalize_message
 from app.core.redis_conversation_store import write_message
+from app.db.message_repository import persist_message
 from app.db.models import AthleteProfile, CoachMessage, CoachProgressEvent, StravaAccount, StravaAuth, UserSettings
 from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
@@ -133,6 +134,7 @@ def get_or_create_athlete_id(db, user_id: str) -> int | None:
 async def coach_chat(
     req: CoachChatRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(validate_conversation_ownership),
 ) -> CoachChatResponse:
     """Handle coach chat request using orchestrator agent."""
@@ -151,6 +153,10 @@ async def coach_chat(
         # Write normalized user message to Redis (B26)
         # This happens after normalization and token counting
         write_message(normalized_user_message)
+
+        # Persist normalized user message to Postgres (B29)
+        # This happens asynchronously and never blocks the request
+        background_tasks.add_task(persist_message, normalized_user_message)
     except ValueError as e:
         logger.error(
             "Failed to normalize user message",
@@ -274,6 +280,10 @@ async def coach_chat(
             # Write normalized assistant message to Redis (B26)
             if normalized_assistant_message:
                 write_message(normalized_assistant_message)
+
+                # Persist normalized assistant message to Postgres (B29)
+                # This happens asynchronously and never blocks the request
+                background_tasks.add_task(persist_message, normalized_assistant_message)
         except ValueError as e:
             logger.error(
                 "Failed to normalize assistant message for cold start",
@@ -332,6 +342,10 @@ async def coach_chat(
             # Write normalized assistant message to Redis (B26)
             if normalized_assistant_message:
                 write_message(normalized_assistant_message)
+
+                # Persist normalized assistant message to Postgres (B29)
+                # This happens asynchronously and never blocks the request
+                background_tasks.add_task(persist_message, normalized_assistant_message)
         except ValueError as e:
             logger.error(
                 "Failed to normalize assistant message for fast-path",
@@ -493,6 +507,11 @@ async def coach_chat(
         )
         # Write normalized assistant message to Redis (B26)
         write_message(normalized_assistant_message)
+
+        # Persist normalized assistant message to Postgres (B29)
+        # This happens asynchronously and never blocks the request
+        background_tasks.add_task(persist_message, normalized_assistant_message)
+
         # Use normalized content for response
         reply_content = normalized_assistant_message.content
     except ValueError as e:

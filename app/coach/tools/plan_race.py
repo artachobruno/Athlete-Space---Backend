@@ -1,11 +1,18 @@
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from app.coach.services.conversation_progress import (
+    clear_progress,
+    create_or_update_progress,
+    get_conversation_progress,
+)
 from app.coach.tools.session_planner import generate_race_build_sessions, save_planned_sessions
+from app.coach.tools.slot_utils import merge_slots, parse_date_loose
+from app.db.models import ConversationProgress
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
 _recent_calls: dict[str, datetime] = {}
@@ -115,16 +122,35 @@ def extract_race_information(message: str) -> RaceInformation:
     return race_info
 
 
-def build_clarification_message(distance: str | None, race_date: datetime | None) -> str:
+def build_clarification_message(distance: str | None, race_date: datetime | None, awaiting_slots: list[str] | None = None) -> str:
     """Build clarification message when required information is missing.
 
     Args:
         distance: Race distance or None
         race_date: Race date or None
+        awaiting_slots: List of specific slots we're waiting for (for slot-scoped messages)
 
     Returns:
         Clarification message with [CLARIFICATION] prefix
     """
+    # If we have awaiting_slots, build slot-scoped message
+    if awaiting_slots:
+        slot_messages = {
+            "race_distance": "race distance (e.g., 5K, 10K, half marathon, marathon, ultra)",
+            "race_date": "race date (e.g., April 25, 2026 or 4/25)",
+            "target_time": "target finish time (optional)",
+        }
+        missing_parts = [slot_messages.get(slot, slot) for slot in awaiting_slots if slot in slot_messages]
+        if missing_parts:
+            clarification_msg = (
+                "I just need a bit more information to create your race training plan:\n\n"
+                + "\n".join(f"• **{part}**" for part in missing_parts)
+                + "\n\n"
+                + 'Example: "April 25th" or "on the 25th!"'
+            )
+            return f"[CLARIFICATION] {clarification_msg}"
+
+    # Fallback to generic message
     missing = []
     if not distance:
         missing.append("race distance (e.g., 5K, 10K, half marathon, marathon, ultra)")
@@ -260,69 +286,286 @@ def parse_date_string(date_str: str) -> datetime | None:
         return None
 
 
-async def plan_race_build(message: str, user_id: str | None = None, athlete_id: int | None = None) -> str:
+def resolve_awaited_slots(
+    message: str,
+    progress: ConversationProgress,
+    today: date,
+) -> tuple[dict[str, str | datetime | None], list[str]]:
+    """Resolve awaited slots from user message.
+
+    Args:
+        message: User message
+        progress: Conversation progress with current slots and awaiting_slots
+        today: Today's date for year inference
+
+    Returns:
+        Tuple of (resolved_slots dict, remaining_awaiting_slots list)
+    """
+    resolved: dict[str, str | datetime | None] = {}
+    remaining_awaiting = list(progress.awaiting_slots)
+
+    for slot in progress.awaiting_slots:
+        if slot == "race_date":
+            # Use loose date parsing for conversational input
+            parsed_date = parse_date_loose(
+                message,
+                today=today,
+                known_slots=progress.slots,
+            )
+            if parsed_date:
+                # Convert date to datetime for storage
+                resolved["race_date"] = datetime.combine(parsed_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                remaining_awaiting.remove(slot)
+                logger.info(
+                    "Resolved awaited slot",
+                    slot="race_date",
+                    value=parsed_date,
+                    conversation_id=progress.conversation_id,
+                )
+        elif slot == "race_distance":
+            # Extract distance from message
+            race_info = extract_race_information(message)
+            if race_info.distance:
+                resolved["race_distance"] = race_info.distance
+                remaining_awaiting.remove(slot)
+                logger.info(
+                    "Resolved awaited slot",
+                    slot="race_distance",
+                    value=race_info.distance,
+                    conversation_id=progress.conversation_id,
+                )
+        elif slot == "target_time":
+            # Extract target time from message
+            race_info = extract_race_information(message)
+            if race_info.target_time:
+                resolved["target_time"] = race_info.target_time
+                remaining_awaiting.remove(slot)
+                logger.info(
+                    "Resolved awaited slot",
+                    slot="target_time",
+                    value=race_info.target_time,
+                    conversation_id=progress.conversation_id,
+                )
+
+    return resolved, remaining_awaiting
+
+
+async def plan_race_build(
+    message: str,
+    user_id: str | None = None,
+    athlete_id: int | None = None,
+    conversation_id: str | None = None,
+) -> str:
     """Plan a race build and generate training sessions.
+
+    Uses stateful slot extraction with cumulative accumulation and awaited slot resolution.
 
     Args:
         message: User message containing race details
         user_id: User ID for saving sessions (optional)
         athlete_id: Athlete ID for saving sessions (optional)
+        conversation_id: Conversation ID for stateful slot tracking (optional but recommended)
 
     Returns:
         Response message with plan details or clarification questions
     """
-    logger.info(f"Tool plan_race_build called (message_length={len(message)})")
-    message_lower = message.lower().strip()
+    logger.info(
+        "Tool plan_race_build called",
+        message_length=len(message),
+        conversation_id=conversation_id,
+    )
 
-    # Create a simple hash of the message for duplicate detection
-    message_hash = str(hash(message_lower[:100]))  # Use first 100 chars
-    now = datetime.now(timezone.utc)
+    # Get or create conversation progress
+    if conversation_id:
+        progress = get_conversation_progress(conversation_id)
+        if progress is None:
+            # Create new progress for this intent
+            progress = create_or_update_progress(
+                conversation_id=conversation_id,
+                intent="race_plan",
+                slots={},
+                awaiting_slots=[],
+            )
+        # Update intent if it changed
+        elif progress.intent != "race_plan":
+            progress = create_or_update_progress(
+                conversation_id=conversation_id,
+                intent="race_plan",
+                slots=progress.slots,
+                awaiting_slots=progress.awaiting_slots,
+            )
+    else:
+        # No conversation_id - use stateless mode (backward compatibility)
+        progress = None
 
-    # Check if we've been called recently with similar input (within last 10 seconds)
-    if message_hash in _recent_calls:
-        last_time = _recent_calls[message_hash]
-        if (now - last_time).total_seconds() < 10:
-            logger.warning("Duplicate tool call detected within 10 seconds, blocking repeat call")
-            return (
-                "I've already provided information about race planning. "
-                "**Please do not call this tool again with the same input.**\n\n"
-                "To create a specific training plan, provide both the race distance and date in your message:\n\n"
-                "• **Race distance** (e.g., 5K, 10K, half marathon, marathon, ultra)\n"
-                "• **Race date** (e.g., 2026-04-15 or April 15, 2026)\n\n"
-                'Example: "I want to train for a marathon on April 15, 2026"'
+    # PART B: Bypass intent detection if awaiting slots exist
+    if progress and progress.awaiting_slots:
+        logger.debug(
+            "Resolving awaited slots",
+            awaiting_slots=progress.awaiting_slots,
+            conversation_id=conversation_id,
+        )
+        today = datetime.now(timezone.utc).date()
+        resolved_slots, remaining_awaiting = resolve_awaited_slots(message, progress, today)
+
+        # Merge resolved slots into existing slots
+        old_slots = progress.slots.copy()
+        progress.slots = merge_slots(progress.slots, resolved_slots)
+        progress.awaiting_slots = remaining_awaiting
+
+        logger.debug(
+            "Merged slots after awaited resolution",
+            before=old_slots,
+            after=progress.slots,
+            conversation_id=conversation_id,
+        )
+
+        # Update progress
+        if conversation_id:
+            progress = create_or_update_progress(
+                conversation_id=conversation_id,
+                intent="race_plan",
+                slots=progress.slots,
+                awaiting_slots=progress.awaiting_slots,
             )
 
-    # Update cache
-    _recent_calls[message_hash] = now
-    # Clean old entries (older than 30 seconds) to prevent memory growth
-    cutoff = now - timedelta(seconds=30)
-    # Filter and update cache in place to avoid type checker issues
-    keys_to_remove = [k for k, v in _recent_calls.items() if v <= cutoff]
-    for key in keys_to_remove:
-        del _recent_calls[key]
+        # If still awaiting slots, ask for them
+        if progress.awaiting_slots:
+            logger.info(
+                "Still awaiting slots after resolution",
+                awaiting_slots=progress.awaiting_slots,
+                conversation_id=conversation_id,
+            )
+            distance = progress.slots.get("race_distance")
+            race_date_str = progress.slots.get("race_date")
+            race_date = race_date_str if isinstance(race_date_str, datetime) else None
+            return build_clarification_message(distance, race_date, progress.awaiting_slots)
 
-    # Extract race information using LLM
+        # All slots resolved - continue to tool execution
+        logger.info(
+            "All awaited slots resolved, proceeding to tool execution",
+            conversation_id=conversation_id,
+        )
+
+    # Extract new slots from current message
     race_info = extract_race_information(message)
-    distance = race_info.distance
-    race_date = parse_date_string(race_info.date) if race_info.date else None
-    target_time = race_info.target_time
+    new_slots: dict[str, str | datetime | None] = {}
+    if race_info.distance:
+        new_slots["race_distance"] = race_info.distance
+    if race_info.date:
+        parsed_date = parse_date_string(race_info.date)
+        if parsed_date:
+            new_slots["race_date"] = parsed_date
+    if race_info.target_time:
+        new_slots["target_time"] = race_info.target_time
 
-    # Check if we have minimum required info
-    if not distance or not race_date:
-        return build_clarification_message(distance, race_date)
+    logger.debug("Extracted slots", slots=new_slots, conversation_id=conversation_id)
+
+    # Merge with existing slots (if we have progress)
+    if progress:
+        old_slots = progress.slots.copy()
+        merged_slots = merge_slots(progress.slots, new_slots)
+        progress.slots = merged_slots
+        logger.debug(
+            "Merged slots",
+            before=old_slots,
+            after=merged_slots,
+            conversation_id=conversation_id,
+        )
+        current_slots = merged_slots
+    else:
+        # No progress - use new slots directly
+        current_slots = new_slots
+
+    # Determine what slots we still need with proper type extraction
+    distance_raw = current_slots.get("race_distance")
+    race_date_raw = current_slots.get("race_date")
+    target_time_raw = current_slots.get("target_time")
+
+    # Extract and validate distance (must be str or None)
+    distance: str | None = None
+    if isinstance(distance_raw, str):
+        distance = distance_raw
+
+    # Extract and validate race_date (must be datetime or None)
+    race_date: datetime | None = None
+    if isinstance(race_date_raw, datetime):
+        race_date = race_date_raw
+    elif isinstance(race_date_raw, str):
+        race_date = parse_date_string(race_date_raw)
+
+    # Extract and validate target_time (must be str or None)
+    target_time: str | None = None
+    if isinstance(target_time_raw, str):
+        target_time = target_time_raw
+
+    # Determine awaiting slots
+    awaiting_slots: list[str] = []
+    if not distance:
+        awaiting_slots.append("race_distance")
+    if not race_date:
+        awaiting_slots.append("race_date")
+
+    # Update progress with current state
+    if conversation_id:
+        progress = create_or_update_progress(
+            conversation_id=conversation_id,
+            intent="race_plan",
+            slots=current_slots,
+            awaiting_slots=awaiting_slots,
+        )
+
+    # If we're missing required slots, ask for them
+    if awaiting_slots:
+        logger.info(
+            "Missing required slots, asking for clarification",
+            awaiting_slots=awaiting_slots,
+            conversation_id=conversation_id,
+        )
+        return build_clarification_message(distance, race_date, awaiting_slots)
 
     # Validate race date is in the future
-    if race_date < datetime.now(timezone.utc):
+    if race_date and race_date < datetime.now(timezone.utc):
         return (
             f"The race date you provided ({race_date.strftime('%Y-%m-%d')}) is in the past. "
             f"Please provide a future race date to generate a training plan."
         )
 
+    # Type narrowing: distance and race_date are guaranteed to be non-None here
+    if not isinstance(distance, str):
+        return build_clarification_message(None, None, ["race_distance"])
+    if not isinstance(race_date, datetime):
+        return build_clarification_message(None, None, ["race_date"])
+
+    # All required slots filled - execute tool
+    logger.info(
+        "All required slots filled, executing tool",
+        distance=distance,
+        race_date=race_date,
+        target_time=target_time,
+        conversation_id=conversation_id,
+    )
+
+    # Clear progress after successful execution
+    if conversation_id:
+        clear_progress(conversation_id)
+        logger.info("Cleared conversation progress after successful execution", conversation_id=conversation_id)
+
     # Generate sessions if we have user_id and athlete_id
     if user_id and athlete_id:
-        logger.info(f"Creating and saving race plan: user_id={user_id}, athlete_id={athlete_id}, distance={distance}, date={race_date}")
+        logger.info(
+            "Creating and saving race plan",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            distance=distance,
+            date=race_date,
+        )
         return await create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
 
     # Return plan details without saving
-    logger.warning(f"Missing user_id or athlete_id - returning preview plan. user_id={user_id}, athlete_id={athlete_id}")
+    logger.warning(
+        "Missing user_id or athlete_id - returning preview plan",
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
     return _build_preview_plan(distance, race_date)

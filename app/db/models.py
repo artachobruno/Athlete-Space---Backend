@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Enum, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -701,4 +701,86 @@ class ConversationOwnership(Base):
 
     __table_args__ = (
         Index("idx_conversation_ownership_user_id", "user_id"),  # Fast lookup by user
+    )
+
+
+class ConversationProgress(Base):
+    """Conversation progress state for slot extraction and follow-up resolution.
+
+    Stores stateful slot information per conversation to enable:
+    - Cumulative slot accumulation across turns
+    - Awaited slot tracking for follow-up questions
+    - Context-aware slot resolution
+
+    Schema:
+    - conversation_id: Conversation ID (primary key, format: c_<UUID>)
+    - intent: Current intent (e.g., "race_plan", "season_plan")
+    - slots: JSON object with slot values (e.g., {"race_distance": "marathon", "race_date": null})
+    - awaiting_slots: JSON array of slot names we're waiting for (e.g., ["race_date"])
+    - updated_at: Last update timestamp
+    """
+
+    __tablename__ = "conversation_progress"
+
+    conversation_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    intent: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    slots: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    awaiting_slots: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("idx_conversation_progress_intent", "intent"),  # Fast lookup by intent
+    )
+
+
+class ConversationMessage(Base):
+    """Long-term message persistence (B29).
+
+    Append-only storage for every canonical Message in Postgres.
+    This table is used for:
+    - Debugging and audit trails
+    - Analytics and conversation replay
+    - Compliance and regulatory requirements
+    - Future summarization (B33/B34)
+
+    Postgres is NEVER used for prompts - Redis remains the only short-term working memory.
+
+    Schema:
+    - id: UUID primary key (generated on insert)
+    - conversation_id: Conversation ID (format: c_<UUID>)
+    - user_id: User ID (Clerk user ID)
+    - role: Message role - must be one of: user, assistant, system
+    - content: Message content (TEXT, not truncated)
+    - tokens: Token count (from normalization)
+    - ts: ISO-8601 timestamp from Message (UTC)
+    - metadata: JSONB metadata dictionary (stored as 'metadata' in DB, accessed as 'message_metadata' in Python)
+    - created_at: Record creation timestamp (server-generated)
+
+    Constraints:
+    - Append-only (no updates or deletes)
+    - Duplicates are acceptable for audit
+    - No uniqueness constraints beyond PK
+    """
+
+    __tablename__ = "conversation_messages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    ts: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    message_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'assistant', 'system')", name="check_role_valid"),
+        Index("idx_messages_conversation_ts", "conversation_id", "ts"),  # Common query: messages by conversation ordered by time
+        Index("idx_messages_user_ts", "user_id", "ts"),  # Common query: messages by user ordered by time
     )

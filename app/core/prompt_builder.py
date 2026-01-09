@@ -20,6 +20,7 @@ from loguru import logger
 from app.core.message import Message
 from app.core.prompt_history import get_prompt_history
 from app.core.token_counting import count_tokens
+from app.core.token_guard import enforce_token_limit
 
 
 class LLMMessage(TypedDict):
@@ -33,9 +34,7 @@ class LLMMessage(TypedDict):
     content: str
 
 
-# Soft ceiling for prompt size (warning only, no truncation in B31)
-# This is a very high threshold - actual enforcement comes in B32
-SOFT_PROMPT_SIZE_CEILING = 200000  # tokens
+# Token guard is now enforced in build_prompt (B32)
 
 
 def build_prompt(
@@ -109,8 +108,13 @@ def build_prompt(
     # Assemble final prompt
     prompt: list[LLMMessage] = [system_message, *llm_history, current_llm_message]
 
-    # Step 5: Token counting and soft size guard
-    total_tokens = _count_prompt_tokens(prompt, conversation_id, current_user_message.user_id)
+    # Step 5: Enforce token limit with deterministic truncation (B32)
+    # This ensures no LLM call can exceed token limits
+    prompt, truncation_meta = enforce_token_limit(
+        prompt,
+        conversation_id=conversation_id,
+        user_id=current_user_message.user_id,
+    )
 
     # Step 6: Logging & observability
     roles_sequence = [msg["role"] for msg in prompt]
@@ -118,20 +122,13 @@ def build_prompt(
         "Prompt built",
         conversation_id=conversation_id,
         history_count=len(history_messages),
-        total_tokens=total_tokens,
+        total_tokens=truncation_meta["final_tokens"],
+        original_tokens=truncation_meta.get("original_tokens", truncation_meta["final_tokens"]),
+        truncated=truncation_meta["truncated"],
+        removed_count=truncation_meta.get("removed_count", 0),
         roles_sequence=roles_sequence,
         event="prompt_built",
     )
-
-    # Soft size guard (warning only, no truncation in B31)
-    if total_tokens > SOFT_PROMPT_SIZE_CEILING:
-        logger.warning(
-            "Prompt size exceeds soft ceiling",
-            conversation_id=conversation_id,
-            total_tokens=total_tokens,
-            ceiling=SOFT_PROMPT_SIZE_CEILING,
-            event="prompt_size_warning",
-        )
 
     return prompt
 

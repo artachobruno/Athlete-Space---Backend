@@ -1,6 +1,7 @@
 """Context management tools for MCP DB server."""
 
 import sys
+import threading
 from datetime import UTC, datetime, timezone
 from pathlib import Path
 
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from app.core.message import Message, normalize_message
 from app.core.redis_conversation_store import write_message
+from app.db.message_repository import persist_message
 from app.db.models import CoachMessage, StravaAccount
 from app.db.session import get_session
 from mcp.db_server.errors import MCPError
@@ -170,6 +172,12 @@ def save_context_tool(arguments: dict) -> dict:
             # Redis failures are logged but do not block the request
             write_message(normalized_user)
             write_message(normalized_assistant)
+
+            # Persist normalized messages to Postgres (B29)
+            # This happens asynchronously and never blocks the request
+            # Using threading since this is not a FastAPI endpoint
+            threading.Thread(target=persist_message, args=(normalized_user,), daemon=True).start()
+            threading.Thread(target=persist_message, args=(normalized_assistant,), daemon=True).start()
         except ValueError as e:
             logger.error(
                 "Failed to normalize messages in save_context_tool",

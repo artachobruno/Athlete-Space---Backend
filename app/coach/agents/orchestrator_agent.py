@@ -18,6 +18,7 @@ from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.config.models import ORCHESTRATOR_MODEL
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
+from app.core.token_guard import LLMMessage, enforce_token_limit
 from app.services.llm.model import get_model
 
 # ============================================================================
@@ -133,15 +134,15 @@ async def run_conversation(
         history_text = "\n".join([f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in message_history])
         prompt_parts.append(f"Message History:\n{history_text}")
     prompt_parts.append(f"User Input: {user_input}")
-    full_prompt = "\n\n".join(prompt_parts)
+    full_prompt_text = "\n\n".join(prompt_parts)
 
     logger.debug(
         "Orchestrator prompt",
-        prompt_length=len(full_prompt),
+        prompt_length=len(full_prompt_text),
         instructions_length=len(ORCHESTRATOR_INSTRUCTIONS),
         message_history_length=len(message_history) if message_history else 0,
         user_input_length=len(user_input),
-        full_prompt=full_prompt,
+        full_prompt=full_prompt_text,
     )
 
     # Ensure agent is initialized
@@ -156,8 +157,62 @@ async def run_conversation(
         user_input=user_input,
     )
 
-    # Convert dict messages to ModelMessage type for pydantic_ai
-    typed_message_history = cast(list[ModelMessage], message_history) if message_history else None
+    # Apply token guard before LLM call (B32)
+    # Build full prompt: system + history + user
+    # Then truncate history if needed, preserving system and user
+    conversation_id = f"orchestrator_{deps.athlete_id}"
+    user_id = deps.user_id or f"athlete_{deps.athlete_id}"
+
+    # Convert message_history to LLMMessage format
+    llm_history: list[LLMMessage] = []
+    if message_history:
+        for msg in message_history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in {"user", "assistant", "system"} and content:
+                llm_history.append({"role": role, "content": content})
+
+    # Build full prompt: system + history + user
+    system_message: LLMMessage = {"role": "system", "content": ORCHESTRATOR_INSTRUCTIONS}
+    user_message: LLMMessage = {"role": "user", "content": user_input}
+    full_prompt: list[LLMMessage] = [system_message, *llm_history, user_message]
+
+    # Apply token guard (truncates history, preserves system and user)
+    truncated_prompt, truncation_meta = enforce_token_limit(
+        full_prompt,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+
+    # Extract truncated history (middle messages, excluding system and user)
+    truncated_history = truncated_prompt[1:-1]
+
+    # Log truncation event
+    if truncation_meta["truncated"]:
+        logger.info(
+            "Token guard applied to orchestrator prompt",
+            conversation_id=conversation_id,
+            athlete_id=deps.athlete_id,
+            truncated=True,
+            removed_count=truncation_meta["removed_count"],
+            original_tokens=truncation_meta["original_tokens"],
+            final_tokens=truncation_meta["final_tokens"],
+            event="token_guard",
+        )
+    else:
+        logger.info(
+            "Token guard applied to orchestrator prompt",
+            conversation_id=conversation_id,
+            athlete_id=deps.athlete_id,
+            truncated=False,
+            final_tokens=truncation_meta["final_tokens"],
+            event="token_guard",
+        )
+
+    # Convert truncated history back to dict format for pydantic_ai
+    typed_message_history: list[ModelMessage] | None = None
+    if truncated_history:
+        typed_message_history = cast(list[ModelMessage], truncated_history)
 
     try:
         result = await ORCHESTRATOR_AGENT.run(
@@ -266,8 +321,8 @@ async def run_conversation(
     # Save conversation history via MCP
     # This is non-critical - conversation can continue even if context save fails
     try:
-        user_message = str(user_input).strip() if user_input else ""
-        if not user_message:
+        user_message_text = str(user_input).strip() if user_input else ""
+        if not user_message_text:
             logger.warning("Skipping context save: empty user message", athlete_id=deps.athlete_id)
         elif not result.output.message:
             logger.warning("Skipping context save: empty assistant message", athlete_id=deps.athlete_id)
@@ -286,7 +341,7 @@ async def run_conversation(
             payload = {
                 "athlete_id": deps.athlete_id,
                 "model_name": ORCHESTRATOR_AGENT_MODEL.model_name,
-                "user_message": user_message,
+                "user_message": user_message_text,
                 "assistant_message": assistant_message,
             }
             await call_tool("save_context", payload)

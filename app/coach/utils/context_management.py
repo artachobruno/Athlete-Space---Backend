@@ -3,12 +3,14 @@
 Handles loading and saving conversation history for the pydantic_ai agent.
 """
 
+import threading
 from datetime import datetime, timezone
 
 from loguru import logger
 
 from app.core.message import Message, normalize_message
 from app.core.redis_conversation_store import write_message
+from app.db.message_repository import persist_message
 from app.db.models import CoachMessage
 from app.db.session import get_session
 from app.state.api_helpers import get_user_id_from_athlete_id
@@ -112,8 +114,16 @@ def save_context(
         # Redis failures are logged but do not block the request
         if normalized_user:
             write_message(normalized_user)
+
+            # Persist normalized user message to Postgres (B29)
+            # This happens asynchronously and never blocks the request
+            threading.Thread(target=persist_message, args=(normalized_user,), daemon=True).start()
         if normalized_assistant:
             write_message(normalized_assistant)
+
+            # Persist normalized assistant message to Postgres (B29)
+            # This happens asynchronously and never blocks the request
+            threading.Thread(target=persist_message, args=(normalized_assistant,), daemon=True).start()
     except ValueError as e:
         logger.error(
             "Failed to normalize messages before saving",

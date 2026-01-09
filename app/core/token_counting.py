@@ -18,6 +18,16 @@ MAX_TOKENS_PER_MESSAGE = 50000
 # Expected token norms for warning logs
 WARNING_TOKEN_THRESHOLD = 10000  # Warn if message exceeds this
 
+# Token limits for prompt truncation (B32)
+# Model hard limit - absolute maximum tokens the model can accept
+MAX_MODEL_TOKENS = 200_000
+
+# Safety margin for prompt tokens - ensures we never exceed model limit
+MAX_PROMPT_TOKENS = 180_000
+
+# Reserved buffer for completion tokens
+TRUNCATION_BUFFER = 2_000
+
 
 def _get_encoding() -> tiktoken.Encoding:
     """Get tiktoken encoding for OpenAI models.

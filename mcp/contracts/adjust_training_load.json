@@ -1,0 +1,158 @@
+{
+  "name": "adjust_training_load",
+  "description": "B18: Training Load Adjustment Tool. Safely applies training load changes using bounded, auditable, deterministic rules. Consumes TrainingConstraints (B17) and canonical training data. This tool does NOT plan workouts. It adjusts load parameters that planning (B8) will respect.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "user_id": {
+        "type": "string",
+        "description": "User ID (required)"
+      },
+      "athlete_id": {
+        "type": "integer",
+        "description": "Optional athlete ID (will be resolved from user_id if not provided)"
+      },
+      "constraints": {
+        "type": "object",
+        "description": "Optional training constraints (B17 format). If not provided, uses defaults.",
+        "properties": {
+          "volume_multiplier": {
+            "type": "number",
+            "description": "Volume multiplier (0.6-1.1)",
+            "minimum": 0.6,
+            "maximum": 1.1
+          },
+          "intensity_cap": {
+            "type": "string",
+            "enum": ["easy", "moderate", "hard", "none"],
+            "description": "Maximum allowed intensity level. 'none' means no cap."
+          },
+          "force_rest_days": {
+            "type": "integer",
+            "description": "Number of forced rest days required in next period",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "disallow_intensity_days": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["hard", "moderate"]
+            },
+            "description": "Intensity levels to disallow"
+          },
+          "long_session_cap_minutes": {
+            "type": "integer",
+            "description": "Maximum duration for long sessions in minutes (null = no cap)",
+            "minimum": 0
+          },
+          "expiry_date": {
+            "type": "string",
+            "format": "date",
+            "description": "ISO date when constraints expire (max 7 days from creation)"
+          },
+          "source": {
+            "type": "string",
+            "enum": ["user_feedback"],
+            "description": "Source of constraints"
+          },
+          "confidence": {
+            "type": "number",
+            "description": "Confidence in constraint derivation (0.0-1.0)",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["HIGH_FATIGUE", "REPORTED_PAIN", "POOR_SLEEP", "LOW_MOTIVATION", "RECOVERY_MISMATCH", "SYSTEMIC_SORENESS", "LOCALIZED_SORENESS", "HIGH_STRESS"]
+            },
+            "description": "Reason codes explaining why constraints exist (1-2 max)"
+          },
+          "explanation": {
+            "type": "string",
+            "description": "Single factual sentence explaining constraints",
+            "maxLength": 200
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When constraints were created"
+          }
+        }
+      },
+      "window_days": {
+        "type": "integer",
+        "description": "Optional window days for training summary (default: 14)",
+        "default": 14,
+        "minimum": 7,
+        "maximum": 30
+      }
+    },
+    "required": ["user_id"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "description": "LoadAdjustmentDecision - load adjustment decision output",
+    "properties": {
+      "volume_delta_pct": {
+        "type": "number",
+        "description": "Volume adjustment as percentage change (-0.40 to +0.10)",
+        "minimum": -0.40,
+        "maximum": 0.10
+      },
+      "intensity_cap": {
+        "type": "string",
+        "enum": ["easy", "moderate", "none"],
+        "description": "Maximum allowed intensity level. 'none' means no cap."
+      },
+      "long_session_cap_minutes": {
+        "type": ["integer", "null"],
+        "description": "Maximum duration for long sessions in minutes (null = no cap)",
+        "minimum": 45
+      },
+      "forced_rest_days": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "format": "date"
+        },
+        "description": "ISO date strings (YYYY-MM-DD) for forced rest days"
+      },
+      "effective_window_days": {
+        "type": "integer",
+        "description": "Number of days this adjustment is effective (1-7)",
+        "minimum": 1,
+        "maximum": 7
+      },
+      "reason_codes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["HIGH_FATIGUE", "ATL_SPIKE", "TSB_LOW", "HIGH_VARIANCE", "POOR_RECOVERY", "CONSTRAINT_DRIVEN", "BACK_TO_BACK_HARD"]
+        },
+        "description": "Reason codes explaining the adjustment (1-3 max)"
+      },
+      "confidence": {
+        "type": "number",
+        "description": "Confidence in this adjustment (0.0-1.0)",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "explanation": {
+        "type": "string",
+        "description": "Single factual sentence explaining the adjustment",
+        "maxLength": 200
+      },
+      "applied_constraints": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of constraint types that were applied"
+      }
+    },
+    "required": ["volume_delta_pct", "intensity_cap", "forced_rest_days", "effective_window_days", "reason_codes", "confidence", "explanation", "applied_constraints"]
+  }
+}

@@ -10,7 +10,9 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.api.user.me import get_overview_data
+from app.calendar.training_summary import build_training_summary
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
+from app.coach.utils.reconciliation_context import get_recent_missed_workouts, get_reconciliation_stats
 from app.db.models import Activity
 from app.db.session import get_session
 from app.services.intelligence.store import IntentStore
@@ -98,6 +100,25 @@ def _build_athlete_state_from_overview(overview: dict[str, Any]) -> dict[str, An
     }
 
 
+def _format_training_history_from_summary(summary) -> str:
+    """Format training history from TrainingSummary.
+
+    Args:
+        summary: TrainingSummary object
+
+    Returns:
+        Formatted training history string
+    """
+    volume = summary.volume
+    sessions_completed = volume.get("sessions_completed", 0)
+    total_duration_hours = volume.get("total_duration_minutes", 0) / 60.0
+
+    if sessions_completed == 0:
+        return f"No activities in the last {summary.days} days"
+
+    return f"Last {summary.days} days: {sessions_completed} sessions, {total_duration_hours:.1f} hours total"
+
+
 def _format_training_history(activities: list[Activity], days: int = 7) -> str:
     """Format training history as a string.
 
@@ -121,6 +142,32 @@ def _format_training_history(activities: list[Activity], days: int = 7) -> str:
     activity_count = len(recent)
 
     return f"Last {days} days: {activity_count} sessions, {total_duration:.1f} hours total"
+
+
+def _get_yesterday_training_from_summary(summary) -> str:
+    """Get description of yesterday's training from TrainingSummary.
+
+    Args:
+        summary: TrainingSummary object
+
+    Returns:
+        Description of yesterday's training
+    """
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday_str = yesterday.isoformat()
+
+    # Check key sessions for yesterday
+    for key_session in summary.last_key_sessions:
+        if key_session.date == yesterday_str:
+            if key_session.status == "completed":
+                return f"{key_session.title} completed"
+            if key_session.status == "missed":
+                return "Rest day"
+            return f"{key_session.title} ({key_session.status})"
+
+    # Check if there were any completed sessions yesterday
+    # We'd need to look at reconciliation results, but for now return generic
+    return "Rest day"
 
 
 def _get_yesterday_training(activities: list[Activity]) -> str:
@@ -284,11 +331,22 @@ def build_daily_decision_context(
         logger.warning(f"Failed to get overview data: {e}, using minimal context")
         overview = {"today": {}, "metrics": {"ctl": [], "atl": [], "tsb": []}, "data_quality": "insufficient"}
 
-    # Get activities and build context components
-    activities_list = _get_activities_for_context(user_id)
+    # Get training summary (canonical source)
+    try:
+        training_summary = build_training_summary(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            window_days=14,
+        )
+        training_history = _format_training_history_from_summary(training_summary)
+        yesterday_training = _get_yesterday_training_from_summary(training_summary)
+    except Exception as e:
+        logger.warning(f"Failed to get training summary: {e!r}, falling back to activities")
+        activities_list = _get_activities_for_context(user_id)
+        training_history = _format_training_history(activities_list, days=7)
+        yesterday_training = _get_yesterday_training(activities_list)
+
     athlete_state = _build_athlete_state_from_overview(overview)
-    training_history = _format_training_history(activities_list, days=7)
-    yesterday_training = _get_yesterday_training(activities_list)
 
     # Build day context
     decision_datetime = datetime.combine(decision_date, datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -301,12 +359,33 @@ def build_daily_decision_context(
     weekly_intent = _get_weekly_intent_for_context(athlete_id, decision_date)
     recent_decisions = _get_recent_decisions_for_context(athlete_id, decision_date)
 
+    # Get reconciliation statistics (missed workouts, compliance)
+    try:
+        reconciliation_stats = get_reconciliation_stats(user_id=user_id, athlete_id=athlete_id, days=30)
+        missed_workouts = get_recent_missed_workouts(user_id=user_id, athlete_id=athlete_id, days=14)
+    except Exception as e:
+        logger.warning(f"Failed to get reconciliation data: {e!r}, using defaults")
+        reconciliation_stats = {
+            "completed_count": 0,
+            "missed_count": 0,
+            "partial_count": 0,
+            "substituted_count": 0,
+            "skipped_count": 0,
+            "total_planned": 0,
+            "compliance_rate": 0.0,
+        }
+        missed_workouts = []
+
     # Build final context
     context = {
         "athlete_state": athlete_state,
         "training_history": training_history,
         "yesterday_training": yesterday_training,
         "day_context": day_context,
+        "reconciliation": {
+            "stats": reconciliation_stats,
+            "recent_missed_workouts": missed_workouts,
+        },
     }
 
     if weekly_intent:
@@ -315,7 +394,10 @@ def build_daily_decision_context(
     if recent_decisions:
         context["recent_decisions"] = [d.model_dump() for d in recent_decisions]
 
-    logger.info(f"Built context with athlete_state, training_history, weekly_intent={'present' if weekly_intent else 'none'}")
+    logger.info(
+        f"Built context with athlete_state, training_history, weekly_intent={'present' if weekly_intent else 'none'}, "
+        f"compliance_rate={reconciliation_stats.get('compliance_rate', 0.0):.2f}"
+    )
     return context
 
 
@@ -349,10 +431,20 @@ def build_weekly_intent_context(
         logger.warning(f"Failed to get overview data: {e}, using minimal context")
         overview = {"today": {}, "metrics": {"ctl": [], "atl": [], "tsb": []}, "data_quality": "insufficient"}
 
-    # Get activities and build context components
-    activities_list = _get_activities_for_context(user_id)
+    # Get training summary (canonical source)
+    try:
+        training_summary = build_training_summary(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            window_days=28,
+        )
+        training_history = _format_training_history_from_summary(training_summary)
+    except Exception as e:
+        logger.warning(f"Failed to get training summary: {e!r}, falling back to activities")
+        activities_list = _get_activities_for_context(user_id)
+        training_history = _format_training_history(activities_list, days=28)
+
     athlete_state = _build_athlete_state_from_overview(overview)
-    training_history = _format_training_history(activities_list, days=28)
 
     # Build week context
     week_datetime = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -372,6 +464,23 @@ def build_weekly_intent_context(
             logger.warning(f"Failed to parse season plan: {e}")
 
     previous_week_intent = _get_previous_week_intent(athlete_id, week_start)
+
+    # Get reconciliation statistics (missed workouts, compliance)
+    try:
+        reconciliation_stats = get_reconciliation_stats(user_id=user_id, athlete_id=athlete_id, days=30)
+        missed_workouts = get_recent_missed_workouts(user_id=user_id, athlete_id=athlete_id, days=14)
+    except Exception as e:
+        logger.warning(f"Failed to get reconciliation data: {e!r}, using defaults")
+        reconciliation_stats = {
+            "completed_count": 0,
+            "missed_count": 0,
+            "partial_count": 0,
+            "substituted_count": 0,
+            "skipped_count": 0,
+            "total_planned": 0,
+            "compliance_rate": 0.0,
+        }
+        missed_workouts = []
 
     # Get recent daily decisions (last 7 days)
     recent_decisions = []
@@ -393,6 +502,10 @@ def build_weekly_intent_context(
         "athlete_state": athlete_state,
         "training_history": training_history,
         "week_context": week_context,
+        "reconciliation": {
+            "stats": reconciliation_stats,
+            "recent_missed_workouts": missed_workouts,
+        },
     }
 
     if season_plan:

@@ -7,6 +7,7 @@ import asyncio
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from loguru import logger
 from sqlalchemy import select
@@ -15,13 +16,16 @@ from sqlalchemy.exc import SQLAlchemyError
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from app.calendar.training_summary import build_training_summary
 from app.coach.schemas.athlete_state import AthleteState
+from app.coach.schemas.constraints import TrainingConstraints
 from app.coach.tools.adjust_load import adjust_training_load
 from app.coach.tools.explain_state import explain_training_state
 from app.coach.tools.next_session import recommend_next_session
 from app.coach.tools.plan_week import plan_week
 from app.coach.tools.run_analysis import run_analysis
 from app.coach.tools.share_report import share_report
+from app.coach.utils.constraints import RecoveryState
 from app.db.models import PlannedSession
 from app.db.session import get_session
 from mcp.db_server.errors import MCPError
@@ -53,13 +57,14 @@ def plan_week_tool(arguments: dict) -> dict:
     state_dict = arguments.get("state")
     user_id = arguments.get("user_id")
     athlete_id = arguments.get("athlete_id")
+    user_feedback = arguments.get("user_feedback")
 
     if not state_dict or not isinstance(state_dict, dict):
         raise MCPError("INVALID_INPUT", "Missing or invalid state")
 
     try:
         state = _parse_athlete_state(state_dict)
-        result = plan_week(state, user_id, athlete_id)
+        result = asyncio.run(plan_week(state, user_id, athlete_id, user_feedback))
     except MCPError:
         raise
     except Exception as e:
@@ -114,28 +119,107 @@ def explain_training_state_tool(arguments: dict) -> dict:
 
 
 def adjust_training_load_tool(arguments: dict) -> dict:
-    """Adjust training load based on feedback.
+    """Adjust training load based on constraints and training state.
 
     Contract: adjust_training_load.json
-    """
-    state_dict = arguments.get("state")
-    user_feedback = arguments.get("user_feedback")
 
-    if not state_dict or not isinstance(state_dict, dict):
-        raise MCPError("INVALID_INPUT", "Missing or invalid state")
-    if not user_feedback or not isinstance(user_feedback, str):
-        raise MCPError("INVALID_INPUT", "Missing or invalid user_feedback")
+    Args:
+        arguments: Dictionary containing:
+            - user_id: User ID (required)
+            - athlete_id: Optional athlete ID
+            - constraints: Optional training constraints dict (B17 format)
+            - window_days: Optional window days for training summary (default: 14)
+
+    Returns:
+        LoadAdjustmentDecision as dict
+
+    B18: Training Load Adjustment Tool
+    Safely applies training load changes using bounded, auditable, deterministic rules.
+
+    Args:
+        user_id: User ID (required)
+        athlete_id: Optional athlete ID (will be resolved from user_id if not provided)
+        constraints: Optional training constraints dict (B17 format)
+        window_days: Optional window days for training summary (default: 14)
+
+    Returns:
+        LoadAdjustmentDecision as dict
+    """
+    user_id = arguments.get("user_id")
+    athlete_id = arguments.get("athlete_id")
+    constraints_dict = arguments.get("constraints")
+    window_days = arguments.get("window_days", 14)
+
+    if not user_id or not isinstance(user_id, str):
+        raise MCPError("INVALID_INPUT", "Missing or invalid user_id")
 
     try:
-        state = _parse_athlete_state(state_dict)
-        result = adjust_training_load(state, user_feedback)
+        # Build TrainingSummary (B16)
+        training_summary = build_training_summary(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            window_days=window_days,
+        )
+
+        # Build RecoveryState (B19) from TrainingSummary
+        load_metrics = training_summary.load
+        atl_raw = load_metrics.get("atl", 0.0)
+        tsb_raw = load_metrics.get("tsb", 0.0)
+        ctl_raw = load_metrics.get("ctl", 0.0)
+
+        # Convert to float (handle case where dict values might be str)
+        atl = float(atl_raw) if isinstance(atl_raw, (int, float)) else 0.0
+        tsb = float(tsb_raw) if isinstance(tsb_raw, (int, float)) else 0.0
+        ctl = float(ctl_raw) if isinstance(ctl_raw, (int, float)) else 0.0
+
+        # Determine recovery status from TSB
+        if tsb < -25.0:
+            recovery_status: Literal["under", "adequate", "over"] = "over"
+        elif tsb > 5.0:
+            recovery_status = "under"
+        else:
+            recovery_status = "adequate"
+
+        # Collect risk flags from training summary
+        risk_flags: list[str] = []
+        if atl > 0 and ctl > 0 and atl / ctl > 1.5:
+            risk_flags.append("ATL_SPIKE")
+        if tsb < -25.0:
+            risk_flags.append("TSB_LOW")
+        if training_summary.reliability_flags.high_variance:
+            risk_flags.append("HIGH_VARIANCE")
+
+        recovery_state = RecoveryState(
+            atl=atl,
+            tsb=tsb,
+            recovery_status=recovery_status,
+            risk_flags=risk_flags,
+        )
+
+        # Parse constraints if provided
+        constraints: TrainingConstraints | None = None
+        if constraints_dict and isinstance(constraints_dict, dict):
+            try:
+                constraints = TrainingConstraints(**constraints_dict)
+            except Exception as e:
+                logger.warning(f"Failed to parse constraints, using defaults: {e}")
+                constraints = None
+
+        # Call B18 adjustment tool
+        decision = adjust_training_load(
+            training_summary=training_summary,
+            recovery_state=recovery_state,
+            constraints=constraints,
+        )
+
+        # Return decision as dict
+        return decision.model_dump()
+
     except MCPError:
         raise
     except Exception as e:
         logger.error(f"Error adjusting training load: {e}", exc_info=True)
         raise MCPError("INTERNAL_ERROR", f"Failed to adjust training load: {e!s}") from e
-    else:
-        return {"message": result}
 
 
 async def recommend_next_session_tool_impl(state: AthleteState, user_id: str | None) -> str:

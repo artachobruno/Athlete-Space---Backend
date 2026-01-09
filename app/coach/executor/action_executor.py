@@ -336,6 +336,14 @@ class CoachActionExecutor:
             step_id, label = step_info
             await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
 
+        # Extract user feedback if available (for B17/B18 constraint generation)
+        user_feedback = decision.structured_data.get("user_feedback", "")
+        if not user_feedback and decision.message:
+            # Check if message contains feedback keywords
+            feedback_keywords = ["fatigue", "tired", "sore", "pain", "wrecked", "adjust"]
+            if any(keyword in decision.message.lower() for keyword in feedback_keywords):
+                user_feedback = decision.message
+
         try:
             result = await call_tool(
                 "plan_week",
@@ -343,6 +351,7 @@ class CoachActionExecutor:
                     "state": deps.athlete_state.model_dump(),
                     "user_id": deps.user_id,
                     "athlete_id": deps.athlete_id,
+                    "user_feedback": user_feedback if user_feedback else None,
                 },
             )
             if conversation_id and step_info:

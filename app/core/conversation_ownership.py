@@ -49,7 +49,9 @@ def validate_conversation_ownership(
 
     # Check ownership store
     with get_session() as db:
-        ownership = db.execute(select(ConversationOwnership).where(ConversationOwnership.conversation_id == conversation_id)).first()
+        ownership = db.execute(
+            select(ConversationOwnership).where(ConversationOwnership.conversation_id == conversation_id)
+        ).scalar_one_or_none()
 
         if ownership is None:
             # Conversation doesn't exist - create ownership record
@@ -103,7 +105,9 @@ def get_conversation_owner(conversation_id: str) -> str | None:
         Owner user_id if conversation exists, None otherwise
     """
     with get_session() as db:
-        ownership = db.execute(select(ConversationOwnership).where(ConversationOwnership.conversation_id == conversation_id)).first()
+        ownership = db.execute(
+            select(ConversationOwnership).where(ConversationOwnership.conversation_id == conversation_id)
+        ).scalar_one_or_none()
         if ownership is None:
             return None
         return ownership.user_id

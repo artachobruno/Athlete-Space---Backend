@@ -238,22 +238,78 @@ class CoachActionExecutor:
         Args:
             conversation_id: Conversation ID (None if no conversation context)
         """
+        logger.debug(
+            "ActionExecutor: _trigger_summarization_if_needed called",
+            conversation_id=conversation_id,
+            has_conversation_id=bool(conversation_id),
+        )
         if not conversation_id:
+            logger.debug("ActionExecutor: No conversation_id, skipping summarization")
             return
 
         try:
+            # Validate conversation_id format (must start with "c_")
+            logger.debug(
+                "ActionExecutor: Validating conversation_id format",
+                conversation_id=conversation_id,
+                starts_with_c=conversation_id.startswith("c_") if conversation_id else False,
+                length=len(conversation_id) if conversation_id else 0,
+            )
+            if not conversation_id or not conversation_id.startswith("c_"):
+                logger.debug(
+                    "ActionExecutor: Invalid conversation_id format for summarization",
+                    conversation_id=conversation_id,
+                    reason="conversation_id must start with 'c_'",
+                )
+                return
+
             # Load slot state from conversation progress
+            logger.debug(
+                "ActionExecutor: Loading conversation progress for summarization",
+                conversation_id=conversation_id,
+            )
             progress = get_conversation_progress(conversation_id)
             slot_state = progress.slots if progress else {}
+            logger.debug(
+                "ActionExecutor: Conversation progress loaded",
+                conversation_id=conversation_id,
+                has_progress=progress is not None,
+                slot_state_keys=list(slot_state.keys()) if slot_state else [],
+                slot_state_count=len(slot_state) if slot_state else 0,
+            )
 
             # Summarize conversation (incremental update)
+            logger.debug(
+                "ActionExecutor: Calling summarize_conversation",
+                conversation_id=conversation_id,
+                slot_state_keys=list(slot_state.keys()) if slot_state else [],
+                slot_state_count=len(slot_state) if slot_state else 0,
+            )
             summary = await summarize_conversation(
                 conversation_id=conversation_id,
                 slot_state=slot_state,
             )
+            logger.debug(
+                "ActionExecutor: summarize_conversation completed",
+                conversation_id=conversation_id,
+                has_summary=summary is not None,
+                facts_count=len(summary.facts) if summary and hasattr(summary, "facts") else 0,
+                preferences_count=len(summary.preferences) if summary and hasattr(summary, "preferences") else 0,
+                open_threads_count=len(summary.open_threads) if summary and hasattr(summary, "open_threads") else 0,
+            )
 
             # Save summary to database
+            logger.debug(
+                "ActionExecutor: Saving conversation summary to database",
+                conversation_id=conversation_id,
+                facts_count=len(summary.facts) if summary and hasattr(summary, "facts") else 0,
+                preferences_count=len(summary.preferences) if summary and hasattr(summary, "preferences") else 0,
+            )
             save_conversation_summary(conversation_id, summary)
+            logger.debug(
+                "ActionExecutor: Conversation summary saved to database",
+                conversation_id=conversation_id,
+            )
 
             logger.info(
                 "Conversation summary updated after tool execution",
@@ -264,10 +320,18 @@ class CoachActionExecutor:
             )
         except Exception as e:
             # Never fail the request due to summarization errors
+            logger.debug(
+                "ActionExecutor: Exception caught during summarization",
+                conversation_id=conversation_id,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                error_class=type(e).__module__ + "." + type(e).__name__,
+            )
             logger.warning(
                 "Failed to summarize conversation after tool execution",
                 conversation_id=conversation_id,
                 error=str(e),
+                error_type=type(e).__name__,
                 exc_info=True,
             )
 

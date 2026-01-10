@@ -263,9 +263,25 @@ def plan_race_build_tool(arguments: dict) -> dict:
     target_time = filled_slots.get("target_time")
     target_time_str = target_time if isinstance(target_time, str) else None
 
+    logger.debug(
+        "plan_race_build_tool: Validated inputs, calling create_and_save_plan",
+        race_date=race_date.isoformat() if isinstance(race_date, datetime) else str(race_date),
+        race_distance=race_distance,
+        target_time=target_time_str,
+        user_id=user_id,
+        athlete_id=athlete_id,
+        filled_slots_keys=list(filled_slots.keys()),
+    )
+
     try:
         # B37: Use slots directly from filled_slots - no re-extraction
         # Call create_and_save_plan directly with validated slots
+        logger.debug(
+            "plan_race_build_tool: Starting create_and_save_plan via asyncio.run",
+            race_date=race_date.isoformat() if isinstance(race_date, datetime) else str(race_date),
+            distance=race_distance,
+            target_time=target_time_str,
+        )
         result_message, saved_count = asyncio.run(
             create_and_save_plan(
                 race_date=race_date,
@@ -275,21 +291,27 @@ def plan_race_build_tool(arguments: dict) -> dict:
                 athlete_id=athlete_id,
             )
         )
-
-        # B37: Use slots directly - no re-extraction from message
-        # All required data is already validated from filled_slots above
-        return {
-            "status": "success",
-            "saved_count": saved_count or 0,
-            "message": result_message,
-            "race_distance": race_distance,
-            "race_date": race_date.isoformat(),
-        }
-
-    except MCPError:
+        logger.debug(
+            "plan_race_build_tool: create_and_save_plan completed",
+            saved_count=saved_count,
+            message_length=len(result_message) if result_message else 0,
+            race_distance=race_distance,
+            race_date=race_date.isoformat() if isinstance(race_date, datetime) else str(race_date),
+        )
+    except MCPError as e:
+        logger.debug(
+            "plan_race_build_tool: MCPError caught, re-raising",
+            error_code=e.code,
+            error_message=e.message,
+        )
         raise
     except ToolContractViolationError as e:
         # Convert ToolContractViolationError to MCPError with specific code (developer error)
+        logger.debug(
+            "plan_race_build_tool: ToolContractViolationError caught",
+            tool_name=e.tool_name,
+            error_message=e.message,
+        )
         logger.error(
             "Tool contract violation detected",
             tool="plan_race_build",
@@ -298,8 +320,55 @@ def plan_race_build_tool(arguments: dict) -> dict:
         )
         raise MCPError("TOOL_CONTRACT_VIOLATION", f"Tool contract violation: {e.message}") from e
     except Exception as e:
-        logger.error(f"Error planning race build: {e}", exc_info=True)
-        raise MCPError("DB_ERROR", f"Failed to plan race build: {e!s}") from e
+        # Extract original error details from exception chain
+        original_error = e.__cause__ if e.__cause__ else e
+        original_error_type = type(original_error).__name__
+        original_error_message = str(original_error)
+        error_details = f"{original_error_type}: {original_error_message}"
+
+        logger.debug(
+            "plan_race_build_tool: Exception caught during plan creation",
+            error_type=type(e).__name__,
+            error_message=str(e),
+            error_class=type(e).__module__ + "." + type(e).__name__,
+            has_cause=bool(e.__cause__),
+            original_error_type=original_error_type if e.__cause__ else None,
+            original_error_message=original_error_message if e.__cause__ else None,
+            race_date=race_date.isoformat() if isinstance(race_date, datetime) else str(race_date),
+            race_distance=race_distance,
+            target_time=target_time_str,
+        )
+        logger.error(
+            f"Error planning race build: {e}",
+            error_type=type(e).__name__,
+            error_message=str(e),
+            has_cause=bool(e.__cause__),
+            original_error_type=original_error_type if e.__cause__ else None,
+            original_error_message=original_error_message if e.__cause__ else None,
+            exc_info=True,
+        )
+        # Include original error details in MCP error message if available
+        if e.__cause__:
+            error_msg = f"Failed to plan race build: {error_details} (wrapped: {type(e).__name__}: {e!s})"
+        else:
+            error_msg = f"Failed to plan race build: {error_details}"
+        raise MCPError("DB_ERROR", error_msg) from e
+    else:
+        # B37: Use slots directly - no re-extraction from message
+        # All required data is already validated from filled_slots above
+        result = {
+            "status": "success",
+            "saved_count": saved_count or 0,
+            "message": result_message,
+            "race_distance": race_distance,
+            "race_date": race_date.isoformat() if isinstance(race_date, datetime) else str(race_date),
+        }
+        logger.debug(
+            "plan_race_build_tool: Returning success result",
+            saved_count=result.get("saved_count"),
+            has_message=bool(result.get("message")),
+        )
+        return result
 
 
 def plan_season_tool(arguments: dict) -> dict:

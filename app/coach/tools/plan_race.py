@@ -637,10 +637,28 @@ async def create_and_save_plan(
         calendar_note = "Your planned sessions are now available in your calendar!"
 
     except Exception as e:
+        logger.debug(
+            "plan_race: Exception caught during race plan generation",
+            error_type=type(e).__name__,
+            error_message=str(e),
+            error_class=type(e).__module__ + "." + type(e).__name__,
+            has_cause=bool(e.__cause__),
+            cause_type=type(e.__cause__).__name__ if e.__cause__ else None,
+            cause_message=str(e.__cause__) if e.__cause__ else None,
+            distance=distance,
+            race_date=race_date.isoformat(),
+            target_time=target_time,
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
         logger.error(
             "Failed to generate race plan",
             error_type=type(e).__name__,
             error_message=str(e),
+            error_class=type(e).__module__ + "." + type(e).__name__,
+            has_cause=bool(e.__cause__),
+            cause_type=type(e.__cause__).__name__ if e.__cause__ else None,
+            cause_message=str(e.__cause__) if e.__cause__ else None,
             distance=distance,
             race_date=race_date.isoformat(),
             target_time=target_time,
@@ -649,8 +667,9 @@ async def create_and_save_plan(
             exc_info=True,
         )
         # Phase 7: User-visible error message
+        # Preserve original error details in exception chain
         raise RuntimeError(
-            "The AI coach failed to generate a valid training plan. Please retry."
+            f"The AI coach failed to generate a valid training plan. Please retry. (Error: {type(e).__name__}: {e!s})"
         ) from e
 
     success_message = (

@@ -20,6 +20,7 @@ Implements MCP-compliant tools for database operations:
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -141,6 +142,8 @@ emit_progress_event_tool = _progress_events_module.emit_progress_event_tool
 app = FastAPI(title="MCP DB Server", version="1.0.0")
 
 # Configure logger
+# Use DEBUG level if LOG_LEVEL env var is set, otherwise default to INFO
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logger.remove()
 logger.add(
     sys.stderr,
@@ -150,7 +153,7 @@ logger.add(
         "<cyan>{file.name}</cyan>:<cyan>{line}</cyan> - "
         "<level>{message}</level>"
     ),
-    level="INFO",
+    level=log_level,
     colorize=True,
 )
 
@@ -224,10 +227,34 @@ async def call_tool(request: Request) -> JSONResponse:
                 content={"result": result},
             )
         except MCPError as e:
+            logger.debug(
+                "MCP tool raised MCPError",
+                tool=tool_name,
+                error_code=e.code,
+                error_message=e.message,
+            )
             return create_error_response(e.code, e.message)
         except Exception as e:
+            # Extract original error from exception chain for better debugging
+            original_error = e.__cause__ if e.__cause__ else e
+            original_error_type = type(original_error).__name__
+            original_error_message = str(original_error)
+            logger.debug(
+                "MCP tool raised unexpected exception",
+                tool=tool_name,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                has_cause=bool(e.__cause__),
+                original_error_type=original_error_type if e.__cause__ else None,
+                original_error_message=original_error_message if e.__cause__ else None,
+            )
             logger.error(f"Tool execution error: {e}", exc_info=True)
-            return create_error_response("INTERNAL_ERROR", f"Tool execution failed: {e!s}")
+            # Include original error in message for debugging
+            if e.__cause__:
+                error_msg = f"Tool execution failed: {original_error_type}: {original_error_message} (wrapped: {type(e).__name__}: {e!s})"
+            else:
+                error_msg = f"Tool execution failed: {type(e).__name__}: {e!s}"
+            return create_error_response("INTERNAL_ERROR", error_msg)
 
     except json.JSONDecodeError:
         return create_error_response("INVALID_REQUEST", "Invalid JSON in request body")

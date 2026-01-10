@@ -331,9 +331,28 @@ AWAITING SLOTS
     )
 
     try:
+        logger.debug(
+            "plan_race: Extracting training goal via LLM",
+            message_length=len(latest_user_message),
+            message_preview=latest_user_message[:100],
+            has_context=bool(conversation_context),
+            awaiting_slots=awaiting_slots,
+        )
         user_prompt = f"Extract training goal information from this message: {latest_user_message}"
+        logger.debug(
+            "plan_race: Calling LLM agent for goal extraction",
+            prompt_length=len(user_prompt),
+        )
         result = await agent.run(user_prompt)
         goal_info = result.output
+        logger.debug(
+            "plan_race: Goal extraction completed",
+            race_distance=goal_info.race_distance,
+            race_date=goal_info.race_date,
+            target_finish_time=goal_info.target_finish_time,
+            goal_type=goal_info.goal_type,
+            has_race_name=bool(goal_info.race_name),
+        )
 
         logger.info(
             f"Extraction successful: race_distance={goal_info.race_distance}, "
@@ -341,6 +360,11 @@ AWAITING SLOTS
             f"goal_type={goal_info.goal_type}",
         )
     except Exception as e:
+        logger.debug(
+            "plan_race: Goal extraction failed",
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
         logger.error(f"Failed to extract training goal: {e}", exc_info=True)
         # Return empty information on failure (non-blocking)
         goal_info = TrainingGoalInformation()
@@ -424,8 +448,17 @@ async def create_and_save_plan(
             user_id=user_id,
             athlete_id=athlete_id,
         )
+        logger.debug(
+            "plan_race: Starting create_and_save_plan",
+            distance=distance,
+            race_date=race_date.isoformat(),
+            target_time=target_time,
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
 
         # Generate plan via LLM - single source of truth
+        logger.debug("plan_race: Creating LLM client")
         llm_client = CoachLLMClient()
         goal_context = {
             "plan_type": "race",
@@ -440,18 +473,50 @@ async def create_and_save_plan(
         athlete_context = {}  # TODO: Fill with actual athlete context
         calendar_constraints = {}  # TODO: Fill with actual calendar constraints
 
+        logger.debug(
+            "plan_race: Preparing context for LLM generation",
+            goal_context_keys=list(goal_context.keys()),
+            user_context_keys=list(user_context.keys()),
+            athlete_context_keys=list(athlete_context.keys()),
+            calendar_constraints_keys=list(calendar_constraints.keys()),
+        )
+        logger.debug(
+            "plan_race: Calling generate_training_plan_via_llm",
+            goal_context=goal_context,
+            user_context=user_context,
+        )
         training_plan = await llm_client.generate_training_plan_via_llm(
             user_context=user_context,
             athlete_context=athlete_context,
             goal_context=goal_context,
             calendar_constraints=calendar_constraints,
         )
+        logger.debug(
+            "plan_race: Training plan generated via LLM",
+            plan_type=training_plan.plan_type,
+            session_count=len(training_plan.sessions),
+            has_rationale=bool(training_plan.rationale),
+            assumptions_count=len(training_plan.assumptions),
+        )
 
         # Convert TrainingPlan to session dictionaries
         # Phase 6: Persist exactly what LLM returns - only minimal field name mapping for DB compatibility
         # sport -> type is a field name mapping, not a logic mutation
+        logger.debug(
+            "plan_race: Converting TrainingPlan to session dictionaries",
+            total_sessions=len(training_plan.sessions),
+        )
         sessions = []
-        for session in training_plan.sessions:
+        for idx, session in enumerate(training_plan.sessions):
+            logger.debug(
+                "plan_race: Converting session to dict",
+                index=idx,
+                session_date=session.date.isoformat(),
+                session_sport=session.sport,
+                session_title=session.title,
+                session_intensity=session.intensity,
+                session_week_number=session.week_number,
+            )
             # Map sport field to type field (database schema expects "type" not "sport")
             # Preserve all other fields exactly as LLM provides
             session_dict: dict = {
@@ -466,6 +531,12 @@ async def create_and_save_plan(
                 "week_number": session.week_number,  # Exactly as LLM
             }
             sessions.append(session_dict)
+        logger.debug(
+            "plan_race: Sessions converted",
+            total_sessions=len(sessions),
+            first_session_date=sessions[0]["date"].isoformat() if sessions else None,
+            last_session_date=sessions[-1]["date"].isoformat() if sessions else None,
+        )
 
         # Calculate weeks and start date from training plan sessions
         if not sessions:
@@ -514,12 +585,29 @@ async def create_and_save_plan(
             user_id=user_id,
             athlete_id=athlete_id,
         )
+        logger.debug(
+            "plan_race: Calling save_planned_sessions via MCP",
+            plan_id=plan_id,
+            session_count=len(sessions),
+            plan_type="race",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            first_session_keys=list(sessions[0].keys()) if sessions else None,
+        )
         saved_count = await save_planned_sessions(
             user_id=user_id,
             athlete_id=athlete_id,
             sessions=sessions,
             plan_type="race",
             plan_id=plan_id,
+        )
+        logger.debug(
+            "plan_race: save_planned_sessions completed",
+            plan_id=plan_id,
+            saved_count=saved_count,
+            expected_count=len(sessions),
+            user_id=user_id,
+            athlete_id=athlete_id,
         )
 
         if saved_count == 0:

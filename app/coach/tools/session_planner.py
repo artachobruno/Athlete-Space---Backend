@@ -1,6 +1,7 @@
 """Helper functions for generating and storing planned training sessions."""
 
 from datetime import date, datetime, timedelta, timezone
+from typing import NoReturn
 
 from loguru import logger
 from sqlalchemy import select
@@ -15,8 +16,11 @@ def _raise_timezone_naive_error(session_date_raw: str) -> None:
     raise ValueError(f"Timezone-naive date from ISO string: {session_date_raw}")
 
 
-def _raise_mcp_save_failed_error(expected_count: int) -> None:
-    """Raise error when MCP tool fails to save sessions."""
+def _raise_mcp_save_failed_error(expected_count: int) -> NoReturn:
+    """Raise error when MCP tool fails to save sessions.
+
+    This function always raises RuntimeError and never returns.
+    """
     raise RuntimeError(
         f"Failed to save planned sessions: MCP tool returned saved_count=0. "
         f"Expected to save {expected_count} sessions but none were saved."
@@ -241,21 +245,61 @@ async def save_planned_sessions(
     Returns:
         Number of sessions saved
     """
+    logger.debug(
+        "session_planner: Starting save_planned_sessions",
+        user_id=user_id,
+        athlete_id=athlete_id,
+        session_count=len(sessions) if sessions else 0,
+        plan_type=plan_type,
+        plan_id=plan_id,
+    )
+
     if not sessions:
+        logger.debug("session_planner: No sessions to save, returning 0")
         logger.warning("No sessions to save")
         return 0
 
     # Convert datetime objects to ISO strings for MCP
+    logger.debug(
+        "session_planner: Converting sessions for MCP",
+        total_sessions=len(sessions),
+    )
     sessions_for_mcp = []
-    for session_data in sessions:
+    for idx, session_data in enumerate(sessions):
+        logger.debug(
+            "session_planner: Converting session for MCP",
+            index=idx,
+            session_keys=list(session_data.keys()) if isinstance(session_data, dict) else None,
+            has_date="date" in session_data if isinstance(session_data, dict) else False,
+        )
         mcp_session = session_data.copy()
         # Convert date to ISO string if it's a datetime
         session_date = mcp_session.get("date")
         if isinstance(session_date, (datetime, date)):
+            original_date = session_date
             mcp_session["date"] = session_date.isoformat()
+            logger.debug(
+                "session_planner: Converted date to ISO string",
+                index=idx,
+                original_date_type=type(original_date).__name__,
+                iso_string=mcp_session["date"],
+            )
         sessions_for_mcp.append(mcp_session)
+    logger.debug(
+        "session_planner: Sessions converted for MCP",
+        total_sessions=len(sessions_for_mcp),
+        first_session_date=sessions_for_mcp[0].get("date") if sessions_for_mcp else None,
+    )
 
     try:
+        logger.debug(
+            "session_planner: Calling MCP tool save_planned_sessions",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            session_count=len(sessions_for_mcp),
+            plan_type=plan_type,
+            plan_id=plan_id,
+        )
         result = await call_tool(
             "save_planned_sessions",
             {
@@ -266,7 +310,17 @@ async def save_planned_sessions(
                 "plan_id": plan_id,
             },
         )
+        logger.debug(
+            "session_planner: MCP tool save_planned_sessions completed",
+            result_keys=list(result.keys()) if isinstance(result, dict) else None,
+            has_saved_count="saved_count" in result if isinstance(result, dict) else False,
+        )
         saved_count = result.get("saved_count", 0)
+        logger.debug(
+            "session_planner: Extracted saved_count from result",
+            saved_count=saved_count,
+            expected_count=len(sessions),
+        )
         if saved_count == 0:
             _raise_mcp_save_failed_error(len(sessions))
         else:

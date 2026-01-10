@@ -355,6 +355,13 @@ class CoachActionExecutor:
         # STATE 2: SLOTS COMPLETE - Execute immediately
         # If slots are complete, execute without confirmation
         if decision.should_execute and target_action:
+            logger.debug(
+                "ActionExecutor: STATE 2 - Slots complete, checking for execution",
+                should_execute=decision.should_execute,
+                target_action=target_action,
+                missing_slots=decision.missing_slots,
+                missing_slots_count=len(decision.missing_slots),
+            )
             # Assertion: should_execute requires no missing slots
             if len(decision.missing_slots) > 0:
                 raise RuntimeError(f"should_execute=True requires empty missing_slots, got {decision.missing_slots}")
@@ -365,8 +372,18 @@ class CoachActionExecutor:
                 should_execute=decision.should_execute,
                 conversation_id=conversation_id,
             )
+            logger.debug(
+                "ActionExecutor: STATE 2 - Preparing for immediate execution",
+                current_action=decision.action,
+                target_action=target_action,
+            )
             # Override action to EXECUTE if not already set
             if decision.action != "EXECUTE":
+                logger.debug(
+                    "ActionExecutor: Overriding action to EXECUTE",
+                    old_action=decision.action,
+                    new_action="EXECUTE",
+                )
                 decision.action = "EXECUTE"
             # Fall through to execution logic below
 
@@ -437,8 +454,21 @@ class CoachActionExecutor:
         horizon = decision.horizon
         target_action = decision.target_action or decision.next_executable_action
 
+        logger.debug(
+            "ActionExecutor: Executing action",
+            intent=intent,
+            horizon=horizon,
+            target_action=target_action,
+            action=decision.action,
+            conversation_id=conversation_id,
+        )
+
         # Use target_action for execution routing if available
         if target_action == "plan_race_build":
+            logger.debug(
+                "ActionExecutor: Routing to plan_race_build execution",
+                conversation_id=conversation_id,
+            )
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
 
         if target_action == "plan_week":
@@ -640,9 +670,21 @@ class CoachActionExecutor:
         conversation_id: str | None = None,
     ) -> str:
         """Execute plan_race_build tool."""
+        logger.debug(
+            "ActionExecutor: Starting plan_race_build execution",
+            user_id=deps.user_id,
+            athlete_id=deps.athlete_id,
+            conversation_id=conversation_id,
+            intent=decision.intent,
+            horizon=decision.horizon,
+            should_execute=decision.should_execute,
+        )
+
         if not deps.user_id or not isinstance(deps.user_id, str):
+            logger.debug("ActionExecutor: Missing user_id for plan_race_build")
             return "I need your user ID to save a race plan. Please check your account settings."
         if deps.athlete_id is None:
+            logger.debug("ActionExecutor: Missing athlete_id for plan_race_build")
             return "I need your athlete ID to create a race plan. Please check your account settings."
 
         # Extract race description from structured_data or message
@@ -650,6 +692,12 @@ class CoachActionExecutor:
         if not race_description and decision.message:
             # Fallback: use message if structured_data is empty
             race_description = decision.message
+        logger.debug(
+            "ActionExecutor: Race description extracted",
+            has_structured_data=bool(decision.structured_data.get("race_description")),
+            has_message=bool(decision.message),
+            description_length=len(race_description),
+        )
 
         tool_name = "plan_race_build"
 
@@ -658,15 +706,29 @@ class CoachActionExecutor:
         slots = decision.filled_slots
 
         logger.debug(
-            "Using filled_slots from decision (conversation slot state)",
+            "ActionExecutor: Using filled_slots from decision (conversation slot state)",
             slots=slots,
+            slots_keys=list(slots.keys()) if slots else [],
+            slots_count=len(slots) if slots else 0,
             intent=decision.intent,
             horizon=decision.horizon,
             conversation_id=conversation_id,
         )
 
         # Final validation using filled_slots (should already be validated, but double-check)
+        logger.debug(
+            "ActionExecutor: Validating slots for plan_race_build",
+            tool=tool_name,
+            slots_keys=list(slots.keys()) if slots else [],
+        )
         can_execute, missing_slots = validate_slots(tool_name, slots)
+        logger.debug(
+            "ActionExecutor: Slot validation complete",
+            tool=tool_name,
+            can_execute=can_execute,
+            missing_slots=missing_slots,
+            missing_slots_count=len(missing_slots) if missing_slots else 0,
+        )
         if not can_execute:
             # This should not happen if orchestrator logic is correct, but fail-safe check
             logger.error(
@@ -681,16 +743,41 @@ class CoachActionExecutor:
 
         # All checks passed - proceed with execution
         # Progress events are only emitted during execution
+        logger.debug(
+            "ActionExecutor: Finding step info for plan_race_build",
+            tool=tool_name,
+            has_action_plan=bool(decision.action_plan),
+        )
         step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
+        logger.debug(
+            "ActionExecutor: Step info found",
+            tool=tool_name,
+            has_step_info=bool(step_info),
+            step_id=step_info[0] if step_info else None,
+            step_label=step_info[1] if step_info else None,
+        )
 
         if conversation_id and step_info:
             step_id, label = step_info
+            logger.debug(
+                "ActionExecutor: Emitting progress event (in_progress)",
+                conversation_id=conversation_id,
+                step_id=step_id,
+                step_label=label,
+            )
             await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
 
         # Tool execution is wrapped defensively - never surface errors to users
         try:
             # B37: Pass filled_slots in context - tool reads ONLY from this
             # B44: Serialize filled_slots before MCP call (convert date/datetime to ISO strings)
+            logger.debug(
+                "ActionExecutor: Preparing tool arguments for plan_race_build",
+                user_id=deps.user_id,
+                athlete_id=deps.athlete_id,
+                conversation_id=conversation_id,
+                slots_keys=list(slots.keys()) if slots else [],
+            )
             tool_args = {
                 "message": race_description,
                 "user_id": deps.user_id,
@@ -705,6 +792,11 @@ class CoachActionExecutor:
             if settings.log_level == "DEBUG":
                 try:
                     json.dumps(tool_args)
+                    logger.debug(
+                        "ActionExecutor: Tool args JSON validation passed",
+                        tool=tool_name,
+                        tool_args_keys=list(tool_args.keys()),
+                    )
                 except (TypeError, ValueError) as e:
                     logger.error(
                         "Tool args are not JSON-safe (B47)",
@@ -715,7 +807,20 @@ class CoachActionExecutor:
                     )
                     raise RuntimeError(f"Tool args are not JSON-safe: {e}") from e
 
+            logger.debug(
+                "ActionExecutor: Calling MCP tool plan_race_build",
+                tool=tool_name,
+                tool_args_keys=list(tool_args.keys()),
+                conversation_id=conversation_id,
+            )
             result = await call_tool("plan_race_build", tool_args)
+            logger.debug(
+                "ActionExecutor: MCP tool plan_race_build completed",
+                tool=tool_name,
+                result_keys=list(result.keys()) if isinstance(result, dict) else None,
+                has_message="message" in result if isinstance(result, dict) else False,
+                conversation_id=conversation_id,
+            )
 
             # B39: Prevent clarification after slot validation
             # If slots were complete (should_execute=True) and tool requests clarification, fail hard
@@ -725,18 +830,43 @@ class CoachActionExecutor:
                 if result_message.startswith("[CLARIFICATION]") or result.get("needs_clarification"):
                     CoachActionExecutor._raise_clarification_violation(tool_name)
 
-            if conversation_id and step_info:
-                step_id, label = step_info
-                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
             logger.info(
                 "Tool executed successfully",
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            logger.debug(
+                "ActionExecutor: Triggering summarization if needed",
+                conversation_id=conversation_id,
+            )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
-            return result.get("message", "Race plan created.")
+            message = result.get("message", "Race plan created.")
+            logger.debug(
+                "ActionExecutor: plan_race_build execution complete",
+                tool=tool_name,
+                message_length=len(message),
+                conversation_id=conversation_id,
+            )
+            if conversation_id and step_info:
+                step_id, label = step_info
+                logger.debug(
+                    "ActionExecutor: Emitting progress event (completed)",
+                    conversation_id=conversation_id,
+                    step_id=step_id,
+                    step_label=label,
+                )
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+
+            return message
         except MCPError as e:
+            logger.debug(
+                "ActionExecutor: MCPError caught in plan_race_build",
+                tool=tool_name,
+                error_code=e.code,
+                error_message=e.message,
+                conversation_id=conversation_id,
+            )
             # B39: TOOL_CONTRACT_VIOLATION or MISSING_RACE_INFO should never occur after slot validation
             # If it does, this is a developer error
             if e.code == "TOOL_CONTRACT_VIOLATION":

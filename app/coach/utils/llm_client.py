@@ -61,13 +61,35 @@ async def _load_prompt(filename: str) -> str:
     Raises:
         FileNotFoundError: If prompt file doesn't exist
     """
+    logger.debug(
+        "llm_client: Loading prompt via MCP",
+        filename=filename,
+    )
     try:
+        logger.debug(
+            "llm_client: _load_prompt - calling MCP tool",
+            filename=filename,
+        )
         result = await call_tool("load_prompt", {"filename": filename})
-        return result["content"]
+        content = result["content"]
+        logger.debug(
+            "llm_client: _load_prompt - prompt loaded successfully",
+            filename=filename,
+            content_length=len(content) if content else 0,
+            content_preview=content[:200] if content else None,
+        )
     except MCPError as e:
+        logger.debug(
+            "llm_client: _load_prompt - MCP error",
+            filename=filename,
+            error_code=e.code,
+            error_message=e.message,
+        )
         if e.code == "FILE_NOT_FOUND":
             raise FileNotFoundError(f"Prompt file not found: {filename}") from e
         raise RuntimeError(f"Failed to load prompt: {e.message}") from e
+    else:
+        return content
 
 
 def _get_model():
@@ -373,18 +395,52 @@ class CoachLLMClient:
         Raises:
             ValueError if validation failed and no more retries
         """
+        logger.debug(
+            "llm_client: _validate_plan_sessions - starting validation",
+            attempt=attempt + 1,
+            session_count=len(plan.sessions) if plan.sessions else 0,
+        )
+
         # Phase 7: Plan guarantees enforced in code
         # ≥1 session exists
         if not plan.sessions:
+            logger.debug(
+                "llm_client: _validate_plan_sessions - no sessions found",
+                attempt=attempt + 1,
+                max_retries=MAX_RETRIES,
+                will_retry=attempt < MAX_RETRIES,
+            )
             if attempt < MAX_RETRIES:
                 logger.warning("Training plan validation failed: no sessions. Retrying with same inputs...")
                 return False
             self._raise_plan_empty_error()
 
+        logger.debug(
+            "llm_client: _validate_plan_sessions - checking timezone and duplicates",
+            attempt=attempt + 1,
+            session_count=len(plan.sessions),
+        )
+
         # Phase 6: Invariant checks - no duplicate dates+titles, all dates timezone-aware
         seen_dates_titles: set[tuple[datetime, str]] = set()
-        for sess in plan.sessions:
+        for idx, sess in enumerate(plan.sessions):
+            logger.debug(
+                "llm_client: _validate_plan_sessions - validating session",
+                attempt=attempt + 1,
+                session_index=idx,
+                session_title=sess.title,
+                session_date=sess.date.isoformat() if sess.date else None,
+                has_timezone=sess.date.tzinfo is not None if sess.date else False,
+            )
             if sess.date.tzinfo is None:
+                logger.debug(
+                    "llm_client: _validate_plan_sessions - timezone-naive date found",
+                    attempt=attempt + 1,
+                    session_index=idx,
+                    session_title=sess.title,
+                    max_retries=MAX_RETRIES,
+                    will_retry=attempt < MAX_RETRIES,
+                )
                 if attempt < MAX_RETRIES:
                     logger.warning(
                         f"Training plan validation failed: timezone-naive date for '{sess.title}'. "
@@ -395,6 +451,15 @@ class CoachLLMClient:
 
             date_title_key = (sess.date, sess.title)
             if date_title_key in seen_dates_titles:
+                logger.debug(
+                    "llm_client: _validate_plan_sessions - duplicate session found",
+                    attempt=attempt + 1,
+                    session_index=idx,
+                    session_title=sess.title,
+                    session_date=sess.date.isoformat(),
+                    max_retries=MAX_RETRIES,
+                    will_retry=attempt < MAX_RETRIES,
+                )
                 if attempt < MAX_RETRIES:
                     logger.warning(
                         f"Training plan validation failed: duplicate session '{sess.title}'. "
@@ -403,6 +468,13 @@ class CoachLLMClient:
                     return False
                 self._raise_duplicate_session_error(sess.title, sess.date.isoformat())
             seen_dates_titles.add(date_title_key)
+
+        logger.debug(
+            "llm_client: _validate_plan_sessions - validation passed",
+            attempt=attempt + 1,
+            session_count=len(plan.sessions),
+            unique_sessions=len(seen_dates_titles),
+        )
         return True
 
     @staticmethod
@@ -412,19 +484,50 @@ class CoachLLMClient:
         Returns:
             Error message if validation fails, None if valid
         """
+        logger.debug(
+            "llm_client: _validate_plan_type_requirements - starting validation",
+            plan_type=plan.plan_type,
+            session_count=len(plan.sessions),
+            goal_context_keys=list(goal_context.keys()) if goal_context else [],
+        )
+
         if plan.plan_type == "race":
+            logger.debug(
+                "llm_client: _validate_plan_type_requirements - validating race plan",
+                has_race_date="race_date" in (goal_context or {}),
+                session_count=len(plan.sessions),
+            )
             # Race plans: race date must exist in plan
             race_date_str = goal_context.get("race_date")
             if race_date_str:
+                logger.debug(
+                    "llm_client: _validate_plan_type_requirements - checking race date in plan",
+                    race_date_str=race_date_str,
+                )
                 try:
                     race_date = datetime.fromisoformat(race_date_str.replace("Z", "+00:00"))
                     race_sessions = [
                         s for s in plan.sessions
                         if s.date.date() == race_date.date() and s.intensity == "race"
                     ]
+                    logger.debug(
+                        "llm_client: _validate_plan_type_requirements - race session check",
+                        race_date=race_date.date().isoformat(),
+                        race_sessions_found=len(race_sessions),
+                        race_session_titles=[s.title for s in race_sessions],
+                    )
                     if not race_sessions:
+                        logger.debug(
+                            "llm_client: _validate_plan_type_requirements - race session missing",
+                            race_date=race_date.date().isoformat(),
+                        )
                         return "Race plan must include a race session on race day"
-                except (ValueError, AttributeError):
+                except (ValueError, AttributeError) as e:
+                    logger.debug(
+                        "llm_client: _validate_plan_type_requirements - race date parsing failed",
+                        race_date_str=race_date_str,
+                        error=str(e),
+                    )
                     pass  # Skip validation if date parsing fails
 
             # Race plans: must span ≥4 weeks
@@ -432,18 +535,43 @@ class CoachLLMClient:
                 dates = sorted([s.date.date() for s in plan.sessions])
                 if len(dates) > 0:
                     span_days = (dates[-1] - dates[0]).days
+                    logger.debug(
+                        "llm_client: _validate_plan_type_requirements - checking race plan span",
+                        first_date=dates[0].isoformat(),
+                        last_date=dates[-1].isoformat(),
+                        span_days=span_days,
+                        required_days=28,
+                        is_valid=span_days >= 28,
+                    )
                     if span_days < 28:  # Less than 4 weeks
                         return f"Race plan must span at least 4 weeks (current: {span_days} days)"
         elif plan.plan_type == "season":
+            logger.debug(
+                "llm_client: _validate_plan_type_requirements - validating season plan",
+                session_count=len(plan.sessions),
+            )
             # Season plans: must span ≥4 weeks
             if len(plan.sessions) > 0:
                 dates = sorted([s.date.date() for s in plan.sessions])
                 if len(dates) > 0:
                     span_days = (dates[-1] - dates[0]).days
+                    logger.debug(
+                        "llm_client: _validate_plan_type_requirements - checking season plan span",
+                        first_date=dates[0].isoformat(),
+                        last_date=dates[-1].isoformat(),
+                        span_days=span_days,
+                        required_days=28,
+                        is_valid=span_days >= 28,
+                    )
                     if span_days < 28:  # Less than 4 weeks
                         return f"Season plan must span at least 4 weeks (current: {span_days} days)"
         # Future plan types (rehab, taper-only, diagnostics, weekly) - no span/race date requirements
         # Validation is keyed by plan_type for extensibility
+
+        logger.debug(
+            "llm_client: _validate_plan_type_requirements - validation passed",
+            plan_type=plan.plan_type,
+        )
         return None
 
     async def generate_training_plan_via_llm(
@@ -472,14 +600,36 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
+        logger.debug(
+            "llm_client: Starting generate_training_plan_via_llm",
+            goal_context_keys=list(goal_context.keys()) if goal_context else [],
+            user_context_keys=list(user_context.keys()) if user_context else [],
+            athlete_context_keys=list(athlete_context.keys()) if athlete_context else [],
+            calendar_constraints_keys=list(calendar_constraints.keys()) if calendar_constraints else [],
+        )
+
+        logger.debug("llm_client: Loading training plan generation prompt")
         prompt_text = await _load_prompt("training_plan_generation.txt")
+        logger.debug(
+            "llm_client: Prompt loaded",
+            prompt_length=len(prompt_text) if prompt_text else 0,
+            prompt_preview=prompt_text[:200] if prompt_text else None,
+        )
+
+        logger.debug(
+            "llm_client: Creating Agent instance",
+            model_name=self.model.model_name if hasattr(self.model, "model_name") else type(self.model).__name__,
+            output_type="TrainingPlan",
+        )
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
             output_type=TrainingPlan,
         )
+        logger.debug("llm_client: Agent instance created")
 
         # Base context - preserve original inputs for deterministic retries
+        logger.debug("llm_client: Building base context for LLM")
         base_context = {
             "user_context": user_context,
             "athlete_context": athlete_context,
@@ -487,45 +637,180 @@ class CoachLLMClient:
             "calendar_constraints": calendar_constraints,
         }
         context_str = json.dumps(base_context, indent=2, default=str)
+        logger.debug(
+            "llm_client: Context prepared",
+            context_length=len(context_str),
+            goal_context=goal_context,
+            has_user_id="user_id" in (user_context or {}),
+            has_athlete_id="athlete_id" in (user_context or {}),
+        )
+
+        logger.debug(
+            "llm_client: Starting retry loop",
+            max_retries=MAX_RETRIES,
+            total_attempts=MAX_RETRIES + 1,
+        )
 
         for attempt in range(MAX_RETRIES + 1):
             try:
+                logger.debug(
+                    "llm_client: Starting LLM call attempt",
+                    attempt=attempt + 1,
+                    max_attempts=MAX_RETRIES + 1,
+                    context_length=len(context_str),
+                )
                 logger.info(f"Generating training plan via LLM (attempt {attempt + 1}/{MAX_RETRIES + 1})")
                 # Use base context for deterministic retries - no accumulated errors
+                logger.debug(
+                    "llm_client: Calling agent.run",
+                    attempt=attempt + 1,
+                    prompt_prefix="Context:\n",
+                    context_length=len(context_str),
+                )
                 result = await agent.run(f"Context:\n{context_str}")
+                logger.debug(
+                    "llm_client: Agent.run completed",
+                    attempt=attempt + 1,
+                    has_output=bool(result.output) if result else False,
+                    has_usage=getattr(result, "usage", None) is not None if result else False,
+                )
 
                 plan = result.output
+                logger.debug(
+                    "llm_client: Extracted plan from result",
+                    attempt=attempt + 1,
+                    plan_type=plan.plan_type if plan else None,
+                    session_count=len(plan.sessions) if plan and plan.sessions else 0,
+                    has_rationale=bool(plan.rationale) if plan else False,
+                    assumptions_count=len(plan.assumptions) if plan and plan.assumptions else 0,
+                )
+
+                logger.debug(
+                    "llm_client: Starting plan validation",
+                    attempt=attempt + 1,
+                    plan_type=plan.plan_type if plan else None,
+                    session_count=len(plan.sessions) if plan and plan.sessions else 0,
+                )
 
                 # Validate plan sessions (extracted to reduce nesting)
-                if not self._validate_plan_sessions(plan, attempt):
+                logger.debug(
+                    "llm_client: Validating plan sessions",
+                    attempt=attempt + 1,
+                    session_count=len(plan.sessions) if plan and plan.sessions else 0,
+                )
+                validation_passed = self._validate_plan_sessions(plan, attempt)
+                if not validation_passed:
+                    logger.debug(
+                        "llm_client: Plan session validation failed, retrying",
+                        attempt=attempt + 1,
+                        max_retries=MAX_RETRIES,
+                        will_retry=attempt < MAX_RETRIES,
+                    )
                     continue
 
+                logger.debug(
+                    "llm_client: Plan session validation passed",
+                    attempt=attempt + 1,
+                    session_count=len(plan.sessions),
+                )
+
                 # Phase 7: Validate plan type requirements (keyed by plan_type for flexibility)
+                logger.debug(
+                    "llm_client: Validating plan type requirements",
+                    attempt=attempt + 1,
+                    plan_type=plan.plan_type,
+                    goal_context_keys=list(goal_context.keys()),
+                )
                 validation_error = self._validate_plan_type_requirements(plan, goal_context)
                 if validation_error:
+                    logger.debug(
+                        "llm_client: Plan type validation failed",
+                        attempt=attempt + 1,
+                        validation_error=validation_error,
+                        max_retries=MAX_RETRIES,
+                        will_retry=attempt < MAX_RETRIES,
+                    )
                     if attempt < MAX_RETRIES:
                         logger.warning(f"Training plan validation failed: {validation_error}. Retrying with same inputs...")
                         continue
                     self._raise_validation_error(validation_error)
                 else:
+                    logger.debug(
+                        "llm_client: Plan type validation passed",
+                        attempt=attempt + 1,
+                        plan_type=plan.plan_type,
+                    )
                     logger.info(
                         "Training plan generated successfully",
                         plan_type=plan.plan_type,
                         session_count=len(plan.sessions),
                     )
+                    logger.debug(
+                        "llm_client: Training plan generation complete",
+                        attempt=attempt + 1,
+                        plan_type=plan.plan_type,
+                        session_count=len(plan.sessions),
+                        first_session_date=plan.sessions[0].date.isoformat() if plan.sessions else None,
+                        last_session_date=plan.sessions[-1].date.isoformat() if plan.sessions else None,
+                        rationale_length=len(plan.rationale) if plan.rationale else 0,
+                        assumptions_count=len(plan.assumptions),
+                    )
                     return plan
 
             except ValidationError as e:
+                logger.debug(
+                    "llm_client: ValidationError caught",
+                    attempt=attempt + 1,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    error_count=len(e.errors()) if hasattr(e, "errors") else 0,
+                    max_retries=MAX_RETRIES,
+                    will_retry=attempt < MAX_RETRIES,
+                )
                 if attempt < MAX_RETRIES:
                     logger.warning(f"Training plan parsing failed: {e}. Retrying with same inputs...")
+                    logger.debug(
+                        "llm_client: Retrying after ValidationError",
+                        attempt=attempt + 1,
+                        next_attempt=attempt + 2,
+                        using_same_inputs=True,
+                    )
                     # Retry with identical inputs - deterministic behavior
                     continue
+                logger.debug(
+                    "llm_client: ValidationError - max retries reached",
+                    attempt=attempt + 1,
+                    total_attempts=MAX_RETRIES + 1,
+                )
                 raise ValueError(f"Training plan parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
             except Exception as e:
+                logger.debug(
+                    "llm_client: Exception caught during plan generation",
+                    attempt=attempt + 1,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    max_retries=MAX_RETRIES,
+                    will_retry=attempt < MAX_RETRIES,
+                )
                 logger.error(f"Error generating training plan: {type(e).__name__}: {e}", exc_info=True)
                 if attempt < MAX_RETRIES:
+                    logger.debug(
+                        "llm_client: Retrying after exception",
+                        attempt=attempt + 1,
+                        next_attempt=attempt + 2,
+                        using_same_inputs=True,
+                    )
                     # Retry with identical inputs - deterministic behavior
                     continue
+                logger.debug(
+                    "llm_client: Exception - max retries reached",
+                    attempt=attempt + 1,
+                    total_attempts=MAX_RETRIES + 1,
+                )
                 raise RuntimeError(f"Failed to generate training plan: {type(e).__name__}: {e}") from e
 
+        logger.debug(
+            "llm_client: All retries exhausted",
+            total_attempts=MAX_RETRIES + 1,
+        )
         raise RuntimeError("Failed to generate training plan after all retries")

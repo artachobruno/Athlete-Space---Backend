@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 from datetime import datetime, timezone
+from typing import Any
 
 import fitparse
 import gpxpy
@@ -82,7 +83,7 @@ def parse_activity_file(file_bytes: bytes, filename: str) -> ParsedActivity:
     raise ValueError(f"Unsupported file format. Expected .fit, .gpx, or .tcx, got: {filename}")
 
 
-def _extract_fit_start_time(record: fitparse.FitFile, current_start_time: datetime | None) -> datetime | None:
+def _extract_fit_start_time(record: Any, current_start_time: datetime | None) -> datetime | None:
     """Extract start time from FIT file_id record."""
     for field in record:
         if field.name == "time_created" and field.value:
@@ -93,7 +94,7 @@ def _extract_fit_start_time(record: fitparse.FitFile, current_start_time: dateti
     return current_start_time
 
 
-def _extract_fit_session_data(record: fitparse.FitFile) -> tuple[int | None, float | None, float | None, str | None]:
+def _extract_fit_session_data(record: Any) -> tuple[int | None, float | None, float | None, str | None]:
     """Extract session data from FIT session record."""
     total_timer_time: int | None = None
     total_distance: float | None = None
@@ -113,7 +114,7 @@ def _extract_fit_session_data(record: fitparse.FitFile) -> tuple[int | None, flo
     return total_timer_time, total_distance, total_ascent, sport
 
 
-def _extract_fit_activity_timestamp(record: fitparse.FitFile, current_start_time: datetime | None) -> datetime | None:
+def _extract_fit_activity_timestamp(record: Any, current_start_time: datetime | None) -> datetime | None:
     """Extract timestamp from FIT activity record."""
     if current_start_time:
         return current_start_time

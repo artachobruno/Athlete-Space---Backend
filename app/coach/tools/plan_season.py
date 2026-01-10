@@ -107,17 +107,36 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
     Returns:
         Response message with plan details or clarification questions
     """
+    logger.debug(
+        "plan_season: Starting plan_season tool",
+        message_length=len(message),
+        has_user_id=bool(user_id),
+        has_athlete_id=athlete_id is not None,
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
     logger.info(f"Tool plan_season called (message_length={len(message)})")
     message_lower = message.lower().strip() if message else ""
 
     # Create a simple hash of the message for duplicate detection
+    logger.debug(
+        "plan_season: Checking for duplicate calls",
+        message_preview=message_lower[:100] if message_lower else None,
+    )
     message_hash = str(hash(message_lower[:100]))  # Use first 100 chars
     now = datetime.now(timezone.utc)
 
     # Check if we've been called recently with similar input (within last 10 seconds)
     if message_hash in _recent_calls:
         last_time = _recent_calls[message_hash]
-        if (now - last_time).total_seconds() < 10:
+        time_diff = (now - last_time).total_seconds()
+        logger.debug(
+            "plan_season: Duplicate call check",
+            message_hash=message_hash,
+            time_diff_seconds=time_diff,
+            is_duplicate=time_diff < 10,
+        )
+        if time_diff < 10:
             logger.warning("Duplicate plan_season tool call detected within 10 seconds, blocking repeat call")
             return (
                 "I've already provided information about season planning. "
@@ -133,11 +152,26 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
     # Clean old entries (older than 30 seconds) to prevent memory growth
     cutoff = now - timedelta(seconds=30)
     keys_to_remove = [k for k, v in _recent_calls.items() if v <= cutoff]
+    logger.debug(
+        "plan_season: Cleaning old cache entries",
+        cache_size_before=len(_recent_calls),
+        keys_to_remove_count=len(keys_to_remove),
+    )
     for key in keys_to_remove:
         del _recent_calls[key]
 
     # Extract season dates
+    logger.debug(
+        "plan_season: Extracting season dates",
+        message_preview=message[:200] if message else None,
+    )
     season_start, season_end = parse_season_dates(message)
+    logger.debug(
+        "plan_season: Season dates extracted",
+        season_start=season_start.isoformat(),
+        season_end=season_end.isoformat(),
+        season_duration_days=(season_end - season_start).days,
+    )
 
     # Check if we need more info
     if not message or ("season" not in message_lower and "plan" not in message_lower):
@@ -153,8 +187,16 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
 
     # Generate plan via LLM if we have user_id and athlete_id
     if user_id and athlete_id:
+        logger.debug(
+            "plan_season: Starting LLM plan generation",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            season_start=season_start.isoformat(),
+            season_end=season_end.isoformat(),
+        )
         try:
             # Generate plan via LLM - single source of truth
+            logger.debug("plan_season: Creating LLM client")
             llm_client = CoachLLMClient()
             goal_context = {
                 "plan_type": "season",
@@ -168,17 +210,49 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
             athlete_context = {}  # TODO: Fill with actual athlete context
             calendar_constraints = {}  # TODO: Fill with actual calendar constraints
 
+            logger.debug(
+                "plan_season: Preparing context for LLM generation",
+                goal_context_keys=list(goal_context.keys()),
+                user_context_keys=list(user_context.keys()),
+                athlete_context_keys=list(athlete_context.keys()),
+                calendar_constraints_keys=list(calendar_constraints.keys()),
+            )
+            logger.debug(
+                "plan_season: Calling generate_training_plan_via_llm",
+                goal_context=goal_context,
+                user_context=user_context,
+            )
             training_plan = await llm_client.generate_training_plan_via_llm(
                 user_context=user_context,
                 athlete_context=athlete_context,
                 goal_context=goal_context,
                 calendar_constraints=calendar_constraints,
             )
+            logger.debug(
+                "plan_season: Training plan generated via LLM",
+                plan_type=training_plan.plan_type,
+                session_count=len(training_plan.sessions),
+                has_rationale=bool(training_plan.rationale),
+                assumptions_count=len(training_plan.assumptions),
+            )
 
             # Convert TrainingPlan to session dictionaries
             # Phase 6: Persist exactly what LLM returns - only minimal field name mapping for DB compatibility
+            logger.debug(
+                "plan_season: Converting TrainingPlan to session dictionaries",
+                total_sessions=len(training_plan.sessions),
+            )
             sessions = []
-            for session in training_plan.sessions:
+            for idx, session in enumerate(training_plan.sessions):
+                logger.debug(
+                    "plan_season: Converting session to dict",
+                    index=idx,
+                    session_date=session.date.isoformat(),
+                    session_sport=session.sport,
+                    session_title=session.title,
+                    session_intensity=session.intensity,
+                    session_week_number=session.week_number,
+                )
                 # Map sport field to type field (database schema expects "type" not "sport")
                 # Preserve all other fields exactly as LLM provides
                 session_dict: dict = {
@@ -193,8 +267,22 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
                     "week_number": session.week_number,  # Exactly as LLM
                 }
                 sessions.append(session_dict)
+            logger.debug(
+                "plan_season: Sessions converted",
+                total_sessions=len(sessions),
+                first_session_date=sessions[0]["date"].isoformat() if sessions else None,
+                last_session_date=sessions[-1]["date"].isoformat() if sessions else None,
+            )
 
             plan_id = f"season_{season_start.strftime('%Y%m%d')}_{season_end.strftime('%Y%m%d')}"
+            logger.debug(
+                "plan_season: Calling save_planned_sessions via MCP",
+                plan_id=plan_id,
+                session_count=len(sessions),
+                plan_type="season",
+                user_id=user_id,
+                athlete_id=athlete_id,
+            )
             saved_count = await save_planned_sessions(
                 user_id=user_id,
                 athlete_id=athlete_id,
@@ -202,8 +290,21 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
                 plan_type="season",
                 plan_id=plan_id,
             )
+            logger.debug(
+                "plan_season: save_planned_sessions completed",
+                plan_id=plan_id,
+                saved_count=saved_count,
+                expected_count=len(sessions),
+                user_id=user_id,
+                athlete_id=athlete_id,
+            )
 
             if saved_count == 0:
+                logger.debug(
+                    "plan_season: Save failed - no sessions saved",
+                    plan_id=plan_id,
+                    expected_count=len(sessions),
+                )
                 _raise_season_save_failed_error()
 
             logger.info(f"Successfully saved {saved_count} planned sessions for season plan")

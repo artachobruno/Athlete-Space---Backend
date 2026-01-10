@@ -5,7 +5,7 @@ Revision is handled by passing current_plan parameter.
 """
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from loguru import logger
 
@@ -47,6 +47,15 @@ async def plan_tool(
     Returns:
         Response message with plan details
     """
+    logger.debug(
+        "unified_plan: Starting plan_tool",
+        horizon=horizon,
+        is_revision=current_plan is not None,
+        has_user_feedback=bool(user_feedback),
+        has_activity_state=bool(activity_state),
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
     logger.info(
         "Unified plan tool called",
         horizon=horizon,
@@ -56,17 +65,29 @@ async def plan_tool(
     )
 
     # Validate inputs
+    logger.debug("unified_plan: Validating inputs", horizon=horizon)
     if horizon not in {"day", "week", "season"}:
+        logger.debug("unified_plan: Invalid horizon", horizon=horizon)
         return f"[CLARIFICATION] Invalid horizon: {horizon}. Must be 'day', 'week', or 'season'."
 
     if not user_id or not athlete_id:
+        logger.debug("unified_plan: Missing user_id or athlete_id", has_user_id=bool(user_id), has_athlete_id=athlete_id is not None)
         return "[CLARIFICATION] user_id and athlete_id are required"
 
     # Calculate date range based on horizon
+    logger.debug("unified_plan: Calculating date range", horizon=horizon, has_current_plan=bool(current_plan))
     today = datetime.now(timezone.utc).date()
     start_date, end_date = _calculate_date_range(horizon, today, current_plan)
+    logger.debug(
+        "unified_plan: Date range calculated",
+        horizon=horizon,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        duration_days=(end_date - start_date).days + 1,
+    )
 
     # Generate plan using LLM - single source of truth
+    logger.debug("unified_plan: Creating LLM client")
     llm_client = CoachLLMClient()
     goal_context = {
         "plan_type": "weekly" if horizon == "week" else ("season" if horizon == "season" else "weekly"),
@@ -81,14 +102,40 @@ async def plan_tool(
     athlete_context = activity_state or {}
     calendar_constraints = {}
 
+    logger.debug(
+        "unified_plan: Preparing context for LLM generation",
+        goal_context_keys=list(goal_context.keys()),
+        user_context_keys=list(user_context.keys()),
+        athlete_context_keys=list(athlete_context.keys()),
+        calendar_constraints_keys=list(calendar_constraints.keys()),
+    )
+    logger.debug(
+        "unified_plan: Calling generate_training_plan_via_llm",
+        horizon=horizon,
+        goal_context=goal_context,
+        user_context_keys=list(user_context.keys()),
+    )
     training_plan = await llm_client.generate_training_plan_via_llm(
         user_context=user_context,
         athlete_context=athlete_context,
         goal_context=goal_context,
         calendar_constraints=calendar_constraints,
     )
+    logger.debug(
+        "unified_plan: Training plan generated via LLM",
+        horizon=horizon,
+        plan_type=training_plan.plan_type,
+        session_count=len(training_plan.sessions),
+        has_rationale=bool(training_plan.rationale),
+        assumptions_count=len(training_plan.assumptions),
+    )
 
     # Convert TrainingPlan to CanonicalPlan (temporary bridge)
+    logger.debug(
+        "unified_plan: Converting TrainingPlan to CanonicalPlan",
+        horizon=horizon,
+        total_sessions=len(training_plan.sessions),
+    )
     sessions: list[PlanSession] = [
         PlanSession(
             date=session.date.date(),
@@ -99,6 +146,13 @@ async def plan_tool(
         )
         for session in training_plan.sessions
     ]
+    logger.debug(
+        "unified_plan: Sessions converted to CanonicalPlan format",
+        horizon=horizon,
+        session_count=len(sessions),
+        first_session_date=sessions[0].date.isoformat() if sessions else None,
+        last_session_date=sessions[-1].date.isoformat() if sessions else None,
+    )
 
     horizon_literal = cast(Literal["day", "week", "season"], horizon)
     plan = CanonicalPlan(
@@ -109,41 +163,128 @@ async def plan_tool(
         assumptions=training_plan.assumptions,
         constraints=[],
     )
+    logger.debug(
+        "unified_plan: CanonicalPlan created",
+        horizon=horizon,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        session_count=len(sessions),
+        assumptions_count=len(training_plan.assumptions),
+    )
 
     # Apply plan replacement rules
+    logger.debug(
+        "unified_plan: Applying plan replacement rules",
+        horizon=horizon,
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
     await _apply_replacement_rules(plan, user_id, athlete_id)
+    logger.debug("unified_plan: Plan replacement rules applied")
 
     # Save plan sessions - fail loudly if persistence fails
-    sessions = _plan_to_sessions(plan, user_id, athlete_id)
+    logger.debug(
+        "unified_plan: Converting plan to session dictionaries",
+        horizon=horizon,
+        session_count=len(plan.sessions),
+    )
+    sessions_dict: list[dict[str, Any]] = _plan_to_sessions(plan, user_id, athlete_id)
+    logger.debug(
+        "unified_plan: Sessions converted to dictionaries",
+        horizon=horizon,
+        sessions_dict_count=len(sessions_dict),
+        first_session_keys=list(sessions_dict[0].keys()) if sessions_dict else None,
+    )
     # Phase 7: Plan guarantees - ≥1 session exists
-    if not sessions:
+    if not sessions_dict:
+        logger.debug("unified_plan: No sessions to save - raising error", horizon=horizon)
         raise RuntimeError("The AI coach failed to generate a valid training plan. Please retry.")
 
     try:
         # Use MCP tool to save sessions
+        plan_type = _horizon_to_plan_type(horizon)
+        logger.debug(
+            "unified_plan: Calling MCP tool save_planned_sessions",
+            horizon=horizon,
+            plan_type=plan_type,
+            session_count=len(sessions_dict),
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
         result = await call_tool(
             "save_planned_sessions",
             {
                 "user_id": user_id,
                 "athlete_id": athlete_id,
-                "sessions": sessions,
-                "plan_type": _horizon_to_plan_type(horizon),
+                "sessions": sessions_dict,
+                "plan_type": plan_type,
                 "plan_id": None,
             },
         )
+        logger.debug(
+            "unified_plan: MCP tool save_planned_sessions completed",
+            horizon=horizon,
+            result_keys=list(result.keys()) if isinstance(result, dict) else None,
+            has_saved_count="saved_count" in result if isinstance(result, dict) else False,
+        )
         saved_count = result.get("saved_count", 0)
+        logger.debug(
+            "unified_plan: Extracted saved_count from result",
+            horizon=horizon,
+            saved_count=saved_count,
+            expected_count=len(sessions_dict),
+        )
         if saved_count == 0:
-            _raise_unified_plan_save_error(horizon, len(sessions))
+            logger.debug(
+                "unified_plan: Save failed - no sessions saved",
+                horizon=horizon,
+                expected_count=len(sessions_dict),
+            )
+            _raise_unified_plan_save_error(horizon, len(sessions_dict))
         logger.info(f"Saved {saved_count} sessions for {horizon} plan")
+        logger.debug(
+            "unified_plan: Plan saved successfully",
+            horizon=horizon,
+            saved_count=saved_count,
+            expected_count=len(sessions_dict),
+        )
     except MCPError as e:
+        logger.debug(
+            "unified_plan: MCPError caught during save",
+            horizon=horizon,
+            error_code=e.code,
+            error_message=e.message,
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
         logger.error(f"Failed to save plan sessions via MCP: {e.code}: {e.message}")
         raise RuntimeError(f"Failed to save plan: {e.message}") from e
     except Exception as e:
+        logger.debug(
+            "unified_plan: Exception caught during save",
+            horizon=horizon,
+            error_type=type(e).__name__,
+            error_message=str(e),
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
         logger.error(f"Failed to save plan sessions: {e}", exc_info=True)
         raise RuntimeError(f"Failed to save plan: {type(e).__name__}: {e!s}") from e
 
     # Generate response
-    return _generate_plan_response(plan, saved_count=saved_count)
+    logger.debug(
+        "unified_plan: Generating plan response",
+        horizon=horizon,
+        saved_count=saved_count,
+        session_count=len(plan.sessions),
+    )
+    response = _generate_plan_response(plan, saved_count=saved_count)
+    logger.debug(
+        "unified_plan: Plan response generated",
+        horizon=horizon,
+        response_length=len(response),
+    )
+    return response
 
 
 def _calculate_date_range(horizon: str, today: date, current_plan: CanonicalPlan | None) -> tuple[date, date]:
@@ -177,8 +318,8 @@ def _calculate_date_range(horizon: str, today: date, current_plan: CanonicalPlan
 
 def _plan_to_sessions(
     plan: CanonicalPlan,
-    user_id: str,  # noqa: ARG001
-    athlete_id: int,  # noqa: ARG001
+    user_id: str,
+    athlete_id: int,
 ) -> list[dict]:
     """Convert CanonicalPlan to session dictionaries for saving.
 
@@ -190,8 +331,22 @@ def _plan_to_sessions(
     Returns:
         List of session dictionaries
     """
+    logger.debug(
+        "unified_plan: _plan_to_sessions - converting plan to session dictionaries",
+        horizon=plan.horizon,
+        session_count=len(plan.sessions),
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
     sessions = []
-    for session in plan.sessions:
+    for idx, session in enumerate(plan.sessions):
+        logger.debug(
+            "unified_plan: _plan_to_sessions - converting session",
+            index=idx,
+            session_date=session.date.isoformat(),
+            session_type=session.type,
+            session_intensity=session.intensity,
+        )
         session_dict: dict = {
             "date": session.date.isoformat(),
             "type": session.type,
@@ -201,6 +356,12 @@ def _plan_to_sessions(
             "notes": session.notes,
         }
         sessions.append(session_dict)
+    logger.debug(
+        "unified_plan: _plan_to_sessions - conversion complete",
+        horizon=plan.horizon,
+        total_sessions=len(sessions),
+        first_session_keys=list(sessions[0].keys()) if sessions else None,
+    )
     return sessions
 
 
@@ -223,7 +384,7 @@ def _horizon_to_plan_type(horizon: str) -> str:
 async def _apply_replacement_rules(
     plan: CanonicalPlan,
     user_id: str,
-    athlete_id: int,  # noqa: ARG001
+    athlete_id: int,
 ) -> None:
     """Apply plan replacement rules.
 
@@ -238,10 +399,23 @@ async def _apply_replacement_rules(
         user_id: User ID
         athlete_id: Athlete ID
     """
+    logger.debug(
+        "unified_plan: _apply_replacement_rules - starting",
+        horizon=plan.horizon,
+        start_date=plan.start_date.isoformat(),
+        end_date=plan.end_date.isoformat(),
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
     # For now, we'll delete existing sessions in the date range
     # In production, this would be more sophisticated
     try:
         # Get existing sessions in date range
+        logger.debug(
+            "unified_plan: _apply_replacement_rules - checking existing sessions via MCP",
+            start_date=plan.start_date.isoformat(),
+            end_date=plan.end_date.isoformat(),
+        )
         result = await call_tool(
             "get_planned_sessions",
             {
@@ -251,6 +425,12 @@ async def _apply_replacement_rules(
             },
         )
         existing_sessions = result.get("sessions", [])
+        logger.debug(
+            "unified_plan: _apply_replacement_rules - existing sessions retrieved",
+            existing_count=len(existing_sessions),
+            start_date=plan.start_date.isoformat(),
+            end_date=plan.end_date.isoformat(),
+        )
 
         # Delete existing sessions (simplified - in production would use proper deletion)
         # For now, we'll just log - actual deletion would need a delete tool
@@ -258,7 +438,25 @@ async def _apply_replacement_rules(
             logger.info(
                 f"Found {len(existing_sessions)} existing sessions in date range ({plan.start_date} to {plan.end_date}) - will be replaced"
             )
+            logger.debug(
+                "unified_plan: _apply_replacement_rules - existing sessions will be replaced",
+                existing_count=len(existing_sessions),
+                new_session_count=len(plan.sessions),
+            )
+        else:
+            logger.debug(
+                "unified_plan: _apply_replacement_rules - no existing sessions to replace",
+                start_date=plan.start_date.isoformat(),
+                end_date=plan.end_date.isoformat(),
+            )
     except MCPError as e:
+        logger.debug(
+            "unified_plan: _apply_replacement_rules - MCP error checking existing sessions",
+            error_code=e.code,
+            error_message=e.message,
+            start_date=plan.start_date.isoformat(),
+            end_date=plan.end_date.isoformat(),
+        )
         logger.warning(f"Could not check existing sessions: {e.message}")
 
 

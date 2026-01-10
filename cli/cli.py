@@ -55,8 +55,8 @@ console = Console()
 
 # Initialize Typer app
 app = typer.Typer(
-    name="virtus-cli",
-    help="Virtus AI CLI - Offline/Local Orchestrator Testing",
+    name="AthleteSpace-cli",
+    help="AthleteSpace AI CLI - Offline/Local Orchestrator Testing",
     add_completion=False,
 )
 
@@ -410,7 +410,7 @@ async def _run_client_async(config: ClientConfig) -> None:
     if config.input_text is None:
         console.print(
             Panel(
-                Text("Virtus AI Orchestrator CLI - Interactive Mode", style="bold cyan"),
+                Text("AthleteSpace AI Orchestrator CLI - Interactive Mode", style="bold cyan"),
                 subtitle="Enter your message (press Enter with empty text, or type EXIT/QUIT to exit)",
                 border_style="cyan",
             )

@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 from typing import cast
 
 from loguru import logger
+from pydantic import ValidationError
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage
@@ -347,11 +348,25 @@ async def run_conversation(
         OrchestratorAgentResponse: Decision object with intent, horizon, action, etc.
     """
     logger.info("Starting orchestrator decision", user_input_preview=user_input[:100])
+    logger.debug(
+        "Orchestrator: Starting decision process",
+        user_id=deps.user_id,
+        athlete_id=deps.athlete_id,
+        conversation_id=conversation_id,
+        user_input_length=len(user_input),
+        user_input=user_input,
+    )
 
     # Load orchestrator instructions via MCP (if not already loaded)
     global ORCHESTRATOR_INSTRUCTIONS, ORCHESTRATOR_AGENT
     if not ORCHESTRATOR_INSTRUCTIONS:
+        logger.debug("Orchestrator: Loading instructions via MCP")
         ORCHESTRATOR_INSTRUCTIONS = await _load_orchestrator_prompt()
+        logger.debug(
+            "Orchestrator: Instructions loaded",
+            instructions_length=len(ORCHESTRATOR_INSTRUCTIONS),
+        )
+        logger.debug("Orchestrator: Creating agent instance")
         ORCHESTRATOR_AGENT = Agent(
             instructions=ORCHESTRATOR_INSTRUCTIONS,
             model=ORCHESTRATOR_AGENT_MODEL,
@@ -361,12 +376,35 @@ async def run_conversation(
             name="Virtus Coach Orchestrator",
             instrument=True,
         )
+        logger.debug("Orchestrator: Agent instance created")
+    else:
+        logger.debug(
+            "Orchestrator: Instructions already loaded",
+            instructions_length=len(ORCHESTRATOR_INSTRUCTIONS),
+        )
 
     # Load conversation history via MCP
+    logger.debug(
+        "Orchestrator: Loading conversation history via MCP",
+        athlete_id=deps.athlete_id,
+        limit=20,
+    )
     try:
         result = await call_tool("load_context", {"athlete_id": deps.athlete_id, "limit": 20})
         message_history = result["messages"]
+        logger.debug(
+            "Orchestrator: Conversation history loaded",
+            athlete_id=deps.athlete_id,
+            message_count=len(message_history) if message_history else 0,
+            has_history=bool(message_history),
+        )
     except MCPError as e:
+        logger.debug(
+            "Orchestrator: Failed to load context via MCP",
+            athlete_id=deps.athlete_id,
+            error_code=e.code,
+            error_message=e.message,
+        )
         logger.error(f"Failed to load context: {e.code}: {e.message}")
         message_history = []
 
@@ -416,6 +454,10 @@ async def run_conversation(
     user_id = deps.user_id or f"athlete_{deps.athlete_id}"
 
     # Convert message_history to LLMMessage format
+    logger.debug(
+        "Orchestrator: Converting message history to LLMMessage format",
+        original_count=len(message_history) if message_history else 0,
+    )
     llm_history: list[LLMMessage] = []
     if message_history:
         for msg in message_history:
@@ -423,17 +465,43 @@ async def run_conversation(
             content = msg.get("content", "")
             if role in {"user", "assistant", "system"} and content:
                 llm_history.append({"role": role, "content": content})
+    logger.debug(
+        "Orchestrator: Message history converted",
+        llm_history_count=len(llm_history),
+        roles=[msg["role"] for msg in llm_history],
+    )
 
     # Build full prompt: system + history + user
+    logger.debug("Orchestrator: Building full prompt")
     system_message: LLMMessage = {"role": "system", "content": ORCHESTRATOR_INSTRUCTIONS}
     user_message: LLMMessage = {"role": "user", "content": user_input}
     full_prompt: list[LLMMessage] = [system_message, *llm_history, user_message]
+    logger.debug(
+        "Orchestrator: Full prompt built",
+        total_messages=len(full_prompt),
+        system_length=len(ORCHESTRATOR_INSTRUCTIONS),
+        history_length=len(llm_history),
+        user_length=len(user_input),
+    )
 
     # Apply token guard (truncates history, preserves system and user)
+    logger.debug(
+        "Orchestrator: Applying token guard",
+        conversation_id=conversation_id_for_tokens,
+        user_id=user_id,
+        prompt_length=len(full_prompt),
+    )
     truncated_prompt, truncation_meta = enforce_token_limit(
         full_prompt,
         conversation_id=conversation_id_for_tokens,
         user_id=user_id,
+    )
+    logger.debug(
+        "Orchestrator: Token guard applied",
+        truncated=truncation_meta["truncated"],
+        removed_count=truncation_meta.get("removed_count", 0),
+        original_tokens=truncation_meta.get("original_tokens", 0),
+        final_tokens=truncation_meta.get("final_tokens", 0),
     )
 
     # Extract truncated history (middle messages, excluding system and user)
@@ -465,19 +533,74 @@ async def run_conversation(
     typed_message_history: list[ModelMessage] | None = None
     if truncated_history:
         typed_message_history = cast(list[ModelMessage], truncated_history)
+        logger.debug(
+            "Orchestrator: Converted truncated history to ModelMessage format",
+            history_count=len(typed_message_history),
+        )
+    else:
+        logger.debug("Orchestrator: No truncated history to convert")
 
+    logger.debug(
+        "Orchestrator: Calling LLM agent",
+        model=model_name,
+        has_history=bool(typed_message_history),
+        history_length=len(typed_message_history) if typed_message_history else 0,
+        user_input_length=len(user_input),
+    )
     try:
         result = await ORCHESTRATOR_AGENT.run(
             user_prompt=user_input,
             deps=deps,
             message_history=typed_message_history,
         )
+        logger.debug(
+            "Orchestrator: LLM agent completed",
+            has_output=bool(result.output),
+            has_message=bool(result.output and result.output.message) if result.output else False,
+        )
 
         # Verify response is valid and complete
         if not result.output or not result.output.message:
+            # Log detailed information about the result to diagnose the issue
+            result_type = type(result).__name__
+            output_type = type(result.output).__name__ if result.output else "None"
+            result_attrs = [attr for attr in dir(result) if not attr.startswith("_")]
+            output_value = str(result.output) if result.output else None
+            message_value: str | None = None
+            message_is_empty_string = False
+            if result.output:
+                if hasattr(result.output, "message"):
+                    message_value = result.output.message
+                    message_is_empty_string = not message_value
+                else:
+                    message_value = "<message attribute not found>"
+            else:
+                message_value = None
+
+            # Check for any error information in the result
+            has_error = hasattr(result, "error")
+            error_value = result.error if has_error else None
+            has_warnings = hasattr(result, "warnings")
+            warnings_value = result.warnings if has_warnings else None
+
             logger.error(
                 "Orchestrator agent returned invalid or empty response",
                 athlete_id=deps.athlete_id,
+                result_type=result_type,
+                output_type=output_type,
+                output_is_none=result.output is None,
+                message_is_none=message_value is None,
+                message_is_empty_string=message_is_empty_string,
+                message_is_none_or_empty=message_value is None or message_is_empty_string,
+                message_value=message_value[:200] if message_value else None,
+                message_length=len(message_value) if message_value else 0,
+                output_repr=output_value[:500] if output_value else None,
+                result_attributes=result_attrs,
+                has_error=has_error,
+                error_value=str(error_value)[:500] if error_value else None,
+                has_warnings=has_warnings,
+                warnings_value=str(warnings_value)[:500] if warnings_value else None,
+                user_input_preview=user_input[:100],
             )
             return OrchestratorAgentResponse(
                 intent="general",
@@ -507,10 +630,24 @@ async def run_conversation(
         # Compute slot state deterministically with persistence
         # Use provided conversation_id or fall back to athlete-based ID
         conversation_id_for_slots = conversation_id or f"orchestrator_{deps.athlete_id}"
+        logger.debug(
+            "Orchestrator: Computing slot state",
+            conversation_id=conversation_id_for_slots,
+            decision_intent=result.output.intent if result.output else None,
+            decision_horizon=result.output.horizon if result.output else None,
+            decision_action=result.output.action if result.output else None,
+        )
         next_executable_action, computed_missing_slots, merged_slots = await _compute_missing_slots_for_decision(
             decision=result.output,
             user_message=user_input,
             conversation_id=conversation_id_for_slots,
+        )
+        logger.debug(
+            "Orchestrator: Slot state computed",
+            next_executable_action=next_executable_action,
+            computed_missing_slots=computed_missing_slots,
+            merged_slots_keys=list(merged_slots.keys()) if merged_slots else [],
+            merged_slots_count=len(merged_slots) if merged_slots else 0,
         )
 
         # Set control data fields (use target_action if provided, fall back to computed)
@@ -533,12 +670,27 @@ async def run_conversation(
         _validate_slots_disjoint(filled_keys, missing_set)
 
         # Determine should_execute: true if slots complete (missing_slots empty) AND target_action exists
+        logger.debug(
+            "Orchestrator: Determining should_execute",
+            has_target_action=bool(result.output.target_action),
+            missing_slots_count=len(result.output.missing_slots),
+            missing_slots=result.output.missing_slots,
+        )
         if result.output.target_action and not result.output.missing_slots:
             result.output.should_execute = True
+            logger.debug(
+                "Orchestrator: Setting should_execute=True (slots complete)",
+                target_action=result.output.target_action,
+                missing_slots=result.output.missing_slots,
+            )
             # Assertion: should_execute requires no missing slots
             _validate_should_execute_condition(result.output.missing_slots)
             # If should_execute and action is NO_ACTION, override to EXECUTE
             if result.output.action == "NO_ACTION":
+                logger.debug(
+                    "Orchestrator: Overriding action from NO_ACTION to EXECUTE",
+                    target_action=result.output.target_action,
+                )
                 logger.info(
                     "Slots complete - overriding to EXECUTE immediately",
                     athlete_id=deps.athlete_id,
@@ -549,6 +701,11 @@ async def run_conversation(
                 result.output.action = "EXECUTE"
         else:
             result.output.should_execute = False
+            logger.debug(
+                "Orchestrator: Setting should_execute=False",
+                has_target_action=bool(result.output.target_action),
+                missing_slots=result.output.missing_slots,
+            )
 
         # Slot state already persisted in _compute_missing_slots_for_decision with correct awaiting_slots
         # No need to persist again here
@@ -617,6 +774,30 @@ async def run_conversation(
             usage_info=usage_info,
         )
 
+    except ValidationError as e:
+        logger.error(
+            "Orchestrator agent validation error - LLM response could not be parsed",
+            athlete_id=deps.athlete_id,
+            error_type=type(e).__name__,
+            error=str(e),
+            validation_errors=str(e.errors()) if hasattr(e, "errors") else None,
+            user_input_preview=user_input[:100],
+            exc_info=True,
+        )
+        return OrchestratorAgentResponse(
+            intent="general",
+            horizon=None,
+            action="NO_ACTION",
+            confidence=0.0,
+            message=(
+                "I processed your request, but I'm having trouble formulating a response. Could you try rephrasing your question?"
+            ),
+            response_type="question",
+            show_plan=False,
+            plan_items=None,
+            structured_data={},
+            follow_up=None,
+        )
     except UsageLimitExceeded as e:
         logger.error(
             "Orchestrator agent exceeded usage limit",

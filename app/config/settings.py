@@ -105,10 +105,16 @@ class Settings(BaseSettings):
     @field_validator("strava_client_id", "strava_client_secret")
     @classmethod
     def validate_required(cls, value: str) -> str:
+        """Validate Strava credentials are provided.
+
+        For local development/testing, empty values are allowed with a warning.
+        Strava OAuth and API features will not work without these credentials.
+        """
         if not value:
-            raise ValueError(
-                "STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET environment variables are required. "
-                "Set them in .env file or environment variables."
+            logger.warning(
+                "⚠️ STRAVA_CLIENT_ID and/or STRAVA_CLIENT_SECRET are not set. "
+                "Strava OAuth and API features will not work. "
+                "Set them in .env file or environment variables to enable Strava integration."
             )
         return value
 

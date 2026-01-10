@@ -3,9 +3,162 @@
 from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
+from sqlalchemy import select
 
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.intent_schemas import SeasonPlan, WeeklyIntent
+from app.db.models import PlannedSession
+from app.db.session import get_session
+
+
+def _parse_session_date(session_date_raw: date | datetime | str | None) -> datetime | None:
+    """Parse session date from various formats.
+
+    Args:
+        session_date_raw: Date in string, date, or datetime format, or None
+
+    Returns:
+        Parsed datetime with timezone, or None if parsing fails or input is None
+    """
+    if session_date_raw is None:
+        return None
+
+    if isinstance(session_date_raw, str):
+        try:
+            if "T" in session_date_raw:
+                parsed_date = datetime.fromisoformat(session_date_raw.replace("Z", "+00:00"))
+            else:
+                parsed_date = datetime.strptime(session_date_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Failed to parse date '{session_date_raw}': {e}")
+            return None
+        else:
+            return parsed_date
+
+    if isinstance(session_date_raw, date) and not isinstance(session_date_raw, datetime):
+        return datetime.combine(session_date_raw, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    if isinstance(session_date_raw, datetime):
+        parsed_date = session_date_raw
+        if parsed_date.tzinfo is None:
+            parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+        return parsed_date
+
+    logger.warning(f"Invalid date type for session: {type(session_date_raw)}")
+    return None
+
+
+def save_sessions_to_database(
+    user_id: str,
+    athlete_id: int,
+    sessions: list[dict],
+    plan_type: str,
+    plan_id: str | None = None,
+) -> int:
+    """Save planned training sessions directly to the database.
+
+    This is the actual implementation that saves to the database.
+    Used by MCP tools and other internal functions.
+
+    Args:
+        user_id: User ID (Clerk)
+        athlete_id: Athlete ID (Strava)
+        sessions: List of session dictionaries with keys:
+            - date: datetime, date, or ISO string (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+            - time: Optional time string (HH:MM)
+            - type: Activity type (Run, Bike, etc.)
+            - title: Session title
+            - duration_minutes: Optional duration
+            - distance_km: Optional distance
+            - intensity: Optional intensity (easy, moderate, hard, race)
+            - notes: Optional notes
+            - week_number: Optional week number in plan
+        plan_type: Type of plan ("race", "season", "weekly", "single")
+        plan_id: Optional plan identifier
+
+    Returns:
+        Number of sessions actually saved (excluding duplicates)
+    """
+    if not sessions:
+        logger.warning("No sessions to save")
+        return 0
+
+    saved_count = 0
+    with get_session() as session:
+        try:
+            for session_data in sessions:
+                session_date_raw = session_data.get("date")
+                parsed_date = _parse_session_date(session_date_raw)
+                if parsed_date is None:
+                    continue
+
+                # Check if session already exists (same user, athlete, date, and title)
+                existing = session.scalar(
+                    select(PlannedSession).where(
+                        PlannedSession.user_id == user_id,
+                        PlannedSession.athlete_id == athlete_id,
+                        PlannedSession.date == parsed_date,
+                        PlannedSession.title == session_data.get("title"),
+                    )
+                )
+
+                if existing:
+                    logger.debug(
+                        "Skipping duplicate planned session",
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                        date=parsed_date.isoformat(),
+                        title=session_data.get("title"),
+                    )
+                    continue
+
+                # Create new PlannedSession
+                planned_session = PlannedSession(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    date=parsed_date,
+                    time=session_data.get("time"),
+                    type=session_data.get("type"),
+                    title=session_data.get("title"),
+                    duration_minutes=session_data.get("duration_minutes"),
+                    distance_km=session_data.get("distance_km"),
+                    intensity=session_data.get("intensity"),
+                    notes=session_data.get("notes"),
+                    plan_type=plan_type,
+                    plan_id=plan_id,
+                    week_number=session_data.get("week_number"),
+                    status="planned",
+                    completed=False,
+                )
+
+                session.add(planned_session)
+                saved_count += 1
+
+            session.commit()
+
+            logger.info(
+                "Saved planned sessions to database",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                saved_count=saved_count,
+                total_sessions=len(sessions),
+                plan_type=plan_type,
+                plan_id=plan_id,
+            )
+
+        except Exception as e:
+            session.rollback()
+            logger.error(
+                "Failed to save planned sessions to database",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                exc_info=True,
+            )
+            raise
+
+    return saved_count
 
 
 async def save_planned_sessions(
@@ -15,7 +168,10 @@ async def save_planned_sessions(
     plan_type: str,
     plan_id: str | None = None,
 ) -> int:
-    """Save planned training sessions to the database.
+    """Save planned training sessions to the database via MCP.
+
+    This function calls the MCP tool for saving sessions.
+    For direct database access, use save_sessions_to_database instead.
 
     Args:
         user_id: User ID (Clerk)
@@ -50,6 +206,8 @@ async def save_planned_sessions(
             mcp_session["date"] = session_date.isoformat()
         sessions_for_mcp.append(mcp_session)
 
+    saved_count = 0
+    saved_count = 0
     try:
         result = await call_tool(
             "save_planned_sessions",
@@ -62,21 +220,32 @@ async def save_planned_sessions(
             },
         )
         saved_count = result.get("saved_count", 0)
-        logger.info(f"Saved {saved_count} planned sessions via MCP for user_id={user_id}, plan_type={plan_type}")
+        logger.info(
+            "Saved planned sessions via MCP",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            saved_count=saved_count,
+            plan_type=plan_type,
+        )
     except MCPError as e:
         logger.warning(
-            f"Failed to persist planned sessions via MCP — continuing without saving. Error: {e.code}: {e.message}",
+            "Failed to persist planned sessions via MCP — continuing without saving",
+            error_code=e.code,
+            error_message=e.message,
+            user_id=user_id,
+            athlete_id=athlete_id,
             exc_info=True,
         )
-        # Return 0 to indicate no sessions were saved, but don't fail the planning operation
-        saved_count = 0
     except Exception as e:
         logger.warning(
-            f"Unexpected error persisting planned sessions — continuing without saving. Error: {type(e).__name__}: {e!s}",
+            "Unexpected error persisting planned sessions — continuing without saving",
+            error_type=type(e).__name__,
+            error_message=str(e),
+            user_id=user_id,
+            athlete_id=athlete_id,
             exc_info=True,
         )
-        # Return 0 to indicate no sessions were saved, but don't fail the planning operation
-        saved_count = 0
+
     return saved_count
 
 

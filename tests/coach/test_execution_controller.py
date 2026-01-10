@@ -10,6 +10,7 @@ import pytest
 
 from app.coach.clarification import generate_slot_clarification
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
+from app.core.tool_names import PLAN_RACE_BUILD, PLAN_WEEK
 
 
 class TestExecutionControllerBehavior:
@@ -18,7 +19,7 @@ class TestExecutionControllerBehavior:
     def test_single_question_rule(self):
         """Test 7.2: Must fail if multiple questions are asked."""
         # Single question - should pass
-        q1 = generate_slot_clarification("plan_race_build", ["race_date"])
+        q1 = generate_slot_clarification(PLAN_RACE_BUILD, ["race_date"])
         assert q1.count("?") == 1, "Must be exactly one question"
         assert len(q1.split("\n\n")) == 1, "Must be no paragraphs"
 
@@ -55,13 +56,13 @@ class TestExecutionControllerBehavior:
 
         # Chatty response - should fail validation
         chatty = "Let's start by thinking about your goals. What's your race date?"
-        is_valid, error = validate_no_chatty_response(chatty, "plan_race_build", ["race_date"])
+        is_valid, error = validate_no_chatty_response(chatty, PLAN_RACE_BUILD, ["race_date"])
         assert not is_valid, "Chatty response should fail validation"
         assert error is not None, "Should have error message"
 
         # Slot-oriented response - should pass
         slot_oriented = "What is the date of your marathon?"
-        is_valid, error = validate_no_chatty_response(slot_oriented, "plan_race_build", ["race_date"])
+        is_valid, error = validate_no_chatty_response(slot_oriented, PLAN_RACE_BUILD, ["race_date"])
         assert is_valid, "Slot-oriented response should pass validation"
 
     def test_vague_goal_triggers_slot_collection(self):
@@ -73,7 +74,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="What is the date of your marathon?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             required_slots=["race_date", "race_distance"],
             filled_slots={"race_distance": "Marathon"},
             missing_slots=["race_date"],
@@ -81,7 +82,7 @@ class TestExecutionControllerBehavior:
             should_execute=False,
         )
 
-        assert decision.target_action == "plan_race_build"
+        assert decision.target_action == PLAN_RACE_BUILD
         assert "race_date" in decision.missing_slots
         assert decision.next_question is not None
         assert decision.should_execute is False
@@ -95,7 +96,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="Building your plan...",
             response_type="plan",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             required_slots=["race_date", "race_distance"],
             filled_slots={"race_date": date(2026, 4, 25), "race_distance": "Marathon"},
             missing_slots=[],
@@ -116,7 +117,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="Do you know the exact race date in April?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             required_slots=["race_date", "race_distance"],
             filled_slots={"race_distance": "Marathon", "race_date_month": "April"},
             missing_slots=["race_date_exact"],
@@ -136,7 +137,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="Is this a marathon, half marathon, or another distance?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             required_slots=["race_date", "race_distance"],
             filled_slots={"race_date": date(2026, 4, 25)},
             missing_slots=["race_distance"],
@@ -156,7 +157,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="Building your plan...",
             response_type="plan",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             required_slots=["race_date", "race_distance"],
             filled_slots={"race_date": date(2026, 4, 25), "race_distance": "Marathon"},
             missing_slots=[],
@@ -177,7 +178,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="I can plan your week once your marathon plan is created. What is your marathon date?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             required_slots=["race_date"],
             filled_slots={},
             missing_slots=["race_date"],
@@ -186,7 +187,7 @@ class TestExecutionControllerBehavior:
         )
 
         # Should target race plan, not weekly plan
-        assert decision.target_action == "plan_race_build"
+        assert decision.target_action == PLAN_RACE_BUILD
         assert decision.should_execute is False
         # Should not contain advice
         advice_keywords = ["focus on", "you should", "tips"]
@@ -202,7 +203,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="Creating your weekly plan...",
             response_type="weekly_plan",
-            target_action="plan_week",
+            target_action=PLAN_WEEK,
             required_slots=[],
             filled_slots={},
             missing_slots=[],
@@ -210,7 +211,7 @@ class TestExecutionControllerBehavior:
             should_execute=True,
         )
 
-        assert decision.target_action == "plan_week"
+        assert decision.target_action == PLAN_WEEK
         assert decision.missing_slots == []
         assert decision.should_execute is True
         assert decision.action == "EXECUTE"
@@ -224,7 +225,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="Let me know when you're ready and I can build the plan.",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             required_slots=["confirmation"],
             filled_slots={"race_date": date(2026, 4, 25), "race_distance": "Marathon"},
             missing_slots=["confirmation"],
@@ -266,7 +267,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="You should build mileage gradually. What's your race date?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             required_slots=["race_date", "race_distance"],
             filled_slots={"race_distance": "Marathon"},
             missing_slots=["race_date"],
@@ -289,7 +290,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="What is the date of your marathon?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             missing_slots=["race_date"],
             should_execute=False,
         )
@@ -304,7 +305,7 @@ class TestExecutionControllerBehavior:
             confidence=0.9,
             message="Building your plan...",
             response_type="plan",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             missing_slots=[],
             should_execute=True,
         )
@@ -339,7 +340,7 @@ class TestSlotStateAccumulation:
             confidence=0.9,
             message="What is the date of your marathon?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             filled_slots={"race_distance": "Marathon"},
             missing_slots=["race_date"],
             should_execute=False,
@@ -355,7 +356,7 @@ class TestSlotStateAccumulation:
             confidence=0.9,
             message="Building your plan...",
             response_type="plan",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             filled_slots={"race_distance": "Marathon", "race_date": date(2026, 4, 25)},
             missing_slots=[],
             should_execute=True,
@@ -375,7 +376,7 @@ class TestSlotStateAccumulation:
             confidence=0.9,
             message="Building your plan...",
             response_type="plan",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             filled_slots={"race_distance": "Marathon", "race_date": date(2026, 4, 25)},
             missing_slots=[],
             should_execute=True,
@@ -394,7 +395,7 @@ class TestSlotStateAccumulation:
             confidence=0.9,
             message="What is the date of your marathon?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             filled_slots={"race_distance": "Marathon"},
             missing_slots=["race_date"],
             should_execute=False,
@@ -414,12 +415,12 @@ class TestSlotStateAccumulation:
             confidence=0.9,
             message="What is the date of your race?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             filled_slots={},
             missing_slots=["race_date", "race_distance"],
             should_execute=False,
         )
-        assert decision.target_action == "plan_race_build"
+        assert decision.target_action == PLAN_RACE_BUILD
         assert len(decision.missing_slots) > 0
         assert decision.should_execute is False
 
@@ -432,7 +433,7 @@ class TestSlotStateAccumulation:
             confidence=0.9,
             message="Building your plan...",
             response_type="plan",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             filled_slots={"race_distance": "Marathon", "race_date": date(2026, 4, 25)},
             missing_slots=[],
             should_execute=True,
@@ -452,7 +453,7 @@ class TestSlotStateAccumulation:
             confidence=0.9,
             message="What is the date of your marathon?",
             response_type="question",
-            target_action="plan_race_build",
+            target_action=PLAN_RACE_BUILD,
             filled_slots=conversation_slot_state.copy(),
             missing_slots=["race_date"],
             should_execute=False,
@@ -476,6 +477,6 @@ class TestSlotStateAccumulation:
             missing_slots=[],
             should_execute=True,
         )
-        assert decision.target_action == "plan_week"
+        assert decision.target_action == PLAN_WEEK
         assert decision.should_execute
         assert decision.action == "EXECUTE"

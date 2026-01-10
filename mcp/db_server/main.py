@@ -142,7 +142,17 @@ app = FastAPI(title="MCP DB Server", version="1.0.0")
 
 # Configure logger
 logger.remove()
-logger.add(sys.stderr, level="INFO")
+logger.add(
+    sys.stderr,
+    format=(
+        "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+        "<level>{level: <8}</level> | "
+        "<cyan>{file.name}</cyan>:<cyan>{line}</cyan> - "
+        "<level>{message}</level>"
+    ),
+    level="INFO",
+    colorize=True,
+)
 
 
 def create_error_response(error_code: str, error_message: str) -> JSONResponse:

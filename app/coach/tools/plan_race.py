@@ -390,7 +390,7 @@ async def create_and_save_plan(
     target_time: str | None,
     user_id: str,
     athlete_id: int,
-) -> str:
+) -> tuple[str, int]:
     """Create and save race training plan.
 
     Args:
@@ -401,19 +401,59 @@ async def create_and_save_plan(
         athlete_id: Athlete ID
 
     Returns:
-        Success message or error message
+        Tuple of (success message, saved_count)
     """
     try:
-        logger.info(f"Generating race build sessions for {distance} on {race_date}")
+        logger.info(
+            "Starting race plan generation",
+            distance=distance,
+            race_date=race_date.isoformat(),
+            target_time=target_time,
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
         sessions = generate_race_build_sessions(
             race_date=race_date,
             race_distance=distance,
             target_time=target_time,
         )
-        logger.info(f"Generated {len(sessions)} sessions for race plan")
+
+        weeks = len({s.get("week_number", 0) for s in sessions})
+        start_date_dt = race_date - timedelta(weeks=weeks)
+        start_date = start_date_dt.strftime("%B %d, %Y")
+        race_date_str = race_date.strftime("%B %d, %Y")
+
+        # Calculate session statistics
+        session_types: dict[str, int] = {}
+        sessions_by_week: dict[int, int] = {}
+        for session in sessions:
+            session_type = session.get("type", "Unknown")
+            session_types[session_type] = session_types.get(session_type, 0) + 1
+            week_num = session.get("week_number", 0)
+            sessions_by_week[week_num] = sessions_by_week.get(week_num, 0) + 1
 
         plan_id = f"race_{distance}_{race_date.strftime('%Y%m%d')}"
-        logger.info(f"Saving {len(sessions)} planned sessions with plan_id={plan_id}")
+
+        logger.info(
+            "Race plan generated successfully",
+            plan_id=plan_id,
+            total_sessions=len(sessions),
+            total_weeks=weeks,
+            start_date=start_date_dt.isoformat(),
+            race_date=race_date.isoformat(),
+            session_types=session_types,
+            sessions_per_week=sessions_by_week,
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
+
+        logger.info(
+            "Attempting to save planned sessions",
+            plan_id=plan_id,
+            session_count=len(sessions),
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
         saved_count = await save_planned_sessions(
             user_id=user_id,
             athlete_id=athlete_id,
@@ -423,13 +463,27 @@ async def create_and_save_plan(
         )
 
         if saved_count > 0:
-            logger.info(f"Successfully saved {saved_count} planned sessions")
+            logger.info(
+                "Race plan saved successfully",
+                plan_id=plan_id,
+                saved_count=saved_count,
+                total_sessions=len(sessions),
+                user_id=user_id,
+                athlete_id=athlete_id,
+            )
         else:
-            logger.warning("Race plan generated successfully but sessions could not be persisted (service may be temporarily unavailable)")
+            logger.warning(
+                "Race plan generated but not saved to database",
+                plan_id=plan_id,
+                total_sessions=len(sessions),
+                total_weeks=weeks,
+                start_date=start_date_dt.isoformat(),
+                race_date=race_date.isoformat(),
+                user_id=user_id,
+                athlete_id=athlete_id,
+                reason="MCP service returned 0 saved sessions (service may be temporarily unavailable)",
+            )
 
-        weeks = len({s.get("week_number", 0) for s in sessions})
-        start_date = (race_date - timedelta(weeks=weeks)).strftime("%B %d, %Y")
-        race_date_str = race_date.strftime("%B %d, %Y")
         target_time_str = f"\nTarget time: {target_time}" if target_time else ""
 
         if saved_count > 0:
@@ -440,14 +494,25 @@ async def create_and_save_plan(
             calendar_note = "The plan is ready, but you may need to retry saving to calendar later."
 
     except Exception as e:
-        logger.error(f"Error generating race plan: {e}", exc_info=True)
+        logger.error(
+            "Failed to generate race plan",
+            error_type=type(e).__name__,
+            error_message=str(e),
+            distance=distance,
+            race_date=race_date.isoformat(),
+            target_time=target_time,
+            user_id=user_id,
+            athlete_id=athlete_id,
+            exc_info=True,
+        )
         race_date_str = race_date.strftime("%B %d, %Y")
-        return (
+        error_message = (
             f"I've prepared a training plan for your **{distance}** race on **{race_date_str}**, "
             f"but encountered an error generating it. Please try again or contact support."
         )
+        return (error_message, 0)
     else:
-        return (
+        success_message = (
             f"✅ **Race Training Plan Created!**\n\n"
             f"I've generated a {weeks}-week training plan for your **{distance}** "
             f"race on **{race_date_str}**.\n\n"
@@ -463,6 +528,7 @@ async def create_and_save_plan(
             f"{calendar_note}{target_time_str}\n\n"
             f"**The plan is complete and ready to use. No further action needed.**"
         )
+        return (success_message, saved_count)
 
 
 def _build_preview_plan(distance: str, race_date: datetime) -> str:
@@ -885,7 +951,8 @@ async def plan_race_build(
             distance=distance,
             date=race_date,
         )
-        return await create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
+        message, _saved_count = await create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
+        return message
 
     # Return plan details without saving
     logger.warning(

@@ -95,7 +95,12 @@ def _setup_logging(debug: bool = False) -> None:
     # Console handler with color
     logger.add(
         sys.stderr,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{file.name}</cyan>:<cyan>{line}</cyan> - "
+            "<level>{message}</level>"
+        ),
         level=log_level,
         colorize=True,
     )
@@ -109,7 +114,7 @@ def _setup_logging(debug: bool = False) -> None:
 
     logger.add(
         log_file,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {file.name}:{line} - {message}",
         level=log_level,
         rotation="10 MB",
         retention="7 days",

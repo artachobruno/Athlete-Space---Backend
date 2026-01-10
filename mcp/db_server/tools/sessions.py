@@ -1,6 +1,7 @@
 """Planned session tools for MCP DB server."""
 
 import asyncio
+import re
 import sys
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -32,9 +33,7 @@ from app.coach.tools.plan_season import (
 from app.coach.tools.session_planner import (
     generate_race_build_sessions,
     generate_season_sessions,
-)
-from app.coach.tools.session_planner import (
-    save_planned_sessions as save_sessions_impl,
+    save_sessions_to_database,
 )
 from app.db.models import PlannedSession
 from app.db.session import get_session
@@ -103,14 +102,12 @@ def save_planned_sessions_tool(arguments: dict) -> dict:
             raise MCPError("INVALID_SESSION_DATA", "Each session must have date, type, and title")
 
     try:
-        saved_count = asyncio.run(
-            save_sessions_impl(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                sessions=sessions,
-                plan_type=plan_type,
-                plan_id=plan_id,
-            )
+        saved_count = save_sessions_to_database(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            sessions=sessions,
+            plan_type=plan_type,
+            plan_id=plan_id,
         )
 
         logger.info(f"Saved {saved_count} planned sessions for user_id={user_id}, plan_type={plan_type}")
@@ -168,15 +165,13 @@ def add_workout_tool(arguments: dict) -> dict:
             "notes": None,
         }
 
-        # Save session via MCP
-        saved_count = asyncio.run(
-            save_sessions_impl(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                sessions=[session_data],
-                plan_type="single",
-                plan_id=None,
-            )
+        # Save session directly to database
+        saved_count = save_sessions_to_database(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            sessions=[session_data],
+            plan_type="single",
+            plan_id=None,
         )
 
         date_str = workout_date.strftime("%B %d, %Y")
@@ -233,6 +228,7 @@ def plan_race_build_tool(arguments: dict) -> dict:
             _raise_missing_race_info(clarification)
 
         # If we got here, the plan was created successfully
+        # The sessions have already been saved by create_and_save_plan
         # Extract race info to return in response
         race_info = extract_race_information(message)
         distance = race_info.distance
@@ -247,25 +243,13 @@ def plan_race_build_tool(arguments: dict) -> dict:
                 if race_date_val and isinstance(race_date_val, datetime):
                     race_date = race_date_val
 
-        # Generate sessions to get saved_count
-        if distance and race_date:
-            sessions = generate_race_build_sessions(
-                race_date=race_date,
-                race_distance=distance,
-                target_time=race_info.target_time,
-            )
-            plan_id = f"race_{distance}_{race_date.strftime('%Y%m%d')}"
-            saved_count = asyncio.run(
-                save_sessions_impl(
-                    user_id=user_id,
-                    athlete_id=athlete_id,
-                    sessions=sessions,
-                    plan_type="race",
-                    plan_id=plan_id,
-                )
-            )
-        else:
-            saved_count = 0
+        # Extract saved_count from result message (sessions already saved by plan_race_build)
+        # Parse the message to find saved count, or default to 0 if parsing fails
+        saved_count = 0
+        if "training sessions" in result_message:
+            match = re.search(r"(\d+)\s+training sessions", result_message)
+            if match:
+                saved_count = int(match.group(1))
 
         return {
             "success": True,
@@ -317,14 +301,12 @@ def plan_season_tool(arguments: dict) -> dict:
         )
 
         plan_id = f"season_{season_start.strftime('%Y%m%d')}_{season_end.strftime('%Y%m%d')}"
-        saved_count = asyncio.run(
-            save_sessions_impl(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                sessions=sessions,
-                plan_type="season",
-                plan_id=plan_id,
-            )
+        saved_count = save_sessions_to_database(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            sessions=sessions,
+            plan_type="season",
+            plan_id=plan_id,
         )
 
         weeks = (season_end - season_start).days // 7

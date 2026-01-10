@@ -1,5 +1,7 @@
 """Coach chat service - core logic shared between API and CLI."""
 
+import asyncio
+import contextlib
 from datetime import datetime, timezone
 
 from loguru import logger
@@ -275,3 +277,158 @@ def _is_simple_acknowledgment(message: str) -> bool:
         "👌",
     ]
     return message_lower in acknowledgments
+
+
+def dispatch_coach_chat(
+    message: str,
+    athlete_id: int,
+    days: int = 60,
+    days_to_race: int | None = None,
+    history_empty: bool = False,
+) -> tuple[str, str]:
+    """Synchronous wrapper for coach chat that returns (intent, reply).
+
+    This function is a backward-compatibility wrapper for legacy endpoints
+    that expect a synchronous function returning (intent, reply).
+
+    Args:
+        message: User's message
+        athlete_id: Athlete ID
+        days: Number of days of training data to consider
+        days_to_race: Optional days until race
+        history_empty: Whether conversation history is empty
+
+    Returns:
+        Tuple of (intent, reply) where intent is the orchestrator intent classification
+    """
+    user_id = get_user_id_from_athlete_id(athlete_id)
+    if user_id is None:
+        logger.warning(f"Cannot find user_id for athlete_id={athlete_id}")
+        return ("error", "Unable to find user account. Please reconnect your Strava account.")
+
+    conversation_id = f"sync_{athlete_id}_{datetime.now(timezone.utc).timestamp()}"
+
+    async def _async_dispatch() -> tuple[str, str]:
+        """Async helper that runs the chat logic and preserves intent."""
+        if history_empty:
+            try:
+                training_data = get_training_data(user_id=user_id, days=days)
+                athlete_state = build_athlete_state(
+                    ctl=training_data.ctl,
+                    atl=training_data.atl,
+                    tsb=training_data.tsb,
+                    daily_load=training_data.daily_load,
+                    days_to_race=days_to_race,
+                )
+                reply = welcome_new_user(athlete_state)
+            except RuntimeError:
+                reply = welcome_new_user(None)
+            return ("cold_start", reply)
+
+        if _is_simple_acknowledgment(message):
+            return ("general", "Nice work 👍 Want feedback on recovery, pacing, or tomorrow's plan?")
+
+        try:
+            training_data = get_training_data(user_id=user_id, days=days)
+            athlete_state = build_athlete_state(
+                ctl=training_data.ctl,
+                atl=training_data.atl,
+                tsb=training_data.tsb,
+                daily_load=training_data.daily_load,
+                days_to_race=days_to_race,
+            )
+        except RuntimeError:
+            athlete_state = None
+
+        athlete_profile = None
+        training_preferences = None
+        race_profile = None
+        with get_session() as db:
+            profile = db.query(AthleteProfile).filter_by(user_id=user_id).first()
+            if profile:
+                age = None
+                if profile.date_of_birth:
+                    today = datetime.now(timezone.utc).date()
+                    dob = profile.date_of_birth.date()
+                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+                weight_lbs_rounded = None
+                if profile.weight_lbs is not None:
+                    weight_lbs_rounded = round(float(profile.weight_lbs), 1)
+                height_in_rounded = None
+                if profile.height_in is not None:
+                    height_in_rounded = round(float(profile.height_in), 1)
+
+                athlete_profile = AthleteProfileData(
+                    gender=profile.gender,
+                    age=age,
+                    weight_lbs=weight_lbs_rounded,
+                    height_in=height_in_rounded,
+                    unit_system=profile.unit_system or "imperial",
+                )
+
+                if profile.extracted_race_attributes and isinstance(profile.extracted_race_attributes, dict):
+                    race_attrs = profile.extracted_race_attributes
+                    race_profile = RaceProfileData(
+                        event_name=race_attrs.get("event_name"),
+                        event_type=race_attrs.get("event_type"),
+                        event_date=race_attrs.get("event_date"),
+                        target_time=race_attrs.get("target_time"),
+                        distance=race_attrs.get("distance"),
+                        location=race_attrs.get("location"),
+                        raw_text=race_attrs.get("raw_text"),
+                    )
+
+            settings = db.query(UserSettings).filter_by(user_id=user_id).first()
+            if settings:
+                training_preferences = TrainingPreferencesData(
+                    training_consistency=settings.consistency,
+                    years_structured=settings.years_of_training,
+                    primary_sports=settings.primary_sports or [],
+                    available_days=settings.available_days or [],
+                    weekly_training_hours=settings.weekly_hours,
+                    primary_training_goal=settings.goal,
+                    training_focus=settings.training_focus,
+                    injury_flag=settings.injury_history or False,
+                )
+
+        deps = CoachDeps(
+            athlete_id=athlete_id,
+            user_id=user_id,
+            athlete_state=athlete_state,
+            athlete_profile=athlete_profile,
+            training_preferences=training_preferences,
+            race_profile=race_profile,
+            days=days,
+            days_to_race=days_to_race,
+        )
+
+        decision = await run_conversation(
+            user_input=message,
+            deps=deps,
+            conversation_id=conversation_id,
+        )
+
+        if decision.action == "EXECUTE" and decision.action_plan:
+            for step in decision.action_plan.steps:
+                with contextlib.suppress(MCPError):
+                    await call_tool(
+                        "emit_progress_event",
+                        {
+                            "conversation_id": conversation_id,
+                            "step_id": step.id,
+                            "label": step.label,
+                            "status": "planned",
+                        },
+                    )
+
+        reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
+        return (decision.intent, reply)
+
+    try:
+        # Since this is called from sync endpoints, FastAPI runs them in a thread pool
+        # which doesn't have an event loop, so asyncio.run() is safe to use
+        return asyncio.run(_async_dispatch())
+    except Exception as e:
+        logger.exception(f"Error in dispatch_coach_chat: {e}")
+        return ("error", "I encountered an error processing your question. Please try again.")

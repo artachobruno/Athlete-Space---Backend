@@ -9,7 +9,7 @@ from app.integrations.strava.service import get_strava_client
 
 
 def incremental_sync_user(user):
-    logger.info(f"[INCREMENTAL] Starting incremental sync for athlete_id={user.athlete_id}")
+    logger.debug(f"[INCREMENTAL] Starting incremental sync for athlete_id={user.athlete_id}")
 
     now = dt.datetime.now(tz=dt.UTC)
     after = (
@@ -21,22 +21,22 @@ def incremental_sync_user(user):
     recent_check_date = now - dt.timedelta(hours=48)
     if after > recent_check_date:
         # If our sync window is very recent, extend it to cover last 48 hours
-        logger.info(
+        logger.debug(
             f"[INCREMENTAL] Extending sync window to cover last 48 hours for safety check: "
             f"after={after.isoformat()} -> recent_check_date={recent_check_date.isoformat()}"
         )
         after = recent_check_date
 
-    logger.info(f"[INCREMENTAL] Fetching activities after {after.isoformat()} for athlete_id={user.athlete_id}")
+    logger.debug(f"[INCREMENTAL] Fetching activities after {after.isoformat()} for athlete_id={user.athlete_id}")
     client = get_strava_client(user.athlete_id)
 
     activities = client.fetch_recent_activities(after=after)
 
     if not activities:
-        logger.info(f"[INCREMENTAL] No new activities found for athlete_id={user.athlete_id} (last_ingested_at={user.last_ingested_at})")
+        logger.debug(f"[INCREMENTAL] No new activities found for athlete_id={user.athlete_id} (last_ingested_at={user.last_ingested_at})")
         return
 
-    logger.info(f"[INCREMENTAL] Fetched {len(activities)} new activities for athlete_id={user.athlete_id}")
+    logger.debug(f"[INCREMENTAL] Fetched {len(activities)} new activities for athlete_id={user.athlete_id}")
 
     saved_count = 0
     for act in activities:
@@ -52,8 +52,8 @@ def incremental_sync_user(user):
         except Exception as e:
             logger.error(f"[INCREMENTAL] Failed to save activity {act.id} for athlete_id={user.athlete_id}: {e}")
 
-    logger.info(f"[INCREMENTAL] Saved {saved_count}/{len(activities)} activities for athlete_id={user.athlete_id}")
+    logger.debug(f"[INCREMENTAL] Saved {saved_count}/{len(activities)} activities for athlete_id={user.athlete_id}")
 
     newest_ts = max(int(act.start_date.timestamp()) for act in activities)
     update_last_ingested_at(user.athlete_id, newest_ts)
-    logger.info(f"[INCREMENTAL] Updated last_ingested_at to {newest_ts} for athlete_id={user.athlete_id}")
+    logger.debug(f"[INCREMENTAL] Updated last_ingested_at to {newest_ts} for athlete_id={user.athlete_id}")

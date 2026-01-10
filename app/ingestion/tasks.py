@@ -26,7 +26,7 @@ def _record_error(session, user, exc: Exception) -> None:
 def incremental_task(athlete_id: int) -> None:
     """Incremental Strava sync task."""
     task_start = time.time()
-    logger.info(f"[INGESTION] Incremental task STARTED for athlete_id={athlete_id}")
+    logger.debug(f"[INGESTION] Incremental task STARTED for athlete_id={athlete_id}")
     lock_key = f"lock:strava:user:{athlete_id}"
 
     with lock_manager.acquire(lock_key) as acquired:
@@ -41,7 +41,7 @@ def incremental_task(athlete_id: int) -> None:
                 return
 
             try:
-                logger.info(f"[INGESTION] Executing incremental sync for athlete_id={athlete_id}")
+                logger.debug(f"[INGESTION] Executing incremental sync for athlete_id={athlete_id}")
                 incremental_sync_user(user)
                 user.last_successful_sync_at = int(time.time())
                 user.last_error = None
@@ -49,7 +49,7 @@ def incremental_task(athlete_id: int) -> None:
                 session.add(user)
                 session.commit()
                 elapsed = time.time() - task_start
-                logger.info(f"[INGESTION] Incremental sync completed successfully for athlete_id={athlete_id} in {elapsed:.2f}s")
+                logger.debug(f"[INGESTION] Incremental sync completed successfully for athlete_id={athlete_id} in {elapsed:.2f}s")
 
                 # Trigger daily aggregation after successful ingestion
                 # Do NOT block ingestion if aggregation fails

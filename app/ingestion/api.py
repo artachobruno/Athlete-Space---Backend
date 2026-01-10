@@ -166,7 +166,7 @@ def ingest_activities(
             last_sync_date = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc)
             # Use the more recent of the two dates (only fetch new activities)
             after_date = max(last_sync_date, requested_after_date)
-            logger.info(
+            logger.debug(
                 f"[INGESTION] Using incremental sync: last_sync_at={last_sync_date.isoformat()}, "
                 f"requested_after={requested_after_date.isoformat()}, using after={after_date.isoformat()}"
             )

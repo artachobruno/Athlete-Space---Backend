@@ -1,59 +1,56 @@
-import re
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
 from app.coach.tools.session_planner import generate_season_sessions, save_planned_sessions
+from app.coach.utils.date_extraction import extract_dates_from_text
 
 # Cache to prevent duplicate calls within a short time window
 _recent_calls: dict[str, datetime] = {}
 
 
-def parse_season_dates(message_lower: str) -> tuple[datetime, datetime]:
-    """Parse season start and end dates from message."""
-    date_patterns = [
-        r"(\d{4})-(\d{2})-(\d{2})",  # YYYY-MM-DD
-        r"(\d{1,2})/(\d{1,2})/(\d{4})",  # MM/DD/YYYY
-        r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})",
-    ]
+def parse_season_dates(message: str) -> tuple[datetime, datetime]:
+    """Parse season start and end dates from message using LLM extraction.
 
-    months = {
-        "january": 1,
-        "february": 2,
-        "march": 3,
-        "april": 4,
-        "may": 5,
-        "june": 6,
-        "july": 7,
-        "august": 8,
-        "september": 9,
-        "october": 10,
-        "november": 11,
-        "december": 12,
-    }
+    Args:
+        message: Message containing season dates
 
-    dates_found = []
-    for pattern in date_patterns:
-        for match in re.finditer(pattern, message_lower, re.IGNORECASE):
-            try:
-                if len(match.groups()) == 3:
-                    if pattern == date_patterns[0]:  # YYYY-MM-DD
-                        date_obj = datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)), tzinfo=timezone.utc)
-                    elif pattern == date_patterns[1]:  # MM/DD/YYYY
-                        date_obj = datetime(int(match.group(3)), int(match.group(1)), int(match.group(2)), tzinfo=timezone.utc)
-                    else:  # Month DD, YYYY
-                        month_name = match.group(1).lower()
-                        date_obj = datetime(int(match.group(3)), months[month_name], int(match.group(2)), tzinfo=timezone.utc)
-                    dates_found.append(date_obj)
-            except (ValueError, IndexError, KeyError):
-                continue
+    Returns:
+        Tuple of (season_start, season_end) datetime objects
+    """
+    dates, start_date_str, end_date_str = extract_dates_from_text(
+        text=message,
+        context="season dates",
+        expected_count=2,
+    )
 
-    if len(dates_found) >= 2:
-        dates_found.sort()
-        return (dates_found[0], dates_found[-1])
-    if len(dates_found) == 1:
-        season_start = dates_found[0]
+    # If we have at least 2 dates, use them
+    if len(dates) >= 2:
+        season_start = datetime.combine(dates[0], datetime.min.time()).replace(tzinfo=timezone.utc)
+        season_end = datetime.combine(dates[-1], datetime.min.time()).replace(tzinfo=timezone.utc)
+        return (season_start, season_end)
+
+    # If we have start_date and end_date strings, use them
+    if start_date_str and end_date_str:
+        try:
+            start_date = datetime.fromisoformat(start_date_str).date()
+            end_date = datetime.fromisoformat(end_date_str).date()
+            season_start = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            season_end = datetime.combine(end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Failed to parse extracted date strings: {e}",
+                start_date_str=start_date_str,
+                end_date_str=end_date_str,
+            )
+        else:
+            return (season_start, season_end)
+
+    # If we have 1 date, use it as start and add 180 days
+    if len(dates) == 1:
+        season_start = datetime.combine(dates[0], datetime.min.time()).replace(tzinfo=timezone.utc)
         return (season_start, season_start + timedelta(days=180))
+
     # Default to current date + 6 months
     season_start = datetime.now(timezone.utc)
     return (season_start, season_start + timedelta(days=180))
@@ -133,7 +130,7 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
         del _recent_calls[key]
 
     # Extract season dates
-    season_start, season_end = parse_season_dates(message_lower)
+    season_start, season_end = parse_season_dates(message)
 
     # Check if we need more info
     if not message or ("season" not in message_lower and "plan" not in message_lower):

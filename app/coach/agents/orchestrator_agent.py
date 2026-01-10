@@ -155,20 +155,37 @@ async def _compute_missing_slots_for_decision(
 
     # STEP 5: Persist merged slots and awaiting_slots to conversation_progress AFTER validation
     # This ensures conversation.slot_state is always up-to-date with correct awaiting_slots
+    # B41: Lock slot state when slots are complete (awaiting_slots is empty)
     if conversation_id:
         try:
-            create_or_update_progress(
-                conversation_id=conversation_id,
-                intent=decision.intent,
-                slots=merged_slots,
-                awaiting_slots=missing_slots,
-            )
-            logger.debug(
-                "Persisted merged slot state with awaiting_slots",
-                conversation_id=conversation_id,
-                merged_slots=merged_slots,
-                awaiting_slots=missing_slots,
-            )
+            # B41: If slots are complete (can_execute=True), lock the slot state
+            if can_execute:
+                # Slots are complete - lock the state
+                create_or_update_progress(
+                    conversation_id=conversation_id,
+                    intent=decision.intent,
+                    slots=merged_slots,
+                    awaiting_slots=[],  # Empty awaiting_slots = locked state
+                )
+                logger.info(
+                    "Slot state locked after validation (slots complete)",
+                    conversation_id=conversation_id,
+                    merged_slots=merged_slots,
+                )
+            else:
+                # Slots are incomplete - allow updates
+                create_or_update_progress(
+                    conversation_id=conversation_id,
+                    intent=decision.intent,
+                    slots=merged_slots,
+                    awaiting_slots=missing_slots,
+                )
+                logger.debug(
+                    "Persisted merged slot state with awaiting_slots",
+                    conversation_id=conversation_id,
+                    merged_slots=merged_slots,
+                    awaiting_slots=missing_slots,
+                )
         except Exception as e:
             logger.warning(
                 "Failed to persist slot state",

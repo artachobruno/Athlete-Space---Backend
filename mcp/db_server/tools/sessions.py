@@ -1,7 +1,6 @@
 """Planned session tools for MCP DB server."""
 
 import asyncio
-import re
 import sys
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from app.coach.errors import ToolContractViolationError
 from app.coach.services.conversation_progress import get_conversation_progress
 from app.coach.tools.add_workout import (
     extract_date_from_description,
@@ -194,12 +194,25 @@ def plan_race_build_tool(arguments: dict) -> dict:
     """Plan a race build and generate training sessions.
 
     Contract: plan_race_build.json
-    Uses stateful slot extraction with cumulative accumulation.
+    CRITICAL: This tool reads inputs ONLY from filled_slots in context.
+    It NEVER re-parses user messages or re-runs NLP extraction.
     """
     message = arguments.get("message")
     user_id = arguments.get("user_id")
     athlete_id = arguments.get("athlete_id")
     conversation_id = arguments.get("conversation_id")  # Optional for backward compatibility
+    context = arguments.get("context", {})
+    filled_slots = context.get("filled_slots", {})
+
+    # Log tool input contract at entry (B38)
+    logger.info(
+        "plan_race_build_tool invoked",
+        extra={
+            "filled_slots": filled_slots,
+            "has_context": bool(context),
+            "conversation_id": conversation_id,
+        },
+    )
 
     # Validate inputs
     if not message or not isinstance(message, str):
@@ -209,58 +222,82 @@ def plan_race_build_tool(arguments: dict) -> dict:
     if athlete_id is None or not isinstance(athlete_id, int):
         raise MCPError("INVALID_INPUT", "Missing or invalid athlete_id")
 
+    # B37: Read inputs ONLY from filled_slots - fail hard if slots are missing
+    race_date_value = filled_slots.get("race_date")
+    race_distance = filled_slots.get("race_distance")
+
+    if not race_date_value:
+        raise ToolContractViolationError(
+            "plan_race_build",
+            "plan_race_build_tool invoked without race_date in filled_slots",
+        )
+
+    if not race_distance:
+        raise ToolContractViolationError(
+            "plan_race_build",
+            "plan_race_build_tool invoked without race_distance in filled_slots",
+        )
+
+    # Convert race_date_value to datetime if needed
+    if isinstance(race_date_value, str):
+        race_date_parsed = parse_date_string(race_date_value)
+        if not race_date_parsed:
+            raise ToolContractViolationError(
+                "plan_race_build",
+                f"race_date in filled_slots is invalid: {race_date_value}",
+            )
+        race_date = race_date_parsed
+    elif isinstance(race_date_value, datetime):
+        race_date = race_date_value
+    else:
+        raise ToolContractViolationError(
+            "plan_race_build",
+            f"race_date in filled_slots has invalid type: {type(race_date_value)}",
+        )
+
+    if not isinstance(race_distance, str):
+        raise ToolContractViolationError(
+            "plan_race_build",
+            f"race_distance in filled_slots has invalid type: {type(race_distance)}",
+        )
+
+    target_time = filled_slots.get("target_time")
+    target_time_str = target_time if isinstance(target_time, str) else None
+
     try:
-        # Call the stateful plan_race_build function
-        # This handles slot extraction, merging, and awaited slot resolution
-        result_message = asyncio.run(
-            plan_race_build(
-                message=message,
+        # B37: Use slots directly from filled_slots - no re-extraction
+        # Call create_and_save_plan directly with validated slots
+        result_message, saved_count = asyncio.run(
+            create_and_save_plan(
+                race_date=race_date,
+                distance=race_distance,
+                target_time=target_time_str,
                 user_id=user_id,
                 athlete_id=athlete_id,
-                conversation_id=conversation_id,
             )
         )
 
-        # Check if this is a clarification message
-        if result_message.startswith("[CLARIFICATION]"):
-            # Extract the message without the prefix
-            clarification = result_message.replace("[CLARIFICATION] ", "")
-            _raise_missing_race_info(clarification)
-
-        # If we got here, the plan was created successfully
-        # The sessions have already been saved by create_and_save_plan
-        # Extract race info to return in response
-        race_info = extract_race_information(message)
-        distance = race_info.distance
-        race_date = parse_date_string(race_info.date) if race_info.date else None
-
-        # Try to get from conversation progress if available
-        if conversation_id:
-            progress = get_conversation_progress(conversation_id)
-            if progress:
-                distance = progress.slots.get("race_distance") or distance
-                race_date_val = progress.slots.get("race_date")
-                if race_date_val and isinstance(race_date_val, datetime):
-                    race_date = race_date_val
-
-        # Extract saved_count from result message (sessions already saved by plan_race_build)
-        # Parse the message to find saved count, or default to 0 if parsing fails
-        saved_count = 0
-        if "training sessions" in result_message:
-            match = re.search(r"(\d+)\s+training sessions", result_message)
-            if match:
-                saved_count = int(match.group(1))
-
+        # B37: Use slots directly - no re-extraction from message
+        # All required data is already validated from filled_slots above
         return {
             "success": True,
             "message": result_message,
-            "saved_count": saved_count,
-            "race_distance": distance or "",
-            "race_date": race_date.isoformat() if race_date else "",
+            "saved_count": saved_count or 0,
+            "race_distance": race_distance,
+            "race_date": race_date.isoformat(),
         }
 
     except MCPError:
         raise
+    except ToolContractViolationError as e:
+        # Convert ToolContractViolationError to MCPError with specific code (developer error)
+        logger.error(
+            "Tool contract violation detected",
+            tool="plan_race_build",
+            error=str(e),
+            exc_info=True,
+        )
+        raise MCPError("TOOL_CONTRACT_VIOLATION", f"Tool contract violation: {e.message}") from e
     except Exception as e:
         logger.error(f"Error planning race build: {e}", exc_info=True)
         raise MCPError("DB_ERROR", f"Failed to plan race build: {e!s}") from e

@@ -715,7 +715,8 @@ async def plan_race_build(
     user_id: str | None = None,
     athlete_id: int | None = None,
     conversation_id: str | None = None,
-) -> str:
+    return_structured: bool = False,
+) -> str | tuple[str, int | None]:
     """Plan a race build and generate training sessions.
 
     Uses stateful slot extraction with cumulative accumulation and awaited slot resolution.
@@ -725,9 +726,11 @@ async def plan_race_build(
         user_id: User ID for saving sessions (optional)
         athlete_id: Athlete ID for saving sessions (optional)
         conversation_id: Conversation ID for stateful slot tracking (optional but recommended)
+        return_structured: If True, return tuple (message, saved_count). If False, return message string only.
 
     Returns:
-        Response message with plan details or clarification questions
+        If return_structured is True: tuple of (response message, saved_count or None)
+        If return_structured is False: response message string with plan details or clarification questions
     """
     logger.info(
         "Tool plan_race_build called",
@@ -799,7 +802,10 @@ async def plan_race_build(
             distance = progress.slots.get("race_distance")
             race_date_str = progress.slots.get("race_date")
             race_date = race_date_str if isinstance(race_date_str, datetime) else None
-            return build_clarification_message(distance, race_date, progress.awaiting_slots)
+            clarification_msg = build_clarification_message(distance, race_date, progress.awaiting_slots)
+            if return_structured:
+                return (clarification_msg, None)
+            return clarification_msg
 
         # All slots resolved - continue to tool execution
         logger.info(
@@ -913,20 +919,32 @@ async def plan_race_build(
             awaiting_slots=awaiting_slots,
             conversation_id=conversation_id,
         )
-        return build_clarification_message(distance, race_date, awaiting_slots)
+        clarification_msg = build_clarification_message(distance, race_date, awaiting_slots)
+        if return_structured:
+            return (clarification_msg, None)
+        return clarification_msg
 
     # Validate race date is in the future
     if race_date and race_date < datetime.now(timezone.utc):
-        return (
+        error_msg = (
             f"The race date you provided ({race_date.strftime('%Y-%m-%d')}) is in the past. "
             f"Please provide a future race date to generate a training plan."
         )
+        if return_structured:
+            return (error_msg, None)
+        return error_msg
 
     # Type narrowing: distance and race_date are guaranteed to be non-None here
     if not isinstance(distance, str):
-        return build_clarification_message(None, None, ["race_distance"])
+        clarification_msg = build_clarification_message(None, None, ["race_distance"])
+        if return_structured:
+            return (clarification_msg, None)
+        return clarification_msg
     if not isinstance(race_date, datetime):
-        return build_clarification_message(None, None, ["race_date"])
+        clarification_msg = build_clarification_message(None, None, ["race_date"])
+        if return_structured:
+            return (clarification_msg, None)
+        return clarification_msg
 
     # All required slots filled - execute tool
     logger.info(
@@ -951,7 +969,9 @@ async def plan_race_build(
             distance=distance,
             date=race_date,
         )
-        message, _saved_count = await create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
+        message, saved_count = await create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
+        if return_structured:
+            return (message, saved_count)
         return message
 
     # Return plan details without saving
@@ -960,4 +980,7 @@ async def plan_race_build(
         user_id=user_id,
         athlete_id=athlete_id,
     )
-    return _build_preview_plan(distance, race_date)
+    preview_msg = _build_preview_plan(distance, race_date)
+    if return_structured:
+        return (preview_msg, None)
+    return preview_msg

@@ -4,7 +4,6 @@ Intent is data. Store it like a first-class entity.
 Never overwrite - append versions.
 """
 
-import re
 from datetime import date, datetime, timezone
 
 from dateutil import parser as date_parser
@@ -12,6 +11,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
+from app.coach.utils.date_extraction import extract_date_from_text, extract_session_count_from_text
 from app.db.models import DailyDecision as DailyDecisionModel
 from app.db.models import SeasonPlan as SeasonPlanModel
 from app.db.models import WeeklyIntent as WeeklyIntentModel
@@ -21,121 +21,40 @@ from app.services.intelligence.weekly_report_metrics import compute_weekly_repor
 
 
 def _extract_date_from_race_string(race_str: str, season_start: date, season_end: date) -> date | None:
-    """Extract date from race string using various parsing strategies.
+    """Extract date from race string using LLM extraction.
 
     Args:
         race_str: Race string (e.g., "Marathon - April 15, 2024" or "Spring Marathon - April 15")
-        season_start: Season start date (for year inference)
-        season_end: Season end date (for year inference)
+        season_start: Season start date (for validation)
+        season_end: Season end date (for validation)
 
     Returns:
         Parsed date or None if parsing fails
     """
-    # Strategy 1: Try dateutil parser (handles many formats)
-    parsed_date = _try_dateutil_parse(race_str, season_start, season_end)
-    if parsed_date:
-        return parsed_date
-
-    # Strategy 2: Look for ISO date format (YYYY-MM-DD)
-    parsed_date = _try_iso_date_parse(race_str, season_start, season_end)
-    if parsed_date:
-        return parsed_date
-
-    # Strategy 3: Look for month/day patterns (e.g., "April 15", "Apr 15")
-    parsed_date = _try_month_day_parse(race_str, season_start, season_end)
-    if parsed_date:
-        return parsed_date
-
-    return None
-
-
-def _try_dateutil_parse(race_str: str, season_start: date, season_end: date) -> date | None:
-    """Try parsing date using dateutil parser."""
+    # First try dateutil parser as a fast fallback for common formats
     try:
         default_dt = datetime(season_start.year, 1, 1, tzinfo=timezone.utc)
         parsed_date = date_parser.parse(race_str, fuzzy=True, default=default_dt)
         if parsed_date:
             parsed_date_obj = parsed_date.date()
             if season_start <= parsed_date_obj <= season_end:
+                logger.debug(f"Extracted date using dateutil parser: {parsed_date_obj}", race_str=race_str[:50])
                 return parsed_date_obj
     except (ValueError, TypeError):
         pass
-    return None
 
+    # Use LLM extraction as primary method
+    extracted_date = extract_date_from_text(
+        text=race_str,
+        context="race date",
+        min_date=season_start,
+        max_date=season_end,
+    )
 
-def _try_iso_date_parse(race_str: str, season_start: date, season_end: date) -> date | None:
-    """Try parsing ISO date format (YYYY-MM-DD)."""
-    iso_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", race_str)
-    if iso_match:
-        try:
-            parsed_date_obj = datetime.fromisoformat(iso_match.group(1)).date()
-            if season_start <= parsed_date_obj <= season_end:
-                return parsed_date_obj
-        except ValueError:
-            pass
-    return None
+    if extracted_date:
+        logger.debug(f"Extracted date using LLM: {extracted_date}", race_str=race_str[:50])
+        return extracted_date
 
-
-def _try_month_day_parse(race_str: str, season_start: date, season_end: date) -> date | None:
-    """Try parsing month/day patterns (e.g., "April 15", "Apr 15")."""
-    month_day_patterns = [
-        r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})",
-        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+(\d{1,2})",
-    ]
-
-    # Map month name to number (no duplicate keys)
-    month_map = {
-        "january": 1,
-        "february": 2,
-        "march": 3,
-        "april": 4,
-        "may": 5,
-        "june": 6,
-        "july": 7,
-        "august": 8,
-        "september": 9,
-        "october": 10,
-        "november": 11,
-        "december": 12,
-        "jan": 1,
-        "feb": 2,
-        "mar": 3,
-        "apr": 4,
-        "jun": 6,
-        "jul": 7,
-        "aug": 8,
-        "sep": 9,
-        "oct": 10,
-        "nov": 11,
-        "dec": 12,
-    }
-
-    for pattern in month_day_patterns:
-        match = re.search(pattern, race_str, re.IGNORECASE)
-        if match:
-            month_str = match.group(1)
-            day = int(match.group(2))
-            month = month_map.get(month_str.lower())
-            if month:
-                # Try current season year first
-                parsed_date = _try_create_date(season_start.year, month, day, season_start, season_end)
-                if parsed_date:
-                    return parsed_date
-                # Try next year if current year doesn't work
-                parsed_date = _try_create_date(season_start.year + 1, month, day, season_start, season_end)
-                if parsed_date:
-                    return parsed_date
-    return None
-
-
-def _try_create_date(year: int, month: int, day: int, season_start: date, season_end: date) -> date | None:
-    """Try creating a date and validate it's within season range."""
-    try:
-        parsed_date_obj = date(year, month, day)
-        if season_start <= parsed_date_obj <= season_end:
-            return parsed_date_obj
-    except ValueError:
-        pass
     return None
 
 
@@ -329,16 +248,14 @@ class IntentStore:
             primary_focus = intent.focus[:100] if len(intent.focus) > 100 else intent.focus
             target_volume_hours = intent.volume_target_hours
 
-            # Estimate total sessions from intensity_distribution
-            # Try to parse "X sessions" or "X hard, Y easy" patterns
+            # Estimate total sessions from intensity_distribution using LLM extraction
             total_sessions = None
-            intensity_dist = intent.intensity_distribution.lower()
-            # Look for patterns like "2 hard sessions, 4 easy sessions" = 6 total
-            session_counts = re.findall(r"(\d+)\s+(?:hard|easy|moderate|session)", intensity_dist)
-            if session_counts:
-                total_sessions = sum(int(count) for count in session_counts)
+            if intent.intensity_distribution:
+                extracted_count = extract_session_count_from_text(intent.intensity_distribution)
+                if extracted_count is not None:
+                    total_sessions = extracted_count
             # Fallback: estimate from volume (rough heuristic: ~1.5 hours per session)
-            elif target_volume_hours:
+            if total_sessions is None and target_volume_hours:
                 total_sessions = int(target_volume_hours / 1.5) if target_volume_hours > 0 else None
 
             # Create new intent

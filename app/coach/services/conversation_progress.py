@@ -129,12 +129,31 @@ def create_or_update_progress(
     Note:
         Slots are automatically serialized (date objects -> ISO strings) before storage,
         and deserialized (ISO strings -> date objects) when returned.
+        B41: Slot state is locked when awaiting_slots is empty (slots are complete).
+        Locked slot state cannot be modified.
     """
     with get_session() as db:
         # Query within this session to avoid detached instance issues
         result = db.execute(select(ConversationProgress).where(ConversationProgress.conversation_id == conversation_id)).first()
         progress = result[0] if result else None
         now = datetime.now(timezone.utc)
+
+        # B41: Check if slot state is locked (awaiting_slots is empty = slots complete)
+        if progress and len(progress.awaiting_slots) == 0:
+            # Slot state is locked - prevent mutation
+            logger.warning(
+                "Attempted to update locked slot state",
+                conversation_id=conversation_id,
+                existing_slots=progress.slots,
+                attempted_slots=slots,
+                attempted_awaiting_slots=awaiting_slots,
+            )
+            # Return existing progress without modification
+            # Deserialize slots before returning
+            if progress.slots:
+                progress.slots = deserialize_slots_from_storage(progress.slots)
+            db.expunge(progress)
+            return progress
 
         # Serialize slots for JSON storage (convert date objects to ISO strings)
         serialized_slots: dict[str, Any] = {}

@@ -12,6 +12,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.core.auth_jwt import decode_access_token
+from app.core.logger import set_user_id
 from app.db.models import User
 from app.db.session import get_session
 
@@ -127,6 +128,9 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
                 detail="Account inactive. Please sign up again.",
             )
 
+    # Set user_id in logger context for all subsequent logs
+    set_user_id(user_id)
+
     return user_id
 
 
@@ -170,5 +174,8 @@ def get_optional_user_id(request: Request, token: str | None = Depends(oauth2_sc
         if not user.is_active:
             logger.debug(f"Optional auth: Inactive user user_id={user_id}, Path: {request.url.path}")
             return None
+
+    # Set user_id in logger context for all subsequent logs
+    set_user_id(user_id)
 
     return user_id

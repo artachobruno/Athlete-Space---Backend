@@ -5,6 +5,7 @@ Owns all MCP tool calls, retries, rate limiting, and safety logic.
 """
 
 from datetime import timezone
+from typing import NoReturn
 
 from loguru import logger
 from sqlalchemy import select
@@ -14,6 +15,7 @@ from app.coach.clarification import (
     generate_proactive_clarification,
     generate_slot_clarification,
 )
+from app.coach.errors import ToolContractViolationError
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import get_conversation_progress
@@ -284,18 +286,47 @@ class CoachActionExecutor:
             # Assertion: must have missing slots to ask a question
             if len(decision.missing_slots) == 0:
                 raise RuntimeError("Must have missing slots to ask question, got empty list")
+
+            # B43: Check awaiting_slots before emitting clarification - skip if already asked
+            # Load conversation progress to check if we've already asked for these slots
+            already_awaiting: set[str] = set()
+            if conversation_id:
+                progress = get_conversation_progress(conversation_id)
+                if progress:
+                    already_awaiting = set(progress.awaiting_slots)
+
+            # Filter out slots we've already asked about
+            new_missing_slots = [slot for slot in decision.missing_slots if slot not in already_awaiting]
+
+            if not new_missing_slots:
+                # All missing slots already in awaiting_slots - don't emit duplicate clarification
+                logger.info(
+                    "B43: Skipping duplicate clarification - all slots already in awaiting_slots",
+                    target_action=target_action,
+                    missing_slots=decision.missing_slots,
+                    awaiting_slots=list(already_awaiting),
+                    conversation_id=conversation_id,
+                )
+                # Return a non-duplicative message or the existing awaiting status
+                if decision.next_question:
+                    return decision.next_question
+                return "I'm still waiting for the information I asked for earlier. Please provide it when you're ready."
+
             logger.info(
                 "STATE 1: Missing slots - asking single blocking question",
                 target_action=target_action,
                 missing_slots=decision.missing_slots,
+                new_missing_slots=new_missing_slots,
+                already_awaiting=list(already_awaiting),
                 conversation_id=conversation_id,
             )
-            # Use next_question if provided (from LLM), otherwise generate
+            # B43: Ask only for NEW missing slots (not already in awaiting_slots)
+            # Use new_missing_slots to avoid duplicate clarification
             if decision.next_question:
                 return decision.next_question
             return generate_slot_clarification(
                 action=target_action,
-                missing_slots=decision.missing_slots,
+                missing_slots=new_missing_slots,  # B43: Use filtered slots
             )
 
         # STATE 2: SLOTS COMPLETE - Execute immediately
@@ -561,6 +592,25 @@ class CoachActionExecutor:
             return "Something went wrong while creating your weekly plan. Please try again."
 
     @staticmethod
+    def _raise_clarification_violation(tool_name: str) -> NoReturn:
+        """Raise error when tool requests clarification after slot validation.
+
+        B39: This is a developer error - tools should never request clarification
+        after slots have been validated and should_execute=True.
+
+        Args:
+            tool_name: Name of the tool that violated the contract
+
+        Raises:
+            RuntimeError: Always raises to indicate developer error
+        """
+        error_msg = (
+            f"{tool_name} requested clarification after slot validation. "
+            f"This is a developer error - slots were validated before tool execution."
+        )
+        raise RuntimeError(error_msg)
+
+    @staticmethod
     async def _execute_plan_race(
         decision: OrchestratorAgentResponse,
         deps: CoachDeps,
@@ -616,16 +666,27 @@ class CoachActionExecutor:
 
         # Tool execution is wrapped defensively - never surface errors to users
         try:
+            # B37: Pass filled_slots in context - tool reads ONLY from this
             tool_args = {
                 "message": race_description,
                 "user_id": deps.user_id,
                 "athlete_id": deps.athlete_id,
+                "context": {"filled_slots": slots},
             }
             # Add conversation_id if available for stateful slot tracking
             if conversation_id:
                 tool_args["conversation_id"] = conversation_id
 
             result = await call_tool("plan_race_build", tool_args)
+
+            # B39: Prevent clarification after slot validation
+            # If slots were complete (should_execute=True) and tool requests clarification, fail hard
+            if decision.should_execute:
+                result_message = result.get("message", "")
+                # Check if result is a clarification message (should never happen post-validation)
+                if result_message.startswith("[CLARIFICATION]") or result.get("needs_clarification"):
+                    CoachActionExecutor._raise_clarification_violation(tool_name)
+
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
@@ -638,14 +699,34 @@ class CoachActionExecutor:
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Race plan created.")
         except MCPError as e:
-            # MISSING_RACE_INFO is not an error - it's a clarification request
+            # B39: TOOL_CONTRACT_VIOLATION or MISSING_RACE_INFO should never occur after slot validation
+            # If it does, this is a developer error
+            if e.code == "TOOL_CONTRACT_VIOLATION":
+                # B39: Tool contract violation - this is a developer error
+                logger.error(
+                    "Tool contract violation detected",
+                    tool=tool_name,
+                    error_code=e.code,
+                    error_message=e.message,
+                    conversation_id=conversation_id,
+                    exc_info=True,
+                )
+                raise RuntimeError(
+                    f"{tool_name} violated contract: {e.message}. "
+                    f"This is a developer error - slots should have been validated before tool execution."
+                ) from e
             if e.code == "MISSING_RACE_INFO":
+                if decision.should_execute:
+                    raise RuntimeError(
+                        f"{tool_name} returned MISSING_RACE_INFO after slot validation. "
+                        f"This is a developer error - slots were validated before tool execution."
+                    ) from e
+                # Only allow clarification if slots weren't complete (shouldn't happen with B37)
                 logger.info(
                     "Tool returned clarification request",
                     tool=tool_name,
                     conversation_id=conversation_id,
                 )
-                # Return the clarification message directly to the user
                 return e.message
             if conversation_id and step_info:
                 step_id, label = step_info

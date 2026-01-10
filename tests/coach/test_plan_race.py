@@ -576,3 +576,118 @@ def test_invariant_partial_followup_resolution(mock_extract):
     assert "race_date" not in remaining
     assert resolved["race_date"].month == 4
     assert resolved["race_date"].day == 25
+
+
+# ============================================================================
+# B42: SLOT CONTRACT INVARIANT TEST (NO CLARIFICATION AFTER SLOT COMPLETE)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_no_clarification_after_slot_complete():
+    """B42: Test that tool never requests clarification after slots are validated as complete.
+
+    This regression test ensures that:
+    1. Once slots are extracted and validated (filled_slots contains race_date and race_distance)
+    2. The slot gate passes (should_execute=True)
+    3. The tool executes immediately without clarification requests
+    4. Any violation = backend exception, not UX retry
+
+    Test Case:
+    - Slots are complete: {"race_date": "2026-04-25", "race_distance": "Marathon"}
+    - Slot validation passes
+    - Tool executes successfully
+    - No clarification messages emitted
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from app.coach.errors import ToolContractViolationError
+    from app.coach.executor.action_executor import CoachActionExecutor
+    from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
+
+    # Create decision with complete slots
+    decision = OrchestratorAgentResponse(
+        intent="plan",
+        horizon="race",
+        action="EXECUTE",
+        confidence=0.9,
+        message="Creating your race plan...",
+        response_type="plan",
+        show_plan=True,
+        plan_items=None,
+        target_action="plan_race_build",
+        required_slots=["race_date", "race_distance"],
+        filled_slots={
+            "race_date": datetime(2026, 4, 25, tzinfo=UTC),
+            "race_distance": "Marathon",
+        },
+        missing_slots=[],  # Slots are complete
+        next_question=None,
+        should_execute=True,  # Slots validated and complete
+    )
+
+    deps = MagicMock()
+    deps.user_id = "test_user"
+    deps.athlete_id = 123
+
+    # Mock the tool call to return success (no clarification)
+    with patch("app.coach.executor.action_executor.call_tool") as mock_call_tool:
+        mock_call_tool.return_value = {
+            "success": True,
+            "message": "Race plan created successfully",
+            "saved_count": 10,
+            "race_distance": "Marathon",
+            "race_date": "2026-04-25T00:00:00+00:00",
+        }
+
+        result = await CoachActionExecutor.execute(
+            decision=decision,
+            deps=deps,
+            conversation_id="test_conv_123",
+        )
+
+        # Verify tool was called with filled_slots in context (B37)
+        assert mock_call_tool.called
+        call_args = mock_call_tool.call_args
+        assert call_args[0][0] == "plan_race_build"
+        tool_args = call_args[0][1]
+        assert "context" in tool_args
+        assert "filled_slots" in tool_args["context"]
+        assert tool_args["context"]["filled_slots"]["race_date"] == decision.filled_slots["race_date"]
+        assert tool_args["context"]["filled_slots"]["race_distance"] == "Marathon"
+
+        # Verify result is success (not a clarification)
+        assert result == "Race plan created successfully"
+        assert "[CLARIFICATION]" not in result
+        assert "needs_clarification" not in str(result).lower()
+
+    # Test that ToolContractViolationError is raised if slots are missing post-validation
+    decision_with_missing_slots = OrchestratorAgentResponse(
+        intent="plan",
+        horizon="race",
+        action="EXECUTE",
+        confidence=0.9,
+        message="Creating your race plan...",
+        response_type="plan",
+        show_plan=True,
+        plan_items=None,
+        target_action="plan_race_build",
+        required_slots=["race_date", "race_distance"],
+        filled_slots={},  # Missing slots - should fail
+        missing_slots=["race_date", "race_distance"],
+        next_question=None,
+        should_execute=False,  # Slots not complete
+    )
+
+    # Should not execute since should_execute=False
+    with patch("app.coach.executor.action_executor.call_tool") as mock_call_tool:
+        result = await CoachActionExecutor.execute(
+            decision=decision_with_missing_slots,
+            deps=deps,
+            conversation_id="test_conv_123",
+        )
+
+        # Should ask for clarification, not execute tool
+        assert not mock_call_tool.called
+        assert "race" in result.lower() or "date" in result.lower() or "distance" in result.lower()

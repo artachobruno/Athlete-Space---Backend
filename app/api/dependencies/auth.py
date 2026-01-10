@@ -12,7 +12,8 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.core.auth_jwt import decode_access_token
-from app.core.logger import set_user_id
+from app.core.conversation_id import get_conversation_id
+from app.core.logger import set_conversation_id, set_user_id
 from app.db.models import User
 from app.db.session import get_session
 
@@ -128,8 +129,15 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
                 detail="Account inactive. Please sign up again.",
             )
 
-    # Set user_id in logger context for all subsequent logs
+    # B46: Bind user_id and conversation_id to logger once per request after auth
     set_user_id(user_id)
+    # Get conversation_id from request state (set by conversation_id_middleware)
+    try:
+        conversation_id = get_conversation_id(request)
+        set_conversation_id(conversation_id)
+    except RuntimeError:
+        # conversation_id not available (e.g., middleware not registered) - use None
+        set_conversation_id(None)
 
     return user_id
 
@@ -175,7 +183,14 @@ def get_optional_user_id(request: Request, token: str | None = Depends(oauth2_sc
             logger.debug(f"Optional auth: Inactive user user_id={user_id}, Path: {request.url.path}")
             return None
 
-    # Set user_id in logger context for all subsequent logs
+    # B46: Bind user_id and conversation_id to logger once per request after auth
     set_user_id(user_id)
+    # Get conversation_id from request state (set by conversation_id_middleware)
+    try:
+        conversation_id = get_conversation_id(request)
+        set_conversation_id(conversation_id)
+    except RuntimeError:
+        # conversation_id not available (e.g., middleware not registered) - use None
+        set_conversation_id(None)
 
     return user_id

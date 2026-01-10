@@ -10,16 +10,27 @@ from loguru import logger
 
 # Context variable to store user_id for logging
 user_id_context: contextvars.ContextVar[str | None] = contextvars.ContextVar("user_id", default=None)
+# Context variable to store conversation_id for logging
+conversation_id_context: contextvars.ContextVar[str | None] = contextvars.ContextVar("conversation_id", default=None)
 
 
 def _get_user_id() -> str:
     """Get user_id from context variable.
 
     Returns:
-        User ID string or "N/A" if not set
+        User ID string or "system" if not set (B45)
     """
     user_id = user_id_context.get()
-    return user_id if user_id else "N/A"
+    return user_id if user_id else "system"
+
+
+def _get_conversation_id() -> str | None:
+    """Get conversation_id from context variable.
+
+    Returns:
+        Conversation ID string or None if not set
+    """
+    return conversation_id_context.get()
 
 
 def set_user_id(user_id: str | None) -> None:
@@ -34,6 +45,20 @@ def set_user_id(user_id: str | None) -> None:
         # Clear context by setting to None
         with contextlib.suppress(LookupError):
             user_id_context.set(None)
+
+
+def set_conversation_id(conversation_id: str | None) -> None:
+    """Set conversation_id in context for logging (B46).
+
+    Args:
+        conversation_id: Conversation ID to set in context, or None to clear
+    """
+    if conversation_id:
+        conversation_id_context.set(conversation_id)
+    else:
+        # Clear context by setting to None
+        with contextlib.suppress(LookupError):
+            conversation_id_context.set(None)
 
 
 def setup_logger(
@@ -53,18 +78,32 @@ def setup_logger(
     # Remove default handler
     logger.remove()
 
-    # Patch the logger to always include user_id from context in all records
-    # This creates a patched logger that adds user_id to the extra dict of all log records
+    # B45: Configure default extra fields globally
+    # This ensures user_id and conversation_id are always present, even outside request scope
+    logger.configure(
+        extra={
+            "user_id": "system",
+            "conversation_id": None,
+        }
+    )
+
+    # Patch the logger to always include user_id and conversation_id from context in all records
+    # This creates a patched logger that adds user_id and conversation_id to the extra dict of all log records
     # Type annotation omitted - loguru's Record type from stubs doesn't expose extra dict properly
     def patcher(record) -> None:
-        """Patch function to add user_id to log records.
+        """Patch function to add user_id and conversation_id to log records (B45, B46).
 
         Args:
             record: Loguru record object (dict-like) that will be modified in place.
                    The record supports dict-like access with record["extra"] returning a dict.
         """
         # Access extra dict directly - loguru Record supports this at runtime
+        # B45: Default to "system" if user_id is not set in context
         record["extra"]["user_id"] = _get_user_id()
+        # B46: Get conversation_id from context (defaults to None from configure)
+        conversation_id = _get_conversation_id()
+        if conversation_id:
+            record["extra"]["conversation_id"] = conversation_id
 
     # Apply patcher to the global logger instance
     # Note: logger.patch() returns a bound logger, but the patch is applied to the global logger

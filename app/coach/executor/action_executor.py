@@ -4,8 +4,9 @@ Executes coaching actions based on orchestrator decisions.
 Owns all MCP tool calls, retries, rate limiting, and safety logic.
 """
 
-from datetime import timezone
-from typing import NoReturn
+import json
+from datetime import date, datetime, timezone
+from typing import Any, NoReturn
 
 from loguru import logger
 from sqlalchemy import select
@@ -19,11 +20,33 @@ from app.coach.errors import ToolContractViolationError
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import get_conversation_progress
+from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
 from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
 from app.db.models import SeasonPlan
 from app.db.session import get_session
+
+
+def serialize_for_mcp(obj: Any) -> Any:
+    """Serialize objects for MCP tool calls (JSON-safe conversion).
+
+    Converts date/datetime objects to ISO format strings.
+    Recursively handles dicts and lists.
+
+    Args:
+        obj: Object to serialize (can be date, datetime, dict, list, or JSON primitive)
+
+    Returns:
+        JSON-serializable object (dates/datetimes converted to ISO strings)
+    """
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: serialize_for_mcp(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [serialize_for_mcp(v) for v in obj]
+    return obj
 
 
 class CoachActionExecutor:
@@ -667,15 +690,30 @@ class CoachActionExecutor:
         # Tool execution is wrapped defensively - never surface errors to users
         try:
             # B37: Pass filled_slots in context - tool reads ONLY from this
+            # B44: Serialize filled_slots before MCP call (convert date/datetime to ISO strings)
             tool_args = {
                 "message": race_description,
                 "user_id": deps.user_id,
                 "athlete_id": deps.athlete_id,
-                "context": {"filled_slots": slots},
+                "context": {"filled_slots": serialize_for_mcp(slots)},
             }
             # Add conversation_id if available for stateful slot tracking
             if conversation_id:
                 tool_args["conversation_id"] = conversation_id
+
+            # B47: Assert JSON safety in dev mode
+            if settings.log_level == "DEBUG":
+                try:
+                    json.dumps(tool_args)
+                except (TypeError, ValueError) as e:
+                    logger.error(
+                        "Tool args are not JSON-safe (B47)",
+                        tool="plan_race_build",
+                        error=str(e),
+                        tool_args_keys=list(tool_args.keys()),
+                        conversation_id=conversation_id,
+                    )
+                    raise RuntimeError(f"Tool args are not JSON-safe: {e}") from e
 
             result = await call_tool("plan_race_build", tool_args)
 

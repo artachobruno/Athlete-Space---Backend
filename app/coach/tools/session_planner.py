@@ -6,29 +6,50 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.coach.mcp_client import MCPError, call_tool
-from app.coach.schemas.intent_schemas import SeasonPlan, WeeklyIntent
 from app.db.models import PlannedSession
 from app.db.session import get_session
+
+
+def _raise_timezone_naive_error(session_date_raw: str) -> None:
+    """Raise error for timezone-naive date from ISO string."""
+    raise ValueError(f"Timezone-naive date from ISO string: {session_date_raw}")
+
+
+def _raise_mcp_save_failed_error(expected_count: int) -> None:
+    """Raise error when MCP tool fails to save sessions."""
+    raise RuntimeError(
+        f"Failed to save planned sessions: MCP tool returned saved_count=0. "
+        f"Expected to save {expected_count} sessions but none were saved."
+    )
 
 
 def _parse_session_date(session_date_raw: date | datetime | str | None) -> datetime | None:
     """Parse session date from various formats.
 
+    Phase 6: Preserve exactly what LLM returns - no timezone mutation.
+    Dates are already validated as timezone-aware in LLM generation.
+
     Args:
         session_date_raw: Date in string, date, or datetime format, or None
 
     Returns:
-        Parsed datetime with timezone, or None if parsing fails or input is None
+        Parsed datetime with preserved timezone, or None if parsing fails or input is None
     """
     if session_date_raw is None:
         return None
 
     if isinstance(session_date_raw, str):
         try:
+            # Preserve timezone from ISO string - no normalization
             if "T" in session_date_raw:
                 parsed_date = datetime.fromisoformat(session_date_raw.replace("Z", "+00:00"))
+                # Validate timezone-aware (already enforced by LLM validation)
+                if parsed_date.tzinfo is None:
+                    _raise_timezone_naive_error(session_date_raw)
             else:
+                # Date-only string - this shouldn't happen if LLM returns timezone-aware dates
                 parsed_date = datetime.strptime(session_date_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                logger.warning(f"Received date-only string, defaulting to UTC: {session_date_raw}")
         except (ValueError, TypeError) as e:
             logger.warning(f"Failed to parse date '{session_date_raw}': {e}")
             return None
@@ -36,13 +57,17 @@ def _parse_session_date(session_date_raw: date | datetime | str | None) -> datet
             return parsed_date
 
     if isinstance(session_date_raw, date) and not isinstance(session_date_raw, datetime):
+        # Date-only - shouldn't happen if LLM returns timezone-aware datetimes
+        logger.warning(f"Received date-only object, defaulting to UTC: {session_date_raw}")
         return datetime.combine(session_date_raw, datetime.min.time()).replace(tzinfo=timezone.utc)
 
     if isinstance(session_date_raw, datetime):
-        parsed_date = session_date_raw
-        if parsed_date.tzinfo is None:
-            parsed_date = parsed_date.replace(tzinfo=timezone.utc)
-        return parsed_date
+        # Phase 6: Preserve exact timezone from LLM - no mutation
+        if session_date_raw.tzinfo is None:
+            # This should not happen - validation already ensures timezone-aware
+            logger.error(f"Timezone-naive datetime received despite validation: {session_date_raw}")
+            raise ValueError(f"Date must be timezone-aware: {session_date_raw}")
+        return session_date_raw
 
     logger.warning(f"Invalid date type for session: {type(session_date_raw)}")
     return None
@@ -83,6 +108,29 @@ def save_sessions_to_database(
         logger.warning("No sessions to save")
         return 0
 
+    # Phase 6: Invariant checks before saving
+    # No duplicate dates+titles, all dates timezone-aware
+    seen_dates_titles: set[tuple[datetime, str]] = set()
+    for session_data in sessions:
+        session_date_raw = session_data.get("date")
+        parsed_date = _parse_session_date(session_date_raw)
+        if parsed_date is None:
+            raise ValueError(f"Invalid date in session: {session_data.get('title', 'unknown')}")
+
+        # Phase 6: All dates must be timezone-aware
+        if parsed_date.tzinfo is None:
+            raise ValueError(f"Date must be timezone-aware: {parsed_date}")
+
+        title = session_data.get("title")
+        if not title:
+            raise ValueError("Session title is required")
+
+        # Phase 6: No duplicate dates+titles
+        date_title_key = (parsed_date, title)
+        if date_title_key in seen_dates_titles:
+            raise ValueError(f"Duplicate session detected: {title} on {parsed_date.isoformat()}")
+        seen_dates_titles.add(date_title_key)
+
     saved_count = 0
     with get_session() as session:
         try:
@@ -112,21 +160,22 @@ def save_sessions_to_database(
                     )
                     continue
 
-                # Create new PlannedSession
+                # Phase 6: Persist exactly what LLM returns - no field mutation, no auto-fill
+                # Only extract fields that exist in session_data - no defaults
                 planned_session = PlannedSession(
                     user_id=user_id,
                     athlete_id=athlete_id,
                     date=parsed_date,
-                    time=session_data.get("time"),
-                    type=session_data.get("type"),
-                    title=session_data.get("title"),
-                    duration_minutes=session_data.get("duration_minutes"),
-                    distance_km=session_data.get("distance_km"),
-                    intensity=session_data.get("intensity"),
-                    notes=session_data.get("notes"),
+                    time=session_data.get("time"),  # Exactly as LLM provided
+                    type=session_data.get("type"),  # Exactly as LLM provided
+                    title=session_data.get("title"),  # Exactly as LLM provided
+                    duration_minutes=session_data.get("duration_minutes"),  # Exactly as LLM provided
+                    distance_km=session_data.get("distance_km"),  # Exactly as LLM provided
+                    intensity=session_data.get("intensity"),  # Exactly as LLM provided
+                    notes=session_data.get("notes") or session_data.get("description"),  # Use description if notes not provided
                     plan_type=plan_type,
                     plan_id=plan_id,
-                    week_number=session_data.get("week_number"),
+                    week_number=session_data.get("week_number"),  # Exactly as LLM provided
                     status="planned",
                     completed=False,
                 )
@@ -206,8 +255,6 @@ async def save_planned_sessions(
             mcp_session["date"] = session_date.isoformat()
         sessions_for_mcp.append(mcp_session)
 
-    saved_count = 0
-    saved_count = 0
     try:
         result = await call_tool(
             "save_planned_sessions",
@@ -220,486 +267,38 @@ async def save_planned_sessions(
             },
         )
         saved_count = result.get("saved_count", 0)
-        logger.info(
-            "Saved planned sessions via MCP",
-            user_id=user_id,
-            athlete_id=athlete_id,
-            saved_count=saved_count,
-            plan_type=plan_type,
-        )
+        if saved_count == 0:
+            _raise_mcp_save_failed_error(len(sessions))
+        else:
+            logger.info(
+                "Saved planned sessions via MCP",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                saved_count=saved_count,
+                plan_type=plan_type,
+            )
+            return saved_count
     except MCPError as e:
-        logger.warning(
-            "Failed to persist planned sessions via MCP — continuing without saving",
+        logger.error(
+            "Failed to persist planned sessions via MCP — plan creation failed",
             error_code=e.code,
             error_message=e.message,
             user_id=user_id,
             athlete_id=athlete_id,
             exc_info=True,
         )
+        raise RuntimeError(
+            f"Failed to save training plan: MCP error {e.code}: {e.message}"
+        ) from e
     except Exception as e:
-        logger.warning(
-            "Unexpected error persisting planned sessions — continuing without saving",
+        logger.error(
+            "Unexpected error persisting planned sessions — plan creation failed",
             error_type=type(e).__name__,
             error_message=str(e),
             user_id=user_id,
             athlete_id=athlete_id,
             exc_info=True,
         )
-
-    return saved_count
-
-
-def _get_race_build_params(race_distance: str) -> tuple[int, str]:
-    """Get weeks and focus for race distance."""
-    distance_lower = race_distance.lower()
-    if "5k" in distance_lower:
-        return (12, "speed")
-    if "10k" in distance_lower:
-        return (14, "threshold")
-    if "half" in distance_lower:
-        return (16, "endurance")
-    if "marathon" in distance_lower:
-        return (20, "aerobic")
-    if "ultra" in distance_lower or "100" in distance_lower:
-        return (24, "durability")
-    return (16, "general")
-
-
-def _create_quality_workout(focus: str, quality_date: datetime, week_num: int) -> dict:
-    """Create quality workout session based on focus."""
-    workouts = {
-        "speed": {
-            "title": "Intervals",
-            "duration_minutes": 45,
-            "intensity": "hard",
-            "notes": "5x800m at 5K pace with 2min recovery",
-        },
-        "threshold": {
-            "title": "Threshold Run",
-            "duration_minutes": 50,
-            "intensity": "hard",
-            "notes": "20min at threshold pace",
-        },
-        "endurance": {
-            "title": "Tempo Run",
-            "duration_minutes": 60,
-            "intensity": "moderate",
-            "notes": "30min at half marathon pace",
-        },
-        "aerobic": {
-            "title": "Marathon Pace Run",
-            "duration_minutes": 70 + (week_num * 5),
-            "intensity": "moderate",
-            "notes": f"{20 + (week_num * 2)}min at marathon pace",
-        },
-    }
-    workout = workouts.get(
-        focus,
-        {
-            "title": "Long Run",
-            "duration_minutes": 90 + (week_num * 10),
-            "intensity": "easy",
-            "notes": "Time on feet focus",
-        },
-    )
-    return {
-        "date": quality_date,
-        "type": "Run",
-        "title": workout["title"],
-        "duration_minutes": workout["duration_minutes"],
-        "intensity": workout["intensity"],
-        "notes": workout["notes"],
-        "week_number": week_num,
-    }
-
-
-def generate_race_build_sessions(
-    race_date: datetime,
-    race_distance: str,
-    target_time: str | None = None,
-    start_date: datetime | None = None,
-) -> list[dict]:
-    """Generate training sessions for a race build.
-
-    Args:
-        race_date: Target race date
-        race_distance: Race distance (5K, 10K, half, marathon, ultra)
-        target_time: Optional target finish time (e.g., "3:30:00") - reserved for future use
-        start_date: Optional start date for training (defaults to 16 weeks before race)
-
-    Returns:
-        List of session dictionaries
-    """
-    # target_time is reserved for future use to customize training intensity
-    _ = target_time
-    weeks, focus = _get_race_build_params(race_distance)
-    if start_date is None:
-        start_date = race_date - timedelta(weeks=weeks)
-    else:
-        # Adjust start_date to match weeks if provided
-        start_date = race_date - timedelta(weeks=weeks)
-
-    sessions = []
-    current_date = start_date
-
-    # Generate weekly structure
-    distance_lower = race_distance.lower()
-    for week_num in range(1, weeks + 1):
-        if week_num % 4 != 0:
-            sessions.append({
-                "date": current_date,
-                "type": "Run",
-                "title": "Easy Run",
-                "duration_minutes": 30 + (week_num * 5),
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-
-        quality_date = current_date + timedelta(days=2)
-        sessions.append(_create_quality_workout(focus, quality_date, week_num))
-
-        # Saturday: Long run (for distances half marathon and up)
-        if "half" in distance_lower or "marathon" in distance_lower or "ultra" in distance_lower:
-            long_run_date = current_date + timedelta(days=5)
-            long_run_minutes = 60 if "half" in distance_lower else (90 if "marathon" in distance_lower else 120)
-            long_run_minutes += week_num * 5
-
-            sessions.append({
-                "date": long_run_date,
-                "type": "Run",
-                "title": "Long Run",
-                "duration_minutes": min(long_run_minutes, 180 if "ultra" in distance_lower else 150),
-                "intensity": "easy",
-                "notes": "Aerobic base building",
-                "week_number": week_num,
-            })
-
-        current_date += timedelta(days=7)
-
-    return sessions
-
-
-def generate_season_sessions(
-    season_start: datetime,
-    season_end: datetime,
-    _target_races: list[dict] | None = None,
-) -> list[dict]:
-    """Generate training sessions for a season plan.
-
-    Args:
-        season_start: Season start date
-        season_end: Season end date
-        target_races: Optional list of race dictionaries with keys:
-            - date: race date
-            - distance: race distance
-            - target_time: optional target time
-
-    Returns:
-        List of session dictionaries
-    """
-    sessions = []
-    current_date = season_start
-    week_num = 1
-
-    # Calculate total weeks
-    total_weeks = (season_end - season_start).days // 7
-
-    # Phase structure: Base (40%), Build (35%), Peak (15%), Recovery (10%)
-    base_weeks = int(total_weeks * 0.4)
-    build_weeks = int(total_weeks * 0.35)
-    peak_weeks = int(total_weeks * 0.15)
-    recovery_weeks = total_weeks - base_weeks - build_weeks - peak_weeks
-
-    phase = "base"
-    phase_week = 0
-
-    while current_date < season_end:
-        phase_week += 1
-
-        if phase == "base":
-            if phase_week > base_weeks:
-                phase = "build"
-                phase_week = 0
-                continue
-            # Base phase: Easy runs, aerobic volume
-            sessions.append({
-                "date": current_date,
-                "type": "Run",
-                "title": "Easy Run",
-                "duration_minutes": 45,
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-            sessions.append({
-                "date": current_date + timedelta(days=2),
-                "type": "Run",
-                "title": "Aerobic Run",
-                "duration_minutes": 60,
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-            sessions.append({
-                "date": current_date + timedelta(days=4),
-                "type": "Run",
-                "title": "Long Run",
-                "duration_minutes": 90,
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-
-        elif phase == "build":
-            if phase_week > build_weeks:
-                phase = "peak"
-                phase_week = 0
-                continue
-            # Build phase: Add quality workouts
-            sessions.append({
-                "date": current_date,
-                "type": "Run",
-                "title": "Easy Run",
-                "duration_minutes": 40,
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-            sessions.append({
-                "date": current_date + timedelta(days=2),
-                "type": "Run",
-                "title": "Tempo Run",
-                "duration_minutes": 50,
-                "intensity": "moderate",
-                "week_number": week_num,
-            })
-            sessions.append({
-                "date": current_date + timedelta(days=4),
-                "type": "Run",
-                "title": "Long Run",
-                "duration_minutes": 100,
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-
-        elif phase == "peak":
-            if phase_week > peak_weeks:
-                phase = "recovery"
-                phase_week = 0
-                continue
-            # Peak phase: Race-specific work
-            sessions.append({
-                "date": current_date,
-                "type": "Run",
-                "title": "Easy Run",
-                "duration_minutes": 30,
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-            sessions.append({
-                "date": current_date + timedelta(days=2),
-                "type": "Run",
-                "title": "Race Pace Workout",
-                "duration_minutes": 45,
-                "intensity": "hard",
-                "week_number": week_num,
-            })
-            sessions.append({
-                "date": current_date + timedelta(days=5),
-                "type": "Run",
-                "title": "Long Run",
-                "duration_minutes": 90,
-                "intensity": "moderate",
-                "week_number": week_num,
-            })
-
-        else:  # recovery
-            if phase_week > recovery_weeks:
-                break
-            # Recovery phase: Easy volume
-            sessions.append({
-                "date": current_date,
-                "type": "Run",
-                "title": "Easy Run",
-                "duration_minutes": 30,
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-            sessions.append({
-                "date": current_date + timedelta(days=3),
-                "type": "Run",
-                "title": "Easy Run",
-                "duration_minutes": 40,
-                "intensity": "easy",
-                "week_number": week_num,
-            })
-
-        current_date += timedelta(days=7)
-        week_num += 1
-
-    return sessions
-
-
-def weekly_intent_to_sessions(weekly_intent: WeeklyIntent) -> list[dict]:
-    """Convert WeeklyIntent to planned sessions for the week.
-
-    Args:
-        weekly_intent: WeeklyIntent object
-
-    Returns:
-        List of session dictionaries for the week
-    """
-    sessions = []
-    week_start = weekly_intent.week_start
-
-    # Convert date to datetime for calculations
-    if isinstance(week_start, date):
-        week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
-    else:
-        week_start_dt = week_start
-
-    # Parse intensity distribution to determine session types
-    intensity_lower = weekly_intent.intensity_distribution.lower()
-    volume_hours = weekly_intent.volume_target_hours
-
-    # Determine number of sessions based on intensity distribution
-    hard_count = 0
-    moderate_count = 0
-    easy_count = 0
-
-    if "hard" in intensity_lower or "intensity" in intensity_lower:
-        # Count hard sessions
-        for word in intensity_lower.split():
-            if word.isdigit():
-                hard_count = int(word)
-                break
-        if hard_count == 0:
-            hard_count = 1 if "hard" in intensity_lower else 0
-
-    if "moderate" in intensity_lower or "tempo" in intensity_lower:
-        moderate_count = 2
-
-    if "easy" in intensity_lower or "aerobic" in intensity_lower:
-        easy_count = 4
-
-    # Default distribution if parsing fails
-    if hard_count == 0 and moderate_count == 0 and easy_count == 0:
-        # Default: 1-2 quality sessions, rest easy
-        hard_count = 1 if volume_hours > 8 else 0
-        moderate_count = 1 if volume_hours > 10 else 0
-        easy_count = max(3, int(volume_hours / 1.5))  # ~1.5 hours per easy session
-
-    # Calculate session durations
-    total_sessions = hard_count + moderate_count + easy_count
-    if total_sessions == 0:
-        return sessions
-
-    # Distribute volume across sessions
-    # Hard sessions: ~1 hour, Moderate: ~1.5 hours, Easy: remaining volume
-    hard_duration = 60  # minutes
-    moderate_duration = 90  # minutes
-    remaining_hours = volume_hours - (hard_count * 1.0) - (moderate_count * 1.5)
-    easy_duration = int((remaining_hours * 60) / max(easy_count, 1)) if easy_count > 0 else 0
-    easy_duration = max(30, min(easy_duration, 120))  # Clamp between 30-120 min
-
-    # Distribute sessions across the week (Monday=0, Sunday=6)
-    # Use a smarter distribution: hard on Tue/Thu, moderate on Wed, easy on other days
-    used_days = set()
-
-    # Add hard sessions (typically Tuesday/Thursday)
-    hard_days = [1, 3]  # Tuesday, Thursday
-    for i, _ in enumerate(range(hard_count)):
-        if i < len(hard_days):
-            day = hard_days[i]
-            used_days.add(day)
-            session_date = week_start_dt + timedelta(days=day)
-            sessions.append({
-                "date": session_date,
-                "type": "Run",
-                "title": "Hard Workout",
-                "duration_minutes": hard_duration,
-                "intensity": "hard",
-                "notes": weekly_intent.focus,
-                "week_number": weekly_intent.week_number,
-            })
-
-    # Add moderate sessions (typically Wednesday)
-    moderate_days = [2]  # Wednesday
-    for i, _ in enumerate(range(moderate_count)):
-        if i < len(moderate_days):
-            day = moderate_days[i]
-            used_days.add(day)
-            session_date = week_start_dt + timedelta(days=day)
-            sessions.append({
-                "date": session_date,
-                "type": "Run",
-                "title": "Moderate Run",
-                "duration_minutes": moderate_duration,
-                "intensity": "moderate",
-                "notes": weekly_intent.adaptation_goal,
-                "week_number": weekly_intent.week_number,
-            })
-
-    # Add easy sessions (fill remaining days, prefer Mon/Fri/Sat)
-    easy_days = [0, 4, 5, 6]  # Monday, Friday, Saturday, Sunday
-    easy_day_idx = 0
-    for _ in range(easy_count):
-        # Find next available day
-        while easy_day_idx < len(easy_days) and easy_days[easy_day_idx] in used_days:
-            easy_day_idx += 1
-        if easy_day_idx < len(easy_days):
-            day = easy_days[easy_day_idx]
-            used_days.add(day)
-            session_date = week_start_dt + timedelta(days=day)
-            sessions.append({
-                "date": session_date,
-                "type": "Run",
-                "title": "Easy Run",
-                "duration_minutes": easy_duration,
-                "intensity": "easy",
-                "notes": weekly_intent.adaptation_goal,
-                "week_number": weekly_intent.week_number,
-            })
-            easy_day_idx += 1
-        else:
-            # If we run out of preferred days, use any available day
-            for d in range(7):
-                if d not in used_days:
-                    used_days.add(d)
-                    session_date = week_start_dt + timedelta(days=d)
-                    sessions.append({
-                        "date": session_date,
-                        "type": "Run",
-                        "title": "Easy Run",
-                        "duration_minutes": easy_duration,
-                        "intensity": "easy",
-                        "notes": weekly_intent.adaptation_goal,
-                        "week_number": weekly_intent.week_number,
-                    })
-                    break
-
-    return sessions
-
-
-def season_plan_to_sessions(season_plan: SeasonPlan) -> list[dict]:
-    """Convert SeasonPlan to planned sessions.
-
-    Args:
-        season_plan: SeasonPlan object
-
-    Returns:
-        List of session dictionaries for the season
-    """
-    # Convert dates to datetime
-    if isinstance(season_plan.season_start, date):
-        season_start = datetime.combine(season_plan.season_start, datetime.min.time()).replace(tzinfo=timezone.utc)
-    else:
-        season_start = season_plan.season_start
-
-    if isinstance(season_plan.season_end, date):
-        season_end = datetime.combine(season_plan.season_end, datetime.min.time()).replace(tzinfo=timezone.utc)
-    else:
-        season_end = season_plan.season_end
-
-    # Use existing generate_season_sessions function
-    return generate_season_sessions(
-        season_start=season_start,
-        season_end=season_end,
-        _target_races=None,  # Could be enhanced to use season_plan.target_races
-    )
+        raise RuntimeError(
+            f"Failed to save training plan: {type(e).__name__}: {e!s}"
+        ) from e

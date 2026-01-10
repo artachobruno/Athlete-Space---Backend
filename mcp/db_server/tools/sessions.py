@@ -31,10 +31,9 @@ from app.coach.tools.plan_season import (
     parse_season_dates,
 )
 from app.coach.tools.session_planner import (
-    generate_race_build_sessions,
-    generate_season_sessions,
     save_sessions_to_database,
 )
+from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import PlannedSession
 from app.db.session import get_session
 from mcp.db_server.errors import MCPError
@@ -184,9 +183,9 @@ def add_workout_tool(arguments: dict) -> dict:
         raise MCPError("DB_ERROR", f"Failed to add workout: {e!s}") from e
     else:
         return {
-            "success": True,
-            "message": message,
+            "status": "success",
             "saved_count": saved_count,
+            "message": message,
         }
 
 
@@ -280,9 +279,9 @@ def plan_race_build_tool(arguments: dict) -> dict:
         # B37: Use slots directly - no re-extraction from message
         # All required data is already validated from filled_slots above
         return {
-            "success": True,
-            "message": result_message,
+            "status": "success",
             "saved_count": saved_count or 0,
+            "message": result_message,
             "race_distance": race_distance,
             "race_date": race_date.isoformat(),
         }
@@ -330,12 +329,47 @@ def plan_season_tool(arguments: dict) -> dict:
         if not message or ("season" not in message_lower and "plan" not in message_lower):
             _raise_missing_season_info()
 
-        # Generate sessions
-        sessions = generate_season_sessions(
-            season_start=season_start,
-            season_end=season_end,
-            _target_races=None,
+        # Generate plan via LLM - single source of truth
+        llm_client = CoachLLMClient()
+        goal_context = {
+            "plan_type": "season",
+            "season_start": season_start.isoformat(),
+            "season_end": season_end.isoformat(),
+        }
+        user_context = {
+            "user_id": user_id,
+            "athlete_id": athlete_id,
+        }
+        athlete_context = {}  # TODO: Fill with actual athlete context
+        calendar_constraints = {}  # TODO: Fill with actual calendar constraints
+
+        training_plan = asyncio.run(
+            llm_client.generate_training_plan_via_llm(
+                user_context=user_context,
+                athlete_context=athlete_context,
+                goal_context=goal_context,
+                calendar_constraints=calendar_constraints,
+            )
         )
+
+        # Convert TrainingPlan to session dictionaries
+        # Phase 6: Persist exactly what LLM returns - only minimal field name mapping for DB compatibility
+        sessions = []
+        for session in training_plan.sessions:
+            # Map sport field to type field (database schema expects "type" not "sport")
+            # Preserve all other fields exactly as LLM provides
+            session_dict: dict = {
+                "date": session.date,  # Exactly as LLM - timezone preserved
+                "type": session.sport.capitalize() if session.sport != "rest" else "Rest",  # Field name mapping only
+                "title": session.title,  # Exactly as LLM
+                "description": session.description,  # Exactly as LLM
+                "duration_minutes": session.duration_minutes,  # Exactly as LLM
+                "distance_km": session.distance_km,  # Exactly as LLM
+                "intensity": session.intensity,  # Exactly as LLM
+                "notes": session.purpose,  # Exactly as LLM
+                "week_number": session.week_number,  # Exactly as LLM
+            }
+            sessions.append(session_dict)
 
         plan_id = f"season_{season_start.strftime('%Y%m%d')}_{season_end.strftime('%Y%m%d')}"
         saved_count = save_sessions_to_database(
@@ -350,9 +384,9 @@ def plan_season_tool(arguments: dict) -> dict:
         result_message = generate_season_plan_response(season_start, season_end, saved_count, weeks)
 
         return {
-            "success": True,
-            "message": result_message,
+            "status": "success",
             "saved_count": saved_count,
+            "message": result_message,
             "season_start": season_start.isoformat(),
             "season_end": season_end.isoformat(),
         }

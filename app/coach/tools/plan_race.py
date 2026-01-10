@@ -5,13 +5,15 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from app.coach.schemas.training_plan_schemas import TrainingPlan
 from app.coach.services.conversation_progress import (
     clear_progress,
     create_or_update_progress,
     get_conversation_progress,
 )
-from app.coach.tools.session_planner import generate_race_build_sessions, save_planned_sessions
+from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.tools.slot_utils import merge_slots, parse_date_loose
+from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import ConversationProgress
 from app.services.llm.model import get_model
 
@@ -20,6 +22,24 @@ _recent_calls: dict[str, datetime] = {}
 
 # Use cheap model for extraction
 EXTRACTION_MODEL = "gpt-4o-mini"
+
+
+def _raise_no_sessions_error() -> None:
+    """Raise error when training plan has no sessions."""
+    raise RuntimeError("Training plan generated with no sessions")
+
+
+def _raise_invalid_date_type_error(first_date: date | datetime) -> None:
+    """Raise error for invalid date type in training plan."""
+    raise TypeError(f"Invalid date type in training plan: {type(first_date)}")
+
+
+def _raise_save_failed_error() -> None:
+    """Raise error when plan save fails."""
+    raise RuntimeError(
+        "Failed to save race training plan: no sessions were saved. "
+        "Plan generation must be retried."
+    )
 
 
 class RaceInformation(BaseModel):
@@ -83,13 +103,6 @@ class TrainingGoalInformation(BaseModel):
         description=(
             "Goal type: 'time' for time goals, 'finish' for finishing goals, "
             "'performance' for PR/qualify/podium, 'completion' for completion emphasis"
-        ),
-    )
-    confidence_level: Literal["high", "moderate", "low"] | None = Field(
-        default=None,
-        description=(
-            "Confidence level of the extraction: 'high' if all key fields are clear, "
-            "'moderate' if some inference needed, 'low' if minimal information"
         ),
     )
     notes: str | None = Field(
@@ -240,7 +253,6 @@ Return a JSON object with the following fields:
 - training_duration_weeks: integer
 - target_finish_time: HH:MM:SS
 - goal_type: one of ["finish", "time", "performance", "completion"]
-- confidence_level: one of ["high", "moderate", "low"]
 - notes: short free-text clarification if useful
 
 ━━━━━━━━━━━━━━━━━━━
@@ -326,7 +338,7 @@ AWAITING SLOTS
         logger.info(
             f"Extraction successful: race_distance={goal_info.race_distance}, "
             f"race_date={goal_info.race_date}, target_finish_time={goal_info.target_finish_time}, "
-            f"goal_type={goal_info.goal_type}, confidence={goal_info.confidence_level}",
+            f"goal_type={goal_info.goal_type}",
         )
     except Exception as e:
         logger.error(f"Failed to extract training goal: {e}", exc_info=True)
@@ -405,21 +417,69 @@ async def create_and_save_plan(
     """
     try:
         logger.info(
-            "Starting race plan generation",
+            "Starting race plan generation via LLM",
             distance=distance,
             race_date=race_date.isoformat(),
             target_time=target_time,
             user_id=user_id,
             athlete_id=athlete_id,
         )
-        sessions = generate_race_build_sessions(
-            race_date=race_date,
-            race_distance=distance,
-            target_time=target_time,
+
+        # Generate plan via LLM - single source of truth
+        llm_client = CoachLLMClient()
+        goal_context = {
+            "plan_type": "race",
+            "race_distance": distance,
+            "race_date": race_date.isoformat(),
+            "target_time": target_time,
+        }
+        user_context = {
+            "user_id": user_id,
+            "athlete_id": athlete_id,
+        }
+        athlete_context = {}  # TODO: Fill with actual athlete context
+        calendar_constraints = {}  # TODO: Fill with actual calendar constraints
+
+        training_plan = await llm_client.generate_training_plan_via_llm(
+            user_context=user_context,
+            athlete_context=athlete_context,
+            goal_context=goal_context,
+            calendar_constraints=calendar_constraints,
         )
 
+        # Convert TrainingPlan to session dictionaries
+        # Phase 6: Persist exactly what LLM returns - only minimal field name mapping for DB compatibility
+        # sport -> type is a field name mapping, not a logic mutation
+        sessions = []
+        for session in training_plan.sessions:
+            # Map sport field to type field (database schema expects "type" not "sport")
+            # Preserve all other fields exactly as LLM provides
+            session_dict: dict = {
+                "date": session.date,  # Exactly as LLM - timezone preserved
+                "type": session.sport.capitalize() if session.sport != "rest" else "Rest",  # Field name mapping only
+                "title": session.title,  # Exactly as LLM
+                "description": session.description,  # Exactly as LLM
+                "duration_minutes": session.duration_minutes,  # Exactly as LLM
+                "distance_km": session.distance_km,  # Exactly as LLM
+                "intensity": session.intensity,  # Exactly as LLM
+                "notes": session.purpose,  # Exactly as LLM
+                "week_number": session.week_number,  # Exactly as LLM
+            }
+            sessions.append(session_dict)
+
+        # Calculate weeks and start date from training plan sessions
+        if not sessions:
+            _raise_no_sessions_error()
+
+        dates = sorted([s["date"].date() if isinstance(s["date"], datetime) else s["date"] for s in sessions])
+        first_date = dates[0]
+        if isinstance(first_date, date):
+            start_date_dt = datetime.combine(first_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        elif isinstance(first_date, datetime):
+            start_date_dt = first_date
+        else:
+            _raise_invalid_date_type_error(first_date)
         weeks = len({s.get("week_number", 0) for s in sessions})
-        start_date_dt = race_date - timedelta(weeks=weeks)
         start_date = start_date_dt.strftime("%B %d, %Y")
         race_date_str = race_date.strftime("%B %d, %Y")
 
@@ -462,18 +522,9 @@ async def create_and_save_plan(
             plan_id=plan_id,
         )
 
-        if saved_count > 0:
-            logger.info(
-                "Race plan saved successfully",
-                plan_id=plan_id,
-                saved_count=saved_count,
-                total_sessions=len(sessions),
-                user_id=user_id,
-                athlete_id=athlete_id,
-            )
-        else:
-            logger.warning(
-                "Race plan generated but not saved to database",
+        if saved_count == 0:
+            logger.error(
+                "Race plan generation failed: no sessions saved",
                 plan_id=plan_id,
                 total_sessions=len(sessions),
                 total_weeks=weeks,
@@ -481,17 +532,21 @@ async def create_and_save_plan(
                 race_date=race_date.isoformat(),
                 user_id=user_id,
                 athlete_id=athlete_id,
-                reason="MCP service returned 0 saved sessions (service may be temporarily unavailable)",
             )
+            _raise_save_failed_error()
+
+        logger.info(
+            "Race plan saved successfully",
+            plan_id=plan_id,
+            saved_count=saved_count,
+            total_sessions=len(sessions),
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
 
         target_time_str = f"\nTarget time: {target_time}" if target_time else ""
-
-        if saved_count > 0:
-            save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-            calendar_note = "Your planned sessions are now available in your calendar!"
-        else:
-            save_status = "• ⚠️ Sessions generated but could not be saved to calendar (service may be temporarily unavailable)\n"
-            calendar_note = "The plan is ready, but you may need to retry saving to calendar later."
+        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+        calendar_note = "Your planned sessions are now available in your calendar!"
 
     except Exception as e:
         logger.error(
@@ -505,30 +560,28 @@ async def create_and_save_plan(
             athlete_id=athlete_id,
             exc_info=True,
         )
-        race_date_str = race_date.strftime("%B %d, %Y")
-        error_message = (
-            f"I've prepared a training plan for your **{distance}** race on **{race_date_str}**, "
-            f"but encountered an error generating it. Please try again or contact support."
-        )
-        return (error_message, 0)
-    else:
-        success_message = (
-            f"✅ **Race Training Plan Created!**\n\n"
-            f"I've generated a {weeks}-week training plan for your **{distance}** "
-            f"race on **{race_date_str}**.\n\n"
-            f"**Plan Summary:**\n"
-            f"{save_status}"
-            f"• Training starts: {start_date}\n"
-            f"• Race date: {race_date_str}\n\n"
-            f"**Training Structure:**\n"
-            f"• Base building phase\n"
-            f"• Progressive intensity increases\n"
-            f"• Race-specific workouts\n"
-            f"• Taper period before race\n\n"
-            f"{calendar_note}{target_time_str}\n\n"
-            f"**The plan is complete and ready to use. No further action needed.**"
-        )
-        return (success_message, saved_count)
+        # Phase 7: User-visible error message
+        raise RuntimeError(
+            "The AI coach failed to generate a valid training plan. Please retry."
+        ) from e
+
+    success_message = (
+        f"✅ **Race Training Plan Created!**\n\n"
+        f"I've generated a {weeks}-week training plan for your **{distance}** "
+        f"race on **{race_date_str}**.\n\n"
+        f"**Plan Summary:**\n"
+        f"{save_status}"
+        f"• Training starts: {start_date}\n"
+        f"• Race date: {race_date_str}\n\n"
+        f"**Training Structure:**\n"
+        f"• Base building phase\n"
+        f"• Progressive intensity increases\n"
+        f"• Race-specific workouts\n"
+        f"• Taper period before race\n\n"
+        f"{calendar_note}{target_time_str}\n\n"
+        f"**The plan is complete and ready to use. No further action needed.**"
+    )
+    return (success_message, saved_count)
 
 
 def _build_preview_plan(distance: str, race_date: datetime) -> str:

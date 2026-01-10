@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.coach.schemas.intent_schemas import SeasonPlan, WeeklyIntent
 from app.coach.services.state_builder import build_athlete_state
-from app.coach.tools.session_planner import save_planned_sessions, season_plan_to_sessions, weekly_intent_to_sessions
+from app.coach.tools.session_planner import save_planned_sessions
 from app.db.models import AthleteProfile, StravaAccount, UserSettings
 from app.db.models import SeasonPlan as SeasonPlanModel
 from app.db.models import WeeklyIntent as WeeklyIntentModel
@@ -291,26 +291,9 @@ def save_weekly_intent(
     session.add(intent_model)
     session.commit()
 
-    # Create planned sessions from weekly intent (non-blocking)
-    sessions = weekly_intent_to_sessions(intent)
-    if sessions:
-        # Use a new session for planned sessions to avoid transaction issues
-        saved_count = asyncio.run(
-            save_planned_sessions(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                sessions=sessions,
-                plan_type="weekly",
-                plan_id=intent_model.id,
-            )
-        )
-        if saved_count > 0:
-            logger.info(f"Created {saved_count} planned sessions from weekly intent for user_id={user_id}")
-        else:
-            logger.warning(
-                f"Weekly intent saved but {len(sessions)} planned sessions could not be persisted "
-                f"(service may be temporarily unavailable) for user_id={user_id}"
-            )
+    # Note: WeeklyIntent is high-level guidance only, not a session generator.
+    # If sessions are needed, generate a TrainingPlan via LLM using generate_training_plan_via_llm.
+    logger.info(f"Saved weekly intent for user_id={user_id} (sessions must be generated via TrainingPlan if needed)")
 
 
 def save_season_plan(
@@ -337,26 +320,9 @@ def save_season_plan(
     session.add(plan_model)
     session.commit()
 
-    # Create planned sessions from season plan (non-blocking)
-    sessions = season_plan_to_sessions(plan)
-    if sessions:
-        # Use a new session for planned sessions to avoid transaction issues
-        saved_count = asyncio.run(
-            save_planned_sessions(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                sessions=sessions,
-                plan_type="season",
-                plan_id=plan_model.id,
-            )
-        )
-        if saved_count > 0:
-            logger.info(f"Created {saved_count} planned sessions from season plan for user_id={user_id}")
-        else:
-            logger.warning(
-                f"Season plan saved but {len(sessions)} planned sessions could not be persisted "
-                f"(service may be temporarily unavailable) for user_id={user_id}"
-            )
+    # Note: SeasonPlan is high-level guidance only, not a session generator.
+    # If sessions are needed, generate a TrainingPlan via LLM using generate_training_plan_via_llm.
+    logger.info(f"Saved season plan for user_id={user_id} (sessions must be generated via TrainingPlan if needed)")
 
 
 def _build_weekly_intent_context(

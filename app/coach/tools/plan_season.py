@@ -2,8 +2,15 @@ from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
-from app.coach.tools.session_planner import generate_season_sessions, save_planned_sessions
+from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.utils.date_extraction import extract_dates_from_text
+from app.coach.utils.llm_client import CoachLLMClient
+
+
+def _raise_season_save_failed_error() -> None:
+    """Raise error when season plan save fails."""
+    raise RuntimeError("Failed to save season training plan: no sessions were saved")
+
 
 # Cache to prevent duplicate calls within a short time window
 _recent_calls: dict[str, datetime] = {}
@@ -144,14 +151,48 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
             "that will be added to your calendar."
         )
 
-    # Generate sessions if we have user_id and athlete_id
+    # Generate plan via LLM if we have user_id and athlete_id
     if user_id and athlete_id:
         try:
-            sessions = generate_season_sessions(
-                season_start=season_start,
-                season_end=season_end,
-                target_races=None,  # Could be enhanced to parse races from message
+            # Generate plan via LLM - single source of truth
+            llm_client = CoachLLMClient()
+            goal_context = {
+                "plan_type": "season",
+                "season_start": season_start.isoformat(),
+                "season_end": season_end.isoformat(),
+            }
+            user_context = {
+                "user_id": user_id,
+                "athlete_id": athlete_id,
+            }
+            athlete_context = {}  # TODO: Fill with actual athlete context
+            calendar_constraints = {}  # TODO: Fill with actual calendar constraints
+
+            training_plan = await llm_client.generate_training_plan_via_llm(
+                user_context=user_context,
+                athlete_context=athlete_context,
+                goal_context=goal_context,
+                calendar_constraints=calendar_constraints,
             )
+
+            # Convert TrainingPlan to session dictionaries
+            # Phase 6: Persist exactly what LLM returns - only minimal field name mapping for DB compatibility
+            sessions = []
+            for session in training_plan.sessions:
+                # Map sport field to type field (database schema expects "type" not "sport")
+                # Preserve all other fields exactly as LLM provides
+                session_dict: dict = {
+                    "date": session.date,  # Exactly as LLM - timezone preserved
+                    "type": session.sport.capitalize() if session.sport != "rest" else "Rest",  # Field name mapping only
+                    "title": session.title,  # Exactly as LLM
+                    "description": session.description,  # Exactly as LLM
+                    "duration_minutes": session.duration_minutes,  # Exactly as LLM
+                    "distance_km": session.distance_km,  # Exactly as LLM
+                    "intensity": session.intensity,  # Exactly as LLM
+                    "notes": session.purpose,  # Exactly as LLM
+                    "week_number": session.week_number,  # Exactly as LLM
+                }
+                sessions.append(session_dict)
 
             plan_id = f"season_{season_start.strftime('%Y%m%d')}_{season_end.strftime('%Y%m%d')}"
             saved_count = await save_planned_sessions(
@@ -162,22 +203,19 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
                 plan_id=plan_id,
             )
 
-            if saved_count > 0:
-                logger.info(f"Successfully saved {saved_count} planned sessions for season plan")
-            else:
-                logger.warning(
-                    "Season plan generated successfully but sessions could not be persisted (service may be temporarily unavailable)"
-                )
+            if saved_count == 0:
+                _raise_season_save_failed_error()
+
+            logger.info(f"Successfully saved {saved_count} planned sessions for season plan")
 
             weeks = (season_end - season_start).days // 7
             return generate_season_plan_response(season_start, season_end, saved_count, weeks)
         except Exception as e:
             logger.error(f"Error generating season plan: {e}", exc_info=True)
-            return (
-                f"I've prepared a season training plan from **{season_start.strftime('%B %d, %Y')}** "
-                f"to **{season_end.strftime('%B %d, %Y')}**, but encountered an error generating it. "
-                f"Please try again or contact support."
-            )
+            # Phase 7: User-visible error message
+            raise RuntimeError(
+                "The AI coach failed to generate a valid training plan. Please retry."
+            ) from e
     else:
         weeks = (season_end - season_start).days // 7
         return (

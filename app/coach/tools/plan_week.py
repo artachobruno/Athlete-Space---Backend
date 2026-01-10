@@ -132,25 +132,13 @@ async def plan_week(
                 risk_flags=list(state.flags),
             )
 
-            # For now, we'll create basic constraints from feedback keywords
-            # In production, this would use B17's translate_feedback_to_constraints
-            # Simple keyword-based constraint detection
-            feedback_lower = user_feedback.lower()
+            # Phase 4: LLM-only extraction - use B17's translate_feedback_to_constraints
+            # No keyword-based heuristics - all constraint extraction via LLM
+            # TODO: Replace with LLM-based constraint extraction from user_feedback
+            # For now, create minimal constraints without keyword parsing
             volume_multiplier = 1.0
             intensity_cap = "none"
             force_rest_days = 0
-
-            if any(word in feedback_lower for word in ["fatigue", "tired", "exhausted", "worn"]):
-                volume_multiplier = 0.8
-                intensity_cap = "moderate"
-            if any(word in feedback_lower for word in ["sore", "pain", "hurt"]):
-                volume_multiplier = 0.7
-                intensity_cap = "easy"
-                force_rest_days = 1
-            if any(word in feedback_lower for word in ["wrecked", "destroyed", "can't"]):
-                volume_multiplier = 0.6
-                intensity_cap = "easy"
-                force_rest_days = 2
 
             constraints = TrainingConstraints(
                 volume_multiplier=volume_multiplier,
@@ -283,43 +271,52 @@ async def plan_week(
         })
         session_count += 1
 
-    # Save sessions via MCP (non-blocking - planning continues even if persistence fails)
+    # Save sessions via MCP - fail loudly if persistence fails
     logger.info(
         "B8: Saving planned sessions",
         session_count=len(sessions),
         week_start=monday.date().isoformat(),
         week_end=sunday.date().isoformat(),
     )
-    saved_count = await save_planned_sessions(
-        user_id=user_id,
-        athlete_id=athlete_id,
-        sessions=sessions,
-        plan_type="weekly",
-        plan_id=None,
-    )
 
-    if saved_count > 0:
-        logger.info(
-            "B8: Planned sessions saved successfully",
-            saved_count=saved_count,
-            session_details=[{"date": s["date"], "title": s["title"], "intensity": s.get("intensity")} for s in sessions[:5]],
+    try:
+        saved_count = await save_planned_sessions(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            sessions=sessions,
+            plan_type="weekly",
+            plan_id=None,
         )
-    else:
-        logger.warning(
-            "B8: Planned sessions could not be persisted, but plan generation succeeded",
+    except Exception as e:
+        logger.error(
+            "B8: Failed to save planned sessions — plan generation failed",
+            session_count=len(sessions),
+            error_type=type(e).__name__,
+            error_message=str(e),
+            exc_info=True,
+        )
+        raise RuntimeError(
+            "The AI coach failed to generate a valid training plan. Please retry."
+        ) from e
+
+    if saved_count == 0:
+        logger.error(
+            "B8: No sessions saved — plan generation failed",
             session_count=len(sessions),
         )
+        raise RuntimeError(
+            f"Failed to save weekly training plan: expected to save {len(sessions)} sessions but saved 0."
+        )
+
+    logger.info(
+        "B8: Planned sessions saved successfully",
+        saved_count=saved_count,
+        session_details=[{"date": s["date"], "title": s["title"], "intensity": s.get("intensity")} for s in sessions[:5]],
+    )
 
     # Generate response
-    if saved_count > 0:
-        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-    else:
-        save_status = "• ⚠️ Sessions generated but could not be saved to calendar (service may be temporarily unavailable)\n"
-
-    if saved_count > 0:
-        calendar_message = "Your planned sessions are now available in your calendar!"
-    else:
-        calendar_message = "The plan is ready, but you may need to retry saving to calendar later."
+    save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+    calendar_message = "Your planned sessions are now available in your calendar!"
 
     return (
         f"✅ **Weekly Training Plan Created!**\n\n"

@@ -16,6 +16,7 @@ from typing import Literal, TypedDict
 
 from loguru import logger
 
+from app.core.memory_metrics import increment_memory_counter
 from app.core.token_counting import (
     MAX_MODEL_TOKENS,
     MAX_PROMPT_TOKENS,
@@ -127,6 +128,16 @@ def enforce_token_limit(
 
     # If within limit, return unchanged
     if original_tokens <= max_prompt_tokens:
+        logger.info(
+            "token_guard",
+            conversation_id=conversation_id,
+            user_id=user_id,
+            truncated=False,
+            removed_messages=0,
+            original_tokens=original_tokens,
+            final_tokens=original_tokens,
+            event="token_guard",
+        )
         return messages, {
             "truncated": False,
             "removed_count": 0,
@@ -184,17 +195,20 @@ def enforce_token_limit(
         )
         raise RuntimeError(f"Prompt exceeds model hard token limit ({final_tokens} > {MAX_MODEL_TOKENS})")
 
-    # Log truncation event
+    # Log truncation event (B37)
     logger.info(
-        "Token guard applied",
+        "token_guard",
         conversation_id=conversation_id,
         user_id=user_id,
         truncated=True,
-        removed_count=len(removed),
+        removed_messages=len(removed),
         original_tokens=original_tokens,
         final_tokens=final_tokens,
         event="token_guard",
     )
+
+    # Increment truncation counter (B37)
+    increment_memory_counter("token_truncations")
 
     return final_messages, {
         "truncated": True,

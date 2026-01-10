@@ -15,6 +15,7 @@ from app.analytics.api import router as analytics_router
 from app.api.activities.activities import router as activities_router
 from app.api.admin.admin_activities import router as admin_activities_router
 from app.api.admin.admin_ingestion_status import router as admin_ingestion_router
+from app.api.admin.admin_memory import router as admin_memory_router
 from app.api.admin.admin_retry import router as admin_retry_router
 from app.api.admin.ingestion_reliability import router as ingestion_reliability_router
 from app.api.auth.auth import router as auth_router
@@ -50,6 +51,7 @@ from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_add_activity_tss import migrate_add_activity_tss
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
+from scripts.migrate_add_conversation_summary import migrate_add_conversation_summary
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
@@ -313,6 +315,14 @@ except Exception as e:
     migration_errors.append(f"migrate_add_activity_tss: {e}")
     logger.error(f"Migration failed: migrate_add_activity_tss - {e}", exc_info=True)
 
+try:
+    logger.info("Running migration: conversation summary columns (B34)")
+    migrate_add_conversation_summary()
+    logger.info("✓ Migration completed: conversation summary columns (B34)")
+except Exception as e:
+    migration_errors.append(f"migrate_add_conversation_summary: {e}")
+    logger.error(f"Migration failed: migrate_add_conversation_summary - {e}", exc_info=True)
+
 if migration_errors:
     logger.error(
         f"Some migrations failed ({len(migration_errors)} errors). "
@@ -527,6 +537,7 @@ app.include_router(activities_router)
 app.include_router(admin_retry_router)
 app.include_router(admin_ingestion_router)
 app.include_router(admin_activities_router)
+app.include_router(admin_memory_router)
 app.include_router(ingestion_reliability_router)
 app.include_router(analytics_router)
 app.include_router(auth_router)

@@ -1,9 +1,9 @@
-import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
+from pydantic_ai import Agent
 
 from app.coach.services.conversation_progress import (
     clear_progress,
@@ -13,9 +13,13 @@ from app.coach.services.conversation_progress import (
 from app.coach.tools.session_planner import generate_race_build_sessions, save_planned_sessions
 from app.coach.tools.slot_utils import merge_slots, parse_date_loose
 from app.db.models import ConversationProgress
+from app.services.llm.model import get_model
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
 _recent_calls: dict[str, datetime] = {}
+
+# Use cheap model for extraction
+EXTRACTION_MODEL = "gpt-4o-mini"
 
 
 class RaceInformation(BaseModel):
@@ -41,8 +45,61 @@ class RaceInformation(BaseModel):
     )
 
 
+class TrainingGoalInformation(BaseModel):
+    """Structured training goal information extracted from user message with conversation context."""
+
+    race_name: str | None = Field(
+        default=None,
+        description="Official or informal race name if mentioned",
+    )
+    race_distance: Literal["5K", "10K", "Half Marathon", "Marathon", "Ultra"] | None = Field(
+        default=None,
+        description="Race distance. Extract from terms like '5k', '10k', 'half marathon', 'marathon', 'ultra', '42k', '26.2 miles', etc.",
+    )
+    race_date: str | None = Field(
+        default=None,
+        description=(
+            "Race date in YYYY-MM-DD format. Extract from various date formats. "
+            "If year is missing, infer current or next year based on today's date."
+        ),
+    )
+    training_start_date: str | None = Field(
+        default=None,
+        description="Training start date in YYYY-MM-DD format if mentioned",
+    )
+    training_duration_weeks: int | None = Field(
+        default=None,
+        description="Training duration in weeks if mentioned",
+    )
+    target_finish_time: str | None = Field(
+        default=None,
+        description=(
+            "Target finish time in HH:MM:SS format (e.g., '03:00:00' for 3 hours). "
+            "Extract from time expressions like 'sub 3', 'under 2 hours', '2:45 marathon', etc."
+        ),
+    )
+    goal_type: Literal["finish", "time", "performance", "completion"] | None = Field(
+        default=None,
+        description=(
+            "Goal type: 'time' for time goals, 'finish' for finishing goals, "
+            "'performance' for PR/qualify/podium, 'completion' for completion emphasis"
+        ),
+    )
+    confidence_level: Literal["high", "moderate", "low"] | None = Field(
+        default=None,
+        description=(
+            "Confidence level of the extraction: 'high' if all key fields are clear, "
+            "'moderate' if some inference needed, 'low' if minimal information"
+        ),
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Short free-text clarification if useful",
+    )
+
+
 def extract_race_information(message: str) -> RaceInformation:
-    """Extract race information from user message using simple parsing.
+    """Extract race information from user message using LLM-based extraction.
 
     Args:
         message: User message containing race details
@@ -50,76 +107,233 @@ def extract_race_information(message: str) -> RaceInformation:
     Returns:
         RaceInformation with extracted fields (may have None values if not found)
     """
-    message_lower = message.lower()
-    race_info = RaceInformation()
+    logger.info(f"Extracting race information from message: {message[:100]}...")
 
-    # Extract distance
-    distance_patterns = {
-        "5K": ["5k", "5 k", "five k"],
-        "10K": ["10k", "10 k", "ten k"],
-        "Half Marathon": ["half marathon", "half-marathon", "21k", "21.1k", "13.1"],
-        "Marathon": ["marathon", "42k", "42.2k", "26.2"],
-        "Ultra": ["ultra", "ultramarathon", "50k", "100k"],
-    }
-    for distance, patterns in distance_patterns.items():
-        if any(pattern in message_lower for pattern in patterns):
-            race_info.distance = distance
-            break
+    today = datetime.now(timezone.utc).date()
+    today_str = today.strftime("%Y-%m-%d")
+    current_year = today.year
 
-    # Extract date (simple patterns)
-    current_date = datetime.now(timezone.utc)
-    month_map = {
-        "january": 1,
-        "february": 2,
-        "march": 3,
-        "april": 4,
-        "may": 5,
-        "june": 6,
-        "july": 7,
-        "august": 8,
-        "september": 9,
-        "october": 10,
-        "november": 11,
-        "december": 12,
-    }
-    date_patterns = [
-        (r"(\d{4})-(\d{2})-(\d{2})", lambda m: datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)),
-        (r"(\d{1,2})/(\d{1,2})/(\d{4})", lambda m: datetime(int(m.group(3)), int(m.group(1)), int(m.group(2)), tzinfo=timezone.utc)),
-        (
-            r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})",
-            lambda m: datetime(int(m.group(3)), month_map[m.group(1).lower()], int(m.group(2)), tzinfo=timezone.utc),
-        ),
-    ]
+    system_prompt = f"""You are a race information extraction assistant. Extract structured race information from user messages.
 
-    for pattern, parser in date_patterns:
-        match = re.search(pattern, message_lower)
-        if match:
-            try:
-                date_obj = parser(match)
-                if date_obj >= current_date:
-                    race_info.date = date_obj.strftime("%Y-%m-%d")
-                    break
-            except (ValueError, KeyError, IndexError):
-                continue
+Today's date is {today_str} (year: {current_year}).
 
-    # Extract target time (simple patterns)
-    time_patterns = [
-        (r"(\d{1,2}):(\d{2}):(\d{2})", lambda m: f"{m.group(1)}:{m.group(2)}:{m.group(3)}"),
-        (r"(\d{1,2}):(\d{2})", lambda m: f"{m.group(1)}:{m.group(2)}:00"),
-        (r"(\d{1,2})h\s*(\d{1,2})m", lambda m: f"{m.group(1)}:{m.group(2)}:00"),
-        (r"(\d{1,2})\s*hours?\s*(\d{1,2})\s*minutes?", lambda m: f"{m.group(1)}:{m.group(2)}:00"),
-    ]
-    for pattern, parser in time_patterns:
-        match = re.search(pattern, message_lower)
-        if match:
-            try:
-                race_info.target_time = parser(match)
-                break
-            except (ValueError, IndexError):
-                continue
+Your task:
+- Extract race distance (must be one of: "5K", "10K", "Half Marathon", "Marathon", "Ultra")
+- Extract race date in YYYY-MM-DD format (if year is missing, infer current or next year based on today's date)
+- Extract target finish time in HH:MM:SS format if mentioned
 
-    logger.info(f"Extracted race information: distance={race_info.distance}, date={race_info.date}, target_time={race_info.target_time}")
+Rules:
+- Only extract information that is explicitly mentioned or clearly implied
+- If information is not available, set field to null
+- Be conservative - don't guess or infer
+- Dates should be in YYYY-MM-DD format
+- If only month/day is mentioned (e.g., "April 25th", "on the 25th"), infer the year:
+  * If the date (with current year) hasn't passed yet, use current year
+  * If the date (with current year) has passed, use next year
+- Target times should be normalized to HH:MM:SS format (e.g., "2:30:00" for 2 hours 30 minutes)
+- Distance must match exactly: "5K", "10K", "Half Marathon", "Marathon", or "Ultra"
+
+Example inputs (assuming today is {today_str}):
+- "on the 25th!" -> date: infer month from context or use current month, year based on whether date has passed
+- "I'm training for a marathon in April 25th" -> distance: "Marathon", date: "{current_year}-04-25" or "{current_year + 1}-04-25"
+- "marathon on April 15, 2026" -> distance: "Marathon", date: "2026-04-15"
+- "half marathon under 2 hours" -> distance: "Half Marathon", target_time: "2:00:00"
+"""
+
+    model = get_model("openai", EXTRACTION_MODEL)
+    agent = Agent(
+        model=model,
+        system_prompt=system_prompt,
+        output_type=RaceInformation,
+    )
+
+    try:
+        result = agent.run_sync(f"Extract race information from this message: {message}")
+        race_info = result.output
+
+        logger.info(
+            f"Extraction successful: distance={race_info.distance}, date={race_info.date}, target_time={race_info.target_time}",
+        )
+    except Exception as e:
+        logger.error(f"Failed to extract race information: {e}", exc_info=True)
+        # Return empty information on failure (non-blocking)
+        race_info = RaceInformation()
+
     return race_info
+
+
+async def extract_training_goal(
+    latest_user_message: str,
+    conversation_context: dict[str, str | None],
+    awaiting_slots: list[str],
+    today: date,
+) -> TrainingGoalInformation:
+    """Extract training goal information from user message with conversation context.
+
+    This function uses conversation context to resolve partial or follow-up answers
+    and prioritizes resolving awaited slots before general extraction.
+
+    Args:
+        latest_user_message: The user's latest message
+        conversation_context: Dictionary with known facts from previous turns:
+            - known_race_name: str | None
+            - known_race_distance: str | None
+            - known_race_date: str | None (YYYY-MM-DD)
+            - known_race_month: str | None
+            - known_target_time: str | None (HH:MM:SS)
+            - known_goal_type: str | None
+        awaiting_slots: List of slot names the system is currently awaiting
+        today: Today's date for year inference
+
+    Returns:
+        TrainingGoalInformation with extracted fields (may have None values if not found)
+    """
+    logger.info(
+        f"Extracting training goal from message: {latest_user_message[:100]}...",
+        awaiting_slots=awaiting_slots,
+        has_context=bool(conversation_context),
+    )
+
+    today_str = today.strftime("%Y-%m-%d")
+    current_year = today.year
+
+    # Build context string for prompt
+    context_parts = []
+    if conversation_context.get("known_race_name"):
+        context_parts.append(f"Race name: {conversation_context['known_race_name']}")
+    if conversation_context.get("known_race_distance"):
+        context_parts.append(f"Race distance: {conversation_context['known_race_distance']}")
+    if conversation_context.get("known_race_date"):
+        context_parts.append(f"Race date: {conversation_context['known_race_date']}")
+    if conversation_context.get("known_race_month"):
+        context_parts.append(f"Race month: {conversation_context['known_race_month']}")
+    if conversation_context.get("known_target_time"):
+        context_parts.append(f"Target time: {conversation_context['known_target_time']}")
+    if conversation_context.get("known_goal_type"):
+        context_parts.append(f"Goal type: {conversation_context['known_goal_type']}")
+
+    context_str = "\n".join(context_parts) if context_parts else "No previous context."
+
+    awaiting_str = ", ".join(awaiting_slots) if awaiting_slots else "None"
+
+    system_prompt = f"""You are a structured information extraction assistant for endurance training and race planning.
+
+Today's date is {today_str} (year: {current_year}).
+
+You will receive:
+1. The user's latest message
+2. Conversation context containing previously known facts
+3. A list of slots that the system is currently awaiting
+
+Your job is to extract or resolve structured training and race information.
+
+━━━━━━━━━━━━━━━━━━━
+FIELDS TO EXTRACT
+━━━━━━━━━━━━━━━━━━━
+
+Return a JSON object with the following fields:
+
+- race_name: Official or informal race name if mentioned
+- race_distance: One of ["5K", "10K", "Half Marathon", "Marathon", "Ultra"]
+- race_date: YYYY-MM-DD
+- training_start_date: YYYY-MM-DD
+- training_duration_weeks: integer
+- target_finish_time: HH:MM:SS
+- goal_type: one of ["finish", "time", "performance", "completion"]
+- confidence_level: one of ["high", "moderate", "low"]
+- notes: short free-text clarification if useful
+
+━━━━━━━━━━━━━━━━━━━
+CORE RULES (STRICT)
+━━━━━━━━━━━━━━━━━━━
+
+1. Use conversation_context to resolve partial or follow-up answers.
+2. If awaiting_slots is not empty, prioritize resolving those slots.
+3. Do NOT ask clarifying questions.
+4. Do NOT invent or guess missing information.
+5. Only infer a year for dates when month/day are given.
+
+━━━━━━━━━━━━━━━━━━━
+DATE RESOLUTION RULES
+━━━━━━━━━━━━━━━━━━━
+
+If a date is incomplete:
+
+- "on the 25th":
+  • Use known month from conversation_context if available
+  • Otherwise, leave race_date as null
+
+- Month/day without year:
+  • If date (with current year) is in the future → use current year
+  • If date has passed → use next year
+
+- Never infer past dates
+- Normalize all dates to YYYY-MM-DD
+
+━━━━━━━━━━━━━━━━━━━
+TIME NORMALIZATION
+━━━━━━━━━━━━━━━━━━━
+
+Normalize all times to HH:MM:SS:
+- "sub 3" → 03:00:00
+- "under 2 hours" → 02:00:00
+- "2:45 marathon" → 02:45:00
+
+━━━━━━━━━━━━━━━━━━━
+GOAL TYPE INFERENCE
+━━━━━━━━━━━━━━━━━━━
+
+- Mentions of time goals → goal_type = "time"
+- Mentions of finishing → goal_type = "finish"
+- Performance language (PR, qualify, podium) → "performance"
+- Completion emphasis → "completion"
+
+━━━━━━━━━━━━━━━━━━━
+OUTPUT RULES
+━━━━━━━━━━━━━━━━━━━
+
+- Return ONLY valid JSON
+- Use null for unknown fields
+- Do not include explanations
+- Do not include extra keys
+- Deterministic output for identical inputs
+
+━━━━━━━━━━━━━━━━━━━
+CONVERSATION CONTEXT
+━━━━━━━━━━━━━━━━━━━
+
+{context_str}
+
+━━━━━━━━━━━━━━━━━━━
+AWAITING SLOTS
+━━━━━━━━━━━━━━━━━━━
+
+{awaiting_str}
+"""
+
+    model = get_model("openai", EXTRACTION_MODEL)
+    agent = Agent(
+        model=model,
+        system_prompt=system_prompt,
+        output_type=TrainingGoalInformation,
+    )
+
+    try:
+        user_prompt = f"Extract training goal information from this message: {latest_user_message}"
+        result = await agent.run(user_prompt)
+        goal_info = result.output
+
+        logger.info(
+            f"Extraction successful: race_distance={goal_info.race_distance}, "
+            f"race_date={goal_info.race_date}, target_finish_time={goal_info.target_finish_time}, "
+            f"goal_type={goal_info.goal_type}, confidence={goal_info.confidence_level}",
+        )
+    except Exception as e:
+        logger.error(f"Failed to extract training goal: {e}", exc_info=True)
+        # Return empty information on failure (non-blocking)
+        goal_info = TrainingGoalInformation()
+
+    return goal_info
 
 
 def build_clarification_message(distance: str | None, race_date: datetime | None, awaiting_slots: list[str] | None = None) -> str:
@@ -286,12 +500,83 @@ def parse_date_string(date_str: str) -> datetime | None:
         return None
 
 
-def resolve_awaited_slots(
+def build_conversation_context(progress: ConversationProgress | None) -> dict[str, str | None]:
+    """Build conversation context from ConversationProgress.
+
+    Extracts known facts from progress slots to provide context for extraction.
+    Never overwrites filled values with null - context is facts only.
+
+    Args:
+        progress: ConversationProgress or None
+
+    Returns:
+        Dictionary with conversation context fields
+    """
+    if not progress:
+        return {
+            "known_race_name": None,
+            "known_race_distance": None,
+            "known_race_date": None,
+            "known_race_month": None,
+            "known_target_time": None,
+            "known_goal_type": None,
+        }
+
+    slots = progress.slots or {}
+
+    # Extract race_name
+    race_name: str | None = None
+    if isinstance(slots.get("race_name"), str):
+        race_name = slots["race_name"]
+
+    # Extract race_distance
+    race_distance: str | None = None
+    if isinstance(slots.get("race_distance"), str):
+        race_distance = slots["race_distance"]
+
+    # Extract race_date and race_month
+    race_date: str | None = None
+    race_month: str | None = None
+    race_date_value = slots.get("race_date")
+    if isinstance(race_date_value, datetime):
+        race_date = race_date_value.strftime("%Y-%m-%d")
+        race_month = race_date_value.strftime("%B")
+    elif isinstance(race_date_value, str):
+        # Try to parse if it's a string
+        parsed = parse_date_string(race_date_value)
+        if parsed:
+            race_date = parsed.strftime("%Y-%m-%d")
+            race_month = parsed.strftime("%B")
+
+    # Extract target_time
+    target_time: str | None = None
+    if isinstance(slots.get("target_time"), str):
+        target_time = slots["target_time"]
+
+    # Extract goal_type
+    goal_type: str | None = None
+    if isinstance(slots.get("goal_type"), str):
+        goal_type = slots["goal_type"]
+
+    return {
+        "known_race_name": race_name,
+        "known_race_distance": race_distance,
+        "known_race_date": race_date,
+        "known_race_month": race_month,
+        "known_target_time": target_time,
+        "known_goal_type": goal_type,
+    }
+
+
+async def resolve_awaited_slots(
     message: str,
     progress: ConversationProgress,
     today: date,
-) -> tuple[dict[str, str | datetime | None], list[str]]:
-    """Resolve awaited slots from user message.
+) -> tuple[dict[str, str | datetime | int | None], list[str]]:
+    """Resolve awaited slots from user message using context-aware extraction.
+
+    Uses the new extract_training_goal function with conversation context
+    to resolve partial follow-ups correctly.
 
     Args:
         message: User message
@@ -301,20 +586,26 @@ def resolve_awaited_slots(
     Returns:
         Tuple of (resolved_slots dict, remaining_awaiting_slots list)
     """
-    resolved: dict[str, str | datetime | None] = {}
+    resolved: dict[str, str | datetime | int | None] = {}
     remaining_awaiting = list(progress.awaiting_slots)
 
+    # Build conversation context from progress
+    conversation_context = build_conversation_context(progress)
+
+    # Use new extractor with context
+    goal_info = await extract_training_goal(
+        latest_user_message=message,
+        conversation_context=conversation_context,
+        awaiting_slots=progress.awaiting_slots,
+        today=today,
+    )
+
+    # Map extracted fields to slots
     for slot in progress.awaiting_slots:
-        if slot == "race_date":
-            # Use loose date parsing for conversational input
-            parsed_date = parse_date_loose(
-                message,
-                today=today,
-                known_slots=progress.slots,
-            )
+        if slot == "race_date" and goal_info.race_date:
+            parsed_date = parse_date_string(goal_info.race_date)
             if parsed_date:
-                # Convert date to datetime for storage
-                resolved["race_date"] = datetime.combine(parsed_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                resolved["race_date"] = parsed_date
                 remaining_awaiting.remove(slot)
                 logger.info(
                     "Resolved awaited slot",
@@ -322,30 +613,33 @@ def resolve_awaited_slots(
                     value=parsed_date,
                     conversation_id=progress.conversation_id,
                 )
-        elif slot == "race_distance":
-            # Extract distance from message
-            race_info = extract_race_information(message)
-            if race_info.distance:
-                resolved["race_distance"] = race_info.distance
-                remaining_awaiting.remove(slot)
-                logger.info(
-                    "Resolved awaited slot",
-                    slot="race_distance",
-                    value=race_info.distance,
-                    conversation_id=progress.conversation_id,
-                )
-        elif slot == "target_time":
-            # Extract target time from message
-            race_info = extract_race_information(message)
-            if race_info.target_time:
-                resolved["target_time"] = race_info.target_time
-                remaining_awaiting.remove(slot)
-                logger.info(
-                    "Resolved awaited slot",
-                    slot="target_time",
-                    value=race_info.target_time,
-                    conversation_id=progress.conversation_id,
-                )
+        elif slot == "race_distance" and goal_info.race_distance:
+            resolved["race_distance"] = goal_info.race_distance
+            remaining_awaiting.remove(slot)
+            logger.info(
+                "Resolved awaited slot",
+                slot="race_distance",
+                value=goal_info.race_distance,
+                conversation_id=progress.conversation_id,
+            )
+        elif slot == "target_time" and goal_info.target_finish_time:
+            resolved["target_time"] = goal_info.target_finish_time
+            remaining_awaiting.remove(slot)
+            logger.info(
+                "Resolved awaited slot",
+                slot="target_time",
+                value=goal_info.target_finish_time,
+                conversation_id=progress.conversation_id,
+            )
+        elif slot == "race_name" and goal_info.race_name:
+            resolved["race_name"] = goal_info.race_name
+            remaining_awaiting.remove(slot)
+            logger.info(
+                "Resolved awaited slot",
+                slot="race_name",
+                value=goal_info.race_name,
+                conversation_id=progress.conversation_id,
+            )
 
     return resolved, remaining_awaiting
 
@@ -406,7 +700,7 @@ async def plan_race_build(
             conversation_id=conversation_id,
         )
         today = datetime.now(timezone.utc).date()
-        resolved_slots, remaining_awaiting = resolve_awaited_slots(message, progress, today)
+        resolved_slots, remaining_awaiting = await resolve_awaited_slots(message, progress, today)
 
         # Merge resolved slots into existing slots
         old_slots = progress.slots.copy()
@@ -447,17 +741,48 @@ async def plan_race_build(
             conversation_id=conversation_id,
         )
 
-    # Extract new slots from current message
-    race_info = extract_race_information(message)
-    new_slots: dict[str, str | datetime | None] = {}
-    if race_info.distance:
-        new_slots["race_distance"] = race_info.distance
-    if race_info.date:
-        parsed_date = parse_date_string(race_info.date)
+    # Build conversation context from progress
+    conversation_context = build_conversation_context(progress)
+    today = datetime.now(timezone.utc).date()
+
+    # Determine awaiting slots for extraction
+    current_awaiting: list[str] = []
+    if progress:
+        current_awaiting = progress.awaiting_slots or []
+    else:
+        # If no progress, we need to determine what's missing after extraction
+        # For now, extract first, then determine awaiting slots
+        current_awaiting = []
+
+    # Extract new slots from current message using context-aware extractor
+    goal_info = await extract_training_goal(
+        latest_user_message=message,
+        conversation_context=conversation_context,
+        awaiting_slots=current_awaiting,
+        today=today,
+    )
+
+    # Map extracted fields to slots
+    # Note: slots can contain str, datetime, int, or None (stored as JSON)
+    new_slots: dict[str, str | datetime | int | None] = {}
+    if goal_info.race_name:
+        new_slots["race_name"] = goal_info.race_name
+    if goal_info.race_distance:
+        new_slots["race_distance"] = goal_info.race_distance
+    if goal_info.race_date:
+        parsed_date = parse_date_string(goal_info.race_date)
         if parsed_date:
             new_slots["race_date"] = parsed_date
-    if race_info.target_time:
-        new_slots["target_time"] = race_info.target_time
+    if goal_info.target_finish_time:
+        new_slots["target_time"] = goal_info.target_finish_time
+    if goal_info.goal_type:
+        new_slots["goal_type"] = goal_info.goal_type
+    if goal_info.training_start_date:
+        parsed_start = parse_date_string(goal_info.training_start_date)
+        if parsed_start:
+            new_slots["training_start_date"] = parsed_start
+    if goal_info.training_duration_weeks:
+        new_slots["training_duration_weeks"] = goal_info.training_duration_weeks
 
     logger.debug("Extracted slots", slots=new_slots, conversation_id=conversation_id)
 

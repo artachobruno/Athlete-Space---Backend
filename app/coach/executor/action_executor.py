@@ -4,13 +4,24 @@ Executes coaching actions based on orchestrator decisions.
 Owns all MCP tool calls, retries, rate limiting, and safety logic.
 """
 
+from datetime import timezone
+
 from loguru import logger
+from sqlalchemy import select
 
 from app.coach.agents.orchestrator_deps import CoachDeps
+from app.coach.clarification import (
+    generate_proactive_clarification,
+    generate_slot_clarification,
+)
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
-from app.core.slot_extraction import extract_slots_for_intent, generate_clarification_for_missing_slots
-from app.core.tool_requirements import has_required_slots
+from app.coach.services.conversation_progress import get_conversation_progress
+from app.core.conversation_summary import save_conversation_summary, summarize_conversation
+from app.core.slot_extraction import generate_clarification_for_missing_slots
+from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
+from app.db.models import SeasonPlan
+from app.db.session import get_session
 
 
 class CoachActionExecutor:
@@ -193,6 +204,49 @@ class CoachActionExecutor:
         return True, None
 
     @staticmethod
+    async def _trigger_summarization_if_needed(conversation_id: str | None) -> None:
+        """Trigger conversation summarization after successful tool execution (B34).
+
+        This is called only after successful tool execution, not during clarification loops.
+        Summarization runs asynchronously and does not block the response.
+
+        Args:
+            conversation_id: Conversation ID (None if no conversation context)
+        """
+        if not conversation_id:
+            return
+
+        try:
+            # Load slot state from conversation progress
+            progress = get_conversation_progress(conversation_id)
+            slot_state = progress.slots if progress else {}
+
+            # Summarize conversation (incremental update)
+            summary = await summarize_conversation(
+                conversation_id=conversation_id,
+                slot_state=slot_state,
+            )
+
+            # Save summary to database
+            save_conversation_summary(conversation_id, summary)
+
+            logger.info(
+                "Conversation summary updated after tool execution",
+                conversation_id=conversation_id,
+                facts_count=len(summary.facts),
+                preferences_count=len(summary.preferences),
+                open_threads_count=len(summary.open_threads),
+            )
+        except Exception as e:
+            # Never fail the request due to summarization errors
+            logger.warning(
+                "Failed to summarize conversation after tool execution",
+                conversation_id=conversation_id,
+                error=str(e),
+                exc_info=True,
+            )
+
+    @staticmethod
     async def execute(
         decision: OrchestratorAgentResponse,
         deps: CoachDeps,
@@ -211,8 +265,78 @@ class CoachActionExecutor:
         Note:
             Confidence is used for UI tone and follow-up prompts, NOT for execution logic.
             Execution proceeds regardless of confidence level.
+
+        Design Invariant:
+            No tool may execute unless the user explicitly asked for execution AND all required slots are present.
+
+        CORE INVARIANT (HARD RULE):
+            If an executable action exists and is blocked only by missing slots,
+            the system MUST ask for those slots and MUST NOT chat.
+
+        EXECUTION INVARIANT (CRITICAL):
+            If slots are complete (should_execute = true), execute immediately.
+            No confirmation. No waiting. Execute now.
         """
+        # STATE 1: MISSING SLOTS - Ask exactly one blocking question
+        # If executable action exists but slots are incomplete, ask for missing slots
+        target_action = decision.target_action or decision.next_executable_action
+        if target_action and decision.missing_slots and not decision.should_execute:
+            # Assertion: must have missing slots to ask a question
+            if len(decision.missing_slots) == 0:
+                raise RuntimeError("Must have missing slots to ask question, got empty list")
+            logger.info(
+                "STATE 1: Missing slots - asking single blocking question",
+                target_action=target_action,
+                missing_slots=decision.missing_slots,
+                conversation_id=conversation_id,
+            )
+            # Use next_question if provided (from LLM), otherwise generate
+            if decision.next_question:
+                return decision.next_question
+            return generate_slot_clarification(
+                action=target_action,
+                missing_slots=decision.missing_slots,
+            )
+
+        # STATE 2: SLOTS COMPLETE - Execute immediately
+        # If slots are complete, execute without confirmation
+        if decision.should_execute and target_action:
+            # Assertion: should_execute requires no missing slots
+            if len(decision.missing_slots) > 0:
+                raise RuntimeError(f"should_execute=True requires empty missing_slots, got {decision.missing_slots}")
+            logger.info(
+                "STATE 2: Slots complete - executing immediately",
+                action=decision.action,
+                target_action=target_action,
+                should_execute=decision.should_execute,
+                conversation_id=conversation_id,
+            )
+            # Override action to EXECUTE if not already set
+            if decision.action != "EXECUTE":
+                decision.action = "EXECUTE"
+            # Fall through to execution logic below
+
+        # STATE 3: NO EXECUTABLE INTENT - Return informational response
+        # If no executable action, return message as-is (allowed for informational responses)
+        if not target_action:
+            logger.info(
+                "STATE 3: No executable intent - returning informational response",
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+            )
+            return decision.message
+
+        # If we reach here and action is still NO_ACTION, this is STATE 3 (no executable intent)
+        # Return informational response without side effects
         if decision.action != "EXECUTE":
+            logger.info(
+                "NO_ACTION: returning informational response, no side effects",
+                action=decision.action,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+            )
             return decision.message
 
         # Risk 2: Validate intent/horizon combination
@@ -254,15 +378,32 @@ class CoachActionExecutor:
             )
             return "I need your training data to perform this action. Please sync your activities first, or try asking a general question."
 
-        # Execute based on intent and horizon
+        # Execute based on target_action (preferred) or intent/horizon mapping (fallback)
         intent = decision.intent
         horizon = decision.horizon
+        target_action = decision.target_action or decision.next_executable_action
 
+        # Use target_action for execution routing if available
+        if target_action == "plan_race_build":
+            return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
+
+        if target_action == "plan_week":
+            # Special rule: Weekly planning requires a race plan
+            # Check if race plan exists, if not, request race info first
+            race_plan_exists = await CoachActionExecutor._check_race_plan_exists(deps.user_id, deps.athlete_id)
+            if not race_plan_exists:
+                logger.info(
+                    "Weekly planning requires race plan - requesting race date",
+                    user_id=deps.user_id,
+                    athlete_id=deps.athlete_id,
+                    conversation_id=conversation_id,
+                )
+                return "I can plan your week once your marathon plan is created. What is your marathon date?"
+            return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
+
+        # Fallback to intent/horizon mapping if no target_action
         if intent == "recommend" and horizon in {"next_session", "today"}:
             return await CoachActionExecutor._execute_recommend_next_session(decision, deps, conversation_id)
-
-        if intent == "plan" and horizon == "week":
-            return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
 
         if intent == "plan" and horizon == "race":
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
@@ -316,6 +457,8 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Recommendation generated.")
         except MCPError as e:
             if conversation_id and step_info:
@@ -388,6 +531,8 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Weekly plan created.")
         except MCPError as e:
             if conversation_id and step_info:
@@ -435,33 +580,34 @@ class CoachActionExecutor:
 
         tool_name = "plan_race_build"
 
-        # Extract slots BEFORE tool execution
-        slots = extract_slots_for_intent(
-            intent=decision.intent,
-            horizon=decision.horizon,
-            message=race_description,
-            _structured_data=decision.structured_data,
-        )
+        # CRITICAL: Use decision.filled_slots (conversation slot state) instead of re-extracting
+        # Decision logic already validated slots and set filled_slots from conversation slot state
+        slots = decision.filled_slots
 
         logger.debug(
-            "Extracted slots for plan_race_build",
+            "Using filled_slots from decision (conversation slot state)",
             slots=slots,
             intent=decision.intent,
             horizon=decision.horizon,
+            conversation_id=conversation_id,
         )
 
-        # CRITICAL: Gate tool execution based on required slots
-        can_execute, missing_slots = has_required_slots(tool_name, slots)
+        # Final validation using filled_slots (should already be validated, but double-check)
+        can_execute, missing_slots = validate_slots(tool_name, slots)
         if not can_execute:
-            logger.info(
-                "Tool gated due to missing slots",
+            # This should not happen if orchestrator logic is correct, but fail-safe check
+            logger.error(
+                "Slot validation failed despite should_execute=True - this should not happen",
                 tool=tool_name,
-                missing=missing_slots,
+                missing_slots=missing_slots,
+                filled_slots=slots,
                 conversation_id=conversation_id,
             )
-            # Generate clarification response instead of calling tool
+            # Return clarification without side effects
             return generate_clarification_for_missing_slots(tool_name, missing_slots)
 
+        # All checks passed - proceed with execution
+        # Progress events are only emitted during execution
         step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
 
         if conversation_id and step_info:
@@ -488,8 +634,19 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Race plan created.")
         except MCPError as e:
+            # MISSING_RACE_INFO is not an error - it's a clarification request
+            if e.code == "MISSING_RACE_INFO":
+                logger.info(
+                    "Tool returned clarification request",
+                    tool=tool_name,
+                    conversation_id=conversation_id,
+                )
+                # Return the clarification message directly to the user
+                return e.message
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
@@ -558,6 +715,8 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Season plan created.")
         except MCPError as e:
             if conversation_id and step_info:
@@ -620,6 +779,8 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Training load adjusted.")
         except MCPError as e:
             if conversation_id and step_info:
@@ -676,6 +837,8 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Training state explained.")
         except MCPError as e:
             if conversation_id and step_info:
@@ -744,6 +907,8 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Workout added successfully.")
         except MCPError as e:
             if conversation_id and step_info:
@@ -770,3 +935,33 @@ class CoachActionExecutor:
                 },
             )
             return "Something went wrong while adding your workout. Please try again."
+
+    @staticmethod
+    async def _check_race_plan_exists(user_id: str | None, athlete_id: int | None) -> bool:
+        """Check if a race plan (season plan) exists for the user.
+
+        Args:
+            user_id: User ID (optional)
+            athlete_id: Athlete ID (optional)
+
+        Returns:
+            True if an active race/season plan exists, False otherwise
+        """
+        if user_id is None or athlete_id is None:
+            return False
+
+        try:
+            with get_session() as session:
+                result = session.execute(
+                    select(SeasonPlan)
+                    .where(
+                        SeasonPlan.user_id == user_id,
+                        SeasonPlan.athlete_id == athlete_id,
+                        SeasonPlan.is_active == True,  # noqa: E712
+                    )
+                    .limit(1)
+                )
+                return result.scalar_one_or_none() is not None
+        except Exception as e:
+            logger.warning(f"Error checking for existing race plan: {e}")
+            return False

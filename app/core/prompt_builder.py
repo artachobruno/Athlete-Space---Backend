@@ -17,8 +17,18 @@ from typing import Literal, TypedDict
 
 from loguru import logger
 
+from app.core.memory_metrics import MemoryMetrics, log_memory_metrics
 from app.core.message import Message
-from app.core.prompt_history import get_prompt_history
+from app.core.prompt_history import extract_summary_version, get_prompt_history, has_summary
+from app.core.summarization_config import (
+    MAX_HISTORY_MESSAGES_BEFORE_SUMMARY,
+    MAX_HISTORY_TOKENS_BEFORE_SUMMARY,
+)
+from app.core.summarization_queue import enqueue_conversation_summary
+from app.core.summarization_trigger import (
+    count_messages_since_last_summary,
+    should_trigger_summarization,
+)
 from app.core.token_counting import count_tokens
 from app.core.token_guard import enforce_token_limit
 
@@ -86,6 +96,41 @@ def build_prompt(
     # This returns ordered Messages (oldest → newest)
     history_messages = get_prompt_history(conversation_id)
 
+    # Step 2.5: Check summarization trigger (B33)
+    # This happens after history retrieval but before prompt building
+    # Trigger is checked based on objective thresholds (tokens, messages)
+    if history_messages:
+        # Calculate history metrics
+        history_tokens = sum(msg.tokens for msg in history_messages)
+        history_message_count = len(history_messages)
+        messages_since_last_summary = count_messages_since_last_summary(history_messages)
+
+        # Check if summarization should be triggered
+        if should_trigger_summarization(
+            history_tokens=history_tokens,
+            history_message_count=history_message_count,
+            messages_since_last_summary=messages_since_last_summary,
+        ):
+            # Determine trigger reason
+            reason = "unknown"
+            if history_tokens >= MAX_HISTORY_TOKENS_BEFORE_SUMMARY:
+                reason = "token_threshold"
+            elif history_message_count >= MAX_HISTORY_MESSAGES_BEFORE_SUMMARY:
+                reason = "message_threshold"
+
+            logger.info(
+                "summarization_triggered",
+                conversation_id=conversation_id,
+                reason=reason,
+                history_tokens=history_tokens,
+                history_messages=history_message_count,
+                messages_since_last_summary=messages_since_last_summary,
+            )
+
+            # Enqueue summarization asynchronously (non-blocking)
+            # B34 will implement the actual summarization logic
+            enqueue_conversation_summary(conversation_id)
+
     # Step 3: Convert canonical Messages → LLM messages
     # Preserve ordering, preserve role exactly
     # Map Message.role → LLMMessage.role
@@ -116,18 +161,28 @@ def build_prompt(
         user_id=current_user_message.user_id,
     )
 
-    # Step 6: Logging & observability
+    # Step 6: Logging & observability (B37)
     roles_sequence = [msg["role"] for msg in prompt]
-    logger.info(
-        "Prompt built",
-        conversation_id=conversation_id,
-        history_count=len(history_messages),
-        total_tokens=truncation_meta["final_tokens"],
-        original_tokens=truncation_meta.get("original_tokens", truncation_meta["final_tokens"]),
-        truncated=truncation_meta["truncated"],
-        removed_count=truncation_meta.get("removed_count", 0),
-        roles_sequence=roles_sequence,
+    history_tokens = sum(msg.tokens or 0 for msg in history_messages)
+    summary_version = extract_summary_version(history_messages)
+    summary_present = has_summary(history_messages)
+
+    log_memory_metrics(
         event="prompt_built",
+        metrics=MemoryMetrics(
+            conversation_id=conversation_id,
+            redis_message_count=len(history_messages),
+            redis_token_count=history_tokens,
+            prompt_token_count=truncation_meta["final_tokens"],
+            summary_version=summary_version,
+            summary_present=summary_present,
+        ),
+        extra={
+            "roles_sequence": ",".join(roles_sequence),
+            "truncated": truncation_meta["truncated"],
+            "removed_count": truncation_meta.get("removed_count", 0),
+            "original_tokens": truncation_meta.get("original_tokens", truncation_meta["final_tokens"]),
+        },
     )
 
     return prompt

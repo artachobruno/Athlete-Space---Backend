@@ -11,8 +11,50 @@ This is read-only and deterministic. No side effects. No mutation. No heuristics
 
 from loguru import logger
 
+from app.core.memory_metrics import MemoryMetrics, log_memory_metrics
 from app.core.message import Message
 from app.core.redis_conversation_store import MAX_CONVERSATION_MESSAGES, get_recent_messages
+
+
+def has_summary(messages: list[Message]) -> bool:
+    """Check if messages contain a summary.
+
+    Summaries are system messages with summary_version in metadata.
+
+    Args:
+        messages: List of messages to check
+
+    Returns:
+        True if a summary message is present, False otherwise
+    """
+    return any(msg.role == "system" and msg.metadata.get("summary_version") for msg in messages)
+
+
+def extract_summary_version(messages: list[Message]) -> int | None:
+    """Extract summary version from messages.
+
+    Returns the highest summary_version found in system messages.
+
+    Args:
+        messages: List of messages to check
+
+    Returns:
+        Summary version number if found, None otherwise
+    """
+    versions: list[int] = []
+    for msg in messages:
+        if msg.role == "system":
+            version = msg.metadata.get("summary_version")
+            if version is not None:
+                try:
+                    if isinstance(version, str):
+                        versions.append(int(version))
+                    elif isinstance(version, int):
+                        versions.append(version)
+                except (ValueError, TypeError):
+                    continue
+
+    return max(versions) if versions else None
 
 
 def get_prompt_history(conversation_id: str, limit: int | None = None) -> list[Message]:
@@ -113,13 +155,23 @@ def get_prompt_history(conversation_id: str, limit: int | None = None) -> list[M
     # Extract roles sequence for logging (debug only)
     roles_sequence = [msg.role for msg in valid_messages]
 
-    # Log retrieval event
-    logger.debug(
-        "Prompt history retrieved",
-        conversation_id=conversation_id,
-        message_count=len(valid_messages),
-        roles=roles_sequence,
-        event="prompt_history_retrieved",
+    # Calculate metrics for observability (B37)
+    redis_token_count = sum(msg.tokens or 0 for msg in valid_messages)
+    summary_version = extract_summary_version(valid_messages)
+    summary_present = has_summary(valid_messages)
+
+    # Log retrieval event with structured metrics
+    log_memory_metrics(
+        event="memory_history_loaded",
+        metrics=MemoryMetrics(
+            conversation_id=conversation_id,
+            redis_message_count=len(valid_messages),
+            redis_token_count=redis_token_count,
+            prompt_token_count=None,
+            summary_version=summary_version,
+            summary_present=summary_present,
+        ),
+        extra={"roles": ",".join(roles_sequence)},
     )
 
     return valid_messages

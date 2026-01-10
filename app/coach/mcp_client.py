@@ -202,6 +202,9 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 continue
             logger.error(f"MCP tool request error after {max_retries} attempts: {tool_name}", tool=tool_name, error=str(e))
             raise MCPError("NETWORK_ERROR", f"Network error calling {tool_name}: {e!s}") from e
+        except MCPError:
+            # Re-raise MCPError without wrapping (e.g., from _raise_mcp_error for permanent errors)
+            raise
         except RuntimeError as e:
             # Handle event loop closure errors
             if ("Event loop is closed" in str(e) or "This event loop is already running" in str(e)) and attempt < max_retries - 1:

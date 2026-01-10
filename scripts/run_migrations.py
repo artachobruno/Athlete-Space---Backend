@@ -22,6 +22,8 @@ from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_add_activity_tss import migrate_add_activity_tss
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
+from scripts.migrate_add_conversation_summaries_table import migrate_add_conversation_summaries_table
+from scripts.migrate_add_conversation_summary import migrate_add_conversation_summary
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
@@ -67,6 +69,8 @@ def run_all_migrations() -> None:
         ("history cursor fields", migrate_history_cursor),
         ("strava_accounts sync tracking columns", migrate_strava_accounts_sync_tracking),
         ("user_settings fields (units, timezone, notifications_enabled)", migrate_user_settings_fields),
+        ("conversation summary columns (B34)", migrate_add_conversation_summary),
+        ("conversation_summaries table (B35)", migrate_add_conversation_summaries_table),
     ]
 
     for migration_name, migration_func in migrations:

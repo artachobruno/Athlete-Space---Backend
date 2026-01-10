@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Enum, Float, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Enum, Float, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -711,12 +711,15 @@ class ConversationProgress(Base):
     - Cumulative slot accumulation across turns
     - Awaited slot tracking for follow-up questions
     - Context-aware slot resolution
+    - Long-term memory via conversation summary (B34)
 
     Schema:
     - conversation_id: Conversation ID (primary key, format: c_<UUID>)
     - intent: Current intent (e.g., "race_plan", "season_plan")
     - slots: JSON object with slot values (e.g., {"race_distance": "marathon", "race_date": null})
     - awaiting_slots: JSON array of slot names we're waiting for (e.g., ["race_date"])
+    - conversation_summary: JSONB structured summary (facts, preferences, goals, open_threads)
+    - summary_updated_at: Timestamp when summary was last updated
     - updated_at: Last update timestamp
     """
 
@@ -726,6 +729,8 @@ class ConversationProgress(Base):
     intent: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     slots: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     awaiting_slots: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    conversation_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    summary_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,
@@ -783,4 +788,45 @@ class ConversationMessage(Base):
         CheckConstraint("role IN ('user', 'assistant', 'system')", name="check_role_valid"),
         Index("idx_messages_conversation_ts", "conversation_id", "ts"),  # Common query: messages by conversation ordered by time
         Index("idx_messages_user_ts", "user_id", "ts"),  # Common query: messages by user ordered by time
+    )
+
+
+class ConversationSummary(Base):
+    """Versioned conversation summary storage (B35).
+
+    Append-only storage for conversation summaries with versioning.
+    Each summary generation creates a new versioned row. Summaries are never
+    updated or deleted, enabling full audit trail and regression-safe memory.
+
+    Postgres is source of truth. Redis is a cache-only optimization.
+
+    Schema:
+    - id: UUID primary key
+    - conversation_id: Conversation ID (indexed, format: c_<UUID>)
+    - version: Monotonically increasing version number per conversation (starts at 1)
+    - summary: JSONB structured summary (facts, preferences, goals, open_threads)
+    - created_at: Timestamp when summary was created (server-generated, UTC)
+
+    Constraints:
+    - Unique constraint: (conversation_id, version) prevents duplicates
+    - Index on (conversation_id, version DESC) for O(1) latest retrieval
+    - Append-only (no updates or deletes)
+    - Versions are monotonically increasing per conversation
+    """
+
+    __tablename__ = "conversation_summaries"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "version", name="uq_conversation_summary_version"),
+        Index("idx_conversation_summary_latest", "conversation_id", "version"),
     )

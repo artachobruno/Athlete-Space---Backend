@@ -9,7 +9,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -20,6 +20,16 @@ from rich.console import Console
 from rich.json import JSON
 from rich.panel import Panel
 from rich.text import Text
+
+try:
+    import redis
+except ImportError:
+    redis = None
+
+try:
+    from sqlalchemy import text
+except ImportError:
+    text = None
 
 # Bootstrap must be imported after standard library imports
 # but before app imports to set up sys.path correctly
@@ -32,9 +42,13 @@ except ImportError:
     if str(_project_root) not in sys.path:
         sys.path.insert(0, str(_project_root))
 
-from app.coach.agents.orchestrator_agent import run_conversation
+from sqlalchemy import select
+
 from app.coach.agents.orchestrator_deps import CoachDeps
+from app.coach.services.chat_service import process_coach_chat
 from app.config.settings import settings
+from app.db.models import AthleteProfile, StravaAccount, User
+from app.db.session import get_session
 
 # Initialize Rich console for output
 console = Console()
@@ -200,10 +214,100 @@ def check_mcp() -> None:
 
 
 @app.command()
+def check_db() -> None:
+    """Verify Redis and PostgreSQL connections are working.
+
+    Checks that both Redis and PostgreSQL databases are configured and accessible.
+    """
+    results: list[tuple[str, bool, str]] = []
+
+    # Check Redis
+    try:
+        if redis is None:
+            results.append(("Redis", False, "redis package not installed (pip install redis)"))
+        else:
+            redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+            redis_client.ping()
+            results.append(("Redis", True, f"Connected to {settings.redis_url}"))
+    except Exception as e:
+        results.append(("Redis", False, f"Connection failed: {e!s}"))
+
+    # Check PostgreSQL
+    try:
+        if text is None or get_session is None:
+            results.append(("PostgreSQL", False, "Required packages not installed (sqlalchemy, app.db.session)"))
+        else:
+            with get_session() as db:
+                db.execute(text("SELECT 1"))
+            db_type = (
+                "PostgreSQL" if "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower() else "SQLite"
+            )
+            results.append((db_type, True, "Connected to database"))
+    except Exception as e:
+        results.append(("PostgreSQL", False, f"Connection failed: {e!s}"))
+
+    # Display results
+    all_ok = all(status for _, status, _ in results)
+    status_text = "All database connections OK" if all_ok else "Some database connections failed"
+    status_style = "bold green" if all_ok else "bold red"
+    border_style = "green" if all_ok else "red"
+
+    details = "\n".join([f"  {'✓' if status else '✗'} {name}: {message}" for name, status, message in results])
+
+    console.print(
+        Panel(
+            Text(status_text, style=status_style),
+            subtitle=details,
+            border_style=border_style,
+        )
+    )
+
+    if not all_ok:
+        console.print("\n[yellow]Configuration help:[/yellow]")
+        console.print("  Redis: Set REDIS_URL environment variable (default: redis://localhost:6379/0)")
+        console.print("  PostgreSQL: Set DATABASE_URL environment variable")
+        console.print("    Example: postgresql://user:password@localhost:5432/dbname")  # pragma: allowlist secret
+        raise typer.Exit(1)
+
+
+def _get_athlete_id_from_user_id(user_id: str) -> tuple[int | None, bool]:
+    """Get athlete_id from user_id via AthleteProfile or StravaAccount.
+
+    Checks both AthleteProfile (which has direct user_id -> athlete_id mapping)
+    and StravaAccount (which has user_id -> athlete_id via Strava).
+
+    Args:
+        user_id: User ID (Clerk UUID)
+
+    Returns:
+        Tuple of (athlete_id or None, user_exists: bool)
+    """
+    try:
+        with get_session() as session:
+            # First check if user exists
+            user = session.execute(select(User).where(User.id == user_id)).first()
+            user_exists = user is not None
+
+            # Try AthleteProfile first (direct mapping)
+            profile = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
+            if profile and profile[0].athlete_id:
+                return (int(profile[0].athlete_id), user_exists)
+
+            # Fallback to StravaAccount
+            account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+            if account:
+                return (int(account[0].athlete_id), user_exists)
+            return (None, user_exists)
+    except Exception as e:
+        logger.warning(f"Failed to look up athlete_id from user_id: {e}")
+        return (None, False)
+
+
+@app.command()
 def client(
     input_text: str | None = typer.Option(None, "--input", "-i", help="One-shot input text"),
-    athlete_id: int = typer.Option(DEFAULT_ATHLETE_ID, "--athlete-id", help="Athlete ID"),
-    user_id: str = typer.Option(DEFAULT_USER_ID, "--user-id", help="User ID (Clerk)"),
+    athlete_id: int | None = typer.Option(None, "--athlete-id", help="Athlete ID (optional if user-id provided)"),
+    user_id: str = typer.Option(DEFAULT_USER_ID, "--user-id", help="User ID (Clerk UUID) - will look up athlete_id if not provided"),
     days: int = typer.Option(DEFAULT_DAYS, "--days", help="Number of days of training data"),
     days_to_race: int | None = typer.Option(None, "--days-to-race", help="Days until race"),
     output_file: str | None = typer.Option(None, "--output", "-o", help="Write output to file"),
@@ -214,10 +318,47 @@ def client(
 
     Supports both interactive and one-shot execution modes.
     All operations go through MCP clients (no direct DB/FS access).
+
+    If user_id is provided but athlete_id is not, athlete_id will be looked up from the database.
     """
+    # If athlete_id not provided but user_id is, try to look it up
+    resolved_athlete_id = athlete_id
+    if resolved_athlete_id is None and user_id != DEFAULT_USER_ID:
+        # Log database connection info for debugging
+        db_url_preview = str(settings.database_url)
+        if len(db_url_preview) > 50:
+            db_url_preview = db_url_preview[:47] + "..."
+        logger.info(f"Using database: {db_url_preview}")
+        logger.info(f"Looking up athlete_id for user_id: {user_id}")
+        found_athlete_id, user_exists = _get_athlete_id_from_user_id(user_id)
+        if found_athlete_id is None:
+            console.print(f"[red]Error:[/red] Could not find athlete_id for user_id: {user_id}")
+            if user_exists:
+                console.print("[yellow]User exists in database but has not connected their Strava account.[/yellow]")
+                console.print("[yellow]Please connect Strava account first, or provide --athlete-id directly.[/yellow]")
+            else:
+                console.print("[yellow]User not found in database.[/yellow]")
+                # Check if we're using SQLite when data might be in PostgreSQL
+                db_url = str(settings.database_url) if hasattr(settings, "database_url") else "unknown"
+                if "sqlite" in db_url.lower():
+                    console.print(
+                        "[yellow]⚠️  Currently using SQLite database. "
+                        "If your data is in PostgreSQL, set DATABASE_URL environment variable.[/yellow]"
+                    )
+                    console.print(
+                        "[yellow]Example: DATABASE_URL='postgresql://user:pass@host:5432/db'[/yellow]"  # pragma: allowlist secret
+                    )
+                console.print("[yellow]Please provide a valid user_id or use --athlete-id directly.[/yellow]")
+            raise typer.Exit(1)
+        resolved_athlete_id = found_athlete_id
+        logger.info(f"Found athlete_id: {resolved_athlete_id} for user_id: {user_id}")
+    elif resolved_athlete_id is None:
+        # Use default if neither provided
+        resolved_athlete_id = DEFAULT_ATHLETE_ID
+
     config = ClientConfig(
         input_text=input_text,
-        athlete_id=athlete_id,
+        athlete_id=resolved_athlete_id,
         user_id=user_id,
         days=days,
         days_to_race=days_to_race,
@@ -265,7 +406,7 @@ async def _run_client_async(config: ClientConfig) -> None:
         console.print(
             Panel(
                 Text("Virtus AI Orchestrator CLI - Interactive Mode", style="bold cyan"),
-                subtitle="Enter your message (empty line, EXIT, or QUIT to exit)",
+                subtitle="Enter your message (press Enter with empty text, or type EXIT/QUIT to exit)",
                 border_style="cyan",
             )
         )
@@ -275,8 +416,11 @@ async def _run_client_async(config: ClientConfig) -> None:
             try:
                 user_input = console.input("[bold cyan]You:[/bold cyan] ").strip()
 
-                # Exit conditions
-                if not user_input or user_input.upper() in {"EXIT", "QUIT"}:
+                # Exit conditions: empty input, EXIT, or QUIT
+                if not user_input:
+                    console.print("[yellow]Empty input detected. Exiting...[/yellow]")
+                    break
+                if user_input.upper() in {"EXIT", "QUIT"}:
                     console.print("[yellow]Exiting...[/yellow]")
                     break
 
@@ -285,7 +429,7 @@ async def _run_client_async(config: ClientConfig) -> None:
                     user_input=user_input,
                     deps=deps,
                     output_file=None,  # Don't write to file in interactive mode
-                    pretty=config.pretty,
+                    _pretty=config.pretty,
                 )
 
                 console.print()  # Blank line for readability
@@ -305,7 +449,7 @@ async def _run_client_async(config: ClientConfig) -> None:
             user_input=config.input_text,
             deps=deps,
             output_file=config.output_file,
-            pretty=config.pretty,
+            _pretty=config.pretty,
         )
 
 
@@ -313,7 +457,7 @@ async def _run_orchestrator_single(
     user_input: str,
     deps: CoachDeps,
     output_file: str | None,
-    pretty: bool,
+    _pretty: bool,  # Kept for API compatibility, not currently used
 ) -> None:
     """Run orchestrator for a single input.
 
@@ -321,7 +465,7 @@ async def _run_orchestrator_single(
         user_input: User input text
         deps: Coach dependencies
         output_file: Optional output file path
-        pretty: Whether to pretty-print JSON
+        pretty: Whether to pretty-print JSON (kept for compatibility, not currently used)
     """
     logger.info(
         "Running orchestrator",
@@ -331,20 +475,29 @@ async def _run_orchestrator_single(
     )
 
     try:
-        # Call orchestrator (this is the ONLY entry point - no direct DB/FS access)
-        result = await run_conversation(user_input=user_input, deps=deps)
+        # Generate a conversation_id for CLI (not a real conversation_id, but needed for tool execution)
+        conversation_id = f"cli_{deps.athlete_id}_{int(datetime.now(UTC).timestamp())}"
 
-        # Convert to dict for output
-        response_dict = result.model_dump()
+        # Call the same entry point as the API
+        reply = await process_coach_chat(
+            message=user_input,
+            user_id=deps.user_id or f"cli_user_{deps.athlete_id}",
+            athlete_id=deps.athlete_id,
+            conversation_id=conversation_id,
+            days=deps.days,
+            days_to_race=deps.days_to_race,
+        )
 
-        # Format output
-        output_text = _format_response(response_dict, pretty=pretty)
+        # Display the coach's reply
+        console.print("\n[bold cyan]Coach:[/bold cyan]")
+        console.print(f"{reply}")
+        console.print()  # Blank line at end
 
-        # Display output
-        if pretty:
-            console.print(Panel(JSON(output_text), title="Orchestrator Response", border_style="green"))
-        else:
-            console.print(output_text)
+        logger.info(
+            "Coach chat completed",
+            athlete_id=deps.athlete_id,
+            reply_length=len(reply),
+        )
 
         # Write to file if specified
         if output_file:
@@ -352,16 +505,8 @@ async def _run_orchestrator_single(
             output_path.parent.mkdir(parents=True, exist_ok=True)
             # Use synchronous file write in async context (acceptable for CLI)
             # Write file synchronously to avoid async file I/O complexity in CLI
-            _write_file_sync(output_path, output_text)
+            _write_file_sync(output_path, reply)
             logger.info(f"Output written to {output_file}")
-
-        # Log success
-        logger.info(
-            "Orchestrator completed",
-            intent=result.intent,
-            response_type=result.response_type,
-            message_length=len(result.message),
-        )
 
     except Exception as e:
         logger.exception(f"Orchestrator error: {e}")

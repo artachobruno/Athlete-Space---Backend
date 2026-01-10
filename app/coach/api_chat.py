@@ -457,14 +457,16 @@ async def coach_chat(
         days_to_race=req.days_to_race,
     )
 
-    # Get decision from orchestrator (use normalized content)
+    # Get decision from orchestrator (use normalized content, pass conversation_id for slot persistence)
     decision = await run_conversation(
         user_input=normalized_user_message.content,
         deps=deps,
+        conversation_id=conversation_id,
     )
 
-    # Emit planned events if action plan exists
-    if decision.action_plan:
+    # CRITICAL: Emit planned events ONLY if action is EXECUTE
+    # NO_ACTION must be pure - no side effects, no events, no DB writes
+    if decision.action == "EXECUTE" and decision.action_plan:
         logger.info(
             "Emitting planned events for action plan",
             conversation_id=conversation_id,

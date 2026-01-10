@@ -1,22 +1,108 @@
-from loguru import logger
+"""Coach chat service - core logic shared between API and CLI."""
 
-from app.coach.schemas.athlete_state import AthleteState
+from datetime import datetime, timezone
+
+from loguru import logger
+from sqlalchemy import select
+
+from app.coach.agents.orchestrator_agent import run_conversation
+from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
+from app.coach.executor.action_executor import CoachActionExecutor
+from app.coach.mcp_client import MCPError, call_tool
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
+from app.db.models import AthleteProfile, StravaAccount, UserSettings
+from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 
 
-def _handle_cold_start(athlete_id: int, days: int, days_to_race: int | None) -> tuple[str, str]:
-    """Handle cold start scenario - provide welcome message."""
-    logger.info(f"Cold start detected - providing welcome message (days={days}, days_to_race={days_to_race})")
-    user_id = get_user_id_from_athlete_id(athlete_id)
-    if user_id is None:
-        logger.warning(f"Cannot find user_id for athlete_id={athlete_id} in cold start")
-        return ("error", "Unable to find user account. Please reconnect your Strava account.")
+async def process_coach_chat(
+    message: str,
+    user_id: str,
+    athlete_id: int,
+    conversation_id: str,
+    *,
+    days: int = 60,
+    days_to_race: int | None = None,
+) -> str:
+    """Process coach chat message - core logic shared between API and CLI.
+
+    This function contains the core orchestrator + executor logic without
+    FastAPI-specific concerns (normalization, Redis, Postgres persistence).
+
+    Args:
+        message: User's message
+        user_id: User ID
+        athlete_id: Athlete ID
+        conversation_id: Conversation ID
+        days: Number of days of training data to consider
+        days_to_race: Optional days until race
+
+    Returns:
+        Coach's reply message
+    """
+    logger.info(
+        "Processing coach chat",
+        message_length=len(message),
+        user_id=user_id,
+        athlete_id=athlete_id,
+        conversation_id=conversation_id,
+    )
+
+    # Check if this is a cold start (empty history)
+    history_empty = await _is_history_empty(athlete_id)
+    logger.debug(
+        "Cold start check result",
+        conversation_id=conversation_id,
+        athlete_id=athlete_id,
+        history_empty=history_empty,
+    )
+
+    # Handle cold start
+    if history_empty:
+        logger.info(
+            "Cold start detected - providing welcome message",
+            conversation_id=conversation_id,
+        )
+        try:
+            training_data = get_training_data(user_id=user_id, days=days)
+            athlete_state = build_athlete_state(
+                ctl=training_data.ctl,
+                atl=training_data.atl,
+                tsb=training_data.tsb,
+                daily_load=training_data.daily_load,
+                days_to_race=days_to_race,
+            )
+            logger.debug(
+                "Cold start with training data",
+                conversation_id=conversation_id,
+                athlete_id=athlete_id,
+                ctl=athlete_state.ctl,
+                atl=athlete_state.atl,
+                tsb=athlete_state.tsb,
+            )
+            return welcome_new_user(athlete_state)
+        except RuntimeError as e:
+            logger.warning(
+                "Cold start with no training data available",
+                conversation_id=conversation_id,
+                error=str(e),
+            )
+            return welcome_new_user(None)
+
+    # Fast-path: Handle simple activity acknowledgments
+    if _is_simple_acknowledgment(message):
+        logger.info(
+            "Fast-path: Handling simple acknowledgment",
+            conversation_id=conversation_id,
+            message=message,
+            athlete_id=athlete_id,
+        )
+        return "Nice work 👍 Want feedback on recovery, pacing, or tomorrow's plan?"
+
+    # Build athlete state
     try:
-        logger.info("Fetching training data for cold start")
         training_data = get_training_data(user_id=user_id, days=days)
-        logger.info("Building athlete state for cold start")
         athlete_state = build_athlete_state(
             ctl=training_data.ctl,
             atl=training_data.atl,
@@ -24,101 +110,168 @@ def _handle_cold_start(athlete_id: int, days: int, days_to_race: int | None) -> 
             daily_load=training_data.daily_load,
             days_to_race=days_to_race,
         )
-        logger.info("Calling welcome_new_user tool")
-        reply = welcome_new_user(athlete_state)
     except RuntimeError:
-        # Even if we don't have training data, provide a welcome message
-        logger.warning("Cold start with no training data available")
-        reply = welcome_new_user(None)
+        logger.warning(
+            "No training data available for orchestrator",
+            conversation_id=conversation_id,
+        )
+        athlete_state = None
 
-    return ("cold_start", reply)
+    # Load athlete profile, training preferences, and race profile
+    athlete_profile = None
+    training_preferences = None
+    race_profile = None
+    with get_session() as db:
+        profile = db.query(AthleteProfile).filter_by(user_id=user_id).first()
+        if profile:
+            # Calculate age from date_of_birth
+            age = None
+            if profile.date_of_birth:
+                today = datetime.now(timezone.utc).date()
+                dob = profile.date_of_birth.date()
+                age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
+            # Round weight_lbs and height_in to 1 decimal place
+            weight_lbs_rounded = None
+            if profile.weight_lbs is not None:
+                weight_lbs_rounded = round(float(profile.weight_lbs), 1)
+            height_in_rounded = None
+            if profile.height_in is not None:
+                height_in_rounded = round(float(profile.height_in), 1)
 
-def _get_athlete_state(athlete_id: int, days: int, days_to_race: int | None) -> tuple[str, str] | tuple[None, AthleteState]:
-    """Get athlete state or return error response.
+            athlete_profile = AthleteProfileData(
+                gender=profile.gender,
+                age=age,
+                weight_lbs=weight_lbs_rounded,
+                height_in=height_in_rounded,
+                unit_system=profile.unit_system or "imperial",
+            )
 
-    Returns:
-        Tuple of (error_type, error_message) if error, or (None, AthleteState) if successful
-    """
-    logger.info(f"Getting athlete state (days={days}, days_to_race={days_to_race})")
-    user_id = get_user_id_from_athlete_id(athlete_id)
-    if user_id is None:
-        logger.warning(f"Cannot find user_id for athlete_id={athlete_id}")
-        return ("error", "Unable to find user account. Please reconnect your Strava account.")
-    try:
-        logger.info("Fetching training data")
-        training_data = get_training_data(user_id=user_id, days=days)
-    except RuntimeError as e:
-        logger.warning(f"No training data available: {e}")
-        # Return a special error type that allows LLM fallback
-        return ("no_training_data", "")
+            # Load race profile from extracted_race_attributes
+            if profile.extracted_race_attributes and isinstance(profile.extracted_race_attributes, dict):
+                race_attrs = profile.extracted_race_attributes
+                race_profile = RaceProfileData(
+                    event_name=race_attrs.get("event_name"),
+                    event_type=race_attrs.get("event_type"),
+                    event_date=race_attrs.get("event_date"),
+                    target_time=race_attrs.get("target_time"),
+                    distance=race_attrs.get("distance"),
+                    location=race_attrs.get("location"),
+                    raw_text=race_attrs.get("raw_text"),
+                )
 
-    logger.info("Building athlete state from training data")
-    athlete_state = build_athlete_state(
-        ctl=training_data.ctl,
-        atl=training_data.atl,
-        tsb=training_data.tsb,
-        daily_load=training_data.daily_load,
+        # Load training preferences from UserSettings
+        settings = db.query(UserSettings).filter_by(user_id=user_id).first()
+        if settings:
+            training_preferences = TrainingPreferencesData(
+                training_consistency=settings.consistency,
+                years_structured=settings.years_of_training,
+                primary_sports=settings.primary_sports or [],
+                available_days=settings.available_days or [],
+                weekly_training_hours=settings.weekly_hours,
+                primary_training_goal=settings.goal,
+                training_focus=settings.training_focus,
+                injury_flag=settings.injury_history or False,
+            )
+
+    # Create dependencies
+    deps = CoachDeps(
+        athlete_id=athlete_id,
+        user_id=user_id,
+        athlete_state=athlete_state,
+        athlete_profile=athlete_profile,
+        training_preferences=training_preferences,
+        race_profile=race_profile,
+        days=days,
         days_to_race=days_to_race,
     )
-    logger.info(f"Athlete state built successfully (CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f})")
-    return (None, athlete_state)
+
+    # Get decision from orchestrator (pass conversation_id for slot persistence)
+    decision = await run_conversation(
+        user_input=message,
+        deps=deps,
+        conversation_id=conversation_id,
+    )
+
+    # CRITICAL: Emit planned events ONLY if action is EXECUTE
+    # NO_ACTION must be pure - no side effects, no events, no DB writes
+    if decision.action == "EXECUTE" and decision.action_plan:
+        logger.info(
+            "Emitting planned events for action plan",
+            conversation_id=conversation_id,
+            step_count=len(decision.action_plan.steps),
+        )
+        for step in decision.action_plan.steps:
+            try:
+                await call_tool(
+                    "emit_progress_event",
+                    {
+                        "conversation_id": conversation_id,
+                        "step_id": step.id,
+                        "label": step.label,
+                        "status": "planned",
+                    },
+                )
+                logger.info(
+                    "Planned event emitted",
+                    conversation_id=conversation_id,
+                    step_id=step.id,
+                    step_label=step.label,
+                )
+            except MCPError as e:
+                logger.warning(
+                    f"Failed to emit planned event for step {step.id}: {e.code}: {e.message}",
+                    conversation_id=conversation_id,
+                    step_id=step.id,
+                )
+
+    # Execute action if needed (executor will also guard against NO_ACTION)
+    return await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
 
 
-def dispatch_coach_chat(
-    message: str,
-    athlete_id: int,
-    days: int,
-    days_to_race: int | None = None,
-    *,
-    history_empty: bool = False,
-    conversation_history: list[dict[str, str]] | None = None,
-    use_orchestrator: bool = True,
-) -> tuple[str, str]:
-    """Route user message -> coaching tool -> response text.
+async def _is_history_empty(athlete_id: int | None = None) -> bool:
+    """Check if coach chat history is empty for an athlete.
 
     Args:
-        message: User's message to the coach
-        athlete_id: Strava athlete ID (int)
-        days: Number of days of training data to consider
-        days_to_race: Optional days until race
-        history_empty: If True, this is a cold start (first message).
-                      Will return welcome message instead of routing intent.
-        conversation_history: List of previous messages with 'role' and 'content' keys.
-                             Used to provide context to the LLM.
-        use_orchestrator: Deprecated parameter, kept for backward compatibility.
-                         All requests now use intent-based routing.
+        athlete_id: Athlete ID to check history for
+
+    Returns:
+        True if history is empty, False otherwise
     """
-    history_count = len(conversation_history) if conversation_history else 0
-    logger.info(
-        f"Dispatching coach chat (message_length={len(message)}, days={days}, "
-        f"days_to_race={days_to_race}, history_empty={history_empty}, "
-        f"history_count={history_count}, use_orchestrator={use_orchestrator})"
-    )
+    if athlete_id is None:
+        return True
 
-    # Handle cold start - provide welcome message regardless of intent
-    if history_empty:
-        logger.info("Handling cold start scenario")
-        return _handle_cold_start(athlete_id, days, days_to_race)
+    try:
+        result = await call_tool("load_context", {"athlete_id": athlete_id, "limit": 1})
+        messages = result.get("messages", [])
+        return len(messages) == 0
+    except Exception as e:
+        logger.warning(f"Failed to check history: {e}")
+        return True
 
-    # Build athlete state
-    logger.info("Building athlete state")
-    state_result = _get_athlete_state(athlete_id, days, days_to_race)
-    has_training_data = state_result[0] is None
 
-    if not has_training_data:  # Error response
-        error_type = state_result[0]
-        error_message = state_result[1]
-        logger.warning(f"Failed to get athlete state: {error_type}")
-        # Return error message - orchestrator should handle this
-        return (error_type, error_message)
+def _is_simple_acknowledgment(message: str) -> bool:
+    """Check if message is a simple acknowledgment that can be fast-pathed.
 
-    # At this point, state_result[0] is None, so state_result[1] is AthleteState
-    athlete_state = state_result[1]
+    Args:
+        message: User message to check
 
-    # Return state for orchestrator to handle
-    logger.info("Returning state for orchestrator handling")
-    return (
-        "orchestrator",
-        f"Athlete state available: CTL={athlete_state.ctl:.1f}, ATL={athlete_state.atl:.1f}, TSB={athlete_state.tsb:.1f}",
-    )
+    Returns:
+        True if message is a simple acknowledgment
+    """
+    message_lower = message.lower().strip()
+    acknowledgments = [
+        "thanks",
+        "thank you",
+        "thx",
+        "ty",
+        "ok",
+        "okay",
+        "got it",
+        "sounds good",
+        "cool",
+        "nice",
+        "👍",
+        "👌",
+    ]
+    return message_lower in acknowledgments

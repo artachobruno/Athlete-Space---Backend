@@ -12,7 +12,7 @@ import io
 import re
 from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NoReturn
 
 from loguru import logger
 from pydantic import BaseModel, field_validator
@@ -186,7 +186,7 @@ def _parse_text_plan_line(line: str, base_date: datetime) -> ParsedSessionUpload
     )
 
 
-def _raise_no_sessions_error() -> None:
+def _raise_no_sessions_error() -> NoReturn:
     """Raise error when no valid sessions found in CSV."""
     raise ValueError("No valid sessions found in CSV")
 

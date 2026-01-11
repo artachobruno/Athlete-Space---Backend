@@ -12,7 +12,7 @@ import io
 import re
 from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NoReturn
 
 from loguru import logger
 from pydantic import BaseModel, field_validator
@@ -187,7 +187,7 @@ def _parse_heart_rate(text: str) -> int | None:
     return None
 
 
-def _raise_no_activities_error() -> None:
+def _raise_no_activities_error() -> NoReturn:
     """Raise error when no valid activities found in CSV."""
     raise ValueError("No valid activities found in CSV")
 

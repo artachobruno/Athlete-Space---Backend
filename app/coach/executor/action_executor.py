@@ -419,6 +419,17 @@ class CoachActionExecutor:
         # STATE 2: SLOTS COMPLETE - Execute immediately
         # If slots are complete, execute without confirmation
         if decision.should_execute and target_action:
+            # EXECUTION GUARD: Prevent re-execution if tool already executed this turn
+            has_executed = getattr(decision, "_has_executed_tool", False)
+            if has_executed:
+                logger.debug(
+                    "ActionExecutor: Skipping execution - tool already executed this turn",
+                    target_action=target_action,
+                    conversation_id=conversation_id,
+                )
+                # Return early to prevent re-execution
+                return decision.message if decision.message else "Action already executed."
+
             logger.debug(
                 "ActionExecutor: STATE 2 - Slots complete, checking for execution",
                 should_execute=decision.should_execute,
@@ -527,12 +538,19 @@ class CoachActionExecutor:
             conversation_id=conversation_id,
         )
 
+        # ONE-TOOL-PER-TURN ASSERTION: Ensure we haven't already executed a tool
+        has_executed = getattr(decision, "_has_executed_tool", False)
+        if has_executed:
+            raise RuntimeError("Invariant violated: multiple tool executions in a single turn")
+
         # Use target_action for execution routing if available
         if target_action == "plan_race_build":
             logger.debug(
                 "ActionExecutor: Routing to plan_race_build execution",
                 conversation_id=conversation_id,
             )
+            # Mark execution flag BEFORE calling tool to prevent re-entry
+            decision._has_executed_tool = True
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
 
         if target_action == "plan_week":
@@ -547,25 +565,32 @@ class CoachActionExecutor:
                     conversation_id=conversation_id,
                 )
                 return "I can plan your week once your marathon plan is created. What is your marathon date?"
+            decision._has_executed_tool = True
             return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
 
         # Fallback to intent/horizon mapping if no target_action
         if intent == "recommend" and horizon in {"next_session", "today"}:
+            decision._has_executed_tool = True
             return await CoachActionExecutor._execute_recommend_next_session(decision, deps, conversation_id)
 
         if intent == "plan" and horizon == "race":
+            decision._has_executed_tool = True
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
 
         if intent == "plan" and horizon == "season":
+            decision._has_executed_tool = True
             return await CoachActionExecutor._execute_plan_season(decision, deps, conversation_id)
 
         if intent == "adjust":
+            decision._has_executed_tool = True
             return await CoachActionExecutor._execute_adjust_training_load(decision, deps, conversation_id)
 
         if intent == "explain":
+            decision._has_executed_tool = True
             return await CoachActionExecutor._execute_explain_training_state(decision, deps, conversation_id)
 
         if intent == "log":
+            decision._has_executed_tool = True
             return await CoachActionExecutor._execute_add_workout(decision, deps, conversation_id)
 
         logger.warning(

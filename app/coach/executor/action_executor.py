@@ -970,25 +970,17 @@ class CoachActionExecutor:
                 tool_args_keys=list(tool_args.keys()),
                 conversation_id=conversation_id,
             )
-            result = await call_tool("plan_race_build", tool_args)
+            # Phase 6C: plan_race_build is fire-and-forget (event-emitting, side-effect based)
+            # Don't await a result - it emits progress events and writes to DB
+            await call_tool("plan_race_build", tool_args)
             logger.debug(
-                "ActionExecutor: MCP tool plan_race_build completed",
+                "ActionExecutor: MCP tool plan_race_build started (fire-and-forget)",
                 tool=tool_name,
-                result_keys=list(result.keys()) if isinstance(result, dict) else None,
-                has_message="message" in result if isinstance(result, dict) else False,
                 conversation_id=conversation_id,
             )
 
-            # B39: Prevent clarification after slot validation
-            # If slots were complete (should_execute=True) and tool requests clarification, fail hard
-            if decision.should_execute:
-                result_message = result.get("message", "")
-                # Check if result is a clarification message (should never happen post-validation)
-                if result_message.startswith("[CLARIFICATION]") or result.get("needs_clarification"):
-                    CoachActionExecutor._raise_clarification_violation(tool_name)
-
             logger.info(
-                "Tool executed successfully",
+                "Tool execution started (fire-and-forget)",
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
@@ -998,23 +990,15 @@ class CoachActionExecutor:
             )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
-            message = result.get("message", "Race plan created.")
+            # Phase 6C: plan_race_build is fire-and-forget - no result to process
+            # Progress events are emitted via Phase 6B, plan is written to DB
+            # Don't emit "completed" event here - tool emits its own progress events
+            message = "Plan generation started. You'll see updates as I progress."
             logger.debug(
-                "ActionExecutor: plan_race_build execution complete",
+                "ActionExecutor: plan_race_build execution started (fire-and-forget)",
                 tool=tool_name,
-                message_length=len(message),
                 conversation_id=conversation_id,
             )
-            if conversation_id and step_info:
-                step_id, label = step_info
-                logger.debug(
-                    "ActionExecutor: Emitting progress event (completed)",
-                    conversation_id=conversation_id,
-                    step_id=step_id,
-                    step_label=label,
-                )
-                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
-
             return message
         except MCPError as e:
             logger.debug(

@@ -8,7 +8,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
@@ -149,11 +149,18 @@ class ManualSessionRequest(BaseModel):
     date: datetime = Field(..., description="Session date and time (timezone-aware)")
     time: str | None = Field(default=None, description="Session time (HH:MM format)")
     type: str = Field(..., description="Activity type (Run, Bike, Swim, etc.)")
-    title: str = Field(..., description="Session title")
+    title: str | None = Field(default=None, description="Session title (auto-generated from type if not provided)")
     duration_minutes: int | None = Field(default=None, description="Duration in minutes")
     distance_km: float | None = Field(default=None, description="Distance in kilometers")
     intensity: str | None = Field(default=None, description="Intensity (easy, moderate, hard, race)")
     notes: str | None = Field(default=None, description="Optional notes")
+
+    @model_validator(mode="after")
+    def generate_title_if_missing(self) -> "ManualSessionRequest":
+        """Generate title from type if title is not provided."""
+        if not self.title:
+            self.title = self.type
+        return self
 
 
 class ManualSessionResponse(BaseModel):
@@ -235,12 +242,13 @@ async def upload_manual_session(
         athlete_id = _get_athlete_id_from_user_id(user_id)
 
         # Validate minimal fields
-        if not request.type or not request.title:
+        if not request.type:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Type and title are required fields",
+                detail="Type is a required field",
             )
 
+        # Title is auto-generated from type if not provided (handled by model validator)
         # Save session and get ID
         try:
             with get_session() as session:

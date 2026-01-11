@@ -33,6 +33,7 @@ from scripts.migrate_add_profile_health_fields import migrate_add_profile_health
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
+from scripts.migrate_calendar_sessions import migrate_calendar_sessions
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
@@ -65,6 +66,7 @@ def run_all_migrations() -> None:
         ("activities user_id column", migrate_activities_user_id),
         ("activities streams_data column", migrate_add_streams_data),
         ("activities tss and tss_version columns", migrate_add_activity_tss),
+        ("calendar_sessions table", migrate_calendar_sessions),
         ("daily_summary tables", migrate_daily_summary),
         ("history cursor fields", migrate_history_cursor),
         ("strava_accounts sync tracking columns", migrate_strava_accounts_sync_tracking),

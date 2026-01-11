@@ -66,7 +66,10 @@ def get_all_user_ids() -> list[str]:
 
 
 def migrate_user_training_load(user_id: str) -> dict[str, int | str]:
-    """Delete and recompute training load metrics for a user from scratch.
+    """Recompute training load metrics for a user from scratch.
+
+    Note: All daily_training_load records should already be deleted before calling this.
+    This function only recomputes and inserts new records.
 
     This ensures EWMA integrity by computing sequentially from the first activity
     to today, without any historical overwrites.
@@ -77,7 +80,7 @@ def migrate_user_training_load(user_id: str) -> dict[str, int | str]:
     Returns:
         Dictionary with counts and status
     """
-    logger.info(f"Migrating training load for user {user_id}")
+    logger.info(f"Recomputing training load for user {user_id}")
 
     with get_session() as session:
         # Get date range from activities
@@ -90,7 +93,6 @@ def migrate_user_training_load(user_id: str) -> dict[str, int | str]:
             return {
                 "status": "skipped",
                 "message": "No activities found",
-                "deleted": 0,
                 "created": 0,
             }
 
@@ -98,14 +100,6 @@ def migrate_user_training_load(user_id: str) -> dict[str, int | str]:
         end_date = datetime.now(UTC).date()
 
         logger.info(f"Date range: {first_date.isoformat()} to {end_date.isoformat()}")
-
-        # Delete all existing records for this user
-        result = session.execute(
-            delete(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id)
-        )
-        deleted_count = result.rowcount
-        session.commit()
-        logger.info(f"Deleted {deleted_count} existing DailyTrainingLoad records for user {user_id}")
 
         # Fetch all activities in date range
         activities = session.execute(
@@ -128,7 +122,6 @@ def migrate_user_training_load(user_id: str) -> dict[str, int | str]:
             return {
                 "status": "skipped",
                 "message": "No activities in date range",
-                "deleted": deleted_count,
                 "created": 0,
             }
 
@@ -168,14 +161,13 @@ def migrate_user_training_load(user_id: str) -> dict[str, int | str]:
         session.commit()
 
         logger.info(
-            f"Migration complete for user {user_id}: "
-            f"deleted={deleted_count}, created={daily_created}, "
+            f"Recomputation complete for user {user_id}: "
+            f"created={daily_created}, "
             f"date_range={first_date.isoformat()} to {end_date.isoformat()}"
         )
 
         return {
             "status": "success",
-            "deleted": deleted_count,
             "created": daily_created,
             "date_range": f"{first_date.isoformat()} to {end_date.isoformat()}",
         }
@@ -232,8 +224,26 @@ def validate_user_metrics(user_id: str) -> dict[str, bool | float | int]:
         }
 
 
+def delete_all_training_load() -> int:
+    """Delete all DailyTrainingLoad records for all users.
+
+    Returns:
+        Number of records deleted
+    """
+    with get_session() as session:
+        result = session.execute(delete(DailyTrainingLoad))
+        deleted_count = result.rowcount
+        session.commit()
+        logger.info(f"Deleted {deleted_count} DailyTrainingLoad records for all users")
+        return deleted_count
+
+
 def migrate_all_users(user_ids: list[str] | None = None, dry_run: bool = False) -> dict[str, int | dict]:
     """Migrate training load metrics for all users (or specified users).
+
+    Strategy:
+    1. Delete ALL daily_training_load records (clean slate)
+    2. Recalculate all users sequentially
 
     Args:
         user_ids: Optional list of user IDs to migrate (if None, migrates all users)
@@ -265,12 +275,27 @@ def migrate_all_users(user_ids: list[str] | None = None, dry_run: bool = False) 
             "validation_results": {},
         }
 
+    # Step 1: Delete ALL daily_training_load records (clean slate)
     total_deleted = 0
+    if dry_run:
+        with get_session() as session:
+            total_deleted = session.execute(
+                select(func.count(DailyTrainingLoad.id))
+            ).scalar() or 0
+        logger.info(f"[DRY RUN] Would delete {total_deleted} DailyTrainingLoad records for all users")
+    else:
+        logger.info("Step 1: Deleting all DailyTrainingLoad records...")
+        total_deleted = delete_all_training_load()
+        logger.info(f"Deleted {total_deleted} records - starting with clean slate")
+
+    # Step 2: Recalculate all users
     total_created = 0
     users_succeeded = 0
     users_failed = 0
     users_skipped = 0
     validation_results: dict[str, dict[str, bool | float | int]] = {}
+
+    logger.info(f"\nStep 2: Recalculating training load for {len(user_ids)} user(s)...")
 
     for idx, user_id in enumerate(user_ids, 1):
         logger.info(f"\n[{idx}/{len(user_ids)}] Processing user {user_id}")
@@ -282,23 +307,16 @@ def migrate_all_users(user_ids: list[str] | None = None, dry_run: bool = False) 
                     activity_count = session.execute(
                         select(func.count(Activity.id)).where(Activity.user_id == user_id)
                     ).scalar() or 0
-                    existing_count = session.execute(
-                        select(func.count(DailyTrainingLoad.id)).where(
-                            DailyTrainingLoad.user_id == user_id
-                        )
-                    ).scalar() or 0
 
                 logger.info(
-                    f"[DRY RUN] Would delete {existing_count} records and recompute from "
-                    f"{activity_count} activities for user {user_id}"
+                    f"[DRY RUN] Would recompute from {activity_count} activities for user {user_id}"
                 )
                 users_succeeded += 1
             else:
-                # Run migration
+                # Run migration (delete already done, so just recompute)
                 result = migrate_user_training_load(user_id)
 
                 if result["status"] == "success":
-                    total_deleted += result["deleted"]
                     total_created += result["created"]
                     users_succeeded += 1
 

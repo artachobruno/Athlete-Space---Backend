@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_user_id
+from app.calendar.helpers import ensure_calendar_session_for_activity
 from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
 from app.ingestion.fetch_streams import fetch_and_save_streams
@@ -635,6 +636,16 @@ def upload_activity_file(
             session.refresh(activity)
 
             logger.info(f"[UPLOAD] Activity created: id={activity.id}, hash={upload_hash[:16]}...")
+
+            # Create calendar session for uploaded activity
+            try:
+                ensure_calendar_session_for_activity(session, activity)
+                session.commit()
+                logger.info(f"[UPLOAD] Calendar session created for activity {activity.id}")
+            except Exception as e:
+                logger.warning(f"[UPLOAD] Failed to create calendar session for activity {activity.id}: {e}")
+                session.rollback()
+                # Don't fail the upload if calendar session creation fails
 
             # Trigger metrics recomputation
             try:

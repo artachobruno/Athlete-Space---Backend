@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_user_id
+from app.calendar.helpers import ensure_calendar_session_for_activity
 from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
 from app.db.models import Activity, StravaAccount
@@ -220,6 +221,7 @@ def ingest_activities(
         imported_count = 0
         skipped_count = 0
         duplicate_count = 0
+        created_activities: list[Activity] = []
 
         for strava_activity in strava_activities:
             strava_id = str(strava_activity.id)
@@ -266,6 +268,7 @@ def ingest_activities(
                 raw_json=raw_json,
             )
             session.add(activity)
+            created_activities.append(activity)
             imported_count += 1
 
         # Update last_sync_at in StravaAccount only if we successfully fetched activities
@@ -277,6 +280,14 @@ def ingest_activities(
         # Commit all activities and last_sync_at update
         try:
             session.commit()
+            # Create calendar sessions for all successfully committed activities
+            for activity in created_activities:
+                try:
+                    ensure_calendar_session_for_activity(session, activity)
+                    session.commit()
+                except Exception as e:
+                    logger.warning(f"[INGESTION] Failed to create calendar session for activity {activity.id}: {e}")
+                    session.rollback()
         except IntegrityError as e:
             # Handle duplicate constraint violations (race condition: activity inserted between check and commit)
             session.rollback()
@@ -324,6 +335,13 @@ def ingest_activities(
                     )
                     session.add(activity)
                     session.commit()
+                    # Create calendar session for successfully committed activity
+                    try:
+                        ensure_calendar_session_for_activity(session, activity)
+                        session.commit()
+                    except Exception as calendar_error:
+                        logger.warning(f"[INGESTION] Failed to create calendar session for activity {activity.id}: {calendar_error}")
+                        session.rollback()
                     retry_imported += 1
                 except IntegrityError:
                     session.rollback()

@@ -11,7 +11,6 @@ It handles:
 
 import json
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -19,7 +18,7 @@ from pydantic import ValidationError
 from pydantic_ai import Agent
 
 from app.coach.config.models import USER_FACING_MODEL
-from app.coach.mcp_client import MCPError, call_tool
+from app.coach.prompts.loader import load_prompt
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.coach.schemas.training_plan_schemas import TrainingPlan
 from app.core.constraints import (
@@ -31,9 +30,6 @@ from app.services.llm.model import get_model
 
 # Maximum retries for LLM calls
 MAX_RETRIES = 2
-
-# Prompt directory (go up two levels from utils/ to coach/, then into prompts/)
-PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 def _raise_validation_error(intent_type: str, error_msg: str) -> None:
@@ -47,49 +43,6 @@ def _raise_validation_error(intent_type: str, error_msg: str) -> None:
         ValueError: Always raises
     """
     raise ValueError(f"{intent_type} validation failed after {MAX_RETRIES + 1} attempts: {error_msg}")
-
-
-async def _load_prompt(filename: str) -> str:
-    """Load a prompt from the prompts directory via MCP.
-
-    Args:
-        filename: Name of the prompt file (e.g., "season_plan.txt")
-
-    Returns:
-        Prompt content as string
-
-    Raises:
-        FileNotFoundError: If prompt file doesn't exist
-    """
-    logger.debug(
-        "llm_client: Loading prompt via MCP",
-        filename=filename,
-    )
-    try:
-        logger.debug(
-            "llm_client: _load_prompt - calling MCP tool",
-            filename=filename,
-        )
-        result = await call_tool("load_prompt", {"filename": filename})
-        content = result["content"]
-        logger.debug(
-            "llm_client: _load_prompt - prompt loaded successfully",
-            filename=filename,
-            content_length=len(content) if content else 0,
-            content_preview=content[:200] if content else None,
-        )
-    except MCPError as e:
-        logger.debug(
-            "llm_client: _load_prompt - MCP error",
-            filename=filename,
-            error_code=e.code,
-            error_message=e.message,
-        )
-        if e.code == "FILE_NOT_FOUND":
-            raise FileNotFoundError(f"Prompt file not found: {filename}") from e
-        raise RuntimeError(f"Failed to load prompt: {e.message}") from e
-    else:
-        return content
 
 
 def _get_model():
@@ -136,7 +89,7 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
-        prompt_text = await _load_prompt("season_plan.txt")
+        prompt_text = await load_prompt("season_plan.txt")
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
@@ -202,7 +155,7 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
-        prompt_text = await _load_prompt("weekly_intent.txt")
+        prompt_text = await load_prompt("weekly_intent.txt")
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
@@ -264,7 +217,7 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
-        prompt_text = await _load_prompt("daily_decision.txt")
+        prompt_text = await load_prompt("daily_decision.txt")
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
@@ -325,7 +278,7 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
-        prompt_text = await _load_prompt("weekly_report.txt")
+        prompt_text = await load_prompt("weekly_report.txt")
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
@@ -609,7 +562,7 @@ class CoachLLMClient:
         )
 
         logger.debug("llm_client: Loading training plan generation prompt")
-        prompt_text = await _load_prompt("training_plan_generation.txt")
+        prompt_text = await load_prompt("training_plan_generation.txt")
         logger.debug(
             "llm_client: Prompt loaded",
             prompt_length=len(prompt_text) if prompt_text else 0,

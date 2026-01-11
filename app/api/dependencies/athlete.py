@@ -9,8 +9,8 @@ from __future__ import annotations
 from fastapi import Depends
 
 from app.api.dependencies.auth import get_current_user_id
-from app.db.session import get_session
 from app.db.models import Athlete
+from app.db.session import get_session
 from app.users.athlete_repository import AthleteRepository
 
 

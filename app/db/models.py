@@ -4,7 +4,22 @@ import enum
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -52,8 +67,8 @@ class User(Base):
         Index("idx_users_strava_athlete_id", "strava_athlete_id", unique=False),  # Already unique, but explicit index
     )
 
-    athlete: Mapped["Athlete | None"] = relationship("Athlete", uselist=False, back_populates="user")
-    coach: Mapped["Coach | None"] = relationship("Coach", uselist=False, back_populates="user")
+    athlete: Mapped[Athlete | None] = relationship("Athlete", uselist=False, back_populates="user")
+    coach: Mapped[Coach | None] = relationship("Coach", uselist=False, back_populates="user")
 
 
 class StravaAuth(Base):
@@ -860,7 +875,7 @@ class Athlete(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    user: Mapped["User"] = relationship("User", back_populates="athlete")
+    user: Mapped[User] = relationship("User", back_populates="athlete")
 
 
 class Coach(Base):
@@ -878,7 +893,7 @@ class Coach(Base):
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
-    user: Mapped["User"] = relationship("User", back_populates="coach")
+    user: Mapped[User] = relationship("User", back_populates="coach")
 
 
 class CoachAthlete(Base):

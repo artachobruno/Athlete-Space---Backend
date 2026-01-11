@@ -157,9 +157,11 @@ pydocstyle = { convention = "google" }
 "app/db/session.py" = ["PLC0415"]  # Allow conditional import of psycopg2
 "cli/**/*.py" = ["PLR0917", "S404", "S603", "S607"]  # Typer CLI commands require many parameters, subprocess is safe
 "scripts/create_test_user.py" = ["S106"]  # Test tokens are placeholders, not real credentials
+"scripts/create_dev_user.py" = ["S105"]  # Dev-only password, safe in dev script
 "mcp/db_server/tools/context.py" = ["TRY301"]  # Direct raise is appropriate here
 "mcp/db_server/main.py" = ["S104"]  # Binding to 0.0.0.0 is required for Render/cloud deployments
 "mcp/fs_server/main.py" = ["S104"]  # Binding to 0.0.0.0 is required for Render/cloud deployments
+"app/api/**/*.py" = ["B008"]  # FastAPI Depends() is safe in function defaults
 "app/api/auth/auth_google.py" = ["TRY300"]  # RET505 correctly flags unnecessary else; TRY300 conflicts
 "app/coach/executor/action_executor.py" = ["TRY300"]  # TRY300 conflicts with RET505 - return after if block is correct here
 

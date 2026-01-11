@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import asyncio
 
 from loguru import logger
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from app.coach.prompts.loader import load_prompt
 from app.services.llm.model import get_model
 
 # Use cheap model for extraction
 EXTRACTION_MODEL = "gpt-4o-mini"
-
-# Prompt directory (app/coach/prompts/)
-PROMPTS_DIR = Path(__file__).parent.parent / "coach" / "prompts"
 
 
 class ExtractedRaceAttributes(BaseModel):
@@ -92,7 +90,7 @@ class GoalExtractionService:
         """
         logger.info(f"Extracting race attributes from goal text: {goal_text[:50]}...")
 
-        prompt_text = _load_extraction_prompt()
+        prompt_text = asyncio.run(load_prompt("goal_extraction.txt"))
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
@@ -115,36 +113,6 @@ class GoalExtractionService:
             return extracted
 
 
-def _load_extraction_prompt() -> str:
-    """Load the goal extraction prompt from file.
-
-    Returns:
-        Prompt content as string
-
-    Raises:
-        FileNotFoundError: If prompt file doesn't exist
-    """
-    prompt_path = PROMPTS_DIR / "goal_extraction.txt"
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-    return prompt_path.read_text(encoding="utf-8")
-
-
-def _load_injury_extraction_prompt() -> str:
-    """Load the injury extraction prompt from file.
-
-    Returns:
-        Prompt content as string
-
-    Raises:
-        FileNotFoundError: If prompt file doesn't exist
-    """
-    prompt_path = PROMPTS_DIR / "injury_extraction.txt"
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-    return prompt_path.read_text(encoding="utf-8")
-
-
 def extract_injury_attributes(injury_notes: str) -> ExtractedInjuryAttributes:
     """Extract structured injury attributes from free text injury notes.
 
@@ -159,7 +127,7 @@ def extract_injury_attributes(injury_notes: str) -> ExtractedInjuryAttributes:
 
     logger.info(f"Extracting injury attributes from notes: {injury_notes[:50]}...")
 
-    prompt_text = _load_injury_extraction_prompt()
+    prompt_text = asyncio.run(load_prompt("injury_extraction.txt"))
     agent = Agent(
         model=get_model("openai", EXTRACTION_MODEL),
         system_prompt=prompt_text,

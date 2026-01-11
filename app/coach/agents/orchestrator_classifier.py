@@ -4,43 +4,15 @@ This agent classifies user intent BEFORE any tool execution.
 It is a decision layer, not an intelligence layer.
 """
 
-import pathlib
-
 from loguru import logger
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import UsageLimitExceeded
 
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.config.models import ORCHESTRATOR_MODEL
-from app.coach.mcp_client import MCPError, call_tool
+from app.coach.prompts.loader import load_prompt
 from app.coach.schemas.orchestration import OrchestrationDecision
 from app.services.llm.model import get_model
-
-
-async def _load_classifier_prompt() -> str:
-    """Load classifier prompt via MCP.
-
-    Returns:
-        Prompt content as string
-
-    Raises:
-        FileNotFoundError: If prompt file doesn't exist
-    """
-    try:
-        result = await call_tool("load_orchestrator_classifier_prompt", {})
-        return result["content"]
-    except MCPError as e:
-        if e.code == "FILE_NOT_FOUND":
-            # Fallback to direct file read if MCP not available
-            # Note: Using blocking file I/O in async function is acceptable for fallback
-            try:
-                file_path = pathlib.Path("app/coach/prompts/orchestrator_classifier.txt")
-                # Suppress warning: This is a fallback path, sync I/O is acceptable here
-                return file_path.read_text(encoding="utf-8")  # noqa: ASYNC240
-            except FileNotFoundError:
-                raise FileNotFoundError(f"Classifier prompt file not found: {e.message}") from e
-        raise RuntimeError(f"Failed to load classifier prompt: {e.message}") from e
-
 
 # Global classifier agent (lazy loaded)
 CLASSIFIER_AGENT: Agent[CoachDeps, OrchestrationDecision] | None = None
@@ -66,7 +38,7 @@ async def classify_intent(
 
     # Load classifier prompt if not already loaded
     if not CLASSIFIER_INSTRUCTIONS:
-        CLASSIFIER_INSTRUCTIONS = await _load_classifier_prompt()
+        CLASSIFIER_INSTRUCTIONS = await load_prompt("orchestrator_classifier.txt")
         CLASSIFIER_AGENT = Agent(
             instructions=CLASSIFIER_INSTRUCTIONS,
             model=ORCHESTRATOR_MODEL,

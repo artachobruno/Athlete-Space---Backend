@@ -12,6 +12,7 @@ import httpx
 from loguru import logger
 
 from app.config.settings import settings
+from app.core.observe import trace
 
 # MCP server URLs (from validated Settings)
 MCP_DB_SERVER_URL = settings.mcp_db_server_url
@@ -144,314 +145,318 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
     ):
         for attempt in range(max_retries):
             logger.debug(
-            "MCP: Attempting tool call",
-            tool=tool_name,
-            attempt=attempt + 1,
-            max_retries=max_retries,
-            endpoint=endpoint,
-        )
-
-        try:
-            client = _get_client()
-            logger.debug(
-                "MCP: HTTP client obtained",
+                "MCP: Attempting tool call",
                 tool=tool_name,
                 attempt=attempt + 1,
-                client_closed=client.is_closed,
-            )
-
-            logger.debug(
-                "MCP: Sending HTTP POST request",
-                tool=tool_name,
-                attempt=attempt + 1,
+                max_retries=max_retries,
                 endpoint=endpoint,
-                payload_keys=["tool", "arguments"],
             )
 
-            response = await client.post(
-                endpoint,
-                json={
-                    "tool": tool_name,
-                    "arguments": arguments,
-                },
-            )
-
-            logger.debug(
-                "MCP: HTTP response received",
-                tool=tool_name,
-                attempt=attempt + 1,
-                status_code=response.status_code,
-                response_headers=dict(response.headers),
-            )
-
-            response.raise_for_status()
-
-            logger.debug(
-                "MCP: Parsing JSON response",
-                tool=tool_name,
-                attempt=attempt + 1,
-                content_length=len(response.content) if response.content else 0,
-            )
-
-            data = response.json()
-
-            logger.debug(
-                "MCP: JSON response parsed",
-                tool=tool_name,
-                attempt=attempt + 1,
-                response_keys=list(data.keys()) if isinstance(data, dict) else None,
-                has_error="error" in data if isinstance(data, dict) else False,
-                has_result="result" in data if isinstance(data, dict) else False,
-            )
-
-            # Check for MCP error response
-            if "error" in data:
-                error = data["error"]
-                error_code = error.get("code", "UNKNOWN_ERROR")
-                error_message = error.get("message", "Unknown error")
-
-                # Log full error response at ERROR level with all details
-                logger.error(
-                    "MCP tool error - full error response",
-                    tool=tool_name,
-                    attempt=attempt + 1,
-                    error_code=error_code,
-                    error_message=error_message,
-                    error_data=error,
-                    full_response=data,
-                )
-
-                # Also log at debug level with structured data
+            try:
+                client = _get_client()
                 logger.debug(
-                    "MCP: Error response received (detailed)",
+                    "MCP: HTTP client obtained",
                     tool=tool_name,
                     attempt=attempt + 1,
-                    error_code=error_code,
-                    error_message=error_message,
-                    error_data=error,
-                    full_response=data,
-                    error_keys=list(error.keys()) if isinstance(error, dict) else None,
+                    client_closed=client.is_closed,
                 )
 
-                # Print formatted error message for immediate visibility
-                logger.error(f"MCP tool error: {tool_name} - {error_code}: {error_message}")
+                logger.debug(
+                    "MCP: Sending HTTP POST request",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    endpoint=endpoint,
+                    payload_keys=["tool", "arguments"],
+                )
 
-                # Extract and print original error details if present in message
-                if "wrapped:" in error_message or "original_error" in str(error).lower() or "Failed to plan race build:" in error_message:
+                response = await client.post(
+                    endpoint,
+                    json={
+                        "tool": tool_name,
+                        "arguments": arguments,
+                    },
+                )
+
+                logger.debug(
+                    "MCP: HTTP response received",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    status_code=response.status_code,
+                    response_headers=dict(response.headers),
+                )
+
+                response.raise_for_status()
+
+                logger.debug(
+                    "MCP: Parsing JSON response",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    content_length=len(response.content) if response.content else 0,
+                )
+
+                data = response.json()
+
+                logger.debug(
+                    "MCP: JSON response parsed",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    response_keys=list(data.keys()) if isinstance(data, dict) else None,
+                    has_error="error" in data if isinstance(data, dict) else False,
+                    has_result="result" in data if isinstance(data, dict) else False,
+                )
+
+                # Check for MCP error response
+                if "error" in data:
+                    error = data["error"]
+                    error_code = error.get("code", "UNKNOWN_ERROR")
+                    error_message = error.get("message", "Unknown error")
+
+                    # Log full error response at ERROR level with all details
                     logger.error(
-                        "MCP error contains wrapped/original error details - printing full error chain",
+                        "MCP tool error - full error response",
                         tool=tool_name,
+                        attempt=attempt + 1,
                         error_code=error_code,
                         error_message=error_message,
-                        error_full=error,
+                        error_data=error,
                         full_response=data,
                     )
 
-                # Print the full error structure for debugging (as JSON string)
-                try:
-                    error_json_str = json.dumps(data, indent=2, default=str)
-                    # Log as both structured and plain text for visibility
-                    logger.error(
-                        "MCP error response (JSON formatted)",
+                    # Also log at debug level with structured data
+                    logger.debug(
+                        "MCP: Error response received (detailed)",
                         tool=tool_name,
                         attempt=attempt + 1,
-                        error_json=error_json_str,
+                        error_code=error_code,
+                        error_message=error_message,
+                        error_data=error,
+                        full_response=data,
+                        error_keys=list(error.keys()) if isinstance(error, dict) else None,
                     )
-                    # Also print directly to ensure visibility
-                    print(f"\n{'=' * 80}")
-                    print(f"MCP ERROR RESPONSE (tool={tool_name}, attempt={attempt + 1}):")
-                    print(error_json_str)
-                    print(f"{'=' * 80}\n")
-                except Exception as json_error:
-                    logger.error(
-                        "Failed to serialize error response to JSON",
-                        tool=tool_name,
-                        json_error=str(json_error),
-                        error_response=data,
-                    )
-                    print(f"\n{'=' * 80}")
-                    print("MCP ERROR RESPONSE (serialization failed):")
-                    print(f"Error: {json_error}")
-                    print(f"Data: {data}")
-                    print(f"{'=' * 80}\n")
 
-                # Don't retry on permanent errors
-                permanent_errors = {
-                    "TOOL_NOT_FOUND",
-                    "INVALID_INPUT",
-                    "INVALID_SESSION_DATA",
-                    "INVALID_DATE_FORMAT",
-                    "USER_NOT_FOUND",
-                    "MISSING_RACE_INFO",
-                    "MISSING_SEASON_INFO",
-                    "INVALID_RACE_DATE",
-                }
-                if error_code in permanent_errors:
+                    # Print formatted error message for immediate visibility
+                    logger.error(f"MCP tool error: {tool_name} - {error_code}: {error_message}")
+
+                    # Extract and print original error details if present in message
+                    if (
+                        "wrapped:" in error_message
+                        or "original_error" in str(error).lower()
+                        or "Failed to plan race build:" in error_message
+                    ):
+                        logger.error(
+                            "MCP error contains wrapped/original error details - printing full error chain",
+                            tool=tool_name,
+                            error_code=error_code,
+                            error_message=error_message,
+                            error_full=error,
+                            full_response=data,
+                        )
+
+                    # Print the full error structure for debugging (as JSON string)
+                    try:
+                        error_json_str = json.dumps(data, indent=2, default=str)
+                        # Log as both structured and plain text for visibility
+                        logger.error(
+                            "MCP error response (JSON formatted)",
+                            tool=tool_name,
+                            attempt=attempt + 1,
+                            error_json=error_json_str,
+                        )
+                        # Also print directly to ensure visibility
+                        print(f"\n{'=' * 80}")
+                        print(f"MCP ERROR RESPONSE (tool={tool_name}, attempt={attempt + 1}):")
+                        print(error_json_str)
+                        print(f"{'=' * 80}\n")
+                    except Exception as json_error:
+                        logger.error(
+                            "Failed to serialize error response to JSON",
+                            tool=tool_name,
+                            json_error=str(json_error),
+                            error_response=data,
+                        )
+                        print(f"\n{'=' * 80}")
+                        print("MCP ERROR RESPONSE (serialization failed):")
+                        print(f"Error: {json_error}")
+                        print(f"Data: {data}")
+                        print(f"{'=' * 80}\n")
+
+                    # Don't retry on permanent errors
+                    permanent_errors = {
+                        "TOOL_NOT_FOUND",
+                        "INVALID_INPUT",
+                        "INVALID_SESSION_DATA",
+                        "INVALID_DATE_FORMAT",
+                        "USER_NOT_FOUND",
+                        "MISSING_RACE_INFO",
+                        "MISSING_SEASON_INFO",
+                        "INVALID_RACE_DATE",
+                    }
+                    if error_code in permanent_errors:
+                        _raise_mcp_error(error_code, error_message)
+
+                    # Retry on transient errors
+                    if attempt < max_retries - 1:
+                        wait_time = min(2**attempt, 10)  # Exponential backoff: 1s, 2s, 4s, max 10s
+                        logger.warning(
+                            f"MCP tool transient error: {tool_name} - {error_code}: {error_message}. "
+                            f"Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+
                     _raise_mcp_error(error_code, error_message)
 
-                # Retry on transient errors
+                # Return result
+                if "result" not in data:
+                    _raise_mcp_error(
+                        "INVALID_RESPONSE",
+                        f"Missing 'result' field in MCP response for {tool_name}",
+                    )
+
+                # Success - return result
+                result = data["result"]
+                result_keys = list(result.keys()) if isinstance(result, dict) else None
+                logger.debug(
+                    "MCP: Tool call successful",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    result_keys=result_keys,
+                    result_type=type(result).__name__,
+                    result_size=len(str(result)) if result else 0,
+                )
+            except httpx.TimeoutException as e:
+                logger.debug(
+                    "MCP: Timeout exception",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    timeout=HTTP_TIMEOUT,
+                    error=str(e),
+                )
                 if attempt < max_retries - 1:
                     wait_time = min(2**attempt, 10)  # Exponential backoff: 1s, 2s, 4s, max 10s
+                    logger.debug(
+                        "MCP: Scheduling retry after timeout",
+                        tool=tool_name,
+                        attempt=attempt + 1,
+                        wait_time=wait_time,
+                        next_attempt=attempt + 2,
+                    )
                     logger.warning(
-                        f"MCP tool transient error: {tool_name} - {error_code}: {error_message}. "
-                        f"Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})"
+                        f"MCP tool timeout: {tool_name}. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
+                        tool=tool_name,
+                        timeout=HTTP_TIMEOUT,
                     )
                     await asyncio.sleep(wait_time)
                     continue
-
-                _raise_mcp_error(error_code, error_message)
-
-            # Return result
-            if "result" not in data:
-                _raise_mcp_error(
-                    "INVALID_RESPONSE",
-                    f"Missing 'result' field in MCP response for {tool_name}",
-                )
-
-            # Success - return result
-            result = data["result"]
-            result_keys = list(result.keys()) if isinstance(result, dict) else None
-            logger.debug(
-                "MCP: Tool call successful",
-                tool=tool_name,
-                attempt=attempt + 1,
-                result_keys=result_keys,
-                result_type=type(result).__name__,
-                result_size=len(str(result)) if result else 0,
-            )
-        except httpx.TimeoutException as e:
-            logger.debug(
-                "MCP: Timeout exception",
-                tool=tool_name,
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                timeout=HTTP_TIMEOUT,
-                error=str(e),
-            )
-            if attempt < max_retries - 1:
-                wait_time = min(2**attempt, 10)  # Exponential backoff: 1s, 2s, 4s, max 10s
+                logger.error(f"MCP tool timeout after {max_retries} attempts: {tool_name}", tool=tool_name, timeout=HTTP_TIMEOUT)
+                raise MCPError("TIMEOUT", f"Tool call to {tool_name} timed out after {max_retries} attempts") from e
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code if e.response else None
                 logger.debug(
-                    "MCP: Scheduling retry after timeout",
-                    tool=tool_name,
-                    attempt=attempt + 1,
-                    wait_time=wait_time,
-                    next_attempt=attempt + 2,
-                )
-                logger.warning(
-                    f"MCP tool timeout: {tool_name}. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
-                    tool=tool_name,
-                    timeout=HTTP_TIMEOUT,
-                )
-                await asyncio.sleep(wait_time)
-                continue
-            logger.error(f"MCP tool timeout after {max_retries} attempts: {tool_name}", tool=tool_name, timeout=HTTP_TIMEOUT)
-            raise MCPError("TIMEOUT", f"Tool call to {tool_name} timed out after {max_retries} attempts") from e
-        except httpx.HTTPStatusError as e:
-            status_code = e.response.status_code if e.response else None
-            logger.debug(
-                "MCP: HTTP status error",
-                tool=tool_name,
-                attempt=attempt + 1,
-                status_code=status_code,
-                is_5xx=500 <= status_code < 600 if status_code else False,
-                max_retries=max_retries,
-                error=str(e),
-            )
-            # Retry on 5xx errors but not 4xx
-            if e.response is not None and 500 <= e.response.status_code < 600 and attempt < max_retries - 1:
-                wait_time = min(2**attempt, 10)
-                logger.debug(
-                    "MCP: Scheduling retry after 5xx error",
+                    "MCP: HTTP status error",
                     tool=tool_name,
                     attempt=attempt + 1,
                     status_code=status_code,
-                    wait_time=wait_time,
-                    next_attempt=attempt + 2,
-                )
-                logger.warning(
-                    f"MCP tool HTTP error: {tool_name} - {e.response.status_code}. "
-                    f"Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
-                    tool=tool_name,
-                    status_code=e.response.status_code,
-                )
-                await asyncio.sleep(wait_time)
-                continue
-            # 4xx errors (client errors) - don't retry
-            logger.error(f"MCP tool HTTP error: {tool_name}", tool=tool_name, status_code=status_code)
-            raise MCPError("HTTP_ERROR", f"HTTP {status_code if status_code else 'unknown'} error calling {tool_name}") from e
-        except httpx.RequestError as e:
-            logger.debug(
-                "MCP: Request error",
-                tool=tool_name,
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                error_type=type(e).__name__,
-                error=str(e),
-            )
-            if attempt < max_retries - 1:
-                wait_time = min(2**attempt, 10)
-                logger.debug(
-                    "MCP: Scheduling retry after request error",
-                    tool=tool_name,
-                    attempt=attempt + 1,
-                    wait_time=wait_time,
-                    next_attempt=attempt + 2,
-                )
-                logger.warning(
-                    f"MCP tool request error: {tool_name} - {e!s}. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
-                    tool=tool_name,
+                    is_5xx=500 <= status_code < 600 if status_code else False,
+                    max_retries=max_retries,
                     error=str(e),
                 )
-                await asyncio.sleep(wait_time)
-                continue
-            logger.error(f"MCP tool request error after {max_retries} attempts: {tool_name}", tool=tool_name, error=str(e))
-            raise MCPError("NETWORK_ERROR", f"Network error calling {tool_name}: {e!s}") from e
-        except MCPError:
-            # Re-raise MCPError without wrapping (e.g., from _raise_mcp_error for permanent errors)
-            raise
-        except RuntimeError as e:
-            logger.debug(
-                "MCP: RuntimeError exception",
-                tool=tool_name,
-                attempt=attempt + 1,
-                error_type=type(e).__name__,
-                error=str(e),
-                is_event_loop_error=("Event loop is closed" in str(e) or "This event loop is already running" in str(e)),
-            )
-            # Handle event loop closure errors
-            if ("Event loop is closed" in str(e) or "This event loop is already running" in str(e)) and attempt < max_retries - 1:
+                # Retry on 5xx errors but not 4xx
+                if e.response is not None and 500 <= e.response.status_code < 600 and attempt < max_retries - 1:
+                    wait_time = min(2**attempt, 10)
+                    logger.debug(
+                        "MCP: Scheduling retry after 5xx error",
+                        tool=tool_name,
+                        attempt=attempt + 1,
+                        status_code=status_code,
+                        wait_time=wait_time,
+                        next_attempt=attempt + 2,
+                    )
+                    logger.warning(
+                        f"MCP tool HTTP error: {tool_name} - {e.response.status_code}. "
+                        f"Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
+                        tool=tool_name,
+                        status_code=e.response.status_code,
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                # 4xx errors (client errors) - don't retry
+                logger.error(f"MCP tool HTTP error: {tool_name}", tool=tool_name, status_code=status_code)
+                raise MCPError("HTTP_ERROR", f"HTTP {status_code if status_code else 'unknown'} error calling {tool_name}") from e
+            except httpx.RequestError as e:
                 logger.debug(
-                    "MCP: Recreating client after event loop error",
+                    "MCP: Request error",
                     tool=tool_name,
                     attempt=attempt + 1,
-                    next_attempt=attempt + 2,
-                )
-                logger.warning(
-                    f"Event loop issue calling MCP tool: {tool_name}, recreating client",
-                    tool=tool_name,
+                    max_retries=max_retries,
+                    error_type=type(e).__name__,
                     error=str(e),
                 )
-                global _client
-                _client = None
-                wait_time = min(2**attempt, 10)
-                await asyncio.sleep(wait_time)
-                continue
-            logger.error(f"Unexpected RuntimeError calling MCP tool: {tool_name}", tool=tool_name, error=str(e), exc_info=True)
-            raise MCPError("INTERNAL_ERROR", f"Unexpected error calling {tool_name}: {e!s}") from e
-        except Exception as e:
-            logger.debug(
-                "MCP: Unexpected exception",
-                tool=tool_name,
-                attempt=attempt + 1,
-                error_type=type(e).__name__,
-                error=str(e),
-            )
-            # Don't retry on unknown exceptions
-            logger.error(f"Unexpected error calling MCP tool: {tool_name}", tool=tool_name, error=str(e), exc_info=True)
-            raise MCPError("INTERNAL_ERROR", f"Unexpected error calling {tool_name}: {e!s}") from e
-        else:
-            # Success path - return result
-            logger.debug(
+                if attempt < max_retries - 1:
+                    wait_time = min(2**attempt, 10)
+                    logger.debug(
+                        "MCP: Scheduling retry after request error",
+                        tool=tool_name,
+                        attempt=attempt + 1,
+                        wait_time=wait_time,
+                        next_attempt=attempt + 2,
+                    )
+                    logger.warning(
+                        f"MCP tool request error: {tool_name} - {e!s}. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
+                        tool=tool_name,
+                        error=str(e),
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                logger.error(f"MCP tool request error after {max_retries} attempts: {tool_name}", tool=tool_name, error=str(e))
+                raise MCPError("NETWORK_ERROR", f"Network error calling {tool_name}: {e!s}") from e
+            except MCPError:
+                # Re-raise MCPError without wrapping (e.g., from _raise_mcp_error for permanent errors)
+                raise
+            except RuntimeError as e:
+                logger.debug(
+                    "MCP: RuntimeError exception",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    error_type=type(e).__name__,
+                    error=str(e),
+                    is_event_loop_error=("Event loop is closed" in str(e) or "This event loop is already running" in str(e)),
+                )
+                # Handle event loop closure errors
+                if ("Event loop is closed" in str(e) or "This event loop is already running" in str(e)) and attempt < max_retries - 1:
+                    logger.debug(
+                        "MCP: Recreating client after event loop error",
+                        tool=tool_name,
+                        attempt=attempt + 1,
+                        next_attempt=attempt + 2,
+                    )
+                    logger.warning(
+                        f"Event loop issue calling MCP tool: {tool_name}, recreating client",
+                        tool=tool_name,
+                        error=str(e),
+                    )
+                    global _client
+                    _client = None
+                    wait_time = min(2**attempt, 10)
+                    await asyncio.sleep(wait_time)
+                    continue
+                logger.error(f"Unexpected RuntimeError calling MCP tool: {tool_name}", tool=tool_name, error=str(e), exc_info=True)
+                raise MCPError("INTERNAL_ERROR", f"Unexpected error calling {tool_name}: {e!s}") from e
+            except Exception as e:
+                logger.debug(
+                    "MCP: Unexpected exception",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    error_type=type(e).__name__,
+                    error=str(e),
+                )
+                # Don't retry on unknown exceptions
+                logger.error(f"Unexpected error calling MCP tool: {tool_name}", tool=tool_name, error=str(e), exc_info=True)
+                raise MCPError("INTERNAL_ERROR", f"Unexpected error calling {tool_name}: {e!s}") from e
+            else:
+                # Success path - return result
+                logger.debug(
                 "MCP: Returning successful result",
                 tool=tool_name,
                 attempt=attempt + 1,

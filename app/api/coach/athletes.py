@@ -56,45 +56,44 @@ def list_athletes(
         "endpoint": "GET /api/coach/athletes",
     }
 
-    with trace(name="api.coach.list_athletes", metadata=trace_metadata) as span:
-        with get_session() as db:
-            # Query CoachAthlete join table to get assigned athletes
-            links = db.query(CoachAthlete).filter_by(coach_id=coach.id).all()
+    with trace(name="api.coach.list_athletes", metadata=trace_metadata) as span, get_session() as db:
+        # Query CoachAthlete join table to get assigned athletes
+        links = db.query(CoachAthlete).filter_by(coach_id=coach.id).all()
 
-            athlete_ids = [link.athlete_id for link in links]
-            if not athlete_ids:
-                latency_ms = int((time.time() - start_time) * 1000)
-                if span and hasattr(span, "set_attribute"):
-                    span.set_attribute("response_size", 0)
-                    span.set_attribute("latency_ms", latency_ms)
-                    span.set_attribute("athlete_count", 0)
-                return []
-
-            # Fetch athlete records
-            athletes = db.query(Athlete).filter(Athlete.id.in_(athlete_ids)).all()
-
-            # Create a map of athlete_id -> can_edit from links
-            can_edit_map = {link.athlete_id: link.can_edit for link in links}
-
-            result = [
-                AthleteListItem(
-                    athlete_id=athlete.id,
-                    display_name=athlete.display_name,
-                    can_edit=can_edit_map.get(athlete.id, False),
-                )
-                for athlete in athletes
-            ]
-
-            # Record metrics on span
+        athlete_ids = [link.athlete_id for link in links]
+        if not athlete_ids:
             latency_ms = int((time.time() - start_time) * 1000)
-            # Estimate response size (JSON serialization)
-            response_size = len(json.dumps([item.model_dump() for item in result]))
             if span and hasattr(span, "set_attribute"):
-                span.set_attribute("response_size", response_size)
+                span.set_attribute("response_size", 0)
                 span.set_attribute("latency_ms", latency_ms)
-                span.set_attribute("athlete_count", len(result))
+                span.set_attribute("athlete_count", 0)
+            return []
 
-            return result
+        # Fetch athlete records
+        athletes = db.query(Athlete).filter(Athlete.id.in_(athlete_ids)).all()
+
+        # Create a map of athlete_id -> can_edit from links
+        can_edit_map = {link.athlete_id: link.can_edit for link in links}
+
+        result = [
+            AthleteListItem(
+                athlete_id=athlete.id,
+                display_name=athlete.display_name,
+                can_edit=can_edit_map.get(athlete.id, False),
+            )
+            for athlete in athletes
+        ]
+
+        # Record metrics on span
+        latency_ms = int((time.time() - start_time) * 1000)
+        # Estimate response size (JSON serialization)
+        response_size = len(json.dumps([item.model_dump() for item in result]))
+        if span and hasattr(span, "set_attribute"):
+            span.set_attribute("response_size", response_size)
+            span.set_attribute("latency_ms", latency_ms)
+            span.set_attribute("athlete_count", len(result))
+
+        return result
 
 
 @router.post("/athletes/{athlete_id}")
@@ -143,17 +142,16 @@ def assign_athlete(
             db.commit()
             logger.info(f"Updated relationship: coach_id={coach.id}, athlete_id={athlete_id}, can_edit={request.can_edit}")
             return {"message": "Athlete assignment updated"}
-        else:
-            # Create new relationship
-            new_link = CoachAthlete(
-                coach_id=coach.id,
-                athlete_id=athlete_id,
-                can_edit=request.can_edit,
-            )
-            db.add(new_link)
-            db.commit()
-            logger.info(f"Created relationship: coach_id={coach.id}, athlete_id={athlete_id}, can_edit={request.can_edit}")
-            return {"message": "Athlete assigned successfully"}
+        # Create new relationship
+        new_link = CoachAthlete(
+            coach_id=coach.id,
+            athlete_id=athlete_id,
+            can_edit=request.can_edit,
+        )
+        db.add(new_link)
+        db.commit()
+        logger.info(f"Created relationship: coach_id={coach.id}, athlete_id={athlete_id}, can_edit={request.can_edit}")
+        return {"message": "Athlete assigned successfully"}
 
 
 @router.delete("/athletes/{athlete_id}")

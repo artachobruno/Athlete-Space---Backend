@@ -17,6 +17,8 @@ class CoachIntent(StrEnum):
     ADD_WORKOUT = "add_workout"
     RUN_ANALYSIS = "run_analysis"
     SHARE_REPORT = "share_report"
+    UPLOAD_ACTIVITY = "upload_activity"
+    UPLOAD_PLAN = "upload_plan"
     UNSUPPORTED = "unsupported"
     # Legacy intents (for backward compatibility)
     TODAY_SESSION = "today_session"

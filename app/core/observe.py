@@ -9,6 +9,16 @@ from typing import Any
 
 from loguru import logger
 
+try:
+    from opentelemetry import trace as otel_trace_module
+except ImportError:
+    otel_trace_module = None
+
+try:
+    from traceloop import Traceloop
+except ImportError:
+    Traceloop = None
+
 
 class _NoOpTrace:
     """No-op trace context manager for when Observe is disabled."""
@@ -50,9 +60,15 @@ class _ObserveSDK:
             logger.info("Observe tracing is disabled")
             return
 
-        try:
-            from traceloop import Traceloop
+        if Traceloop is None:
+            logger.warning(
+                "traceloop-sdk not installed. Install with: pip install traceloop-sdk. "
+                "Tracing will be disabled."
+            )
+            self._enabled = False
+            return
 
+        try:
             self._traceloop = Traceloop
             # Initialize Traceloop with minimal config
             # Note: Actual configuration happens via environment variables
@@ -90,19 +106,20 @@ class _ObserveSDK:
         if not self._enabled or not self._initialized:
             return _NoOpTrace()
 
-        try:
-            # Use OpenTelemetry context directly if available
-            from opentelemetry import trace
+        if otel_trace_module is None:
+            return _NoOpTrace()
 
-            tracer = trace.get_tracer(__name__)
+        try:
+            tracer = otel_trace_module.get_tracer(__name__)
             span = tracer.start_as_current_span(name)
             if metadata:
                 for key, value in metadata.items():
                     span.set_attribute(key, str(value))
-            return span
         except Exception as e:
             logger.debug(f"Failed to create trace span: {e}")
             return _NoOpTrace()
+        else:
+            return span
 
     def set_association_properties(self, properties: dict[str, str]) -> None:
         """Set association properties for tracing (user_id, conversation_id, etc.).

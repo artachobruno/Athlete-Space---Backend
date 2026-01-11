@@ -21,15 +21,16 @@ from app.api.admin.ingestion_reliability import router as ingestion_reliability_
 from app.api.auth.auth import router as auth_router
 from app.api.auth.auth_google import router as auth_google_router
 from app.api.auth.auth_strava import router as auth_strava_router
+from app.api.coach.athletes import router as coach_athletes_router
 from app.api.export.plan_export import router as export_router
 from app.api.integrations.integrations_strava import router as integrations_strava_router
 from app.api.intelligence.intelligence import router as intelligence_router
 from app.api.intelligence.risks import router as risks_router
 from app.api.onboarding.onboarding import router as onboarding_router
 from app.api.strava.strava import router as strava_router
+from app.api.training.manual_upload import router as manual_upload_router
 from app.api.training.state import router as state_router
 from app.api.training.training import router as training_router
-from app.api.coach.athletes import router as coach_athletes_router
 from app.api.user.me import router as me_router
 from app.calendar.api import router as calendar_router
 from app.coach.api import router as coach_router
@@ -565,6 +566,7 @@ app.include_router(risks_router)
 app.include_router(me_router)
 app.include_router(onboarding_router)
 app.include_router(strava_router)
+app.include_router(manual_upload_router)
 app.include_router(state_router)
 app.include_router(training_router)
 app.include_router(webhooks_router)

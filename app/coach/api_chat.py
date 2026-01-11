@@ -30,6 +30,9 @@ from app.db.message_repository import persist_message
 from app.db.models import AthleteProfile, CoachMessage, CoachProgressEvent, StravaAccount, StravaAuth, UserSettings
 from app.db.session import get_session
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
+from app.upload.activity_handler import upload_activity_from_chat
+from app.upload.plan_handler import upload_plan_from_chat
+from app.upload.upload_detector import is_activity_upload, is_plan_upload
 
 router = APIRouter(prefix="/coach", tags=["coach"])
 
@@ -310,6 +313,93 @@ async def coach_chat(
             reply=reply,
             conversation_id=conversation_id,
             response_type="greeting",
+            show_plan=False,
+            plan_items=None,
+        )
+
+    # Handle upload requests (activities or plans)
+    message_content = normalized_user_message.content
+    if is_activity_upload(message_content):
+        logger.info(
+            "Detected activity upload request",
+            conversation_id=conversation_id,
+            athlete_id=athlete_id,
+        )
+        try:
+            _activity_ids, created_count = upload_activity_from_chat(user_id=user_id, content=message_content)
+            if created_count > 0:
+                reply = f"Great! I've logged {created_count} activity/activities to your calendar. Your training data has been updated."
+            else:
+                reply = "I found those activities, but they appear to be duplicates of existing entries. No new activities were added."
+        except ValueError as e:
+            logger.warning(f"Activity upload failed: {e}", conversation_id=conversation_id)
+            reply = f"I had trouble parsing that activity. Could you try again? Error: {e!s}"
+        except Exception as e:
+            logger.error(f"Activity upload error: {e}", exc_info=True, conversation_id=conversation_id)
+            reply = "I encountered an error processing your activity upload. Please try again."
+
+        # Normalize and save assistant message
+        try:
+            normalized_assistant_message = normalize_message(
+                raw_input=reply,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="assistant",
+            )
+            if normalized_assistant_message:
+                write_message(normalized_assistant_message)
+                background_tasks.add_task(persist_message, normalized_assistant_message)
+        except ValueError as e:
+            logger.error(f"Failed to normalize assistant message for upload: {e}", conversation_id=conversation_id)
+
+        return CoachChatResponse(
+            intent="upload_activity",
+            reply=reply,
+            conversation_id=conversation_id,
+            response_type="explanation",
+            show_plan=False,
+            plan_items=None,
+        )
+
+    if is_plan_upload(message_content):
+        logger.info(
+            "Detected plan upload request",
+            conversation_id=conversation_id,
+            athlete_id=athlete_id,
+        )
+        try:
+            _saved_count, summary = upload_plan_from_chat(
+                user_id=user_id,
+                athlete_id=athlete_id,
+                content=message_content,
+            )
+            reply = summary
+        except ValueError as e:
+            logger.warning(f"Plan upload failed: {e}", conversation_id=conversation_id)
+            reply = f"I had trouble parsing that training plan. Could you try again? Error: {e!s}"
+        except Exception as e:
+            logger.error(f"Plan upload error: {e}", exc_info=True, conversation_id=conversation_id)
+            reply = "I encountered an error processing your training plan upload. Please try again."
+
+        # Normalize and save assistant message
+        try:
+            normalized_assistant_message = normalize_message(
+                raw_input=reply,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="assistant",
+            )
+            if normalized_assistant_message:
+                write_message(normalized_assistant_message)
+                background_tasks.add_task(persist_message, normalized_assistant_message)
+        except ValueError as e:
+            logger.error(f"Failed to normalize assistant message for upload: {e}", conversation_id=conversation_id)
+
+        return CoachChatResponse(
+            intent="upload_plan",
+            reply=reply,
+            conversation_id=conversation_id,
+            response_type="explanation",
             show_plan=False,
             plan_items=None,
         )

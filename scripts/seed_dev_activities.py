@@ -91,7 +91,6 @@ def seed_activities() -> int:
             )
             activity_counter += 1
 
-            # Tuesday: Workout (tempo/intervals)
             activities.append(
                 Activity(
                     id=str(uuid.uuid4()),
@@ -109,7 +108,6 @@ def seed_activities() -> int:
             )
             activity_counter += 1
 
-            # Wednesday: Rest or easy (50% chance)
             if week % 2 == 0:
                 activities.append(
                     Activity(
@@ -128,7 +126,6 @@ def seed_activities() -> int:
                 )
                 activity_counter += 1
 
-            # Thursday: Workout (intervals)
             activities.append(
                 Activity(
                     id=str(uuid.uuid4()),
@@ -146,7 +143,6 @@ def seed_activities() -> int:
             )
             activity_counter += 1
 
-            # Friday: Easy
             activities.append(
                 Activity(
                     id=str(uuid.uuid4()),
@@ -181,8 +177,6 @@ def seed_activities() -> int:
                 )
             )
             activity_counter += 1
-
-            # Sunday: Rest (skip)
 
         # Add all activities
         db.add_all(activities)

@@ -450,7 +450,7 @@ MAX_UPLOADS_PER_DAY = 20
 
 @router.post("/upload")
 def upload_activity_file(
-    file: UploadFile = File(...),  # noqa: B008
+    file: UploadFile = File(...),
     user_id: str = Depends(get_current_user_id),
 ):
     """Upload and ingest a single activity file (FIT, GPX, or TCX).

@@ -20,6 +20,7 @@ from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.config.models import ORCHESTRATOR_MODEL
 from app.coach.config.prompt_versions import ORCHESTRATOR_PROMPT_VERSION
 from app.coach.mcp_client import MCPError, call_tool
+from app.coach.prompts.loader import load_prompt
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import create_or_update_progress, get_conversation_progress
 from app.coach.validators.execution_validator import validate_no_advice_before_execution
@@ -279,24 +280,6 @@ def is_execution_confirmation(msg: str) -> bool:
 # ============================================================================
 
 
-async def _load_orchestrator_prompt() -> str:
-    """Load orchestrator prompt via MCP.
-
-    Returns:
-        Prompt content as string
-
-    Raises:
-        FileNotFoundError: If prompt file doesn't exist
-    """
-    try:
-        result = await call_tool("load_orchestrator_prompt", {})
-        return result["content"]
-    except MCPError as e:
-        if e.code == "FILE_NOT_FOUND":
-            raise FileNotFoundError(f"Orchestrator prompt file not found: {e.message}") from e
-        raise RuntimeError(f"Failed to load orchestrator prompt: {e.message}") from e
-
-
 # Load prompt synchronously at module level (will be replaced with async loading if needed)
 # For now, we'll load it lazily in run_conversation
 ORCHESTRATOR_INSTRUCTIONS = ""
@@ -364,7 +347,7 @@ async def run_conversation(
     global ORCHESTRATOR_INSTRUCTIONS, ORCHESTRATOR_AGENT
     if not ORCHESTRATOR_INSTRUCTIONS:
         logger.debug("Orchestrator: Loading instructions via MCP")
-        ORCHESTRATOR_INSTRUCTIONS = await _load_orchestrator_prompt()
+        ORCHESTRATOR_INSTRUCTIONS = await load_prompt("orchestrator.txt")
         logger.debug(
             "Orchestrator: Instructions loaded",
             instructions_length=len(ORCHESTRATOR_INSTRUCTIONS),

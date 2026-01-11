@@ -3,6 +3,7 @@
 Provides utilities to extract and format trace metadata from request context.
 """
 
+import os
 from typing import Any
 
 
@@ -39,16 +40,13 @@ def get_trace_metadata(
 
     if environment:
         metadata["env"] = environment
+    # Auto-detect environment
+    elif os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT"):
+        metadata["env"] = "prod"
+    elif os.getenv("STAGING"):
+        metadata["env"] = "staging"
     else:
-        # Auto-detect environment
-        import os
-
-        if os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT"):
-            metadata["env"] = "prod"
-        elif os.getenv("STAGING"):
-            metadata["env"] = "staging"
-        else:
-            metadata["env"] = "dev"
+        metadata["env"] = "dev"
 
     return metadata
 

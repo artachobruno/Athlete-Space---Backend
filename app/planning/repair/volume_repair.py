@@ -15,6 +15,21 @@ class RepairImpossibleError(Exception):
     pass
 
 
+class WeekVolumeMismatchError(Exception):
+    """Raise when week volume mismatch cannot be repaired.
+
+    This error should NOT trigger retries since LLM regeneration
+    won't converge on numeric precision. Repair should be attempted first.
+    """
+
+    def __init__(self, message: str, target_km: float, actual_km: float, diff_km: float, tolerance_km: float):
+        self.target_km = target_km
+        self.actual_km = actual_km
+        self.diff_km = diff_km
+        self.tolerance_km = tolerance_km
+        super().__init__(message)
+
+
 def compute_week_volume(specs: list[SessionSpec]) -> float:
     """Compute total week volume from session specs.
 

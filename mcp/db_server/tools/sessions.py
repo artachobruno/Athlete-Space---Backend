@@ -72,6 +72,33 @@ def _raise_missing_season_info() -> NoReturn:
     )
 
 
+def _is_volume_mismatch_error(exception: Exception) -> bool:
+    """Check if exception chain contains a volume mismatch error.
+
+    Volume mismatch errors should NOT trigger retries since LLM regeneration
+    won't converge on numeric precision. These errors are detected by checking
+    the error message for the distinctive "Week volume mismatch" pattern.
+
+    Args:
+        exception: Exception to check
+
+    Returns:
+        True if this is a volume mismatch error (non-retryable)
+    """
+    error_msg = str(exception)
+    if "Week volume mismatch" in error_msg:
+        return True
+
+    # Check exception chain
+    current = exception
+    while current:
+        if "Week volume mismatch" in str(current):
+            return True
+        current = getattr(current, "__cause__", None)
+
+    return False
+
+
 def save_planned_sessions_tool(arguments: dict) -> dict:
     """Save planned training sessions to database.
 
@@ -348,12 +375,28 @@ def plan_race_build_tool(arguments: dict) -> dict:
             original_error_message=original_error_message if e.__cause__ else None,
             exc_info=True,
         )
-        # Include original error details in MCP error message if available
-        if e.__cause__:
-            error_msg = f"Failed to plan race build: {error_details} (wrapped: {type(e).__name__}: {e!s})"
+        # Check if this is a volume mismatch error (non-retryable)
+        if _is_volume_mismatch_error(e):
+            # Volume mismatch errors should NOT be retried
+            # These indicate LLM numeric instability, not transient failures
+            error_code = "VOLUME_MISMATCH"
+            if e.__cause__:
+                error_msg = f"Failed to plan race build: {error_details} (wrapped: {type(e).__name__}: {e!s})"
+            else:
+                error_msg = f"Failed to plan race build: {error_details}"
+            logger.warning(
+                "Volume mismatch error detected - marking as permanent (non-retryable)",
+                error_code=error_code,
+                error_message=error_msg,
+            )
         else:
-            error_msg = f"Failed to plan race build: {error_details}"
-        raise MCPError("DB_ERROR", error_msg) from e
+            # Other errors use DB_ERROR (may be retried by client)
+            error_code = "DB_ERROR"
+            if e.__cause__:
+                error_msg = f"Failed to plan race build: {error_details} (wrapped: {type(e).__name__}: {e!s})"
+            else:
+                error_msg = f"Failed to plan race build: {error_details}"
+        raise MCPError(error_code, error_msg) from e
     else:
         # B37: Use slots directly - no re-extraction from message
         # All required data is already validated from filled_slots above

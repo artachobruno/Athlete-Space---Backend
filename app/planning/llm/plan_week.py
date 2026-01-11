@@ -4,7 +4,12 @@ from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
-from app.planning.repair.volume_repair import RepairImpossibleError, repair_week_volume, volume_within_tolerance
+from app.planning.repair.volume_repair import (
+    RepairImpossibleError,
+    WeekVolumeMismatchError,
+    repair_week_volume,
+    volume_within_tolerance,
+)
 from app.planning.schema.session_spec import SessionSpec, Sport
 from app.services.llm.model import get_model
 
@@ -83,10 +88,14 @@ def validate_week(specs: list[SessionSpec], input: PlanWeekInput) -> None:
         except RepairImpossibleError as e:
             volume_diff = abs(total_distance - input.total_volume_km)
             volume_tolerance = input.total_volume_km * 0.05
-            raise ValueError(
+            raise WeekVolumeMismatchError(
                 f"Week volume mismatch: expected {input.total_volume_km}km, "
                 f"got {total_distance}km (diff: {volume_diff}km, tolerance: {volume_tolerance}km). "
-                f"Repair impossible: {e}"
+                f"Repair impossible: {e}",
+                target_km=input.total_volume_km,
+                actual_km=total_distance,
+                diff_km=volume_diff,
+                tolerance_km=volume_tolerance,
             ) from e
 
     long_runs = [s for s in specs if s.session_type.value == "long"]

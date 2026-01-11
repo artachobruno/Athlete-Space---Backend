@@ -329,6 +329,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                         "MISSING_RACE_INFO",
                         "MISSING_SEASON_INFO",
                         "INVALID_RACE_DATE",
+                        "VOLUME_MISMATCH",  # Volume mismatch errors are non-retryable (LLM numeric instability)
                     }
                     if error_code in permanent_errors:
                         _raise_mcp_error(error_code, error_message)

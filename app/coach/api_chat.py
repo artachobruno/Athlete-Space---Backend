@@ -537,6 +537,15 @@ async def coach_chat(
                 injury_flag=settings.injury_history or False,
             )
 
+    # Create turn-scoped execution guard (prevents duplicate tool execution within a turn)
+    from app.coach.execution_guard import TurnExecutionGuard
+
+    execution_guard = TurnExecutionGuard(conversation_id=conversation_id)
+    logger.debug(
+        "Initialized execution guard for turn",
+        conversation_id=conversation_id,
+    )
+
     # Create dependencies
     deps = CoachDeps(
         athlete_id=athlete_id,
@@ -547,6 +556,7 @@ async def coach_chat(
         race_profile=race_profile,
         days=req.days,
         days_to_race=req.days_to_race,
+        execution_guard=execution_guard,
     )
 
     # Set association properties for tracing

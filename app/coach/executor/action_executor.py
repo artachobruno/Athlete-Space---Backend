@@ -419,11 +419,10 @@ class CoachActionExecutor:
         # STATE 2: SLOTS COMPLETE - Execute immediately
         # If slots are complete, execute without confirmation
         if decision.should_execute and target_action:
-            # EXECUTION GUARD: Prevent re-execution if tool already executed this turn
-            has_executed = getattr(decision, "_has_executed_tool", False)
-            if has_executed:
-                logger.debug(
-                    "ActionExecutor: Skipping execution - tool already executed this turn",
+            # TURN-SCOPED EXECUTION GUARD: Prevent duplicate execution across orchestrator re-entries
+            if deps.execution_guard and deps.execution_guard.has_executed(target_action):
+                logger.info(
+                    "ActionExecutor: Prevented duplicate execution of tool (turn-scoped guard)",
                     target_action=target_action,
                     conversation_id=conversation_id,
                 )
@@ -538,19 +537,15 @@ class CoachActionExecutor:
             conversation_id=conversation_id,
         )
 
-        # ONE-TOOL-PER-TURN ASSERTION: Ensure we haven't already executed a tool
-        has_executed = getattr(decision, "_has_executed_tool", False)
-        if has_executed:
-            raise RuntimeError("Invariant violated: multiple tool executions in a single turn")
-
         # Use target_action for execution routing if available
         if target_action == "plan_race_build":
             logger.debug(
                 "ActionExecutor: Routing to plan_race_build execution",
                 conversation_id=conversation_id,
             )
-            # Mark execution flag BEFORE calling tool to prevent re-entry
-            decision._has_executed_tool = True
+            # Mark execution in turn-scoped guard BEFORE calling tool to prevent re-entry
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("plan_race_build")
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
 
         if target_action == "plan_week":
@@ -565,32 +560,39 @@ class CoachActionExecutor:
                     conversation_id=conversation_id,
                 )
                 return "I can plan your week once your marathon plan is created. What is your marathon date?"
-            decision._has_executed_tool = True
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("plan_week")
             return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
 
         # Fallback to intent/horizon mapping if no target_action
         if intent == "recommend" and horizon in {"next_session", "today"}:
-            decision._has_executed_tool = True
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("recommend_next_session")
             return await CoachActionExecutor._execute_recommend_next_session(decision, deps, conversation_id)
 
         if intent == "plan" and horizon == "race":
-            decision._has_executed_tool = True
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("plan_race_build")
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
 
         if intent == "plan" and horizon == "season":
-            decision._has_executed_tool = True
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("plan_season")
             return await CoachActionExecutor._execute_plan_season(decision, deps, conversation_id)
 
         if intent == "adjust":
-            decision._has_executed_tool = True
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("adjust_training_load")
             return await CoachActionExecutor._execute_adjust_training_load(decision, deps, conversation_id)
 
         if intent == "explain":
-            decision._has_executed_tool = True
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("explain_training_state")
             return await CoachActionExecutor._execute_explain_training_state(decision, deps, conversation_id)
 
         if intent == "log":
-            decision._has_executed_tool = True
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("add_workout")
             return await CoachActionExecutor._execute_add_workout(decision, deps, conversation_id)
 
         logger.warning(

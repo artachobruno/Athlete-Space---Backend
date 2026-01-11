@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
+from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.services.state_builder import build_athlete_state
@@ -176,6 +177,13 @@ async def process_coach_chat(
                 injury_flag=settings.injury_history or False,
             )
 
+    # Create turn-scoped execution guard (prevents duplicate tool execution within a turn)
+    execution_guard = TurnExecutionGuard(conversation_id=conversation_id)
+    logger.debug(
+        "Initialized execution guard for turn",
+        conversation_id=conversation_id,
+    )
+
     # Create dependencies
     deps = CoachDeps(
         athlete_id=athlete_id,
@@ -186,6 +194,7 @@ async def process_coach_chat(
         race_profile=race_profile,
         days=days,
         days_to_race=days_to_race,
+        execution_guard=execution_guard,
     )
 
     # Get decision from orchestrator (pass conversation_id for slot persistence)
@@ -392,6 +401,13 @@ def dispatch_coach_chat(
                     injury_flag=settings.injury_history or False,
                 )
 
+        # Create turn-scoped execution guard (prevents duplicate tool execution within a turn)
+        execution_guard = TurnExecutionGuard(conversation_id=conversation_id)
+        logger.debug(
+            "Initialized execution guard for turn",
+            conversation_id=conversation_id,
+        )
+
         deps = CoachDeps(
             athlete_id=athlete_id,
             user_id=user_id,
@@ -401,6 +417,7 @@ def dispatch_coach_chat(
             race_profile=race_profile,
             days=days,
             days_to_race=days_to_race,
+            execution_guard=execution_guard,
         )
 
         decision = await run_conversation(

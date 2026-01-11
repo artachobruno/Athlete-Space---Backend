@@ -3,8 +3,9 @@
 Provides context and dependencies needed by the pydantic_ai agent.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
+from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.schemas.athlete_state import AthleteState
 
 
@@ -49,6 +50,8 @@ class CoachDeps(BaseModel):
     Provides context that tools and the agent can access.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     athlete_id: int
     user_id: str | None = None  # User ID (Clerk) - used for storing planned sessions
     athlete_state: AthleteState | None = None
@@ -57,3 +60,6 @@ class CoachDeps(BaseModel):
     race_profile: RaceProfileData | None = None
     days: int = 60
     days_to_race: int | None = None
+    execution_guard: TurnExecutionGuard | None = Field(
+        default=None, exclude=True
+    )  # Turn-scoped execution guard (excluded from serialization)

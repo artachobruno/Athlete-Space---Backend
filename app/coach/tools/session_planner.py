@@ -1,11 +1,16 @@
 """Helper functions for generating and storing planned training sessions."""
 
 from datetime import date, datetime, timedelta, timezone
-from typing import NoReturn
+from typing import Any, NoReturn, cast
 
 from loguru import logger
 from sqlalchemy import select
 
+from app.calendar.conflicts import (
+    auto_shift_sessions,
+    detect_conflicts,
+    get_resolution_mode,
+)
 from app.coach.mcp_client import MCPError, call_tool
 from app.db.models import PlannedSession
 from app.db.session import get_session
@@ -135,10 +140,99 @@ def save_sessions_to_database(
             raise ValueError(f"Duplicate session detected: {title} on {parsed_date.isoformat()}")
         seen_dates_titles.add(date_title_key)
 
+    # A86: Conflict detection and resolution
+    # Determine resolution mode
+    resolution_mode = get_resolution_mode(plan_type)
+
+    # Get date range for querying existing sessions
+    session_dates = []
+    for session_data in sessions:
+        parsed_date = _parse_session_date(session_data.get("date"))
+        if parsed_date:
+            session_dates.append(parsed_date)
+
+    if not session_dates:
+        logger.warning("No valid dates in sessions for conflict detection")
+        return 0
+
+    min_date = min(session_dates).date()
+    max_date = max(session_dates).date()
+    # Expand range by MAX_SHIFT_DAYS to account for potential shifts
+    min_date -= timedelta(days=3)
+    max_date += timedelta(days=3)
+
+    # Fetch existing sessions for conflict detection
+    with get_session() as db_session:
+        existing_sessions = db_session.execute(
+            select(PlannedSession)
+            .where(
+                PlannedSession.user_id == user_id,
+                PlannedSession.athlete_id == athlete_id,
+                PlannedSession.date >= datetime.combine(min_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+                PlannedSession.date <= datetime.combine(max_date, datetime.max.time()).replace(tzinfo=timezone.utc),
+            )
+            .order_by(PlannedSession.date)
+        ).scalars().all()
+        existing_sessions_list = list(existing_sessions)
+
+    # Detect conflicts
+    # Type cast: sessions is list[dict] which is compatible with list[PlannedSession | dict[str, Any]]
+    conflicts = detect_conflicts(existing_sessions_list, cast("list[PlannedSession | dict[str, Any]]", sessions))
+
+    # Handle conflicts based on resolution mode
+    sessions_to_save = sessions
+    if conflicts:
+        if resolution_mode == "auto_shift":
+            # Try to auto-shift sessions
+            shifted_sessions, unresolved_conflicts = auto_shift_sessions(
+                candidate_sessions=sessions,
+                existing_sessions=existing_sessions_list,
+            )
+            if unresolved_conflicts:
+                # Some conflicts couldn't be resolved
+                conflict_summary = f"Found {len(unresolved_conflicts)} unresolved conflicts after auto-shift"
+                logger.warning(
+                    conflict_summary,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    unresolved_count=len(unresolved_conflicts),
+                )
+                raise ValueError(
+                    f"{conflict_summary}. Please review your calendar and try again. "
+                    f"Conflicts: {', '.join(f'{c.candidate_session_title} on {c.date}' for c in unresolved_conflicts[:3])}"
+                )
+            sessions_to_save = shifted_sessions
+            logger.info(
+                "Auto-shifted sessions to resolve conflicts",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                original_count=len(sessions),
+                shifted_count=len(shifted_sessions),
+            )
+        else:
+            # require_user_confirmation mode - don't save, raise error with conflict info
+            conflict_summary = f"Found {len(conflicts)} conflicts that require user confirmation"
+            logger.warning(
+                conflict_summary,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                conflict_count=len(conflicts),
+            )
+            # For now, raise ValueError with conflict details
+            # TODO: Return structured conflict info in response schema (A86.5)
+            conflict_details = ", ".join(
+                f"{c.candidate_session_title} conflicts with {c.existing_session_title} on {c.date}"
+                for c in conflicts[:3]
+            )
+            raise ValueError(
+                f"{conflict_summary}. Conflicts: {conflict_details}"
+                + (f" (and {len(conflicts) - 3} more)" if len(conflicts) > 3 else "")
+            )
+
     saved_count = 0
     with get_session() as session:
         try:
-            for session_data in sessions:
+            for session_data in sessions_to_save:
                 session_date_raw = session_data.get("date")
                 parsed_date = _parse_session_date(session_date_raw)
                 if parsed_date is None:

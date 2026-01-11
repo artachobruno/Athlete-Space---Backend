@@ -85,6 +85,31 @@ class CalendarTodayResponse(BaseModel):
     sessions: list[CalendarSession] = Field(description="Sessions scheduled for today")
 
 
+class ConflictInfo(BaseModel):
+    """Information about a single conflict.
+
+    A86.6: Conflict response schema for UI surfacing.
+    """
+
+    date: str = Field(description="ISO 8601 date of the conflict (YYYY-MM-DD)")
+    existing_session_id: str = Field(description="ID of the existing conflicting session")
+    existing_session_title: str = Field(description="Title of existing session")
+    candidate_session_title: str = Field(description="Title of candidate session")
+    reason: str = Field(description="Reason for conflict: time_overlap | all_day_overlap | multiple_key_sessions")
+
+
+class ConflictResponse(BaseModel):
+    """Response when conflicts are detected during session upload.
+
+    A86.5/A86.6: Conflict detection response schema.
+    """
+
+    status: str = Field(description="Status: 'conflict_detected'")
+    conflict_count: int = Field(description="Number of conflicts detected")
+    conflicts: list[ConflictInfo] = Field(description="List of detected conflicts")
+    message: str = Field(description="Human-readable message about conflicts")
+
+
 class CalendarSessionsResponse(BaseModel):
     """Response for GET /calendar/sessions."""
 

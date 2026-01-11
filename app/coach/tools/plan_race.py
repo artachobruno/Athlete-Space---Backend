@@ -5,6 +5,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from app.coach.mcp_client import call_tool
 from app.coach.schemas.training_plan_schemas import TrainingPlan
 from app.coach.services.conversation_progress import (
     clear_progress,
@@ -15,6 +16,7 @@ from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.tools.slot_utils import merge_slots, parse_date_loose
 from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import ConversationProgress
+from app.planning.plan_race import plan_race_build_new
 from app.services.llm.model import get_model
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
@@ -140,6 +142,10 @@ Rules:
 - If information is not available, set field to null
 - Be conservative - don't guess or infer
 - Dates should be in YYYY-MM-DD format
+- Relative dates: Calculate from today's date ({today_str})
+  * "in 4 weeks" → calculate today + 4 weeks (28 days), format as YYYY-MM-DD
+  * "in 2 months" → calculate today + approximately 2 months (60 days), format as YYYY-MM-DD
+  * "in X days/weeks/months" → add the specified time to today, format as YYYY-MM-DD
 - If only month/day is mentioned (e.g., "April 25th", "on the 25th"), infer the year:
   * If the date (with current year) hasn't passed yet, use current year
   * If the date (with current year) has passed, use next year
@@ -147,6 +153,7 @@ Rules:
 - Distance must match exactly: "5K", "10K", "Half Marathon", "Marathon", or "Ultra"
 
 Example inputs (assuming today is {today_str}):
+- "5k in 4 weeks" -> distance: "5K", date: calculate today + 28 days
 - "on the 25th!" -> date: infer month from context or use current month, year based on whether date has passed
 - "I'm training for a marathon in April 25th" -> distance: "Marathon", date: "{current_year}-04-25" or "{current_year + 1}-04-25"
 - "marathon on April 15, 2026" -> distance: "Marathon", date: "2026-04-15"
@@ -269,7 +276,13 @@ CORE RULES (STRICT)
 DATE RESOLUTION RULES
 ━━━━━━━━━━━━━━━━━━━
 
-If a date is incomplete:
+Extract dates from various formats:
+
+- Relative dates (calculate from today):
+  • "in 4 weeks" → calculate today + 4 weeks, format as YYYY-MM-DD
+  • "in 2 months" → calculate today + 2 months, format as YYYY-MM-DD
+  • "in 3 days" → calculate today + 3 days, format as YYYY-MM-DD
+  • "next week" → calculate next week's date, format as YYYY-MM-DD
 
 - "on the 25th":
   • Use known month from conversation_context if available
@@ -281,6 +294,7 @@ If a date is incomplete:
 
 - Never infer past dates
 - Normalize all dates to YYYY-MM-DD
+- Calculate relative dates by adding the specified time to today's date
 
 ━━━━━━━━━━━━━━━━━━━
 TIME NORMALIZATION
@@ -418,277 +432,6 @@ def build_clarification_message(distance: str | None, race_date: datetime | None
         f'Example: "I want to train for a marathon on April 15, 2026"'
     )
     return f"[CLARIFICATION] {clarification_msg}"
-
-
-async def create_and_save_plan(
-    race_date: datetime,
-    distance: str,
-    target_time: str | None,
-    user_id: str,
-    athlete_id: int,
-) -> tuple[str, int]:
-    """Create and save race training plan.
-
-    Args:
-        race_date: Race date
-        distance: Race distance
-        target_time: Target finish time or None
-        user_id: User ID
-        athlete_id: Athlete ID
-
-    Returns:
-        Tuple of (success message, saved_count)
-    """
-    try:
-        logger.info(
-            "Starting race plan generation via LLM",
-            distance=distance,
-            race_date=race_date.isoformat(),
-            target_time=target_time,
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-        logger.debug(
-            "plan_race: Starting create_and_save_plan",
-            distance=distance,
-            race_date=race_date.isoformat(),
-            target_time=target_time,
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-
-        # Generate plan via LLM - single source of truth
-        logger.debug("plan_race: Creating LLM client")
-        llm_client = CoachLLMClient()
-        goal_context = {
-            "plan_type": "race",
-            "race_distance": distance,
-            "race_date": race_date.isoformat(),
-            "target_time": target_time,
-        }
-        user_context = {
-            "user_id": user_id,
-            "athlete_id": athlete_id,
-        }
-        athlete_context = {}  # TODO: Fill with actual athlete context
-        calendar_constraints = {}  # TODO: Fill with actual calendar constraints
-
-        logger.debug(
-            "plan_race: Preparing context for LLM generation",
-            goal_context_keys=list(goal_context.keys()),
-            user_context_keys=list(user_context.keys()),
-            athlete_context_keys=list(athlete_context.keys()),
-            calendar_constraints_keys=list(calendar_constraints.keys()),
-        )
-        logger.debug(
-            "plan_race: Calling generate_training_plan_via_llm",
-            goal_context=goal_context,
-            user_context=user_context,
-        )
-        training_plan = await llm_client.generate_training_plan_via_llm(
-            user_context=user_context,
-            athlete_context=athlete_context,
-            goal_context=goal_context,
-            calendar_constraints=calendar_constraints,
-        )
-        logger.debug(
-            "plan_race: Training plan generated via LLM",
-            plan_type=training_plan.plan_type,
-            session_count=len(training_plan.sessions),
-            has_rationale=bool(training_plan.rationale),
-            assumptions_count=len(training_plan.assumptions),
-        )
-
-        # Convert TrainingPlan to session dictionaries
-        # Phase 6: Persist exactly what LLM returns - only minimal field name mapping for DB compatibility
-        # sport -> type is a field name mapping, not a logic mutation
-        logger.debug(
-            "plan_race: Converting TrainingPlan to session dictionaries",
-            total_sessions=len(training_plan.sessions),
-        )
-        sessions = []
-        for idx, session in enumerate(training_plan.sessions):
-            logger.debug(
-                "plan_race: Converting session to dict",
-                index=idx,
-                session_date=session.date.isoformat(),
-                session_sport=session.sport,
-                session_title=session.title,
-                session_intensity=session.intensity,
-                session_week_number=session.week_number,
-            )
-            # Map sport field to type field (database schema expects "type" not "sport")
-            # Preserve all other fields exactly as LLM provides
-            session_dict: dict = {
-                "date": session.date,  # Exactly as LLM - timezone preserved
-                "type": session.sport.capitalize() if session.sport != "rest" else "Rest",  # Field name mapping only
-                "title": session.title,  # Exactly as LLM
-                "description": session.description,  # Exactly as LLM
-                "duration_minutes": session.duration_minutes,  # Exactly as LLM
-                "distance_km": session.distance_km,  # Exactly as LLM
-                "intensity": session.intensity,  # Exactly as LLM
-                "notes": session.purpose,  # Exactly as LLM
-                "week_number": session.week_number,  # Exactly as LLM
-            }
-            sessions.append(session_dict)
-        logger.debug(
-            "plan_race: Sessions converted",
-            total_sessions=len(sessions),
-            first_session_date=sessions[0]["date"].isoformat() if sessions else None,
-            last_session_date=sessions[-1]["date"].isoformat() if sessions else None,
-        )
-
-        # Calculate weeks and start date from training plan sessions
-        if not sessions:
-            _raise_no_sessions_error()
-
-        dates = sorted([s["date"].date() if isinstance(s["date"], datetime) else s["date"] for s in sessions])
-        first_date = dates[0]
-        if isinstance(first_date, date):
-            start_date_dt = datetime.combine(first_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        elif isinstance(first_date, datetime):
-            start_date_dt = first_date
-        else:
-            _raise_invalid_date_type_error(first_date)
-        weeks = len({s.get("week_number", 0) for s in sessions})
-        start_date = start_date_dt.strftime("%B %d, %Y")
-        race_date_str = race_date.strftime("%B %d, %Y")
-
-        # Calculate session statistics
-        session_types: dict[str, int] = {}
-        sessions_by_week: dict[int, int] = {}
-        for session in sessions:
-            session_type = session.get("type", "Unknown")
-            session_types[session_type] = session_types.get(session_type, 0) + 1
-            week_num = session.get("week_number", 0)
-            sessions_by_week[week_num] = sessions_by_week.get(week_num, 0) + 1
-
-        plan_id = f"race_{distance}_{race_date.strftime('%Y%m%d')}"
-
-        logger.info(
-            "Race plan generated successfully",
-            plan_id=plan_id,
-            total_sessions=len(sessions),
-            total_weeks=weeks,
-            start_date=start_date_dt.isoformat(),
-            race_date=race_date.isoformat(),
-            session_types=session_types,
-            sessions_per_week=sessions_by_week,
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-
-        logger.info(
-            "Attempting to save planned sessions",
-            plan_id=plan_id,
-            session_count=len(sessions),
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-        logger.debug(
-            "plan_race: Calling save_planned_sessions via MCP",
-            plan_id=plan_id,
-            session_count=len(sessions),
-            plan_type="race",
-            user_id=user_id,
-            athlete_id=athlete_id,
-            first_session_keys=list(sessions[0].keys()) if sessions else None,
-        )
-        saved_count = await save_planned_sessions(
-            user_id=user_id,
-            athlete_id=athlete_id,
-            sessions=sessions,
-            plan_type="race",
-            plan_id=plan_id,
-        )
-        logger.debug(
-            "plan_race: save_planned_sessions completed",
-            plan_id=plan_id,
-            saved_count=saved_count,
-            expected_count=len(sessions),
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-
-        if saved_count == 0:
-            logger.error(
-                "Race plan generation failed: no sessions saved",
-                plan_id=plan_id,
-                total_sessions=len(sessions),
-                total_weeks=weeks,
-                start_date=start_date_dt.isoformat(),
-                race_date=race_date.isoformat(),
-                user_id=user_id,
-                athlete_id=athlete_id,
-            )
-            _raise_save_failed_error()
-
-        logger.info(
-            "Race plan saved successfully",
-            plan_id=plan_id,
-            saved_count=saved_count,
-            total_sessions=len(sessions),
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-
-        target_time_str = f"\nTarget time: {target_time}" if target_time else ""
-        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-        calendar_note = "Your planned sessions are now available in your calendar!"
-
-    except Exception as e:
-        logger.debug(
-            "plan_race: Exception caught during race plan generation",
-            error_type=type(e).__name__,
-            error_message=str(e),
-            error_class=type(e).__module__ + "." + type(e).__name__,
-            has_cause=bool(e.__cause__),
-            cause_type=type(e.__cause__).__name__ if e.__cause__ else None,
-            cause_message=str(e.__cause__) if e.__cause__ else None,
-            distance=distance,
-            race_date=race_date.isoformat(),
-            target_time=target_time,
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-        logger.error(
-            "Failed to generate race plan",
-            error_type=type(e).__name__,
-            error_message=str(e),
-            error_class=type(e).__module__ + "." + type(e).__name__,
-            has_cause=bool(e.__cause__),
-            cause_type=type(e.__cause__).__name__ if e.__cause__ else None,
-            cause_message=str(e.__cause__) if e.__cause__ else None,
-            distance=distance,
-            race_date=race_date.isoformat(),
-            target_time=target_time,
-            user_id=user_id,
-            athlete_id=athlete_id,
-            exc_info=True,
-        )
-        # Phase 7: User-visible error message
-        # Preserve original error details in exception chain
-        raise RuntimeError(
-            f"The AI coach failed to generate a valid training plan. Please retry. (Error: {type(e).__name__}: {e!s})"
-        ) from e
-
-    success_message = (
-        f"✅ **Race Training Plan Created!**\n\n"
-        f"I've generated a {weeks}-week training plan for your **{distance}** "
-        f"race on **{race_date_str}**.\n\n"
-        f"**Plan Summary:**\n"
-        f"{save_status}"
-        f"• Training starts: {start_date}\n"
-        f"• Race date: {race_date_str}\n\n"
-        f"**Training Structure:**\n"
-        f"• Base building phase\n"
-        f"• Progressive intensity increases\n"
-        f"• Race-specific workouts\n"
-        f"• Taper period before race\n\n"
-        f"{calendar_note}{target_time_str}\n\n"
-        f"**The plan is complete and ready to use. No further action needed.**"
-    )
-    return (success_message, saved_count)
 
 
 def _build_preview_plan(distance: str, race_date: datetime) -> str:
@@ -870,16 +613,17 @@ async def resolve_awaited_slots(
     return resolved, remaining_awaiting
 
 
-async def plan_race_build(
+async def plan_race_build_legacy(
     message: str,
     user_id: str | None = None,
     athlete_id: int | None = None,
     conversation_id: str | None = None,
     return_structured: bool = False,
 ) -> str | tuple[str, int | None]:
-    """Plan a race build and generate training sessions.
+    """Plan a race build and generate training sessions (LEGACY - monolithic LLM approach).
 
     Uses stateful slot extraction with cumulative accumulation and awaited slot resolution.
+    This is the original implementation preserved for rollback capability.
 
     Args:
         message: User message containing race details
@@ -1129,12 +873,420 @@ async def plan_race_build(
             distance=distance,
             date=race_date,
         )
-        message, saved_count = await create_and_save_plan(race_date, distance, target_time, user_id, athlete_id)
+        message, saved_count = await create_and_save_plan_new(
+            race_date, distance, target_time, user_id, athlete_id, conversation_id=conversation_id
+        )
         if return_structured:
             return (message, saved_count)
         return message
 
     # Return plan details without saving
+    logger.warning(
+        "Missing user_id or athlete_id - returning preview plan",
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
+    preview_msg = _build_preview_plan(distance, race_date)
+    if return_structured:
+        return (preview_msg, None)
+    return preview_msg
+
+
+async def create_and_save_plan_new(
+    race_date: datetime,
+    distance: str,
+    target_time: str | None,
+    user_id: str,
+    athlete_id: int,
+    *,
+    conversation_id: str | None = None,
+) -> tuple[str, int]:
+    """Create and save race training plan using hierarchical, compositional approach.
+
+    Args:
+        race_date: Race date
+        distance: Race distance
+        target_time: Target finish time or None (unused in new approach)
+        user_id: User ID
+        athlete_id: Athlete ID
+        conversation_id: Conversation ID for progress tracking (optional)
+
+    Returns:
+        Tuple of (success message, saved_count)
+    """
+    try:
+        logger.info(
+            "Starting race plan generation via hierarchical planner",
+            distance=distance,
+            race_date=race_date.isoformat(),
+            target_time=target_time,
+            user_id=user_id,
+            athlete_id=athlete_id,
+            conversation_id=conversation_id,
+        )
+
+        # Create progress callback if conversation_id is provided
+        async def progress_callback(week_number: int, total_weeks: int, phase: str) -> None:
+            """Emit progress event for week planning."""
+            if conversation_id:
+                percentage = round((week_number / total_weeks) * 100, 1)
+                step_id = f"plan_race_week_{week_number}"
+                label = f"Week {week_number} of {total_weeks} ({phase})"
+                message = f"Planning week {week_number} of {total_weeks} - {percentage}% complete"
+                try:
+                    await call_tool(
+                        "emit_progress_event",
+                        {
+                            "conversation_id": conversation_id,
+                            "step_id": step_id,
+                            "label": label,
+                            "status": "in_progress",
+                            "message": message,
+                        },
+                    )
+                    logger.info(
+                        "Progress event emitted for week planning",
+                        conversation_id=conversation_id,
+                        week_number=week_number,
+                        total_weeks=total_weeks,
+                        percentage=percentage,
+                        phase=phase,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to emit progress event for week planning",
+                        conversation_id=conversation_id,
+                        week_number=week_number,
+                        error=str(e),
+                    )
+
+        sessions, total_weeks = await plan_race_build_new(
+            race_date=race_date,
+            distance=distance,
+            user_id=user_id,
+            athlete_id=athlete_id,
+            start_date=None,
+            progress_callback=progress_callback if conversation_id else None,
+        )
+
+        if not sessions:
+            _raise_no_sessions_error()
+
+        dates = sorted([s["date"].date() if isinstance(s["date"], datetime) else s["date"] for s in sessions])
+        first_date = dates[0]
+        if isinstance(first_date, date):
+            start_date_dt = datetime.combine(first_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        elif isinstance(first_date, datetime):
+            start_date_dt = first_date
+        else:
+            _raise_invalid_date_type_error(first_date)
+
+        start_date = start_date_dt.strftime("%B %d, %Y")
+        race_date_str = race_date.strftime("%B %d, %Y")
+
+        plan_id = f"race_{distance}_{race_date.strftime('%Y%m%d')}"
+
+        logger.info(
+            "Race plan generated successfully",
+            plan_id=plan_id,
+            total_sessions=len(sessions),
+            total_weeks=total_weeks,
+            start_date=start_date_dt.isoformat(),
+            race_date=race_date.isoformat(),
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
+
+        saved_count = await save_planned_sessions(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            sessions=sessions,
+            plan_type="race",
+            plan_id=plan_id,
+        )
+
+        if saved_count == 0:
+            _raise_save_failed_error()
+
+        target_time_str = f"\nTarget time: {target_time}" if target_time else ""
+        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+        calendar_note = "Your planned sessions are now available in your calendar!"
+
+        success_message = (
+            f"✅ **Race Training Plan Created!**\n\n"
+            f"I've generated a {total_weeks}-week training plan for your **{distance}** "
+            f"race on **{race_date_str}**.\n\n"
+            f"**Plan Summary:**\n"
+            f"{save_status}"
+            f"• Training starts: {start_date}\n"
+            f"• Race date: {race_date_str}\n\n"
+            f"**Training Structure:**\n"
+            f"• Base building phase\n"
+            f"• Progressive intensity increases\n"
+            f"• Race-specific workouts\n"
+            f"• Taper period before race\n\n"
+            f"{calendar_note}{target_time_str}\n\n"
+            f"**The plan is complete and ready to use. No further action needed.**"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to generate race plan",
+            error_type=type(e).__name__,
+            error_message=str(e),
+            distance=distance,
+            race_date=race_date.isoformat(),
+            target_time=target_time,
+            user_id=user_id,
+            athlete_id=athlete_id,
+            exc_info=True,
+        )
+        raise RuntimeError(
+            f"The AI coach failed to generate a valid training plan. Please retry. (Error: {type(e).__name__}: {e!s})"
+        ) from e
+    else:
+        return (success_message, saved_count)
+
+
+async def plan_race_build(
+    message: str,
+    user_id: str | None = None,
+    athlete_id: int | None = None,
+    conversation_id: str | None = None,
+    return_structured: bool = False,
+) -> str | tuple[str, int | None]:
+    """Plan a race build and generate training sessions.
+
+    Uses hierarchical, compositional planner where:
+    - LLM generates only atomic sessions
+    - Code composes weeks, races, and seasons
+    - No large JSON outputs
+    - No long-running tool calls
+
+    Args:
+        message: User message containing race details
+        user_id: User ID for saving sessions (optional)
+        athlete_id: Athlete ID for saving sessions (optional)
+        conversation_id: Conversation ID for stateful slot tracking (optional but recommended)
+        return_structured: If True, return tuple (message, saved_count). If False, return message string only.
+
+    Returns:
+        If return_structured is True: tuple of (response message, saved_count or None)
+        If return_structured is False: response message string with plan details or clarification questions
+    """
+    logger.info(
+        "Tool plan_race_build called (hierarchical planner)",
+        message_length=len(message),
+        conversation_id=conversation_id,
+    )
+
+    if conversation_id:
+        progress = get_conversation_progress(conversation_id)
+        if progress is None:
+            progress = create_or_update_progress(
+                conversation_id=conversation_id,
+                intent="race_plan",
+                slots={},
+                awaiting_slots=[],
+            )
+        elif progress.intent != "race_plan":
+            progress = create_or_update_progress(
+                conversation_id=conversation_id,
+                intent="race_plan",
+                slots=progress.slots,
+                awaiting_slots=progress.awaiting_slots,
+            )
+    else:
+        progress = None
+
+    if progress and progress.awaiting_slots:
+        logger.debug(
+            "Resolving awaited slots",
+            awaiting_slots=progress.awaiting_slots,
+            conversation_id=conversation_id,
+        )
+        today = datetime.now(timezone.utc).date()
+        resolved_slots, remaining_awaiting = await resolve_awaited_slots(message, progress, today)
+
+        old_slots = progress.slots.copy()
+        progress.slots = merge_slots(progress.slots, resolved_slots)
+        progress.awaiting_slots = remaining_awaiting
+
+        logger.debug(
+            "Merged slots after awaited resolution",
+            before=old_slots,
+            after=progress.slots,
+            conversation_id=conversation_id,
+        )
+
+        if conversation_id:
+            progress = create_or_update_progress(
+                conversation_id=conversation_id,
+                intent="race_plan",
+                slots=progress.slots,
+                awaiting_slots=progress.awaiting_slots,
+            )
+
+        if progress.awaiting_slots:
+            logger.info(
+                "Still awaiting slots after resolution",
+                awaiting_slots=progress.awaiting_slots,
+                conversation_id=conversation_id,
+            )
+            distance = progress.slots.get("race_distance")
+            race_date_str = progress.slots.get("race_date")
+            race_date = race_date_str if isinstance(race_date_str, datetime) else None
+            clarification_msg = build_clarification_message(distance, race_date, progress.awaiting_slots)
+            if return_structured:
+                return (clarification_msg, None)
+            return clarification_msg
+
+        logger.info(
+            "All awaited slots resolved, proceeding to tool execution",
+            conversation_id=conversation_id,
+        )
+
+    conversation_context = build_conversation_context(progress)
+    today = datetime.now(timezone.utc).date()
+
+    current_awaiting: list[str] = []
+    if progress:
+        current_awaiting = progress.awaiting_slots or []
+    else:
+        current_awaiting = []
+
+    goal_info = await extract_training_goal(
+        latest_user_message=message,
+        conversation_context=conversation_context,
+        awaiting_slots=current_awaiting,
+        today=today,
+    )
+
+    new_slots: dict[str, str | datetime | int | None] = {}
+    if goal_info.race_name:
+        new_slots["race_name"] = goal_info.race_name
+    if goal_info.race_distance:
+        new_slots["race_distance"] = goal_info.race_distance
+    if goal_info.race_date:
+        parsed_date = parse_date_string(goal_info.race_date)
+        if parsed_date:
+            new_slots["race_date"] = parsed_date
+    if goal_info.target_finish_time:
+        new_slots["target_time"] = goal_info.target_finish_time
+    if goal_info.goal_type:
+        new_slots["goal_type"] = goal_info.goal_type
+    if goal_info.training_start_date:
+        parsed_start = parse_date_string(goal_info.training_start_date)
+        if parsed_start:
+            new_slots["training_start_date"] = parsed_start
+    if goal_info.training_duration_weeks:
+        new_slots["training_duration_weeks"] = goal_info.training_duration_weeks
+
+    logger.debug("Extracted slots", slots=new_slots, conversation_id=conversation_id)
+
+    if progress:
+        old_slots = progress.slots.copy()
+        merged_slots = merge_slots(progress.slots, new_slots)
+        progress.slots = merged_slots
+        logger.debug(
+            "Merged slots",
+            before=old_slots,
+            after=merged_slots,
+            conversation_id=conversation_id,
+        )
+        current_slots = merged_slots
+    else:
+        current_slots = new_slots
+
+    distance_raw = current_slots.get("race_distance")
+    race_date_raw = current_slots.get("race_date")
+    target_time_raw = current_slots.get("target_time")
+
+    distance: str | None = None
+    if isinstance(distance_raw, str):
+        distance = distance_raw
+
+    race_date: datetime | None = None
+    if isinstance(race_date_raw, datetime):
+        race_date = race_date_raw
+    elif isinstance(race_date_raw, str):
+        race_date = parse_date_string(race_date_raw)
+
+    target_time: str | None = None
+    if isinstance(target_time_raw, str):
+        target_time = target_time_raw
+
+    awaiting_slots: list[str] = []
+    if not distance:
+        awaiting_slots.append("race_distance")
+    if not race_date:
+        awaiting_slots.append("race_date")
+
+    if conversation_id:
+        progress = create_or_update_progress(
+            conversation_id=conversation_id,
+            intent="race_plan",
+            slots=current_slots,
+            awaiting_slots=awaiting_slots,
+        )
+
+    if awaiting_slots:
+        logger.info(
+            "Missing required slots, asking for clarification",
+            awaiting_slots=awaiting_slots,
+            conversation_id=conversation_id,
+        )
+        clarification_msg = build_clarification_message(distance, race_date, awaiting_slots)
+        if return_structured:
+            return (clarification_msg, None)
+        return clarification_msg
+
+    if race_date and race_date < datetime.now(timezone.utc):
+        error_msg = (
+            f"The race date you provided ({race_date.strftime('%Y-%m-%d')}) is in the past. "
+            f"Please provide a future race date to generate a training plan."
+        )
+        if return_structured:
+            return (error_msg, None)
+        return error_msg
+
+    if not isinstance(distance, str):
+        clarification_msg = build_clarification_message(None, None, ["race_distance"])
+        if return_structured:
+            return (clarification_msg, None)
+        return clarification_msg
+    if not isinstance(race_date, datetime):
+        clarification_msg = build_clarification_message(None, None, ["race_date"])
+        if return_structured:
+            return (clarification_msg, None)
+        return clarification_msg
+
+    logger.info(
+        "All required slots filled, executing tool",
+        distance=distance,
+        race_date=race_date,
+        target_time=target_time,
+        conversation_id=conversation_id,
+    )
+
+    if conversation_id:
+        clear_progress(conversation_id)
+        logger.info("Cleared conversation progress after successful execution", conversation_id=conversation_id)
+
+    if user_id and athlete_id:
+        logger.info(
+            "Creating and saving race plan",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            distance=distance,
+            date=race_date,
+        )
+        message, saved_count = await create_and_save_plan_new(
+            race_date, distance, target_time, user_id, athlete_id, conversation_id=conversation_id
+        )
+        if return_structured:
+            return (message, saved_count)
+        return message
+
     logger.warning(
         "Missing user_id or athlete_id - returning preview plan",
         user_id=user_id,

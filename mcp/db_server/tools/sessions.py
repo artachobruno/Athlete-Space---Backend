@@ -21,7 +21,7 @@ from app.coach.tools.add_workout import (
 )
 from app.coach.tools.plan_race import (
     build_clarification_message,
-    create_and_save_plan,
+    create_and_save_plan_new,
     extract_race_information,
     parse_date_string,
     plan_race_build,
@@ -264,7 +264,7 @@ def plan_race_build_tool(arguments: dict) -> dict:
     target_time_str = target_time if isinstance(target_time, str) else None
 
     logger.debug(
-        "plan_race_build_tool: Validated inputs, calling create_and_save_plan",
+        "plan_race_build_tool: Validated inputs, calling create_and_save_plan_new",
         race_date=race_date.isoformat() if isinstance(race_date, datetime) else str(race_date),
         race_distance=race_distance,
         target_time=target_time_str,
@@ -275,24 +275,25 @@ def plan_race_build_tool(arguments: dict) -> dict:
 
     try:
         # B37: Use slots directly from filled_slots - no re-extraction
-        # Call create_and_save_plan directly with validated slots
+        # Call create_and_save_plan_new with validated slots
         logger.debug(
-            "plan_race_build_tool: Starting create_and_save_plan via asyncio.run",
+            "plan_race_build_tool: Starting create_and_save_plan_new via asyncio.run",
             race_date=race_date.isoformat() if isinstance(race_date, datetime) else str(race_date),
             distance=race_distance,
             target_time=target_time_str,
         )
         result_message, saved_count = asyncio.run(
-            create_and_save_plan(
+            create_and_save_plan_new(
                 race_date=race_date,
                 distance=race_distance,
                 target_time=target_time_str,
                 user_id=user_id,
                 athlete_id=athlete_id,
+                conversation_id=conversation_id,
             )
         )
         logger.debug(
-            "plan_race_build_tool: create_and_save_plan completed",
+            "plan_race_build_tool: create_and_save_plan_new completed",
             saved_count=saved_count,
             message_length=len(result_message) if result_message else 0,
             race_distance=race_distance,

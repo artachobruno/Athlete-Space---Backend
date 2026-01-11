@@ -599,7 +599,8 @@ async def run_conversation(
             logger.info(f"{'=' * 80}\n")
 
         # Verify response is valid and complete
-        if not result.output or not result.output.message:
+        # If should_execute is True, message can be empty (executor will generate message from tool result)
+        if not result.output or (not result.output.message and not result.output.should_execute):
             # Log detailed information about the result to diagnose the issue
             result_type = type(result).__name__
             output_type = type(result.output).__name__ if result.output else "None"

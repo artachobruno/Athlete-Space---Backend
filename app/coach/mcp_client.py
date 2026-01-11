@@ -49,11 +49,11 @@ MCP_TOOL_ROUTES: dict[str, str] = {
 HTTP_TIMEOUT = 30.0
 
 # Tool-specific timeouts (in seconds)
-# Long-running tools that involve LLM calls need more time
+# Hierarchical planner uses atomic LLM calls - much faster than monolithic approach
 TOOL_TIMEOUTS: dict[str, float] = {
-    "plan_race_build": 300.0,  # 5 minutes for LLM-based race plan generation
-    "plan_season": 300.0,  # 5 minutes for season planning
-    "plan_week": 180.0,  # 3 minutes for week planning
+    "plan_race_build": 90.0,  # 90s for hierarchical planner (atomic calls, cached)
+    "plan_season": 300.0,  # 5 minutes for season planning (still monolithic)
+    "plan_week": 180.0,  # 3 minutes for week planning (legacy, not used by new planner)
     "run_analysis": 120.0,  # 2 minutes for analysis
 }
 

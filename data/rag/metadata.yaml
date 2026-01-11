@@ -1,0 +1,35 @@
+version: "v1.0"
+created_at: "2026-01-11"
+reviewed_at: "2026-01-11"
+reviewer: "human"
+scope_locked: true
+
+allowed_domains:
+  - training_philosophy
+  - training_principles
+
+forbidden_domains:
+  - medical
+  - nutrition
+  - supplements
+  - diagnostics
+
+documents:
+  philosophies:
+    - running/5k_speed
+    - running/8020_polarized
+    - running/daniels
+    - running/hansons
+    - running/lydiard
+    - running/marathon_specificity
+    - running/norwegian
+    - running/pfitzinger
+    - running/threshold_heavy
+    - ultra/durability_first
+    - ultra/koop
+    - ultra/mountain
+  principles:
+    - injury_risk
+    - intensity_distribution
+    - progression_rules
+    - tapering

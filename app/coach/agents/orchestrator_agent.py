@@ -8,6 +8,7 @@ All tool execution happens in the separate executor module.
 """
 
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import cast
 
 from loguru import logger
@@ -16,11 +17,15 @@ from pydantic_ai import Agent
 from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage
 
+from app.coach.agents.decision_bias import apply_rag_bias
 from app.coach.agents.orchestrator_deps import CoachDeps
+from app.coach.agents.orchestrator_state import OrchestratorState
 from app.coach.config.models import ORCHESTRATOR_MODEL
 from app.coach.config.prompt_versions import ORCHESTRATOR_PROMPT_VERSION
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.prompts.loader import load_prompt
+from app.coach.rag.adapter import OrchestratorRagAdapter
+from app.coach.rag.logging import log_rag_usage
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import create_or_update_progress, get_conversation_progress
 from app.coach.tools.plan_race import parse_date_string
@@ -193,21 +198,34 @@ async def _compute_missing_slots_for_decision(
         confidence=extracted.confidence,
     )
 
-    # STEP 4: Determine missing slots from extractor output
-    # Missing slots = required_attributes that are in missing_fields or ambiguous_fields
-    missing_slots_from_extractor = [
+    # STEP 4: Determine missing slots deterministically from required_attributes vs merged_slots
+    # CRITICAL: Never trust extractor missing_fields - recompute deterministically
+    # Missing slots = required_attributes that are NOT in merged_slots (or have None value)
+    # 🔐 PHASE 0.6: This logic cannot be removed - it ensures slot recompute never trusts extractor
+    missing_slots_deterministic = [
         attr
         for attr in decision.required_attributes
-        if attr in extracted.missing_fields or attr in extracted.ambiguous_fields
+        if attr not in merged_slots or merged_slots.get(attr) is None
     ]
 
-    # Also check validation gate (for backward compatibility)
+    # Also check validation gate (for backward compatibility and additional validation)
     can_execute_gate, missing_slots_gate = validate_slots(tool_name, merged_slots)
 
-    # Combine missing slots from extractor and gate
-    # If extractor says missing, trust the extractor (it's authoritative)
-    missing_slots = list(set(missing_slots_from_extractor + missing_slots_gate))
+    # Combine missing slots - use deterministic computation as primary source
+    # This ensures we never execute with empty filled_slots when required_attributes exist
+    missing_slots = list(set(missing_slots_deterministic + missing_slots_gate))
     can_execute = len(missing_slots) == 0 and can_execute_gate
+
+    logger.debug(
+        "Slot completeness check",
+        tool=tool_name,
+        required_attributes=decision.required_attributes,
+        merged_slots_keys=list(merged_slots.keys()),
+        missing_slots_deterministic=missing_slots_deterministic,
+        missing_slots_gate=missing_slots_gate,
+        missing_slots=missing_slots,
+        can_execute=can_execute,
+    )
 
     # STEP 5: Persist merged slots and awaiting_slots to conversation_progress AFTER validation
     # This ensures conversation.slot_state is always up-to-date with correct awaiting_slots
@@ -360,6 +378,50 @@ logger.info(
     agent_name="Virtus Coach Orchestrator",
     tools=[],
 )
+
+# ============================================================================
+# RAG ADAPTER INITIALIZATION
+# ============================================================================
+
+# Lazy initialization of RAG adapter
+_RAG_ADAPTER: OrchestratorRagAdapter | None = None
+
+
+def _get_rag_adapter() -> OrchestratorRagAdapter | None:
+    """Get or create RAG adapter (lazy initialization).
+
+    Returns:
+        RAG adapter or None if RAG is not available
+    """
+    global _RAG_ADAPTER
+
+    if _RAG_ADAPTER is not None:
+        return _RAG_ADAPTER
+
+    try:
+        # Load RAG adapter from pre-computed artifacts
+        project_root = Path(__file__).parent.parent.parent.parent
+        artifacts_dir = project_root / "data" / "rag_artifacts"
+
+        if not artifacts_dir.exists():
+            logger.debug(
+                "RAG artifacts not found, RAG features disabled",
+                artifacts_dir=str(artifacts_dir),
+            )
+            return None
+
+        _RAG_ADAPTER = OrchestratorRagAdapter(artifacts_dir=artifacts_dir)
+
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize RAG adapter, RAG features disabled",
+            error=str(e),
+            exc_info=True,
+        )
+        return None
+    else:
+        return _RAG_ADAPTER
+
 
 # ============================================================================
 # CONVERSATION EXECUTION
@@ -776,32 +838,112 @@ async def run_conversation(
         # Assertion: filled_slots must equal merged_slots (which is the conversation slot state)
         _validate_filled_slots_equality(result.output.filled_slots, merged_slots)
 
-        # Use missing_slots from computed (based on conversation slot state)
-        result.output.missing_slots = computed_missing_slots
+        # FIX 1: Recompute missing_slots as single source of truth (DO NOT trust extractor)
+        # CRITICAL: Never rely on extractor's missing_fields - recompute deterministically
+        # 🔐 PHASE 0.6: This logic cannot be removed - it ensures should_execute iff missing_slots == []
+        # Invariant: should_execute == True iff missing_slots == []
+        required = result.output.required_attributes or []
+        filled = result.output.filled_slots or {}
+
+        result.output.missing_slots = [
+            r for r in required
+            if r not in filled or filled[r] in (None, "", [])
+        ]
 
         # Assertion: missing_slots must be disjoint from filled_slots keys
         filled_keys = set(result.output.filled_slots.keys())
         missing_set = set(result.output.missing_slots)
         _validate_slots_disjoint(filled_keys, missing_set)
 
-        # Determine should_execute: true if slots complete (missing_slots empty) AND target_action exists
+        # FIX 2: should_execute depends on semantic completeness (missing_slots), not validation pass
+        # Execution requires semantic completeness, not just validation
+        result.output.should_execute = not result.output.missing_slots
+
         logger.debug(
             "Orchestrator: Determining should_execute",
-            has_target_action=bool(result.output.target_action),
-            missing_slots_count=len(result.output.missing_slots),
+            target_action=result.output.target_action,
+            required_attributes=required,
+            filled_slots_keys=list(filled.keys()),
             missing_slots=result.output.missing_slots,
+            should_execute=result.output.should_execute,
         )
-        if result.output.target_action and not result.output.missing_slots:
-            result.output.should_execute = True
-            logger.debug(
-                "Orchestrator: Setting should_execute=True (slots complete)",
-                target_action=result.output.target_action,
-                missing_slots=result.output.missing_slots,
-            )
+
+        # ============================================================================
+        # RAG RETRIEVAL AND DECISION BIASING (Phase 3C)
+        # ============================================================================
+        # RAG is retrieved during decision shaping, after slots are resolved,
+        # before tool selection. RAG only influences reasoning, never executes.
+        orchestrator_state = OrchestratorState()
+
+        # Retrieve RAG context for relevant intents
+        if result.output.intent in {"plan", "adjust", "explain"}:
+            rag_adapter = _get_rag_adapter()
+            if rag_adapter is not None:
+                try:
+                    # Extract race_type from merged slots or structured_data
+                    race_type = (
+                        merged_slots.get("race_type")
+                        or result.output.structured_data.get("race_type")
+                        or "marathon"  # Default fallback
+                    )
+                    if isinstance(race_type, str):
+                        race_type_str = race_type
+                    else:
+                        race_type_str = "marathon"
+
+                    # Extract athlete tags from athlete state
+                    athlete_tags: list[str] = []
+                    if deps.athlete_state and hasattr(deps.athlete_state, "flags"):
+                        athlete_tags = deps.athlete_state.flags or []
+
+                    # Retrieve RAG context
+                    rag_context = rag_adapter.retrieve_context(
+                        query=user_input,
+                        race_type=race_type_str,
+                        athlete_tags=athlete_tags,
+                    )
+
+                    # Store in orchestrator state
+                    orchestrator_state.rag_context = rag_context
+
+                    # Apply RAG bias to decision (creates new decision, doesn't mutate original)
+                    result.output = apply_rag_bias(result.output, rag_context)
+
+                    logger.debug(
+                        "RAG context retrieved and bias applied",
+                        intent=result.output.intent,
+                        confidence=rag_context.confidence,
+                        chunk_count=len(rag_context.chunks),
+                    )
+
+                    # Log RAG usage for observability (B50, B63)
+                    log_rag_usage(
+                        rag_context=rag_context,
+                        intent=result.output.intent,
+                        athlete_id=deps.athlete_id,
+                    )
+
+                except Exception as e:
+                    # If RAG retrieval fails, log and continue without RAG
+                    logger.warning(
+                        "RAG retrieval failed, continuing without RAG bias",
+                        intent=result.output.intent,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    # Continue with decision unchanged
+                    # Log that RAG was not used
+                    log_rag_usage(
+                        rag_context=None,
+                        intent=result.output.intent,
+                        athlete_id=deps.athlete_id,
+                    )
+
+        # If should_execute and action is NO_ACTION, override to EXECUTE
+        if result.output.should_execute:
             # Assertion: should_execute requires no missing slots
             _validate_should_execute_condition(result.output.missing_slots)
-            # If should_execute and action is NO_ACTION, override to EXECUTE
-            if result.output.action == "NO_ACTION":
+            if result.output.action == "NO_ACTION" and result.output.target_action:
                 logger.debug(
                     "Orchestrator: Overriding action from NO_ACTION to EXECUTE",
                     target_action=result.output.target_action,
@@ -814,12 +956,12 @@ async def run_conversation(
                     user_input_preview=user_input[:100],
                 )
                 result.output.action = "EXECUTE"
-        else:
-            result.output.should_execute = False
-            logger.debug(
-                "Orchestrator: Setting should_execute=False",
-                has_target_action=bool(result.output.target_action),
-                missing_slots=result.output.missing_slots,
+        elif result.output.missing_slots and not result.output.next_question:
+            # FIX 6: Ensure correct user-visible behavior when slots are missing
+            # Set next_question if missing slots and not already set
+            result.output.next_question = generate_clarification_for_missing_slots(
+                result.output.target_action or "plan_race_build",
+                result.output.missing_slots,
             )
 
         # Slot state already persisted in _compute_missing_slots_for_decision with correct awaiting_slots

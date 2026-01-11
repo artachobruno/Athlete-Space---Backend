@@ -6,8 +6,10 @@ Ensures zero silent overlaps - conflicts are either auto-resolved or explicitly 
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date as date_type
 from datetime import datetime, time, timedelta, timezone
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -576,3 +578,180 @@ def auto_shift_sessions(
             unresolved_conflicts.extend(conflicts)
 
     return shifted_sessions, unresolved_conflicts
+
+
+# ============================================================================
+# Phase 6A: Execution-Specific Conflict Detection
+# ============================================================================
+# No auto-resolution - conflicts must be handled explicitly by caller
+
+
+class ConflictType(Enum):
+    """Conflict types for execution conflict detection."""
+
+    TIME_OVERLAP = "time_overlap"
+    MANUAL_OVERRIDE = "manual_override"
+    DUPLICATE_SESSION = "duplicate_session"
+
+
+@dataclass(frozen=True)
+class CalendarConflict:
+    """Execution conflict detected before calendar write.
+
+    Phase 6A: No auto-resolution - conflicts must be handled explicitly.
+    """
+
+    date: date_type
+    conflict_type: ConflictType
+    existing_session_id: str
+
+
+def detect_execution_conflicts(
+    existing_sessions: list[PlannedSession],
+    candidate_date: date_type,
+    candidate_duration_minutes: int | None,
+    candidate_time: str | None,
+) -> list[CalendarConflict]:
+    """Detect execution conflicts before calendar write.
+
+    Phase 6A: Pure detection - no auto-resolution.
+
+    Conflict rules:
+    1. Same day overlap - time-based overlap on same date
+    2. Manual override - existing manual session on same day (if detectable)
+
+    Args:
+        existing_sessions: List of existing PlannedSession objects for the user
+        candidate_date: Date of candidate session
+        candidate_duration_minutes: Duration of candidate session (minutes)
+        candidate_time: Time of candidate session (HH:MM format, optional)
+
+    Returns:
+        List of detected conflicts (empty if no conflicts)
+    """
+    conflicts: list[CalendarConflict] = []
+
+    candidate_date_datetime = datetime.combine(candidate_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    # Check existing sessions on same date
+    for existing in existing_sessions:
+        existing_date = existing.date.date()
+
+        # Same date - check for conflicts
+        if existing_date == candidate_date:
+            # Conflict 1: Duplicate session_id
+            # (Note: This checks if we're trying to write a duplicate, not if existing has duplicate)
+            # For duplicate detection, caller should check if session_id already exists in DB
+
+            # Conflict 2: Time overlap
+            existing_time_info = SessionTimeInfo.from_session(existing)
+            candidate_time_info = SessionTimeInfo(
+                session_date=candidate_date_datetime,
+                time_str=candidate_time,
+                duration_minutes=candidate_duration_minutes,
+            )
+
+            # Check time overlap (both have times and they overlap)
+            has_times = (
+                not existing_time_info.is_all_day
+                and not candidate_time_info.is_all_day
+                and existing_time_info.start_time is not None
+                and existing_time_info.end_time is not None
+                and candidate_time_info.start_time is not None
+                and candidate_time_info.end_time is not None
+            )
+            if has_times and _time_ranges_overlap(
+                existing_time_info.start_time,
+                existing_time_info.end_time,
+                candidate_time_info.start_time,
+                candidate_time_info.end_time,
+            ):
+                conflicts.append(
+                    CalendarConflict(
+                        date=candidate_date,
+                        conflict_type=ConflictType.TIME_OVERLAP,
+                        existing_session_id=existing.id,
+                    )
+                )
+                continue
+
+            # Conflict 3: All-day overlap (either is all-day)
+            if existing_time_info.is_all_day or candidate_time_info.is_all_day:
+                conflicts.append(
+                    CalendarConflict(
+                        date=candidate_date,
+                        conflict_type=ConflictType.TIME_OVERLAP,
+                        existing_session_id=existing.id,
+                    )
+                )
+                continue
+
+    return conflicts
+
+
+def detect_execution_conflicts_batch(
+    existing_sessions: list[PlannedSession],
+    candidate_sessions: list[dict[str, Any]],
+) -> list[CalendarConflict]:
+    """Detect execution conflicts for a batch of candidate sessions.
+
+    Phase 6A: Pure detection - no auto-resolution.
+
+    Args:
+        existing_sessions: List of existing PlannedSession objects for the user
+        candidate_sessions: List of candidate session dicts with keys:
+            - id: session_id
+            - date: date object
+            - duration_minutes: int | None
+            - time: str | None (HH:MM format)
+
+    Returns:
+        List of detected conflicts (empty if no conflicts)
+    """
+    conflicts: list[CalendarConflict] = []
+    candidate_session_ids: set[str] = {s.get("id", "") for s in candidate_sessions if s.get("id")}
+
+    # Check for duplicate session_ids in database
+    existing_session_ids: set[str] = {s.id for s in existing_sessions}
+    for candidate_id in candidate_session_ids:
+        if candidate_id in existing_session_ids:
+            # Find the existing session to get its date
+            existing = next((s for s in existing_sessions if s.id == candidate_id), None)
+            if existing:
+                conflicts.append(
+                    CalendarConflict(
+                        date=existing.date.date(),
+                        conflict_type=ConflictType.DUPLICATE_SESSION,
+                        existing_session_id=candidate_id,
+                    )
+                )
+
+    # Check each candidate session for conflicts
+    for candidate in candidate_sessions:
+        candidate_id = candidate.get("id")
+        candidate_date_value = candidate.get("date")
+        candidate_duration = candidate.get("duration_minutes")
+        candidate_time = candidate.get("time")
+
+        if not candidate_id or not candidate_date_value:
+            continue
+
+        # Convert date to date object if needed
+        if isinstance(candidate_date_value, datetime):
+            candidate_date = candidate_date_value.date()
+        elif isinstance(candidate_date_value, date_type):
+            candidate_date = candidate_date_value
+        else:
+            continue
+
+        # Detect conflicts for this candidate
+        session_conflicts = detect_execution_conflicts(
+            existing_sessions=existing_sessions,
+            candidate_date=candidate_date,
+            candidate_duration_minutes=candidate_duration,
+            candidate_time=candidate_time,
+        )
+
+        conflicts.extend(session_conflicts)
+
+    return conflicts

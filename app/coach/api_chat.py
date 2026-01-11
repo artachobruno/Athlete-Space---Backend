@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
 from app.coach.config.models import USER_FACING_MODEL
+from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.services.state_builder import build_athlete_state
@@ -538,8 +539,6 @@ async def coach_chat(
             )
 
     # Create turn-scoped execution guard (prevents duplicate tool execution within a turn)
-    from app.coach.execution_guard import TurnExecutionGuard
-
     execution_guard = TurnExecutionGuard(conversation_id=conversation_id)
     logger.debug(
         "Initialized execution guard for turn",

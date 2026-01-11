@@ -7,7 +7,6 @@ due to side effects (e.g., progress events, context saves).
 
 from collections import defaultdict
 from threading import Lock
-from typing import DefaultDict
 
 from loguru import logger
 

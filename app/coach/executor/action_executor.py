@@ -539,6 +539,12 @@ class CoachActionExecutor:
 
         # Use target_action for execution routing if available
         if target_action == "plan_race_build":
+            # CRITICAL — execution invariant (Phase 0.5)
+            # No plan can execute without required slots
+            if not decision.filled_slots:
+                raise RuntimeError(
+                    "EXECUTION_WITH_EMPTY_SLOTS: plan_race_build requires filled slots"
+                )
             logger.debug(
                 "ActionExecutor: Routing to plan_race_build execution",
                 conversation_id=conversation_id,
@@ -771,6 +777,26 @@ class CoachActionExecutor:
             should_execute=decision.should_execute,
         )
 
+        # FIX 4: Hard guard - crash loudly if execution is attempted with missing slots
+        # This ensures orchestrator bugs never reach MCP, failures are obvious not silent
+        required = decision.required_attributes or []
+        slots = decision.filled_slots or {}
+
+        missing = [r for r in required if r not in slots or slots[r] in (None, "", [])]
+
+        if missing:
+            error_msg = f"plan_race_build called with missing slots: {missing}"
+            logger.error(
+                "ActionExecutor: Hard guard fired - missing required slots",
+                tool="plan_race_build",
+                required_attributes=required,
+                filled_slots_keys=list(slots.keys()),
+                missing_slots=missing,
+                should_execute=decision.should_execute,
+                conversation_id=conversation_id,
+            )
+            raise RuntimeError(error_msg)
+
         if not deps.user_id or not isinstance(deps.user_id, str):
             logger.debug("ActionExecutor: Missing user_id for plan_race_build")
             return "I need your user ID to save a race plan. Please check your account settings."
@@ -807,19 +833,6 @@ class CoachActionExecutor:
             should_execute=decision.should_execute,
             conversation_id=conversation_id,
         )
-
-        # Defensive check: if filled_slots is None or empty, fall back to clarification
-        if not slots:
-            logger.error(
-                "ActionExecutor: filled_slots is empty despite should_execute=True - falling back to clarification",
-                tool=tool_name,
-                should_execute=decision.should_execute,
-                target_action=decision.target_action,
-                conversation_id=conversation_id,
-            )
-            # Fall back to asking for required slots
-            required_slots = REQUIRED_SLOTS.get(tool_name, [])
-            return generate_clarification_for_missing_slots(tool_name, required_slots)
 
         # Final validation using filled_slots (should already be validated, but double-check)
         logger.debug(
@@ -881,6 +894,33 @@ class CoachActionExecutor:
 
         # Tool execution is wrapped defensively - never surface errors to users
         try:
+            # FIX 7: Invariant logging before execution (temporary but recommended)
+            logger.info(
+                "Execution check",
+                extra={
+                    "target_action": decision.target_action,
+                    "filled_slots": slots,
+                    "missing_slots": decision.missing_slots,
+                    "should_execute": decision.should_execute,
+                },
+            )
+
+            # FIX 5: Never send empty message to MCP - MCP tools require a semantic message
+            # MCP is message-driven, empty string is invalid
+            if not race_description:
+                # Construct message from slots if original message is empty
+                race_distance = slots.get("race_distance", "race")
+                race_date = slots.get("race_date", "target date")
+                if isinstance(race_date, date):
+                    race_date_str = race_date.strftime("%B %d, %Y")
+                else:
+                    race_date_str = str(race_date)
+                race_description = f"Build a training plan for a {race_distance} race on {race_date_str}."
+                logger.debug(
+                    "ActionExecutor: Constructed message from slots",
+                    constructed_message=race_description,
+                )
+
             # B37: Pass filled_slots in context - tool reads ONLY from this
             # B44: Serialize filled_slots before MCP call (convert date/datetime to ISO strings)
             logger.debug(
@@ -889,6 +929,7 @@ class CoachActionExecutor:
                 athlete_id=deps.athlete_id,
                 conversation_id=conversation_id,
                 slots_keys=list(slots.keys()) if slots else [],
+                message_length=len(race_description),
             )
             tool_args = {
                 "message": race_description,

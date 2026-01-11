@@ -132,7 +132,6 @@ async def plan_week_llm(input: PlanWeekInput) -> list[SessionSpec]:
         model=model,
         system_prompt=SYSTEM_PROMPT,
         output_type=list[SessionSpec],
-        max_retries=0,
     )
 
     user_prompt = build_plan_week_prompt(input)

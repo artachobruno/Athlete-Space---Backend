@@ -63,7 +63,6 @@ async def plan_session_llm(spec: SessionSpec) -> SessionPlan:
         model=model,
         system_prompt=SYSTEM_PROMPT,
         output_type=SessionPlan,
-        max_retries=0,
     )
 
     user_prompt = build_plan_session_prompt(spec)

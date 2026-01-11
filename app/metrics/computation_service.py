@@ -59,7 +59,7 @@ def recompute_metrics_for_user(
 
         if not activity_list:
             logger.info(f"[METRICS] No activities found for user_id={user_id}, skipping metrics computation")
-            return {"daily_created": 0, "daily_updated": 0, "weekly_created": 0, "weekly_updated": 0}
+            return {"daily_created": 0, "daily_skipped": 0, "weekly_created": 0, "weekly_updated": 0}
 
         # Compute daily TSS loads (unified metric from spec)
         daily_tss_loads = compute_daily_tss_load(activity_list, since_date, end_date)
@@ -68,8 +68,11 @@ def recompute_metrics_for_user(
         metrics = compute_ctl_atl_form_from_tss(daily_tss_loads, since_date, end_date)
 
         # Update daily_training_load table
+        # CRITICAL: EWMA (CTL/ATL) depends on initial conditions and previous values.
+        # Once a day's metrics are written, they must NEVER change (immutable).
+        # Historical overwrites corrupt the entire EWMA series silently.
         daily_created = 0
-        daily_updated = 0
+        daily_skipped = 0
 
         for date_val, tss_load in daily_tss_loads.items():
             metrics_for_date = metrics.get(date_val, {"ctl": 0.0, "atl": 0.0, "fsb": 0.0})
@@ -82,30 +85,31 @@ def recompute_metrics_for_user(
                 )
             ).first()
 
+            # GUARD: Skip existing days to preserve EWMA integrity
+            if existing:
+                daily_skipped += 1
+                logger.debug(
+                    f"[METRICS] Skipping existing day {date_val.isoformat()} for user_id={user_id} "
+                    "(EWMA history must never change after write)"
+                )
+                continue
+
             # Note: TSB column stores Form (FSB) value
             form_value = metrics_for_date.get("fsb", 0.0)
+            ctl_val = metrics_for_date["ctl"]
+            atl_val = metrics_for_date["atl"]
 
-            if existing:
-                # Update existing record
-                daily_load = existing[0]
-                daily_load.ctl = metrics_for_date["ctl"]
-                daily_load.atl = metrics_for_date["atl"]
-                daily_load.tsb = form_value  # Storing Form (FSB) in TSB column for backward compatibility
-                daily_load.load_score = tss_load  # Daily TSS load
-                daily_load.updated_at = datetime.now(timezone.utc)
-                daily_updated += 1
-            else:
-                # Create new record
-                daily_load = DailyTrainingLoad(
-                    user_id=user_id,
-                    date=datetime.combine(date_val, datetime.min.time()).replace(tzinfo=timezone.utc),
-                    ctl=metrics_for_date["ctl"],
-                    atl=metrics_for_date["atl"],
-                    tsb=form_value,  # Storing Form (FSB) in TSB column for backward compatibility
-                    load_score=tss_load,  # Daily TSS load
-                )
-                session.add(daily_load)
-                daily_created += 1
+            # Create new record (only for days that don't exist)
+            daily_load = DailyTrainingLoad(
+                user_id=user_id,
+                date=datetime.combine(date_val, datetime.min.time()).replace(tzinfo=timezone.utc),
+                ctl=ctl_val,
+                atl=atl_val,
+                tsb=form_value,  # Storing Form (FSB) in TSB column for backward compatibility
+                load_score=tss_load,  # Daily TSS load
+            )
+            session.add(daily_load)
+            daily_created += 1
 
         # Compute weekly summaries
         weekly_created = 0
@@ -173,13 +177,13 @@ def recompute_metrics_for_user(
 
         logger.info(
             f"[METRICS] Metrics recomputation complete for user_id={user_id}: "
-            f"daily_created={daily_created}, daily_updated={daily_updated}, "
+            f"daily_created={daily_created}, daily_skipped={daily_skipped}, "
             f"weekly_created={weekly_created}, weekly_updated={weekly_updated}"
         )
 
         return {
             "daily_created": daily_created,
-            "daily_updated": daily_updated,
+            "daily_skipped": daily_skipped,
             "weekly_created": weekly_created,
             "weekly_updated": weekly_updated,
         }

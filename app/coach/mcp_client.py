@@ -4,6 +4,7 @@ Handles all communication with MCP servers for database and filesystem operation
 """
 
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -127,11 +128,22 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
         arguments=arguments,
     )
 
+    # Instrument tool execution with tracing
+    # Note: conversation_id and user_id are not available in call_tool signature,
+    # so we use tool name only for metadata
+    tool_metadata: dict[str, str] = {
+        "tool": tool_name,
+    }
+
     # Retry on network errors only (not permanent errors)
     max_retries = 3
 
-    for attempt in range(max_retries):
-        logger.debug(
+    with trace(
+        name=f"tool.{tool_name}",
+        metadata=tool_metadata,
+    ):
+        for attempt in range(max_retries):
+            logger.debug(
             "MCP: Attempting tool call",
             tool=tool_name,
             attempt=attempt + 1,
@@ -197,15 +209,71 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 error = data["error"]
                 error_code = error.get("code", "UNKNOWN_ERROR")
                 error_message = error.get("message", "Unknown error")
-                logger.debug(
-                    "MCP: Error response received",
+
+                # Log full error response at ERROR level with all details
+                logger.error(
+                    "MCP tool error - full error response",
                     tool=tool_name,
                     attempt=attempt + 1,
                     error_code=error_code,
                     error_message=error_message,
                     error_data=error,
+                    full_response=data,
                 )
+
+                # Also log at debug level with structured data
+                logger.debug(
+                    "MCP: Error response received (detailed)",
+                    tool=tool_name,
+                    attempt=attempt + 1,
+                    error_code=error_code,
+                    error_message=error_message,
+                    error_data=error,
+                    full_response=data,
+                    error_keys=list(error.keys()) if isinstance(error, dict) else None,
+                )
+
+                # Print formatted error message for immediate visibility
                 logger.error(f"MCP tool error: {tool_name} - {error_code}: {error_message}")
+
+                # Extract and print original error details if present in message
+                if "wrapped:" in error_message or "original_error" in str(error).lower() or "Failed to plan race build:" in error_message:
+                    logger.error(
+                        "MCP error contains wrapped/original error details - printing full error chain",
+                        tool=tool_name,
+                        error_code=error_code,
+                        error_message=error_message,
+                        error_full=error,
+                        full_response=data,
+                    )
+
+                # Print the full error structure for debugging (as JSON string)
+                try:
+                    error_json_str = json.dumps(data, indent=2, default=str)
+                    # Log as both structured and plain text for visibility
+                    logger.error(
+                        "MCP error response (JSON formatted)",
+                        tool=tool_name,
+                        attempt=attempt + 1,
+                        error_json=error_json_str,
+                    )
+                    # Also print directly to ensure visibility
+                    print(f"\n{'=' * 80}")
+                    print(f"MCP ERROR RESPONSE (tool={tool_name}, attempt={attempt + 1}):")
+                    print(error_json_str)
+                    print(f"{'=' * 80}\n")
+                except Exception as json_error:
+                    logger.error(
+                        "Failed to serialize error response to JSON",
+                        tool=tool_name,
+                        json_error=str(json_error),
+                        error_response=data,
+                    )
+                    print(f"\n{'=' * 80}")
+                    print("MCP ERROR RESPONSE (serialization failed):")
+                    print(f"Error: {json_error}")
+                    print(f"Data: {data}")
+                    print(f"{'=' * 80}\n")
 
                 # Don't retry on permanent errors
                 permanent_errors = {

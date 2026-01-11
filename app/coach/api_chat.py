@@ -23,7 +23,9 @@ from app.coach.utils.schemas import (
 from app.core.conversation_id import get_conversation_id
 from app.core.conversation_ownership import validate_conversation_ownership
 from app.core.message import Message, normalize_message
+from app.core.observe import set_association_properties, trace
 from app.core.redis_conversation_store import write_message
+from app.core.trace_metadata import get_trace_metadata
 from app.db.message_repository import persist_message
 from app.db.models import AthleteProfile, CoachMessage, CoachProgressEvent, StravaAccount, StravaAuth, UserSettings
 from app.db.session import get_session
@@ -457,12 +459,27 @@ async def coach_chat(
         days_to_race=req.days_to_race,
     )
 
-    # Get decision from orchestrator (use normalized content, pass conversation_id for slot persistence)
-    decision = await run_conversation(
-        user_input=normalized_user_message.content,
-        deps=deps,
+    # Set association properties for tracing
+    trace_meta = get_trace_metadata(
         conversation_id=conversation_id,
+        user_id=user_id,
     )
+    set_association_properties(trace_meta)
+
+    # Get decision from orchestrator (use normalized content, pass conversation_id for slot persistence)
+    # Wrap in conversation-level trace (root span)
+    with trace(
+        name="conversation.turn",
+        metadata={
+            **trace_meta,
+            "intent": "unknown",  # Will be updated after decision
+        },
+    ):
+        decision = await run_conversation(
+            user_input=normalized_user_message.content,
+            deps=deps,
+            conversation_id=conversation_id,
+        )
 
     # CRITICAL: Emit planned events ONLY if action is EXECUTE
     # NO_ACTION must be pure - no side effects, no events, no DB writes

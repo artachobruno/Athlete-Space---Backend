@@ -116,14 +116,4 @@ def count_tokens(
             content_length=len(content),
         )
 
-    # Debug logging for all messages
-    logger.debug(
-        "Counted tokens for message",
-        conversation_id=conversation_id,
-        user_id=user_id,
-        role=role,
-        token_count=token_count,
-        content_length=len(content),
-    )
-
     return token_count

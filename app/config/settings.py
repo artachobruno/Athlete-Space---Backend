@@ -85,6 +85,21 @@ class Settings(BaseSettings):
         validation_alias="MCP_FS_SERVER_URL",
         description="MCP Filesystem Server URL",
     )
+    observe_enabled: bool = Field(
+        default=False,
+        validation_alias="OBSERVE_ENABLED",
+        description="Enable Observe tracing",
+    )
+    observe_sample_rate: float = Field(
+        default=1.0,
+        validation_alias="OBSERVE_SAMPLE_RATE",
+        description="Observe sampling rate (0.0-1.0)",
+    )
+    observe_api_key: str = Field(
+        default="",
+        validation_alias="OBSERVE_API_KEY",
+        description="Observe API key",
+    )
 
     @field_validator("log_level")
     @classmethod

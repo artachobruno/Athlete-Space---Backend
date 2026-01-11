@@ -29,6 +29,7 @@ from app.api.onboarding.onboarding import router as onboarding_router
 from app.api.strava.strava import router as strava_router
 from app.api.training.state import router as state_router
 from app.api.training.training import router as training_router
+from app.api.coach.athletes import router as coach_athletes_router
 from app.api.user.me import router as me_router
 from app.calendar.api import router as calendar_router
 from app.coach.api import router as coach_router
@@ -36,6 +37,7 @@ from app.coach.api_chat import router as coach_chat_router
 from app.config.settings import settings
 from app.core.conversation_id import conversation_id_middleware
 from app.core.logger import setup_logger
+from app.core.observe import init as observe_init
 from app.db.models import Base
 from app.db.schema_check import verify_schema
 from app.db.session import engine
@@ -77,6 +79,13 @@ from scripts.migrate_user_settings_fields import migrate_user_settings_fields
 
 # Initialize logger with level from settings (defaults to INFO, can be overridden via LOG_LEVEL env var)
 setup_logger(level=settings.log_level)
+
+# Initialize Observe SDK for LLM observability
+observe_init(
+    api_key=settings.observe_api_key,
+    enabled=settings.observe_enabled,
+    sample_rate=settings.observe_sample_rate,
+)
 
 # Set OPENAI_API_KEY from settings if not already set in environment
 # This ensures pydantic_ai and other libraries can find it
@@ -546,6 +555,7 @@ app.include_router(auth_google_router)
 app.include_router(auth_strava_router)
 app.include_router(calendar_router)
 app.include_router(coach_router)
+app.include_router(coach_athletes_router)
 app.include_router(coach_chat_router)
 app.include_router(export_router)
 app.include_router(ingestion_strava_router)

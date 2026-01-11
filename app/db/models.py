@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Enum, Float, Index, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -51,6 +51,9 @@ class User(Base):
         Index("idx_users_google_sub", "google_sub", unique=False),  # Already unique, but explicit index
         Index("idx_users_strava_athlete_id", "strava_athlete_id", unique=False),  # Already unique, but explicit index
     )
+
+    athlete: Mapped["Athlete | None"] = relationship("Athlete", uselist=False, back_populates="user")
+    coach: Mapped["Coach | None"] = relationship("Coach", uselist=False, back_populates="user")
 
 
 class StravaAuth(Base):
@@ -830,3 +833,71 @@ class ConversationSummary(Base):
         UniqueConstraint("conversation_id", "version", name="uq_conversation_summary_version"),
         Index("idx_conversation_summary_latest", "conversation_id", "version"),
     )
+
+
+class Athlete(Base):
+    """First-class Athlete entity that owns data.
+
+    Each user has exactly one athlete. Athletes own their training data
+    and are explicitly scoped for multi-coach access in the future.
+    """
+
+    __tablename__ = "athletes"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    birthdate: Mapped[date | None] = mapped_column(Date, nullable=True)
+    gender: Mapped[str | None] = mapped_column(String, nullable=True)
+    timezone: Mapped[str] = mapped_column(String, nullable=False, default="UTC")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="athlete")
+
+
+class Coach(Base):
+    """Coach entity for managing athletes.
+
+    Each user can have one coach record. Coaches are linked to athletes
+    via the CoachAthlete join table for explicit access control.
+    """
+
+    __tablename__ = "coaches"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    user: Mapped["User"] = relationship("User", back_populates="coach")
+
+
+class CoachAthlete(Base):
+    """Join table for coach-athlete relationships.
+
+    Explicitly defines which coaches have access to which athletes.
+    No implied access - all relationships must be explicitly created.
+
+    Fields:
+    - coach_id: Foreign key to coaches.id
+    - athlete_id: Foreign key to athletes.id
+    - can_edit: Whether the coach can edit athlete data (default: False)
+    - created_at: Relationship creation timestamp
+    """
+
+    __tablename__ = "coach_athletes"
+
+    coach_id: Mapped[str] = mapped_column(String, ForeignKey("coaches.id"), primary_key=True)
+    athlete_id: Mapped[str] = mapped_column(String, ForeignKey("athletes.id"), primary_key=True)
+
+    can_edit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

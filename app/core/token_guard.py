@@ -160,6 +160,17 @@ def enforce_token_limit(
 
     history = messages[1:-1]
 
+    # Log history before truncation for debugging
+    logger.debug(
+        "History before truncation",
+        conversation_id=conversation_id,
+        user_id=user_id,
+        history_count=len(history),
+        history_roles=[msg["role"] for msg in history],
+        history_content_lengths=[len(msg["content"]) for msg in history],
+        history_preview=[msg["content"][:100] if len(msg["content"]) > 100 else msg["content"] for msg in history],
+    )
+
     # Walk history from newest → oldest, building truncated_history
     truncated_history: list[LLMMessage] = []
     removed: list[LLMMessage] = []
@@ -177,6 +188,19 @@ def enforce_token_limit(
         else:
             # This message would exceed limit, drop it
             removed.append(msg)
+
+    # Log history after truncation for debugging
+    logger.debug(
+        "History after truncation",
+        conversation_id=conversation_id,
+        user_id=user_id,
+        truncated_history_count=len(truncated_history),
+        truncated_history_roles=[msg["role"] for msg in truncated_history],
+        truncated_history_content_lengths=[len(msg["content"]) for msg in truncated_history],
+        truncated_history_preview=[msg["content"][:100] if len(msg["content"]) > 100 else msg["content"] for msg in truncated_history],
+        removed_count=len(removed),
+        removed_roles=[msg["role"] for msg in removed],
+    )
 
     # Build final messages
     final_messages = [system, *truncated_history, user_tail]

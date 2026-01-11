@@ -18,13 +18,16 @@ from pydantic_ai.messages import ModelMessage
 
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.config.models import ORCHESTRATOR_MODEL
+from app.coach.config.prompt_versions import ORCHESTRATOR_PROMPT_VERSION
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import create_or_update_progress, get_conversation_progress
 from app.coach.validators.execution_validator import validate_no_advice_before_execution
+from app.core.observe import trace
 from app.core.slot_extraction import extract_slots_for_intent, generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
 from app.core.token_guard import LLMMessage, enforce_token_limit
+from app.core.trace_metadata import get_trace_metadata_from_deps
 from app.services.llm.model import get_model
 
 # ============================================================================
@@ -530,9 +533,9 @@ async def run_conversation(
         )
 
     # Convert truncated history back to dict format for pydantic_ai
-    typed_message_history: list[ModelMessage] | None = None
+    typed_message_history: list[LLMMessage] | None = None
     if truncated_history:
-        typed_message_history = cast(list[ModelMessage], truncated_history)
+        typed_message_history = truncated_history
         logger.debug(
             "Orchestrator: Converted truncated history to ModelMessage format",
             history_count=len(typed_message_history),
@@ -547,17 +550,60 @@ async def run_conversation(
         history_length=len(typed_message_history) if typed_message_history else 0,
         user_input_length=len(user_input),
     )
+
+    # Instrument LLM call with tracing
+    trace_meta = get_trace_metadata_from_deps(deps, conversation_id=conversation_id)
+    trace_meta.update(
+        {
+            "model": model_name,
+            "prompt_version": ORCHESTRATOR_PROMPT_VERSION,
+        }
+    )
+
     try:
-        result = await ORCHESTRATOR_AGENT.run(
-            user_prompt=user_input,
-            deps=deps,
-            message_history=typed_message_history,
-        )
+        with trace(
+            name="llm.orchestrator_decision",
+            metadata=trace_meta,
+        ):
+            result = await ORCHESTRATOR_AGENT.run(
+                user_prompt=user_input,
+                deps=deps,
+                message_history=cast(list[ModelMessage], typed_message_history) if typed_message_history else None,
+            )
+
+        # Log detailed result structure immediately after agent.run()
         logger.debug(
             "Orchestrator: LLM agent completed",
             has_output=bool(result.output),
             has_message=bool(result.output and result.output.message) if result.output else False,
+            result_type=type(result).__name__,
+            output_type=type(result.output).__name__ if result.output else "None",
+            message_value=repr(result.output.message) if result.output and hasattr(result.output, "message") else None,
+            message_length=(
+                len(result.output.message)
+                if result.output and hasattr(result.output, "message") and result.output.message
+                else 0
+            ),
         )
+
+        # Print result structure to console for debugging
+        if result.output:
+            output_dict = result.output.model_dump() if hasattr(result.output, "model_dump") else None
+            logger.info(f"\n{'=' * 80}")
+            logger.info("ORCHESTRATOR AGENT RESULT (immediate after agent.run()):")
+            logger.info(f"{'=' * 80}")
+            logger.info(f"Result type: {type(result).__name__}")
+            logger.info(f"Output type: {type(result.output).__name__}")
+            logger.info(f"Output dict keys: {list(output_dict.keys()) if output_dict else 'N/A'}")
+            if output_dict:
+                for key, value in output_dict.items():
+                    if key == "message":
+                        logger.info(f"  {key}: {value!r} (length: {len(value) if value else 0})")
+                    elif isinstance(value, (dict, list)) and len(str(value)) > 100:
+                        logger.info(f"  {key}: {type(value).__name__} (length: {len(str(value))} chars)")
+                    else:
+                        logger.info(f"  {key}: {value!r}")
+            logger.info(f"{'=' * 80}\n")
 
         # Verify response is valid and complete
         if not result.output or not result.output.message:
@@ -574,14 +620,46 @@ async def run_conversation(
                     message_is_empty_string = not message_value
                 else:
                     message_value = "<message attribute not found>"
+                # Check all fields on output object
+                output_attrs = [attr for attr in dir(result.output) if not attr.startswith("_")]
+                output_dict = result.output.model_dump() if hasattr(result.output, "model_dump") else None
             else:
                 message_value = None
+                output_attrs = []
+                output_dict = None
 
             # Check for any error information in the result
             has_error = hasattr(result, "error")
             error_value = result.error if has_error else None
             has_warnings = hasattr(result, "warnings")
             warnings_value = result.warnings if has_warnings else None
+
+            # Print detailed diagnostic information to console for immediate visibility
+            logger.info(f"\n{'=' * 80}")
+            logger.info("ORCHESTRATOR AGENT INVALID/EMPTY RESPONSE DIAGNOSTICS:")
+            logger.info(f"{'=' * 80}")
+            logger.info(f"Result type: {result_type}")
+            logger.info(f"Output type: {output_type}")
+            logger.info(f"Output is None: {result.output is None}")
+            logger.info(f"Message is None: {message_value is None}")
+            logger.info(f"Message is empty string: {message_is_empty_string}")
+            logger.info(f"Message value: {repr(message_value[:200]) if message_value else None}")
+            logger.info(f"Message length: {len(message_value) if message_value else 0}")
+            if result.output:
+                logger.info(f"Output attributes: {output_attrs}")
+                if output_dict:
+                    logger.info(f"Output dict keys: {list(output_dict.keys())}")
+                    logger.info(f"Output dict (first 1000 chars): {str(output_dict)[:1000]}")
+            logger.info(f"Result attributes: {result_attrs}")
+            logger.info(f"Has error: {has_error}")
+            if error_value:
+                logger.info(f"Error value: {str(error_value)[:500]}")
+            logger.info(f"Has warnings: {has_warnings}")
+            if warnings_value:
+                logger.info(f"Warnings value: {str(warnings_value)[:500]}")
+            logger.info(f"User input: {user_input[:100]}")
+            logger.info(f"Output repr (first 500 chars): {output_value[:500] if output_value else None}")
+            logger.info(f"{'=' * 80}\n")
 
             logger.error(
                 "Orchestrator agent returned invalid or empty response",
@@ -596,6 +674,8 @@ async def run_conversation(
                 message_length=len(message_value) if message_value else 0,
                 output_repr=output_value[:500] if output_value else None,
                 result_attributes=result_attrs,
+                output_attributes=output_attrs if result.output else [],
+                output_dict_keys=list(output_dict.keys()) if output_dict else [],
                 has_error=has_error,
                 error_value=str(error_value)[:500] if error_value else None,
                 has_warnings=has_warnings,

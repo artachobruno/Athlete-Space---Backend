@@ -4,6 +4,7 @@ from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
+from app.planning.repair.volume_repair import RepairImpossibleError, repair_week_volume, volume_within_tolerance
 from app.planning.schema.session_spec import SessionSpec, Sport
 from app.services.llm.model import get_model
 
@@ -62,25 +63,31 @@ Return a JSON list of SessionSpec objects with:
 def validate_week(specs: list[SessionSpec], input: PlanWeekInput) -> None:
     """Validate week plan meets constraints.
 
+    Repairs volume mismatches deterministically instead of failing.
+
     Args:
-        specs: List of SessionSpecs
+        specs: List of SessionSpecs (may be modified in place)
         input: Original PlanWeekInput
 
     Raises:
-        ValueError: If validation fails
+        ValueError: If validation fails (non-volume issues) or repair is impossible
     """
     if not specs:
         raise ValueError("Week plan must contain at least one session")
 
     total_distance = sum(spec.target_distance_km or 0.0 for spec in specs)
-    volume_diff = abs(total_distance - input.total_volume_km)
-    volume_tolerance = input.total_volume_km * 0.05
 
-    if volume_diff > volume_tolerance:
-        raise ValueError(
-            f"Week volume mismatch: expected {input.total_volume_km}km, "
-            f"got {total_distance}km (diff: {volume_diff}km, tolerance: {volume_tolerance}km)"
-        )
+    if not volume_within_tolerance(total_distance, input.total_volume_km, tolerance=0.05):
+        try:
+            repair_week_volume(specs, input.total_volume_km)
+        except RepairImpossibleError as e:
+            volume_diff = abs(total_distance - input.total_volume_km)
+            volume_tolerance = input.total_volume_km * 0.05
+            raise ValueError(
+                f"Week volume mismatch: expected {input.total_volume_km}km, "
+                f"got {total_distance}km (diff: {volume_diff}km, tolerance: {volume_tolerance}km). "
+                f"Repair impossible: {e}"
+            ) from e
 
     long_runs = [s for s in specs if s.session_type.value == "long"]
     if len(long_runs) != 1:

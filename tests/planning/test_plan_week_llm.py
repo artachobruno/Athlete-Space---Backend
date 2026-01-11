@@ -62,7 +62,8 @@ def test_validate_week_valid():
     validate_week(specs, input_data)
 
 
-def test_validate_week_volume_mismatch():
+def test_validate_week_volume_mismatch_repairs():
+    """Test that volume mismatch is repaired instead of failing."""
     input_data = PlanWeekInput(
         week_number=1,
         phase="base",
@@ -95,8 +96,10 @@ def test_validate_week_volume_mismatch():
         ),
     ]
 
-    with pytest.raises(ValueError, match="Week volume mismatch"):
-        validate_week(specs, input_data)
+    validate_week(specs, input_data)
+
+    final_volume = sum(s.target_distance_km or 0.0 for s in specs)
+    assert abs(final_volume - input_data.total_volume_km) < 0.2
 
 
 def test_validate_week_no_long_run():

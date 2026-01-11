@@ -247,7 +247,7 @@ def _is_key_session(session: PlannedSession | dict) -> bool:
     # Check if duration suggests long run (> 90 minutes for runs)
     session_type = _get_session_type(session)
     duration = _get_session_duration(session)
-    return session_type.lower() == "run" and duration and duration > 90
+    return session_type.lower() == "run" and duration is not None and duration > 90
 
 
 def detect_conflicts(

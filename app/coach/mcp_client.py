@@ -172,8 +172,11 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
         "tool": tool_name,
     }
 
-    # Retry on network errors only (not permanent errors)
-    max_retries = 3
+    # Phase 6C: Reduced retries for heavy operations (planning, etc.)
+    # Retries make sense for idempotent reads, not for heavy planners
+    # Set to 0 for planning tools, 1 for others
+    is_planning_tool = tool_name in {"plan_race_build", "plan_season", "plan_week"}
+    max_retries = 0 if is_planning_tool else 1
 
     with trace(
         name=f"tool.{tool_name}",

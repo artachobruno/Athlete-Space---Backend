@@ -343,6 +343,8 @@ class CoachActionExecutor:
     ) -> str:
         """Execute action based on orchestrator decision.
 
+        Phase 6C: Safe for background execution - errors are logged but never crash the server.
+
         Args:
             decision: Decision from orchestrator
             deps: Dependencies with athlete state and context
@@ -366,6 +368,8 @@ class CoachActionExecutor:
             If slots are complete (should_execute = true), execute immediately.
             No confirmation. No waiting. Execute now.
         """
+        # Phase 6C: Safe for background execution
+        # Individual _execute_* methods have try-except blocks that return error messages
         # STATE 1: MISSING SLOTS - Ask exactly one blocking question
         # If executable action exists but slots are incomplete, ask for missing slots
         target_action = decision.target_action or decision.next_executable_action

@@ -612,7 +612,33 @@ async def coach_chat(
                     step_id=step.id,
                 )
 
-    # Execute action if needed
+    # Phase 6C: Execute action asynchronously (non-blocking)
+    # For EXECUTE actions, run in background and return immediately
+    if decision.action == "EXECUTE":
+        logger.info(
+            "Enqueuing execution for background processing",
+            conversation_id=conversation_id,
+            intent=decision.intent,
+            target_action=decision.target_action,
+        )
+        # Enqueue execution in background (non-blocking)
+        background_tasks.add_task(
+            CoachActionExecutor.execute,
+            decision,
+            deps,
+            conversation_id,
+        )
+        # Return immediately with acknowledgment message
+        return CoachChatResponse(
+            intent=decision.intent,
+            reply="I'm working on your request. You'll see updates as I progress.",
+            conversation_id=conversation_id,
+            response_type=decision.response_type,
+            show_plan=decision.show_plan,
+            plan_items=decision.plan_items,
+        )
+
+    # For NO_ACTION, execute synchronously (fast, non-blocking)
     reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
 
     # Normalize assistant response before returning

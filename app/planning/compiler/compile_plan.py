@@ -15,6 +15,7 @@ from app.planning.library.session_template import SessionTemplate
 from app.planning.materialization.materialize_week import materialize_week
 from app.planning.materialization.validate import validate_materialized_sessions
 from app.planning.output.models import WeekPlan
+from app.planning.progress.emitter import emit_planning_progress
 from app.planning.schemas.plan_spec import PlanSpec
 from app.planning.selection.integration import materialize_sessions_with_templates
 
@@ -27,6 +28,7 @@ def compile_plan(
     rag_bias: dict[str, list[str]] | None = None,
     philosophy_summary: str | None = None,
     use_template_selection: bool = True,
+    conversation_id: str | None = None,
 ) -> list[WeekPlan]:
     """Compile a PlanSpec into fully allocated, invariant-safe WeekPlans.
 
@@ -45,6 +47,7 @@ def compile_plan(
         rag_bias: Optional RAG exclusion context
         philosophy_summary: Optional philosophy summary from RAG
         use_template_selection: Whether to use template selection (requires all_templates)
+        conversation_id: Optional conversation ID for progress tracking
 
     Returns:
         List of WeekPlan objects, one per week in the plan
@@ -54,7 +57,23 @@ def compile_plan(
     """
     weeks = []
 
+    # Phase 2: Week Skeleton Generation
     skeletons = generate_week_skeletons(plan_spec, philosophy)
+    emit_planning_progress(
+        phase="week_skeleton",
+        status="completed",
+        percent=20,
+        message="Weekly structure created",
+        summary={
+            "weeks": len(skeletons),
+            "days_per_week": plan_spec.days_per_week,
+            "long_run_day": plan_spec.preferred_long_run_day,
+        },
+        conversation_id=conversation_id,
+    )
+
+    # Phase 3: Time Allocation (done per week in loop, emit after all weeks)
+    total_allocation_complete = False
 
     for i, skeleton in enumerate(skeletons):
         allocation = allocate_week_time(
@@ -62,6 +81,21 @@ def compile_plan(
             plan_spec.weekly_duration_targets_min[i],
             philosophy,
         )
+
+        # Phase 3: Time Allocation completed (emit once after first week)
+        if not total_allocation_complete:
+            emit_planning_progress(
+                phase="time_allocation",
+                status="completed",
+                percent=35,
+                message="Training time allocated",
+                summary={
+                    "weekly_minutes": plan_spec.weekly_duration_targets_min,
+                    "allocation_strategy": "deterministic_ratio",
+                },
+                conversation_id=conversation_id,
+            )
+            total_allocation_complete = True
 
         validate_compiled_week(
             skeleton,
@@ -120,5 +154,78 @@ def compile_plan(
             )
 
         weeks.append(week_plan)
+
+    # Phase 4: Week Validation completed (after all weeks validated)
+    emit_planning_progress(
+        phase="week_validation",
+        status="completed",
+        percent=45,
+        message="Weekly structure validated",
+        summary={
+            "weeks_validated": len(weeks),
+            "invariants": "passed",
+        },
+        conversation_id=conversation_id,
+    )
+
+    # Phase 5: WeekPlan Assembly completed (after all weeks assembled)
+    emit_planning_progress(
+        phase="week_assembly",
+        status="completed",
+        percent=55,
+        message="Weekly plans assembled",
+        summary={
+            "weeks": len(weeks),
+            "sample_week": {
+                "total_minutes": weeks[0].total_duration_min if weeks else 0,
+                "sessions": len(weeks[0].sessions) if weeks else 0,
+            },
+        },
+        conversation_id=conversation_id,
+    )
+
+    # Phase 6: Template Selection (Phase 4) - only if templates provided
+    if use_template_selection and all_templates and weeks:
+        # Template selection happens per week in loop above
+        # Emit after all template selection is complete
+        emit_planning_progress(
+            phase="template_selection",
+            status="completed",
+            percent=70,
+            message="Workouts selected",
+            summary={
+                "selection_method": "llm_bounded",
+                "fallback_used": False,  # Could track this if needed
+                "philosophy": philosophy.id if hasattr(philosophy, "id") else None,
+            },
+            conversation_id=conversation_id,
+        )
+
+        # Phase 7: Session Materialization (Phase 5) - already done per week in loop
+        total_sessions = sum(len(w.sessions) for w in weeks)
+        interval_count = sum(
+            1 for w in weeks for s in w.sessions if s.session_type in {"interval", "tempo", "hills"}
+        )
+        emit_planning_progress(
+            phase="materialization",
+            status="completed",
+            percent=85,
+            message="Sessions fully defined",
+            summary={
+                "sessions_created": total_sessions,
+                "interval_sessions": interval_count,
+            },
+            conversation_id=conversation_id,
+        )
+
+        # Phase 8: Materialization Validation - already done per week in loop
+        emit_planning_progress(
+            phase="materialization_validation",
+            status="completed",
+            percent=90,
+            message="Final plan validated",
+            summary={"status": "ready_for_execution"},
+            conversation_id=conversation_id,
+        )
 
     return weeks

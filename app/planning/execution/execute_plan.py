@@ -14,6 +14,7 @@ from loguru import logger
 from app.calendar.write_service import CalendarWriteService
 from app.planning.execution.contracts import ExecutableSession, ExecutionSource
 from app.planning.output.models import Day, MaterializedSession, WeekPlan
+from app.planning.progress.emitter import emit_planning_progress
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,7 @@ def execute_week_plan(
     start_date: date,
     *,
     allow_conflicts: bool = False,
+    conversation_id: str | None = None,
 ) -> ExecutionResult:
     """Execute a week plan by writing sessions to the calendar.
 
@@ -169,6 +171,7 @@ def execute_week_plan(
         week_plan: WeekPlan from Phase 5 (immutable)
         start_date: Plan start date (for date computation)
         allow_conflicts: If True, write even with conflicts (default: False)
+        conversation_id: Optional conversation ID for progress tracking
 
     Returns:
         ExecutionResult with status and details
@@ -179,6 +182,15 @@ def execute_week_plan(
         plan_id=plan_id,
         week_index=week_plan.week_index,
         sessions_count=len(week_plan.sessions),
+    )
+
+    # Phase 9: Execution (Phase 6A) - started
+    emit_planning_progress(
+        phase="execution",
+        status="started",
+        percent=92,
+        message="Scheduling sessions",
+        conversation_id=conversation_id,
     )
 
     try:
@@ -248,6 +260,16 @@ def execute_week_plan(
             plan_id=plan_id,
             week_index=week_plan.week_index,
             sessions_written=write_result.sessions_written,
+        )
+
+        # Phase 9: Execution completed
+        emit_planning_progress(
+            phase="execution",
+            status="completed",
+            percent=100,
+            message="Plan scheduled successfully",
+            summary={"sessions_written": write_result.sessions_written},
+            conversation_id=conversation_id,
         )
 
         return ExecutionResult(

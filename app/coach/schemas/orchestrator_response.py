@@ -56,13 +56,17 @@ class OrchestratorAgentResponse(BaseModel):
 
     # Execution control data (not conversational)
     # The LLM is an execution controller, not a coach.
-    # It must always identify: target action, missing slots, next question.
+    # It must always identify: target action, required attributes, next question.
     target_action: str | None = None  # Tool name that should execute
-    required_slots: list[str] = []  # All slots required for target_action
-    filled_slots: dict[str, str | date | int | float | bool | None] = {}  # Slots that have been filled
-    missing_slots: list[str] = []  # Slots still missing (blocks execution)
+    required_attributes: list[str] = []  # Attributes required for target_action (orchestrator decides WHAT is needed)
+    optional_attributes: list[str] = []  # Optional attributes for target_action (orchestrator decides WHAT is optional)
+    filled_slots: dict[str, str | date | int | float | bool | None] = {}  # Slots filled by extractor (NOT set by orchestrator)
+    missing_slots: list[str] = []  # Slots still missing (blocks execution, computed from extractor output)
     next_question: str | None = None  # Single question to remove next blocker (ONE question only, no paragraphs)
     should_execute: bool = False  # True when all slots complete - execute immediately
+
+    # Legacy fields for compatibility (maintained for backward compatibility)
+    required_slots: list[str] = []  # Deprecated: use required_attributes
 
     # Legacy fields (maintained for compatibility, will be deprecated)
     next_executable_action: str | None = None  # Deprecated: use target_action

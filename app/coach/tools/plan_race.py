@@ -1,4 +1,6 @@
+import importlib.util
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Literal
 
 from loguru import logger
@@ -16,8 +18,18 @@ from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.tools.slot_utils import merge_slots, parse_date_loose
 from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import ConversationProgress
-from app.planning.plan_race import plan_race_build_new
 from app.services.llm.model import get_model
+
+# Load plan_race_build_new from file path (app.planning is not a package)
+_planning_dir = Path(__file__).parent.parent.parent / "planning"
+_plan_race_file = _planning_dir / "plan_race.py"
+_plan_race_spec = importlib.util.spec_from_file_location("plan_race", _plan_race_file)
+if _plan_race_spec and _plan_race_spec.loader:
+    _plan_race_module = importlib.util.module_from_spec(_plan_race_spec)
+    _plan_race_spec.loader.exec_module(_plan_race_module)
+    plan_race_build_new = _plan_race_module.plan_race_build_new
+else:
+    raise RuntimeError(f"Failed to load plan_race module from {_plan_race_file}")
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
 _recent_calls: dict[str, datetime] = {}

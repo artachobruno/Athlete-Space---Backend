@@ -23,9 +23,11 @@ from app.coach.mcp_client import MCPError, call_tool
 from app.coach.prompts.loader import load_prompt
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import create_or_update_progress, get_conversation_progress
+from app.coach.tools.plan_race import parse_date_string
 from app.coach.validators.execution_validator import validate_no_advice_before_execution
+from app.core.attribute_extraction import extract_attributes
 from app.core.observe import trace
-from app.core.slot_extraction import extract_slots_for_intent, generate_clarification_for_missing_slots
+from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
 from app.core.token_guard import LLMMessage, enforce_token_limit
 from app.core.trace_metadata import get_trace_metadata_from_deps
@@ -128,45 +130,84 @@ async def _compute_missing_slots_for_decision(
                 slot_state=conversation_slot_state,
             )
 
-    # STEP 2: Extract new slots from current message WITH conversation context
-    # Pass conversation slot state so extractor can use it for context-aware extraction
+    # STEP 2: Extract attributes using authoritative extractor
+    # Orchestrator decides WHAT is needed (required_attributes + optional_attributes)
+    # Extractor decides WHAT is actually known
+    attributes_requested = list(set(decision.required_attributes + decision.optional_attributes))
+
+    if not attributes_requested:
+        # No attributes requested - use legacy flow for backward compatibility
+        # Fall back to required_slots if available
+        if decision.required_slots:
+            attributes_requested = decision.required_slots
+        else:
+            # No attributes to extract
+            merged_slots = conversation_slot_state.copy()
+            can_execute, missing_slots = validate_slots(tool_name, merged_slots)
+            if can_execute:
+                return tool_name, [], merged_slots
+            return tool_name, missing_slots, merged_slots
+
     message_for_slots = decision.structured_data.get("race_description", "") or user_message
-    new_slots = await extract_slots_for_intent(
-        intent=decision.intent,
-        horizon=decision.horizon,
-        message=message_for_slots,
-        _structured_data=decision.structured_data,
-        conversation_id=conversation_id,
+
+    # Call authoritative extractor
+    extracted = await extract_attributes(
+        text=message_for_slots,
+        attributes_requested=attributes_requested,
         conversation_slot_state=conversation_slot_state,
     )
 
-    # STEP 3: Merge conversation slot state + LLM filled_slots + new slots (additive merge)
-    # Priority: conversation_slot_state < LLM filled_slots < new extracted slots
-    # Each source only overrides if it has non-None values
+    # STEP 3: Normalize extractor output and merge with conversation state
+    # Normalize values (convert date strings to date objects, etc.)
+    normalized_slots: dict[str, str | date | int | float | bool | None] = {}
+    for key, value in extracted.values.items():
+        if value is None:
+            continue
+        # Normalize date strings to date objects
+        if key == "race_date" and isinstance(value, str):
+            parsed = parse_date_string(value)
+            if parsed:
+                normalized_slots[key] = parsed.date()
+            else:
+                # If parsing fails, keep as string (validation will catch it)
+                normalized_slots[key] = value
+        else:
+            normalized_slots[key] = value
+
+    # Merge conversation slot state + newly extracted slots (additive merge)
+    # Priority: conversation_slot_state < newly extracted slots
     merged_slots = conversation_slot_state.copy()
-
-    # Merge LLM's filled_slots output (if present) - LLM has conversation context
-    if decision.filled_slots:
-        for key, value in decision.filled_slots.items():
-            if value is not None:  # Only update with non-None values
-                merged_slots[key] = value
-
-    # Merge newly extracted slots from current message (highest priority)
-    for key, value in new_slots.items():
+    for key, value in normalized_slots.items():
         if value is not None:  # Only update with non-None values
             merged_slots[key] = value
 
-    logger.debug(
-        "Merged slot state",
+    logger.info(
+        "Merged slot state from extractor",
         conversation_id=conversation_id,
         previous_state=conversation_slot_state,
-        llm_filled_slots=decision.filled_slots,
-        new_slots=new_slots,
+        extracted_values=extracted.values,
+        normalized_slots=normalized_slots,
         merged_slots=merged_slots,
+        missing_fields=extracted.missing_fields,
+        ambiguous_fields=extracted.ambiguous_fields,
+        confidence=extracted.confidence,
     )
 
-    # STEP 4: Validate AFTER merge (validation must happen after merge)
-    can_execute, missing_slots = validate_slots(tool_name, merged_slots)
+    # STEP 4: Determine missing slots from extractor output
+    # Missing slots = required_attributes that are in missing_fields or ambiguous_fields
+    missing_slots_from_extractor = [
+        attr
+        for attr in decision.required_attributes
+        if attr in extracted.missing_fields or attr in extracted.ambiguous_fields
+    ]
+
+    # Also check validation gate (for backward compatibility)
+    can_execute_gate, missing_slots_gate = validate_slots(tool_name, merged_slots)
+
+    # Combine missing slots from extractor and gate
+    # If extractor says missing, trust the extractor (it's authoritative)
+    missing_slots = list(set(missing_slots_from_extractor + missing_slots_gate))
+    can_execute = len(missing_slots) == 0 and can_execute_gate
 
     # STEP 5: Persist merged slots and awaiting_slots to conversation_progress AFTER validation
     # This ensures conversation.slot_state is always up-to-date with correct awaiting_slots

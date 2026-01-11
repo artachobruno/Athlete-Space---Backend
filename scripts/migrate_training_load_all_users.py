@@ -317,7 +317,9 @@ def migrate_all_users(user_ids: list[str] | None = None, dry_run: bool = False) 
                 result = migrate_user_training_load(user_id)
 
                 if result["status"] == "success":
-                    total_created += result["created"]
+                    created_count = result["created"]
+                    if isinstance(created_count, int):
+                        total_created += created_count
                     users_succeeded += 1
 
                     # Validate first 2 users
@@ -398,9 +400,10 @@ if __name__ == "__main__":
             logger.info("\n✅ Dry run completed. Run without --dry-run to apply changes.")
         else:
             logger.info("\n✅ Migration completed!")
-            if result["users_failed"] > 0:
-                logger.warning(f"⚠️  {result['users_failed']} user(s) failed - check logs above")
-            sys.exit(0 if result["users_failed"] == 0 else 1)
+            users_failed = result["users_failed"]
+            if isinstance(users_failed, int) and users_failed > 0:
+                logger.warning(f"⚠️  {users_failed} user(s) failed - check logs above")
+            sys.exit(0 if isinstance(users_failed, int) and users_failed == 0 else 1)
     except KeyboardInterrupt:
         logger.warning("\n⚠️  Migration interrupted by user")
         sys.exit(130)

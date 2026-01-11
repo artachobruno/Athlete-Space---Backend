@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, CalendarSession
-from loguru import logger
 
 
 def ensure_calendar_session_for_activity(session: Session, activity: Activity) -> CalendarSession:

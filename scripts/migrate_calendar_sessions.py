@@ -7,6 +7,13 @@ constraint on activity_id.
 Supports both SQLite and PostgreSQL.
 """
 
+import sys
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from loguru import logger
 from sqlalchemy import text
 
@@ -122,9 +129,6 @@ def migrate_calendar_sessions() -> None:
         # Check if activity_id column exists
         if not _column_exists(conn, "calendar_sessions", "activity_id"):
             logger.info("Adding activity_id column to calendar_sessions table...")
-            float_type = "DOUBLE PRECISION" if _is_postgresql() else "REAL"
-            string_type = "VARCHAR" if _is_postgresql() else "VARCHAR"
-            datetime_type = "TIMESTAMP" if _is_postgresql() else "DATETIME"
 
             if _is_postgresql():
                 conn.execute(

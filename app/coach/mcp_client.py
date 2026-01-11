@@ -174,9 +174,9 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
 
     # Phase 6C: Reduced retries for heavy operations (planning, etc.)
     # Retries make sense for idempotent reads, not for heavy planners
-    # Set to 0 for planning tools, 1 for others
+    # Planning tools: 1 attempt (no retries). Other tools: 2 attempts (1 retry).
     is_planning_tool = tool_name in {"plan_race_build", "plan_season", "plan_week"}
-    max_retries = 0 if is_planning_tool else 1
+    max_retries = 1 if is_planning_tool else 2
 
     with trace(
         name=f"tool.{tool_name}",
@@ -358,6 +358,11 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
 
                 # Success - return result
                 result = data["result"]
+                if result is None:
+                    _raise_mcp_error(
+                        "INVALID_RESPONSE",
+                        f"Tool {tool_name} returned None (invalid MCP behavior)",
+                    )
                 result_keys = list(result.keys()) if isinstance(result, dict) else None
                 logger.debug(
                     "MCP: Tool call successful",

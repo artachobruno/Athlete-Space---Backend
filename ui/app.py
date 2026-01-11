@@ -56,8 +56,15 @@ def submit_coach_message() -> None:
         ).json()
 
     reply = resp.get("reply") or resp.get("message") or resp.get("output") or "No response from coach."
+    show_plan = resp.get("show_plan", False)
+    plan_items = resp.get("plan_items")
 
-    st_any.session_state.coach_chat.append({"role": "assistant", "content": reply})
+    st_any.session_state.coach_chat.append({
+        "role": "assistant",
+        "content": reply,
+        "show_plan": show_plan,
+        "plan_items": plan_items,
+    })
 
     st_any.session_state.coach_input = ""
 
@@ -362,6 +369,12 @@ with side:
     for msg in st_any.session_state.coach_chat:
         speaker = "You" if msg["role"] == "user" else "Virtus"
         st_any.markdown(f"**{speaker}**  \n{msg['content']}")
+
+        # Display plan items as todo list if show_plan is True
+        if msg.get("show_plan") and msg.get("plan_items"):
+            st_any.markdown("**Plan:**")
+            for item in msg["plan_items"]:
+                st_any.markdown(f"- {item}")
 
     st_any.text_input(
         "Ask about training, fatigue, or race prep",

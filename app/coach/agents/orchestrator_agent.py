@@ -140,9 +140,18 @@ async def _compute_missing_slots_for_decision(
         conversation_slot_state=conversation_slot_state,
     )
 
-    # STEP 3: Merge conversation slot state + new slots (additive merge)
-    # New slots override existing ones only if they have non-None values
+    # STEP 3: Merge conversation slot state + LLM filled_slots + new slots (additive merge)
+    # Priority: conversation_slot_state < LLM filled_slots < new extracted slots
+    # Each source only overrides if it has non-None values
     merged_slots = conversation_slot_state.copy()
+
+    # Merge LLM's filled_slots output (if present) - LLM has conversation context
+    if decision.filled_slots:
+        for key, value in decision.filled_slots.items():
+            if value is not None:  # Only update with non-None values
+                merged_slots[key] = value
+
+    # Merge newly extracted slots from current message (highest priority)
     for key, value in new_slots.items():
         if value is not None:  # Only update with non-None values
             merged_slots[key] = value
@@ -151,6 +160,7 @@ async def _compute_missing_slots_for_decision(
         "Merged slot state",
         conversation_id=conversation_id,
         previous_state=conversation_slot_state,
+        llm_filled_slots=decision.filled_slots,
         new_slots=new_slots,
         merged_slots=merged_slots,
     )

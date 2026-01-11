@@ -774,10 +774,25 @@ class CoachActionExecutor:
             slots=slots,
             slots_keys=list(slots.keys()) if slots else [],
             slots_count=len(slots) if slots else 0,
+            slots_values={k: str(v) for k, v in (slots.items() if slots else [])},
             intent=decision.intent,
             horizon=decision.horizon,
+            should_execute=decision.should_execute,
             conversation_id=conversation_id,
         )
+
+        # Defensive check: if filled_slots is None or empty, fall back to clarification
+        if not slots:
+            logger.error(
+                "ActionExecutor: filled_slots is empty despite should_execute=True - falling back to clarification",
+                tool=tool_name,
+                should_execute=decision.should_execute,
+                target_action=decision.target_action,
+                conversation_id=conversation_id,
+            )
+            # Fall back to asking for required slots
+            required_slots = REQUIRED_SLOTS.get(tool_name, [])
+            return generate_clarification_for_missing_slots(tool_name, required_slots)
 
         # Final validation using filled_slots (should already be validated, but double-check)
         logger.debug(
@@ -795,12 +810,18 @@ class CoachActionExecutor:
         )
         if not can_execute:
             # This should not happen if orchestrator logic is correct, but fail-safe check
+            # Log detailed diagnostic information
             logger.error(
                 "Slot validation failed despite should_execute=True - this should not happen",
                 tool=tool_name,
                 missing_slots=missing_slots,
                 filled_slots=slots,
+                filled_slots_keys=list(slots.keys()) if slots else [],
+                filled_slots_values={k: str(v) if v is not None else "None" for k, v in (slots.items() if slots else [])},
+                should_execute=decision.should_execute,
+                target_action=decision.target_action,
                 conversation_id=conversation_id,
+                exc_info=True,
             )
             # Return clarification without side effects
             return generate_clarification_for_missing_slots(tool_name, missing_slots)

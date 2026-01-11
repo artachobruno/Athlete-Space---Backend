@@ -4,8 +4,10 @@ Handles all communication with MCP servers for database and filesystem operation
 """
 
 import asyncio
+import inspect
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -45,13 +47,28 @@ MCP_TOOL_ROUTES: dict[str, str] = {
 
 # HTTP client with timeout
 HTTP_TIMEOUT = 30.0
+
+# Tool-specific timeouts (in seconds)
+# Long-running tools that involve LLM calls need more time
+TOOL_TIMEOUTS: dict[str, float] = {
+    "plan_race_build": 300.0,  # 5 minutes for LLM-based race plan generation
+    "plan_season": 300.0,  # 5 minutes for season planning
+    "plan_week": 180.0,  # 3 minutes for week planning
+    "run_analysis": 120.0,  # 2 minutes for analysis
+}
+
 _client: httpx.AsyncClient | None = None
 
 
 def _get_client() -> httpx.AsyncClient:
-    """Get or create HTTP client, handling event loop closure."""
+    """Get or create HTTP client, handling event loop closure.
+
+    Client is created with a default timeout that can be overridden per-request.
+    Per-request timeouts from TOOL_TIMEOUTS take precedence.
+    """
     global _client
     if _client is None or _client.is_closed:
+        # Set reasonable default timeout - per-request timeouts will override
         _client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
     return _client
 
@@ -89,6 +106,30 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
     Raises:
         MCPError: If tool call fails after retries
     """
+    # Get caller information for diagnostic logging
+    frame = inspect.currentframe()
+    caller_frame = frame.f_back if frame else None
+    caller_info = "unknown"
+    if caller_frame:
+        caller_file = caller_frame.f_code.co_filename
+        caller_line = caller_frame.f_lineno
+        caller_func = caller_frame.f_code.co_name
+        # Extract just the file name, not full path
+        caller_file = Path(caller_file).name
+        caller_info = f"{caller_file}:{caller_line}:{caller_func}"
+
+    # Get timeout for this tool
+    request_timeout = TOOL_TIMEOUTS.get(tool_name, HTTP_TIMEOUT)
+
+    # Critical diagnostic log - shows WHO is calling and WHAT timeout
+    logger.warning(
+        f"MCP CALL → tool={tool_name}, phase={caller_info}, timeout={request_timeout}s",
+        tool=tool_name,
+        caller=caller_info,
+        timeout=request_timeout,
+        argument_keys=list(arguments.keys()) if isinstance(arguments, dict) else None,
+    )
+
     logger.debug(
         "MCP: Starting tool call",
         tool=tool_name,
@@ -122,12 +163,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
         MCP_CALL_LOG.append(tool_name)
         logger.debug("MCP: Test mode - tool logged to MCP_CALL_LOG", tool=tool_name)
 
-    logger.debug(
-        "MCP: Preparing HTTP request",
-        tool=tool_name,
-        endpoint=endpoint,
-        arguments=arguments,
-    )
+    # Note: request_timeout already set above in diagnostic logging
 
     # Instrument tool execution with tracing
     # Note: conversation_id and user_id are not available in call_tool signature,
@@ -150,6 +186,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 attempt=attempt + 1,
                 max_retries=max_retries,
                 endpoint=endpoint,
+                timeout=request_timeout,
             )
 
             try:
@@ -166,6 +203,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     tool=tool_name,
                     attempt=attempt + 1,
                     endpoint=endpoint,
+                    timeout=request_timeout,
                     payload_keys=["tool", "arguments"],
                 )
 
@@ -175,6 +213,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                         "tool": tool_name,
                         "arguments": arguments,
                     },
+                    timeout=request_timeout,
                 )
 
                 logger.debug(
@@ -330,7 +369,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     tool=tool_name,
                     attempt=attempt + 1,
                     max_retries=max_retries,
-                    timeout=HTTP_TIMEOUT,
+                    timeout=request_timeout,
                     error=str(e),
                 )
                 if attempt < max_retries - 1:
@@ -345,12 +384,13 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     logger.warning(
                         f"MCP tool timeout: {tool_name}. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
                         tool=tool_name,
-                        timeout=HTTP_TIMEOUT,
+                        timeout=request_timeout,
                     )
                     await asyncio.sleep(wait_time)
                     continue
-                logger.error(f"MCP tool timeout after {max_retries} attempts: {tool_name}", tool=tool_name, timeout=HTTP_TIMEOUT)
-                raise MCPError("TIMEOUT", f"Tool call to {tool_name} timed out after {max_retries} attempts") from e
+                logger.error(f"MCP tool timeout after {max_retries} attempts: {tool_name}", tool=tool_name, timeout=request_timeout)
+                timeout_msg = f"Tool call to {tool_name} timed out after {max_retries} attempts (timeout: {request_timeout}s)"
+                raise MCPError("TIMEOUT", timeout_msg) from e
             except httpx.HTTPStatusError as e:
                 status_code = e.response.status_code if e.response else None
                 logger.debug(

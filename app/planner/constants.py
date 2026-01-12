@@ -20,8 +20,5 @@ SUPPORTED_RACE_DISTANCES = {
     "10_mile",
     "half_marathon",
     "marathon",
-    "50k",
-    "50m",
-    "100k",
-    "100m",
+    "ultra",
 }

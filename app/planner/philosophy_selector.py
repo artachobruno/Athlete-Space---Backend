@@ -21,7 +21,7 @@ from app.planner.models import PhilosophySelection, PlanContext
 from app.planner.philosophy_loader import PhilosophyDoc, load_philosophies
 
 # Ultra distances
-ULTRA_DISTANCES = {"50k", "50m", "100k", "100m"}
+ULTRA_DISTANCES = {"ultra"}
 
 
 def _determine_domain(race_distance: RaceDistance | None) -> str:
@@ -61,10 +61,7 @@ def _normalize_race_type_for_matching(race_value: str) -> list[str]:
         "5k": ["5k", "5K"],
         "10k": ["10k", "10K"],
         "marathon": ["marathon"],
-        "50k": ["50k", "ultra"],
-        "50m": ["50m", "ultra"],
-        "100k": ["100k", "ultra"],
-        "100m": ["100m", "ultra"],
+        "ultra": ["ultra", "50k", "50m", "100k", "100m"],
     }
 
     return mapping.get(race_value, [race_value])

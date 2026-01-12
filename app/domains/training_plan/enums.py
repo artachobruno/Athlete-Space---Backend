@@ -31,10 +31,7 @@ class RaceDistance(StrEnum):
     TEN_MILE = "10_mile"
     HALF_MARATHON = "half_marathon"
     MARATHON = "marathon"
-    ULTRA_50K = "50k"
-    ULTRA_50M = "50m"
-    ULTRA_100K = "100k"
-    ULTRA_100M = "100m"
+    ULTRA = "ultra"
 
 
 # -----------------------------

@@ -146,7 +146,7 @@ async def test_pipeline_ultra_distance(
         plan_type=PlanType.RACE,
         intent=TrainingIntent.BUILD,
         weeks=20,
-        race_distance=RaceDistance.ULTRA_100K,
+        race_distance=RaceDistance.ULTRA,
         target_date="2025-08-01",
     )
 

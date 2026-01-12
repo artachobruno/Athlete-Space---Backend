@@ -31,6 +31,10 @@ _executor_run_timestamps: deque[float] = deque(maxlen=1000)
 _plan_build_timestamps: deque[float] = deque(maxlen=100)
 _tool_call_timestamps: deque[float] = deque(maxlen=1000)
 
+# Persistence timestamps for health tracking (last 15 minutes = 900 seconds)
+_persistence_saved_timestamps: deque[float] = deque(maxlen=1000)
+_persistence_degraded_timestamps: deque[float] = deque(maxlen=1000)
+
 # Lock for thread safety
 _traffic_lock = threading.Lock()
 
@@ -74,6 +78,20 @@ def record_tool_call() -> None:
     with _traffic_lock:
         TRAFFIC_COUNTERS["tool_calls"] += 1
         _tool_call_timestamps.append(now)
+
+
+def record_persistence_saved() -> None:
+    """Record a successful persistence operation."""
+    now = time.time()
+    with _traffic_lock:
+        _persistence_saved_timestamps.append(now)
+
+
+def record_persistence_degraded() -> None:
+    """Record a degraded persistence operation."""
+    now = time.time()
+    with _traffic_lock:
+        _persistence_degraded_timestamps.append(now)
 
 
 def _count_recent_timestamps(timestamps: deque[float], window_seconds: int) -> int:
@@ -170,6 +188,10 @@ def get_traffic_snapshot() -> TrafficSnapshot:
     active_24h = _get_active_users_24h()
     concurrent = _get_concurrent_sessions()
 
+    # Persistence health (last 15 minutes = 900 seconds)
+    persistence_saved_15m = _count_recent_timestamps(_persistence_saved_timestamps, 900)
+    persistence_degraded_15m = _count_recent_timestamps(_persistence_degraded_timestamps, 900)
+
     return TrafficSnapshot(
         active_users_15m=active_15m,
         active_users_24h=active_24h,
@@ -178,4 +200,6 @@ def get_traffic_snapshot() -> TrafficSnapshot:
         executor_runs_per_minute=float(executor_rpm),
         plan_builds_per_hour=plan_builds_ph,
         tool_calls_per_minute=tool_calls_rpm,
+        persistence_saved_last_15m=persistence_saved_15m,
+        persistence_degraded_last_15m=persistence_degraded_15m,
     )

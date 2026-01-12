@@ -226,19 +226,22 @@ async def add_workout(
             }
 
             # Save session via MCP
-            saved_count = await save_planned_sessions(
+            result = await save_planned_sessions(
                 user_id=user_id,
                 athlete_id=athlete_id,
                 sessions=[session_data],
                 plan_type="single",
                 plan_id=None,
             )
+            saved_count_raw = result.get("saved_count", 0)
+            saved_count = int(saved_count_raw) if isinstance(saved_count_raw, (int, str)) else 0
+            persistence_status = result.get("persistence_status", "degraded")
 
-            if saved_count > 0:
+            if persistence_status == "saved" and saved_count > 0:
                 date_str = workout_date.strftime("%B %d, %Y")
                 recommendation += f"\n\n✅ Session saved to your calendar for {date_str}!"
             else:
-                recommendation += "\n\nNote: Session may already exist in your calendar."
+                recommendation += "\n\nNote: Session may already exist in your calendar or calendar is temporarily unavailable."
 
         except Exception as e:
             logger.error(f"Error saving workout to calendar: {e}", exc_info=True)

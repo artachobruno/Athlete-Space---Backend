@@ -153,23 +153,17 @@ def _raise_invalid_output_type_error(specs: list[SessionSpec] | object) -> None:
 
 
 async def plan_week_llm(input: PlanWeekInput) -> list[SessionSpec]:
-    """Generate week plan via LLM.
+    """LEGACY PLANNER DISABLED - Use plan_race_simple from app.planner.plan_race_simple instead.
 
-    Phase 2: Uses WeekSkeleton internally to ensure structural invariants.
-    LLM generates details (distance, pace, description) but must match skeleton structure.
-
-    Includes retry logic for structural validation failures.
-
-    Args:
-        input: PlanWeekInput with week parameters
-
-    Returns:
-        List of SessionSpec objects for the week
+    This function is hard-disabled as part of B9 to remove legacy recursive/repair-based planner.
+    All planning must flow through the new linear pipeline only.
 
     Raises:
-        RuntimeError: If generation fails after all retries
-        ValueError: If validation fails after all retries (non-retryable structural errors)
+        RuntimeError: Always, to prevent accidental usage
     """
+    raise RuntimeError(
+        "Legacy planner path disabled. Use plan_race_simple from app.planner.plan_race_simple (planner v2)."
+    )
     # Phase 2: Generate skeleton deterministically before LLM generation
     skeleton = generate_week_skeleton(input)
 

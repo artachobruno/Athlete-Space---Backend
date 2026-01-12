@@ -10,7 +10,8 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Activity, StravaAccount
+from app.db.models import Activity, StravaAccount, UserSettings
+from app.metrics.effort_service import compute_activity_effort
 from app.state.models import ActivityRecord
 
 
@@ -86,6 +87,7 @@ def save_activity_record(
 
     if existing:
         return _update_existing_activity(
+            session=session,
             existing=existing,
             record=record,
             raw_json=raw_json,
@@ -106,6 +108,7 @@ def save_activity_record(
 
 def _update_existing_activity(
     *,
+    session: Session,
     existing: Activity,
     record: ActivityRecord,
     raw_json: dict | None,
@@ -128,6 +131,8 @@ def _update_existing_activity(
         existing.raw_json["average_heartrate"] = record.avg_hr
     if streams_data is not None:
         existing.streams_data = streams_data
+        # Compute effort metrics when streams are updated
+        _compute_and_persist_effort(session, existing)
     return existing
 
 
@@ -214,8 +219,39 @@ def _create_new_activity(
         logger.debug("[SAVE_ACTIVITIES] Activity confirmed in session.new")
     else:
         logger.warning("[SAVE_ACTIVITIES] Activity NOT in session.new after add!")
+    # Compute effort metrics if streams data is available
+    if streams_data is not None:
+        _compute_and_persist_effort(session, activity)
     logger.info(f"[SAVE_ACTIVITIES] Added new activity: {strava_id} for user {user_id}")
     return activity
+
+
+def _compute_and_persist_effort(session: Session, activity: Activity) -> None:
+    """Compute and persist effort metrics for an activity.
+
+    Args:
+        session: Database session
+        activity: Activity record
+    """
+    try:
+        # Get user settings for threshold configuration
+        user_settings = session.query(UserSettings).filter_by(user_id=activity.user_id).first()
+
+        # Compute effort metrics
+        normalized_effort, effort_source, intensity_factor = compute_activity_effort(activity, user_settings)
+
+        # Persist to activity
+        activity.normalized_power = normalized_effort
+        activity.effort_source = effort_source
+        activity.intensity_factor = intensity_factor
+
+        if normalized_effort is not None:
+            logger.debug(
+                f"[SAVE_ACTIVITIES] Computed effort for activity {activity.id}: "
+                f"normalized_effort={normalized_effort}, source={effort_source}, IF={intensity_factor}"
+            )
+    except Exception as e:
+        logger.warning(f"[SAVE_ACTIVITIES] Failed to compute effort for activity {activity.id}: {e}")
 
 
 def save_activity_records(session: Session, records: list[ActivityRecord]) -> int:

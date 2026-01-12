@@ -19,6 +19,7 @@ class CoachChatResponse(BaseModel):
     response_type: ResponseType
     show_plan: bool = False
     plan_items: list[str] | None = None
+    metadata: dict | None = None
 
 
 class ProgressEventResponse(BaseModel):

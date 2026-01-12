@@ -6,9 +6,6 @@ from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.utils.date_extraction import extract_dates_from_text
 from app.coach.utils.llm_client import CoachLLMClient
 
-
-
-
 # Cache to prevent duplicate calls within a short time window
 _recent_calls: dict[str, datetime] = {}
 
@@ -280,28 +277,34 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
                 user_id=user_id,
                 athlete_id=athlete_id,
             )
-            saved_count = await save_planned_sessions(
+            result = await save_planned_sessions(
                 user_id=user_id,
                 athlete_id=athlete_id,
                 sessions=sessions,
                 plan_type="season",
                 plan_id=plan_id,
             )
+            saved_count_raw = result.get("saved_count", 0)
+            saved_count = int(saved_count_raw) if isinstance(saved_count_raw, (int, str)) else 0
+            persistence_status = result.get("persistence_status", "degraded")
+
             logger.debug(
                 "plan_season: save_planned_sessions completed",
                 plan_id=plan_id,
                 saved_count=saved_count,
+                persistence_status=persistence_status,
                 expected_count=len(sessions),
                 user_id=user_id,
                 athlete_id=athlete_id,
             )
 
-            if saved_count > 0:
+            if persistence_status == "saved" and saved_count > 0:
                 logger.info(f"Successfully saved {saved_count} planned sessions for season plan")
             else:
                 logger.warning(
                     "Season plan generated but NOT persisted (MCP down) — returning plan anyway",
                     plan_id=plan_id,
+                    persistence_status=persistence_status,
                     expected_count=len(sessions),
                 )
 

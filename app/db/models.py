@@ -149,6 +149,9 @@ class Activity(Base):
     source: Mapped[str] = mapped_column(String, nullable=False, default="strava")
     tss: Mapped[float | None] = mapped_column(Float, nullable=True)
     tss_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    normalized_power: Mapped[float | None] = mapped_column(Float, nullable=True)
+    effort_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    intensity_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
@@ -556,6 +559,14 @@ class PlannedSession(Base):
     plan_type: Mapped[str] = mapped_column(String, nullable=False)  # "race" or "season"
     plan_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # Reference to race/season plan
     week_number: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Week in the plan
+    session_order: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Order within day (0-based, for idempotency)
+    phase: Mapped[str | None] = mapped_column(String, nullable=True)  # Training phase: "build" or "taper"
+    source: Mapped[str] = mapped_column(String, nullable=False, default="planner_v2")  # Source system identifier
+    philosophy_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Training philosophy ID (e.g., "daniels")
+    template_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Session template ID
+    session_type: Mapped[str | None] = mapped_column(String, nullable=True)  # Session type: easy, threshold, long, etc.
+    distance_mi: Mapped[float | None] = mapped_column(Float, nullable=True)  # Distance in miles
+    tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)  # Session tags
 
     # Status tracking
     status: Mapped[str] = mapped_column(String, nullable=False, default="planned")  # planned, completed, skipped, cancelled
@@ -575,6 +586,14 @@ class PlannedSession(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "athlete_id",
+            "plan_id",
+            "date",
+            "session_order",
+            name="uq_planned_sessions_user_athlete_plan_date_order",
+        ),
         Index("idx_planned_sessions_user_date", "user_id", "date"),  # Common query: user sessions by date range
     )
 
@@ -720,6 +739,11 @@ class UserSettings(Base):
     injury_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     consistency: Mapped[str | None] = mapped_column(String, nullable=True)
     goal: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Threshold configuration (for IF and TSS computation)
+    ftp_watts: Mapped[float | None] = mapped_column(Float, nullable=True)
+    threshold_pace_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    threshold_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Privacy settings
     profile_visibility: Mapped[str | None] = mapped_column(String, nullable=True)

@@ -121,7 +121,7 @@ def session_plan_to_dict(
     return session_dict
 
 
-async def plan_race_build_new(
+def plan_race_build_new(
     race_date: datetime,
     distance: str,
     user_id: str,
@@ -130,86 +130,15 @@ async def plan_race_build_new(
     start_date: datetime | None = None,
     progress_callback: Callable[[int, int, str], Awaitable[None]] | None = None,
 ) -> tuple[list[dict], int]:
-    """Generate race plan using hierarchical, compositional approach.
+    """LEGACY PLANNER DISABLED - Use plan_race_simple from app.planner.plan_race_simple instead.
 
-    Args:
-        race_date: Race date
-        distance: Race distance
-        start_date: Training start date (optional, defaults to 16 weeks before race)
-        user_id: User ID
-        athlete_id: Athlete ID
-        progress_callback: Optional async callback function(week_number, total_weeks, phase) for progress tracking
+    This function is hard-disabled as part of B9 to remove legacy recursive/repair-based planner.
+    All planning must flow through the new linear pipeline only.
 
-    Returns:
-        Tuple of (list of session dictionaries, total weeks)
+    Raises:
+        RuntimeError: Always, to prevent accidental usage
     """
-    if start_date is None:
-        start_date = race_date - timedelta(weeks=16)
-
-    total_weeks = int((race_date.date() - start_date.date()).days / 7)
-    if total_weeks < 4:
-        total_weeks = 16
-        start_date = race_date - timedelta(weeks=16)
-
-    weekly_volumes = calculate_weekly_volumes(distance, total_weeks)
-
-    sport = Sport.RUN
-
-    all_sessions = []
-
-    for week_number in range(1, total_weeks + 1):
-        phase = compute_phase(week_number, total_weeks)
-        volume = weekly_volumes[week_number - 1]
-
-        # Emit progress event for this week
-        if progress_callback:
-            await progress_callback(week_number, total_weeks, phase)
-
-        logger.info(
-            "plan_race_build_new: Planning week",
-            week_number=week_number,
-            total_weeks=total_weeks,
-            phase=phase,
-            percentage=round((week_number / total_weeks) * 100, 1),
-            total_volume_km=volume["total"],
-            long_run_km=volume["long"],
-        )
-
-        week_start = start_date + timedelta(weeks=week_number - 1)
-        monday = week_start - timedelta(days=week_start.weekday())
-
-        week_input = PlanWeekInput(
-            week_number=week_number,
-            phase=phase,
-            total_volume_km=volume["total"],
-            long_run_km=volume["long"],
-            days_available=[0, 1, 2, 3, 4, 5, 6],
-            sport=sport,
-            athlete_context=None,
-        )
-
-        week_specs = await plan_week_llm(week_input)
-
-        for spec in week_specs:
-            session_date = monday + timedelta(days=spec.day_of_week)
-            session_date = datetime.combine(
-                session_date.date(),
-                datetime.min.time(),
-            ).replace(tzinfo=timezone.utc)
-
-            session_plan = await plan_session_llm(spec)
-            session_dict = session_plan_to_dict(session_plan, spec, session_date)
-            all_sessions.append(session_dict)
-
-    logger.info(
-        "plan_race_build_new: Generated race plan",
-        distance=distance,
-        race_date=race_date.isoformat(),
-        start_date=start_date.isoformat(),
-        total_weeks=total_weeks,
-        total_sessions=len(all_sessions),
-        user_id=user_id,
-        athlete_id=athlete_id,
+    _ = race_date, distance, user_id, athlete_id, start_date, progress_callback
+    raise RuntimeError(
+        "Legacy planner path disabled. Use plan_race_simple from app.planner.plan_race_simple (planner v2)."
     )
-
-    return all_sessions, total_weeks

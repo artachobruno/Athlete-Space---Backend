@@ -9,9 +9,11 @@ from typing import Any, Literal, cast
 
 from loguru import logger
 
+from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.canonical_plan import CanonicalPlan, PlanSession
 from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.utils.llm_client import CoachLLMClient
+from app.internal.ops.traffic import record_persistence_degraded, record_persistence_saved
 
 
 async def plan_tool(
@@ -22,7 +24,7 @@ async def plan_tool(
     activity_state: dict | None = None,
     user_id: str | None = None,
     athlete_id: int | None = None,
-) -> str:
+) -> dict[str, str | dict]:
     """Unified planning tool for all horizons.
 
     This tool handles:
@@ -38,7 +40,9 @@ async def plan_tool(
         athlete_id: Athlete ID for saving
 
     Returns:
-        Response message with plan details
+        Dictionary with:
+            - message: Response message with plan details
+            - metadata: Persistence metadata (persistence_status, saved_sessions)
     """
     logger.debug(
         "unified_plan: Starting plan_tool",
@@ -61,11 +65,17 @@ async def plan_tool(
     logger.debug("unified_plan: Validating inputs", horizon=horizon)
     if horizon not in {"day", "week", "season"}:
         logger.debug("unified_plan: Invalid horizon", horizon=horizon)
-        return f"[CLARIFICATION] Invalid horizon: {horizon}. Must be 'day', 'week', or 'season'."
+        return {
+            "message": f"[CLARIFICATION] Invalid horizon: {horizon}. Must be 'day', 'week', or 'season'.",
+            "metadata": {"persistence_status": "degraded", "saved_sessions": 0},
+        }
 
     if not user_id or not athlete_id:
         logger.debug("unified_plan: Missing user_id or athlete_id", has_user_id=bool(user_id), has_athlete_id=athlete_id is not None)
-        return "[CLARIFICATION] user_id and athlete_id are required"
+        return {
+            "message": "[CLARIFICATION] user_id and athlete_id are required",
+            "metadata": {"persistence_status": "degraded", "saved_sessions": 0},
+        }
 
     # Calculate date range based on horizon
     logger.debug("unified_plan: Calculating date range", horizon=horizon, has_current_plan=bool(current_plan))
@@ -202,28 +212,36 @@ async def plan_tool(
         user_id=user_id,
         athlete_id=athlete_id,
     )
-    saved_count = await save_planned_sessions(
+    result = await save_planned_sessions(
         user_id=user_id,
         athlete_id=athlete_id,
         sessions=sessions_dict,
         plan_type=plan_type,
         plan_id=None,
     )
+    saved_count_raw = result.get("saved_count", 0)
+    saved_count = int(saved_count_raw) if isinstance(saved_count_raw, (int, str)) else 0
+    persistence_status = result.get("persistence_status", "degraded")
+
     logger.debug(
         "unified_plan: save_planned_sessions completed",
         horizon=horizon,
         saved_count=saved_count,
+        persistence_status=persistence_status,
         expected_count=len(sessions_dict),
     )
 
-    if saved_count > 0:
+    if persistence_status == "saved" and saved_count > 0:
         logger.info(f"Saved {saved_count} sessions for {horizon} plan")
+        record_persistence_saved()
     else:
         logger.warning(
             "Unified plan generated but NOT persisted (MCP down) — returning plan anyway",
             horizon=horizon,
+            persistence_status=persistence_status,
             expected_count=len(sessions_dict),
         )
+        record_persistence_degraded()
 
     # Generate response
     logger.debug(
@@ -232,13 +250,25 @@ async def plan_tool(
         saved_count=saved_count,
         session_count=len(plan.sessions),
     )
-    response = _generate_plan_response(plan, saved_count=saved_count)
+    response_message = _generate_plan_response(plan, saved_count=saved_count)
     logger.debug(
         "unified_plan: Plan response generated",
         horizon=horizon,
-        response_length=len(response),
+        response_length=len(response_message),
     )
-    return response
+
+    # Include persistence metadata in response
+    response_metadata = {
+        "persistence_status": persistence_status,
+        "saved_sessions": saved_count,
+    }
+
+    # Return dict with message and metadata for structured access
+    # Maintain backward compatibility by also supporting string return
+    return {
+        "message": response_message,
+        "metadata": response_metadata,
+    }
 
 
 def _calculate_date_range(horizon: str, today: date, current_plan: CanonicalPlan | None) -> tuple[date, date]:
@@ -430,8 +460,15 @@ def _generate_plan_response(plan: CanonicalPlan, saved_count: int) -> str:
         save_status = f"• **{saved_count} training sessions** added to your calendar\n"
         calendar_note = "Your planned sessions are now available in your calendar!"
     else:
-        save_status = f"• **{len(plan.sessions)} training sessions** generated (not saved - calendar unavailable)\n"
-        calendar_note = "⚠️ **Note:** Your training plan was generated successfully, but we couldn't save it to your calendar right now. Please try again later or contact support."
+        save_status = (
+            f"• **{len(plan.sessions)} training sessions** generated "
+            f"(not saved - calendar unavailable)\n"
+        )
+        calendar_note = (
+            "⚠️ **Note:** Your training plan was generated successfully, "
+            "but we couldn't save it to your calendar right now. "
+            "Please try again later or contact support."
+        )
 
     return (
         f"✅ **{horizon_name.capitalize()} Training Plan Created!**\n\n"

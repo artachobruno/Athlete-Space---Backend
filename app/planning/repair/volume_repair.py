@@ -64,23 +64,18 @@ def repair_week_volume(
     specs: list[SessionSpec],
     target_km: float,
 ) -> list[SessionSpec]:
-    """Repair week volume by adjusting adjustable sessions.
+    """LEGACY REPAIR LOGIC DISABLED - Volume repair is not allowed in planner v2.
 
-    Strategy:
-    1. Scale adjustable sessions (easy, recovery) proportionally
-    2. Clamp long runs to ±5% of original
-    3. Apply final exact correction to largest adjustable session
-
-    Args:
-        specs: List of SessionSpec objects (will be modified in place)
-        target_km: Target weekly volume in kilometers
-
-    Returns:
-        List of repaired SessionSpec objects (same objects, modified)
+    This function is hard-disabled as part of B9. Volume is locked in B4.
+    If volume is wrong, that is a hard failure, not a repair case.
 
     Raises:
-        RepairImpossibleError: If repair is impossible (no adjustable sessions)
+        RuntimeError: Always, to prevent accidental usage
     """
+    raise RuntimeError(
+        "Legacy volume repair disabled. Use plan_race_simple from app.planner.plan_race_simple (planner v2). "
+        "Volume is locked in B4 - if wrong, that is a hard failure."
+    )
     actual = compute_week_volume(specs)
 
     if volume_within_tolerance(actual, target_km, tolerance=0.05):

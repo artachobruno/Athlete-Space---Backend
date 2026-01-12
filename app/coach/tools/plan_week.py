@@ -279,15 +279,18 @@ async def plan_week(
         week_end=sunday.date().isoformat(),
     )
 
-    saved_count = await save_planned_sessions(
+    result = await save_planned_sessions(
         user_id=user_id,
         athlete_id=athlete_id,
         sessions=sessions,
         plan_type="weekly",
         plan_id=None,
     )
+    saved_count_raw = result.get("saved_count", 0)
+    saved_count = int(saved_count_raw) if isinstance(saved_count_raw, (int, str)) else 0
+    persistence_status = result.get("persistence_status", "degraded")
 
-    if saved_count > 0:
+    if persistence_status == "saved" and saved_count > 0:
         logger.info(
             "B8: Planned sessions saved successfully",
             saved_count=saved_count,
@@ -299,9 +302,17 @@ async def plan_week(
         logger.warning(
             "B8: Weekly plan generated but NOT persisted (MCP down) — returning plan anyway",
             session_count=len(sessions),
+            persistence_status=persistence_status,
         )
-        save_status = f"• **{len(sessions)} training sessions** generated (not saved - calendar unavailable)\n"
-        calendar_message = "⚠️ **Note:** Your training plan was generated successfully, but we couldn't save it to your calendar right now. Please try again later or contact support."
+        save_status = (
+            f"• **{len(sessions)} training sessions** generated "
+            f"(not saved - calendar unavailable)\n"
+        )
+        calendar_message = (
+            "⚠️ **Note:** Your training plan was generated successfully, "
+            "but we couldn't save it to your calendar right now. "
+            "Please try again later or contact support."
+        )
 
     return (
         f"✅ **Weekly Training Plan Created!**\n\n"

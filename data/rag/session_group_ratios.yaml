@@ -1,0 +1,14 @@
+easy:
+  default: 0.45
+
+hard:
+  default: 0.35
+
+long:
+  default: 0.20
+
+race:
+  default: 0.10
+
+rest:
+  default: 0.0

@@ -1,17 +1,13 @@
 """Tests for volume repair engine.
 
-Tests cover:
-- Under-target repair (scales up adjustable sessions)
-- Over-target repair (scales down adjustable sessions)
-- Exact match (no-op)
-- No adjustable sessions (raises error)
-- Long run clamp enforced
+LEGACY TESTS - Volume repair is disabled in B9.
+These tests verify that repair_week_volume raises RuntimeError.
+Utility functions (compute_week_volume, volume_within_tolerance) may still be used.
 """
 
 import pytest
 
 from app.planning.repair.volume_repair import (
-    RepairImpossibleError,
     compute_week_volume,
     repair_week_volume,
     volume_within_tolerance,
@@ -57,8 +53,8 @@ def test_volume_within_tolerance():
     assert volume_within_tolerance(47.0, 50.0, tolerance=0.05) is False
 
 
-def test_repair_under_target():
-    """Test repairing volume when under target (scales up adjustable sessions)."""
+def test_repair_under_target_is_disabled():
+    """Test that repair_week_volume is disabled (B9)."""
     specs = [
         SessionSpec(
             sport=Sport.RUN,
@@ -69,42 +65,16 @@ def test_repair_under_target():
             phase="base",
             week_number=1,
             day_of_week=0,
-        ),
-        SessionSpec(
-            sport=Sport.RUN,
-            session_type=SessionType.LONG,
-            intensity=Intensity.EASY,
-            target_distance_km=20.0,
-            goal="long run",
-            phase="base",
-            week_number=1,
-            day_of_week=5,
-        ),
-        SessionSpec(
-            sport=Sport.RUN,
-            session_type=SessionType.EASY,
-            intensity=Intensity.EASY,
-            target_distance_km=10.0,
-            goal="easy run",
-            phase="base",
-            week_number=1,
-            day_of_week=2,
         ),
     ]
 
     target_km = 50.0
-    repaired = repair_week_volume(specs, target_km)
-
-    final_volume = compute_week_volume(repaired)
-    assert abs(final_volume - target_km) < 0.2
-
-    long_run = next(s for s in repaired if s.session_type == SessionType.LONG)
-    assert long_run.target_distance_km is not None
-    assert abs(long_run.target_distance_km - 20.0) <= 20.0 * 0.05
+    with pytest.raises(RuntimeError, match="Legacy volume repair disabled"):
+        repair_week_volume(specs, target_km)
 
 
-def test_repair_over_target():
-    """Test repairing volume when over target (scales down adjustable sessions)."""
+def test_repair_over_target_is_disabled():
+    """Test that repair_week_volume is disabled (B9)."""
     specs = [
         SessionSpec(
             sport=Sport.RUN,
@@ -116,41 +86,15 @@ def test_repair_over_target():
             week_number=1,
             day_of_week=0,
         ),
-        SessionSpec(
-            sport=Sport.RUN,
-            session_type=SessionType.LONG,
-            intensity=Intensity.EASY,
-            target_distance_km=20.0,
-            goal="long run",
-            phase="base",
-            week_number=1,
-            day_of_week=5,
-        ),
-        SessionSpec(
-            sport=Sport.RUN,
-            session_type=SessionType.EASY,
-            intensity=Intensity.EASY,
-            target_distance_km=15.0,
-            goal="easy run",
-            phase="base",
-            week_number=1,
-            day_of_week=2,
-        ),
     ]
 
     target_km = 40.0
-    repaired = repair_week_volume(specs, target_km)
-
-    final_volume = compute_week_volume(repaired)
-    assert abs(final_volume - target_km) < 0.2
-
-    long_run = next(s for s in repaired if s.session_type == SessionType.LONG)
-    assert long_run.target_distance_km is not None
-    assert abs(long_run.target_distance_km - 20.0) <= 20.0 * 0.05
+    with pytest.raises(RuntimeError, match="Legacy volume repair disabled"):
+        repair_week_volume(specs, target_km)
 
 
-def test_repair_exact_match():
-    """Test repair with exact match (no-op)."""
+def test_repair_exact_match_is_disabled():
+    """Test that repair_week_volume is disabled (B9)."""
     specs = [
         SessionSpec(
             sport=Sport.RUN,
@@ -185,16 +129,12 @@ def test_repair_exact_match():
     ]
 
     target_km = 40.0
-    original_volumes = [s.target_distance_km for s in specs]
-    repaired = repair_week_volume(specs, target_km)
-
-    assert repaired == specs
-    final_volumes = [s.target_distance_km for s in repaired]
-    assert final_volumes == original_volumes
+    with pytest.raises(RuntimeError, match="Legacy volume repair disabled"):
+        repair_week_volume(specs, target_km)
 
 
-def test_repair_no_adjustable_sessions():
-    """Test repair fails when no adjustable sessions available."""
+def test_repair_no_adjustable_sessions_is_disabled():
+    """Test that repair_week_volume is disabled (B9)."""
     specs = [
         SessionSpec(
             sport=Sport.RUN,
@@ -220,12 +160,12 @@ def test_repair_no_adjustable_sessions():
 
     target_km = 50.0
 
-    with pytest.raises(RepairImpossibleError, match="No adjustable sessions"):
+    with pytest.raises(RuntimeError, match="Legacy volume repair disabled"):
         repair_week_volume(specs, target_km)
 
 
-def test_repair_long_run_clamp():
-    """Test that long run distances are clamped to ±5% of original."""
+def test_repair_long_run_clamp_is_disabled():
+    """Test that repair_week_volume is disabled (B9)."""
     specs = [
         SessionSpec(
             sport=Sport.RUN,
@@ -250,18 +190,12 @@ def test_repair_long_run_clamp():
     ]
 
     target_km = 100.0
-    original_long_run = specs[1].target_distance_km
-
-    repaired = repair_week_volume(specs, target_km)
-
-    long_run = next(s for s in repaired if s.session_type == SessionType.LONG)
-    assert long_run.target_distance_km is not None
-    assert long_run.target_distance_km >= original_long_run * 0.95
-    assert long_run.target_distance_km <= original_long_run * 1.05
+    with pytest.raises(RuntimeError, match="Legacy volume repair disabled"):
+        repair_week_volume(specs, target_km)
 
 
-def test_repair_with_recovery_sessions():
-    """Test repair includes recovery sessions as adjustable."""
+def test_repair_with_recovery_sessions_is_disabled():
+    """Test that repair_week_volume is disabled (B9)."""
     specs = [
         SessionSpec(
             sport=Sport.RUN,
@@ -296,14 +230,5 @@ def test_repair_with_recovery_sessions():
     ]
 
     target_km = 50.0
-    repaired = repair_week_volume(specs, target_km)
-
-    final_volume = compute_week_volume(repaired)
-    assert abs(final_volume - target_km) < 0.2
-
-    recovery = next(s for s in repaired if s.session_type == SessionType.RECOVERY)
-    easy = next(s for s in repaired if s.session_type == SessionType.EASY)
-
-    assert recovery.target_distance_km is not None
-    assert easy.target_distance_km is not None
-    assert recovery.target_distance_km != 5.0 or easy.target_distance_km != 10.0
+    with pytest.raises(RuntimeError, match="Legacy volume repair disabled"):
+        repair_week_volume(specs, target_km)

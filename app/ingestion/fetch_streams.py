@@ -19,8 +19,9 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Activity
+from app.db.models import Activity, UserSettings
 from app.integrations.strava.client import StravaClient
+from app.metrics.effort_service import compute_activity_effort
 
 
 def fetch_and_save_streams(
@@ -69,6 +70,22 @@ def fetch_and_save_streams(
         # Update activity with streams data
         activity.streams_data = streams
         session.add(activity)
+
+        # Compute effort metrics after streams are saved
+        try:
+            user_settings = session.query(UserSettings).filter_by(user_id=activity.user_id).first()
+            normalized_effort, effort_source, intensity_factor = compute_activity_effort(activity, user_settings)
+            activity.normalized_power = normalized_effort
+            activity.effort_source = effort_source
+            activity.intensity_factor = intensity_factor
+            if normalized_effort is not None:
+                logger.debug(
+                    f"[FETCH_STREAMS] Computed effort for activity {strava_activity_id}: "
+                    f"normalized_effort={normalized_effort}, source={effort_source}, IF={intensity_factor}"
+                )
+        except Exception as e:
+            logger.warning(f"[FETCH_STREAMS] Failed to compute effort for activity {strava_activity_id}: {e}")
+
         session.commit()
 
         data_points = len(streams.get("time", [])) if streams else 0

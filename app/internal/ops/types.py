@@ -45,6 +45,8 @@ class TrafficSnapshot:
     executor_runs_per_minute: float
     plan_builds_per_hour: int
     tool_calls_per_minute: int
+    persistence_saved_last_15m: int
+    persistence_degraded_last_15m: int
 
 
 @dataclass(frozen=True)

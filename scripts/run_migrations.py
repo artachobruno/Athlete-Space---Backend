@@ -19,6 +19,7 @@ from loguru import logger
 from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_user_id import migrate_activities_user_id
+from scripts.migrate_add_activity_effort_fields import migrate_add_activity_effort_fields
 from scripts.migrate_add_activity_tss import migrate_add_activity_tss
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
@@ -33,6 +34,7 @@ from scripts.migrate_add_profile_health_fields import migrate_add_profile_health
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
+from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
 from scripts.migrate_calendar_sessions import migrate_calendar_sessions
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
@@ -66,6 +68,8 @@ def run_all_migrations() -> None:
         ("activities user_id column", migrate_activities_user_id),
         ("activities streams_data column", migrate_add_streams_data),
         ("activities tss and tss_version columns", migrate_add_activity_tss),
+        ("activities effort computation fields (normalized_power, effort_source, intensity_factor)", migrate_add_activity_effort_fields),
+        ("user_settings threshold configuration fields (ftp_watts, threshold_pace_ms, threshold_hr)", migrate_add_user_threshold_fields),
         ("calendar_sessions table", migrate_calendar_sessions),
         ("daily_summary tables", migrate_daily_summary),
         ("history cursor fields", migrate_history_cursor),

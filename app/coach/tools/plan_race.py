@@ -16,7 +16,7 @@ from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.tools.slot_utils import merge_slots, parse_date_loose
 from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import ConversationProgress
-from app.planning.plan_race import plan_race_build_new
+from app.planner.plan_race_simple import plan_race_simple
 from app.services.llm.model import get_model
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
@@ -34,8 +34,6 @@ def _raise_no_sessions_error() -> None:
 def _raise_invalid_date_type_error(first_date: date | datetime) -> None:
     """Raise error for invalid date type in training plan."""
     raise TypeError(f"Invalid date type in training plan: {type(first_date)}")
-
-
 
 
 class RaceInformation(BaseModel):
@@ -935,7 +933,7 @@ async def create_and_save_plan_new(
                     message=message,
                 )
 
-        sessions, total_weeks = await plan_race_build_new(
+        sessions, total_weeks = await plan_race_simple(
             race_date=race_date,
             distance=distance,
             user_id=user_id,
@@ -980,10 +978,10 @@ async def create_and_save_plan_new(
             plan_id=plan_id,
         )
 
-        # Track persistence status for degraded mode detection
-        saved_count = result
-        persistence_status = "ok" if saved_count > 0 else "degraded"
-        
+        # Extract persistence status from result
+        saved_count = result.get("saved_count", 0)
+        persistence_status = result.get("persistence_status", "degraded")
+
         # Log persistence status for frontend banner, AI dashboard, ops tracking, future retry jobs
         logger.info(
             "Plan persistence status",
@@ -994,8 +992,8 @@ async def create_and_save_plan_new(
             saved_count=saved_count,
             total_sessions=len(sessions),
         )
-        
-        if saved_count == 0:
+
+        if persistence_status == "degraded":
             logger.warning(
                 "MCP save failed — returning plan in degraded mode",
                 user_id=user_id,
@@ -1008,8 +1006,15 @@ async def create_and_save_plan_new(
 
         target_time_str = f"\nTarget time: {target_time}" if target_time else ""
         if saved_count == 0:
-            save_status = f"• **{len(sessions)} training sessions** generated (not saved - calendar unavailable)\n"
-            calendar_note = "⚠️ **Note:** Your training plan was generated successfully, but we couldn't save it to your calendar right now. Please try again later or contact support."
+            save_status = (
+                f"• **{len(sessions)} training sessions** generated "
+                f"(not saved - calendar unavailable)\n"
+            )
+            calendar_note = (
+                "⚠️ **Note:** Your training plan was generated successfully, "
+                "but we couldn't save it to your calendar right now. "
+                "Please try again later or contact support."
+            )
         else:
             save_status = f"• **{saved_count} training sessions** added to your calendar\n"
             calendar_note = "Your planned sessions are now available in your calendar!"
@@ -1046,7 +1051,9 @@ async def create_and_save_plan_new(
             f"The AI coach failed to generate a valid training plan. Please retry. (Error: {type(e).__name__}: {e!s})"
         ) from e
     else:
-        return (success_message, saved_count)
+        saved_count_raw = result.get("saved_count", 0)
+        saved_count_int = int(saved_count_raw) if isinstance(saved_count_raw, (int, str)) else 0
+        return (success_message, saved_count_int)
 
 
 async def plan_race_build(

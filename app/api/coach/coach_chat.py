@@ -283,10 +283,21 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     # Execute action if needed
     reply = await CoachActionExecutor.execute(decision, deps)
 
+    # Extract persistence metadata from structured_data if available
+    metadata: dict | None = None
+    if decision.structured_data and "persistence" in decision.structured_data:
+        persistence_data = decision.structured_data["persistence"]
+        if isinstance(persistence_data, dict):
+            metadata = {
+                "persistence_status": persistence_data.get("persistence_status"),
+                "saved_sessions": persistence_data.get("saved_sessions"),
+            }
+
     return CoachChatResponse(
         intent=decision.intent,
         reply=reply,
         response_type=decision.response_type,
         show_plan=decision.show_plan,
         plan_items=decision.plan_items,
+        metadata=metadata,
     )

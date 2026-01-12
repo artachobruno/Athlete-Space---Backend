@@ -78,12 +78,19 @@ async def run_orchestrated_conversation(
         decision = EXECUTION_GUARD.downgrade_to_no_tool(decision, guard_reason or "unknown")
 
     # Step 3: Execute tool if action=CALL_TOOL
+    plan_metadata: dict | None = None
     if decision.action == "CALL_TOOL" and allowed:
         tool_name = decision.tool_name
         try:
             # Execute unified plan tool
             if tool_name == "plan":
-                response_message = await _execute_plan_tool(decision, user_input, deps, minimal_context)
+                tool_result = await _execute_plan_tool(decision, user_input, deps, minimal_context)
+                # Handle dict return (new format with metadata) or string (backward compatibility)
+                if isinstance(tool_result, dict):
+                    response_message = tool_result.get("message", "")
+                    plan_metadata = tool_result.get("metadata")
+                else:
+                    response_message = tool_result
                 tool_executed = True
                 EXECUTION_GUARD.record_call(tool_name)
             else:
@@ -145,6 +152,11 @@ async def run_orchestrated_conversation(
     # Determine if plan should be shown
     show_plan_value = tool_executed and mapped_horizon in {"week", "season"}
 
+    # Include persistence metadata in structured_data if available
+    structured_data = {"decision": decision.model_dump()}
+    if plan_metadata:
+        structured_data["persistence"] = plan_metadata
+
     return OrchestratorAgentResponse(
         intent=mapped_intent,
         horizon=mapped_horizon,
@@ -154,7 +166,7 @@ async def run_orchestrated_conversation(
         response_type=response_type_value,
         show_plan=show_plan_value,
         plan_items=None,
-        structured_data={"decision": decision.model_dump()},
+        structured_data=structured_data,
         follow_up=None,
     )
 
@@ -190,7 +202,7 @@ async def _execute_plan_tool(
     user_input: str,
     deps: CoachDeps,
     minimal_context: dict,  # noqa: ARG001
-) -> str:
+) -> str | dict:
     """Execute the unified plan tool.
 
     Args:
@@ -200,7 +212,7 @@ async def _execute_plan_tool(
         minimal_context: Minimal context
 
     Returns:
-        Response message from tool
+        Response message from tool (string) or dict with message and metadata
     """
     # Get current plan if this is a revision
     current_plan = None
@@ -220,8 +232,8 @@ async def _execute_plan_tool(
             "confidence": deps.athlete_state.confidence,
         }
 
-    # Execute plan tool
-    return await plan_tool(
+    # Execute plan tool - returns dict with message and metadata
+    result = await plan_tool(
         horizon=decision.horizon,
         user_feedback=user_input,
         current_plan=current_plan,
@@ -229,6 +241,11 @@ async def _execute_plan_tool(
         user_id=deps.user_id,
         athlete_id=deps.athlete_id,
     )
+
+    # Handle both dict (new format) and string (backward compatibility)
+    if isinstance(result, dict):
+        return result
+    return result
 
 
 def _generate_conversational_response(

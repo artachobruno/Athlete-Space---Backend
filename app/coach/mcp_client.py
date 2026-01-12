@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from app.coach.mcp_health import record_mcp_success
 from app.config.settings import settings
 from app.core.observe import trace
 
@@ -174,7 +175,6 @@ async def emit_progress_event_safe(
 async def call_tool_safe(
     tool_name: str,
     arguments: dict[str, Any],
-    timeout: float = 5.0,
 ) -> dict[str, Any] | None:
     """Call an MCP tool with single-attempt, non-blocking logic.
 
@@ -184,11 +184,12 @@ async def call_tool_safe(
     Args:
         tool_name: Name of the tool to call
         arguments: Tool arguments
-        timeout: Request timeout in seconds (default: 5.0)
 
     Returns:
         Tool result dictionary on success, None on failure
     """
+    # Use a short timeout (5 seconds) - fail fast, don't block
+    timeout = 5.0
     try:
         server_url = MCP_TOOL_ROUTES.get(tool_name)
         if not server_url:
@@ -201,38 +202,41 @@ async def call_tool_safe(
         endpoint = f"{server_url}/mcp/tools/call"
         client = _get_client()
 
-        response = await client.post(
-            endpoint,
-            json={
-                "tool": tool_name,
-                "arguments": arguments,
-            },
-            timeout=timeout,
-        )
-
-        response.raise_for_status()
-        data = response.json()
-
-        if "error" in data:
-            error = data["error"]
-            error_code = error.get("code", "UNKNOWN_ERROR")
-            error_message = error.get("message", "Unknown error")
-            logger.error(
-                "Non-fatal MCP failure",
-                tool=tool_name,
-                error_code=error_code,
-                error_message=error_message,
+        async with asyncio.timeout(timeout):
+            response = await client.post(
+                endpoint,
+                json={
+                    "tool": tool_name,
+                    "arguments": arguments,
+                },
+                timeout=timeout,
             )
-            return None
 
-        if "result" not in data:
-            logger.error(
-                "Non-fatal MCP failure - missing result",
-                tool=tool_name,
-            )
-            return None
+            response.raise_for_status()
+            data = response.json()
 
-        return data["result"]
+            if "error" in data:
+                error = data["error"]
+                error_code = error.get("code", "UNKNOWN_ERROR")
+                error_message = error.get("message", "Unknown error")
+                logger.error(
+                    "Non-fatal MCP failure",
+                    tool=tool_name,
+                    error_code=error_code,
+                    error_message=error_message,
+                )
+                return None
+
+            if "result" not in data:
+                logger.error(
+                    "Non-fatal MCP failure - missing result",
+                    tool=tool_name,
+                )
+                return None
+
+            # Record successful MCP call
+            record_mcp_success()
+            return data["result"]
     except Exception as e:
         logger.error(
             "Non-fatal MCP failure",
@@ -523,6 +527,8 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     result_type=type(result).__name__,
                     result_size=len(str(result)) if result else 0,
                 )
+                # Record successful MCP call
+                record_mcp_success()
             except httpx.TimeoutException as e:
                 logger.debug(
                     "MCP: Timeout exception",

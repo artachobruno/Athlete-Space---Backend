@@ -1,10 +1,12 @@
 """Helper functions for generating and storing planned training sessions."""
 
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.calendar.conflicts import (
     auto_shift_sessions,
@@ -12,15 +14,16 @@ from app.calendar.conflicts import (
     get_resolution_mode,
 )
 from app.coach.mcp_client import call_tool_safe
+from app.coach.mcp_health import mcp_is_healthy
 from app.db.models import PlannedSession
 from app.db.session import get_session
+from app.persistence.retry.queue import enqueue_retry
+from app.persistence.retry.types import PlannedSessionRetryJob
 
 
 def _raise_timezone_naive_error(session_date_raw: str) -> None:
     """Raise error for timezone-naive date from ISO string."""
     raise ValueError(f"Timezone-naive date from ISO string: {session_date_raw}")
-
-
 
 
 def _parse_session_date(session_date_raw: date | datetime | str | None) -> datetime | None:
@@ -230,14 +233,17 @@ def save_sessions_to_database(
                     continue
 
                 # Check if session already exists (same user, athlete, date, and title)
-                existing = session.scalar(
-                    select(PlannedSession).where(
-                        PlannedSession.user_id == user_id,
-                        PlannedSession.athlete_id == athlete_id,
-                        PlannedSession.date == parsed_date,
-                        PlannedSession.title == session_data.get("title"),
-                    )
+                # Also check plan_id if provided for idempotency
+                query = select(PlannedSession).where(
+                    PlannedSession.user_id == user_id,
+                    PlannedSession.athlete_id == athlete_id,
+                    PlannedSession.date == parsed_date,
+                    PlannedSession.title == session_data.get("title"),
                 )
+                if plan_id:
+                    query = query.where(PlannedSession.plan_id == plan_id)
+
+                existing = session.scalar(query)
 
                 if existing:
                     logger.debug(
@@ -246,6 +252,7 @@ def save_sessions_to_database(
                         athlete_id=athlete_id,
                         date=parsed_date.isoformat(),
                         title=session_data.get("title"),
+                        plan_id=plan_id,
                     )
                     continue
 
@@ -272,7 +279,43 @@ def save_sessions_to_database(
                 session.add(planned_session)
                 saved_count += 1
 
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError as e:
+                # Handle unique constraint violations (idempotency for retries)
+                session.rollback()
+                logger.warning(
+                    "Unique constraint violation during save (likely duplicate from retry)",
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    plan_id=plan_id,
+                    error=str(e),
+                )
+                # Re-check which sessions were actually saved before the error
+                # This is a best-effort count - some may have been saved
+                saved_count = 0
+                for session_data in sessions_to_save:
+                    session_date_raw = session_data.get("date")
+                    parsed_date = _parse_session_date(session_date_raw)
+                    if parsed_date is None:
+                        continue
+                    query = select(PlannedSession).where(
+                        PlannedSession.user_id == user_id,
+                        PlannedSession.athlete_id == athlete_id,
+                        PlannedSession.date == parsed_date,
+                        PlannedSession.title == session_data.get("title"),
+                    )
+                    if plan_id:
+                        query = query.where(PlannedSession.plan_id == plan_id)
+                    if session.scalar(query):
+                        saved_count += 1
+                logger.info(
+                    "Recovered from unique constraint violation",
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    plan_id=plan_id,
+                    saved_count=saved_count,
+                )
 
             logger.info(
                 "Saved planned sessions to database",
@@ -305,11 +348,14 @@ async def save_planned_sessions(
     sessions: list[dict],
     plan_type: str,
     plan_id: str | None = None,
-) -> int:
+) -> dict[str, int | str]:
     """Save planned training sessions to the database via MCP.
 
     This function calls the MCP tool for saving sessions.
     For direct database access, use save_sessions_to_database instead.
+
+    IMPORTANT: This function NEVER raises exceptions. Persistence failures are
+    logged and marked as degraded, but the plan is always returned.
 
     Args:
         user_id: User ID (Clerk)
@@ -328,8 +374,12 @@ async def save_planned_sessions(
         plan_id: Optional plan identifier
 
     Returns:
-        Number of sessions saved
+        Dictionary with:
+            - saved_count: Number of sessions saved (0 if failed)
+            - persistence_status: "saved" if successful, "degraded" if failed
     """
+    persistence_status = "saved"
+
     logger.debug(
         "session_planner: Starting save_planned_sessions",
         user_id=user_id,
@@ -342,96 +392,208 @@ async def save_planned_sessions(
     if not sessions:
         logger.debug("session_planner: No sessions to save, returning 0")
         logger.warning("No sessions to save")
-        return 0
+        return {"saved_count": 0, "persistence_status": "saved"}
 
-    # Convert datetime objects to ISO strings for MCP
-    logger.debug(
-        "session_planner: Converting sessions for MCP",
-        total_sessions=len(sessions),
-    )
-    sessions_for_mcp = []
-    for idx, session_data in enumerate(sessions):
+    # Circuit breaker: Check MCP health before attempting call
+    if not mcp_is_healthy():
+        logger.warning(
+            "MCP circuit breaker open - skipping persistence call",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            plan_id=plan_id,
+        )
+        # Enqueue retry job (best-effort, never blocks)
+        if plan_id:
+            try:
+                # Convert sessions to MCP format for retry
+                sessions_for_retry = []
+                for session_data in sessions:
+                    mcp_session = session_data.copy()
+                    session_date = mcp_session.get("date")
+                    if isinstance(session_date, (datetime, date)):
+                        mcp_session["date"] = session_date.isoformat()
+                    sessions_for_retry.append(mcp_session)
+                enqueue_retry(
+                    PlannedSessionRetryJob(
+                        plan_id=plan_id,
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                        sessions=sessions_for_retry,
+                        plan_type=plan_type,
+                        created_at=time.time(),
+                        attempts=0,
+                    )
+                )
+            except Exception:
+                logger.warning("Failed to enqueue persistence retry", exc_info=True)
+        return {"saved_count": 0, "persistence_status": "degraded"}
+
+    try:
+        # Convert datetime objects to ISO strings for MCP
         logger.debug(
-            "session_planner: Converting session for MCP",
-            index=idx,
-            session_keys=list(session_data.keys()) if isinstance(session_data, dict) else None,
-            has_date="date" in session_data if isinstance(session_data, dict) else False,
+            "session_planner: Converting sessions for MCP",
+            total_sessions=len(sessions),
         )
-        mcp_session = session_data.copy()
-        # Convert date to ISO string if it's a datetime
-        session_date = mcp_session.get("date")
-        if isinstance(session_date, (datetime, date)):
-            original_date = session_date
-            mcp_session["date"] = session_date.isoformat()
+        sessions_for_mcp = []
+        for idx, session_data in enumerate(sessions):
             logger.debug(
-                "session_planner: Converted date to ISO string",
+                "session_planner: Converting session for MCP",
                 index=idx,
-                original_date_type=type(original_date).__name__,
-                iso_string=mcp_session["date"],
+                session_keys=list(session_data.keys()) if isinstance(session_data, dict) else None,
+                has_date="date" in session_data if isinstance(session_data, dict) else False,
             )
-        sessions_for_mcp.append(mcp_session)
-    logger.debug(
-        "session_planner: Sessions converted for MCP",
-        total_sessions=len(sessions_for_mcp),
-        first_session_date=sessions_for_mcp[0].get("date") if sessions_for_mcp else None,
-    )
-
-    logger.debug(
-        "session_planner: Calling MCP tool save_planned_sessions",
-        user_id=user_id,
-        athlete_id=athlete_id,
-        session_count=len(sessions_for_mcp),
-        plan_type=plan_type,
-        plan_id=plan_id,
-    )
-    result = await call_tool_safe(
-        "save_planned_sessions",
-        {
-            "user_id": user_id,
-            "athlete_id": athlete_id,
-            "sessions": sessions_for_mcp,
-            "plan_type": plan_type,
-            "plan_id": plan_id,
-        },
-    )
-
-    if result is None:
-        logger.warning(
-            "MCP save failed — returning plan in degraded mode",
-            user_id=user_id,
-            athlete_id=athlete_id,
-            session_count=len(sessions),
-            plan_type=plan_type,
+            mcp_session = session_data.copy()
+            # Convert date to ISO string if it's a datetime
+            session_date = mcp_session.get("date")
+            if isinstance(session_date, (datetime, date)):
+                original_date = session_date
+                mcp_session["date"] = session_date.isoformat()
+                logger.debug(
+                    "session_planner: Converted date to ISO string",
+                    index=idx,
+                    original_date_type=type(original_date).__name__,
+                    iso_string=mcp_session["date"],
+                )
+            sessions_for_mcp.append(mcp_session)
+        logger.debug(
+            "session_planner: Sessions converted for MCP",
+            total_sessions=len(sessions_for_mcp),
+            first_session_date=sessions_for_mcp[0].get("date") if sessions_for_mcp else None,
         )
-        return 0
 
-    logger.debug(
-        "session_planner: MCP tool save_planned_sessions completed",
-        result_keys=list(result.keys()) if isinstance(result, dict) else None,
-        has_saved_count="saved_count" in result if isinstance(result, dict) else False,
-    )
-    saved_count = result.get("saved_count", 0)
-    logger.debug(
-        "session_planner: Extracted saved_count from result",
-        saved_count=saved_count,
-        expected_count=len(sessions),
-    )
-
-    if saved_count > 0:
-        logger.info(
-            "Saved planned sessions via MCP",
+        logger.debug(
+            "session_planner: Calling MCP tool save_planned_sessions",
             user_id=user_id,
             athlete_id=athlete_id,
+            session_count=len(sessions_for_mcp),
+            plan_type=plan_type,
+            plan_id=plan_id,
+        )
+        result = await call_tool_safe(
+            "save_planned_sessions",
+            {
+                "user_id": user_id,
+                "athlete_id": athlete_id,
+                "sessions": sessions_for_mcp,
+                "plan_type": plan_type,
+                "plan_id": plan_id,
+            },
+        )
+
+        if result is None:
+            logger.error(
+                "Failed to persist planned sessions via MCP — continuing",
+                extra={
+                    "user_id": user_id,
+                    "athlete_id": athlete_id,
+                    "plan_id": plan_id,
+                    "session_count": len(sessions),
+                    "plan_type": plan_type,
+                },
+            )
+            persistence_status = "degraded"
+            # Enqueue retry job (best-effort, never blocks)
+            if plan_id:
+                try:
+                    enqueue_retry(
+                        PlannedSessionRetryJob(
+                            plan_id=plan_id,
+                            user_id=user_id,
+                            athlete_id=athlete_id,
+                            sessions=sessions_for_mcp,  # Use MCP-formatted sessions
+                            plan_type=plan_type,
+                            created_at=time.time(),
+                            attempts=0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("Failed to enqueue persistence retry", exc_info=True)
+            return {"saved_count": 0, "persistence_status": persistence_status}
+
+        logger.debug(
+            "session_planner: MCP tool save_planned_sessions completed",
+            result_keys=list(result.keys()) if isinstance(result, dict) else None,
+            has_saved_count="saved_count" in result if isinstance(result, dict) else False,
+        )
+        saved_count = result.get("saved_count", 0)
+        logger.debug(
+            "session_planner: Extracted saved_count from result",
             saved_count=saved_count,
-            plan_type=plan_type,
-        )
-    else:
-        logger.warning(
-            "MCP tool returned saved_count=0 (degraded mode)",
-            user_id=user_id,
-            athlete_id=athlete_id,
             expected_count=len(sessions),
-            plan_type=plan_type,
         )
 
-    return saved_count
+        if saved_count > 0:
+            logger.info(
+                "Saved planned sessions via MCP",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                saved_count=saved_count,
+                plan_type=plan_type,
+            )
+        else:
+            logger.warning(
+                "MCP tool returned saved_count=0 (degraded mode)",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                expected_count=len(sessions),
+                plan_type=plan_type,
+            )
+            persistence_status = "degraded"
+            # Enqueue retry job (best-effort, never blocks)
+            if plan_id:
+                try:
+                    enqueue_retry(
+                        PlannedSessionRetryJob(
+                            plan_id=plan_id,
+                            user_id=user_id,
+                            athlete_id=athlete_id,
+                            sessions=sessions_for_mcp,  # Use MCP-formatted sessions
+                            plan_type=plan_type,
+                            created_at=time.time(),
+                            attempts=0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("Failed to enqueue persistence retry", exc_info=True)
+    except Exception as e:
+        logger.error(
+            "Failed to persist planned sessions via MCP — continuing",
+            extra={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "plan_id": plan_id,
+                "user_id": user_id,
+                "athlete_id": athlete_id,
+                "session_count": len(sessions),
+                "plan_type": plan_type,
+            },
+            exc_info=True,
+        )
+        persistence_status = "degraded"
+        # Enqueue retry job (best-effort, never blocks)
+        if plan_id:
+            try:
+                # Convert sessions to MCP format if not already done
+                sessions_for_retry = []
+                for session_data in sessions:
+                    mcp_session = session_data.copy()
+                    session_date = mcp_session.get("date")
+                    if isinstance(session_date, (datetime, date)):
+                        mcp_session["date"] = session_date.isoformat()
+                    sessions_for_retry.append(mcp_session)
+                enqueue_retry(
+                    PlannedSessionRetryJob(
+                        plan_id=plan_id,
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                        sessions=sessions_for_retry,
+                        plan_type=plan_type,
+                        created_at=time.time(),
+                        attempts=0,
+                    )
+                )
+            except Exception:
+                logger.warning("Failed to enqueue persistence retry", exc_info=True)
+        return {"saved_count": 0, "persistence_status": persistence_status}
+    else:
+        return {"saved_count": saved_count, "persistence_status": persistence_status}

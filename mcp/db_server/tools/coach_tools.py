@@ -50,28 +50,18 @@ def _parse_athlete_state(state_dict: dict) -> AthleteState:
 
 
 def plan_week_tool(arguments: dict) -> dict:
-    """Plan weekly training sessions.
+    """DEPRECATED MCP tool - removed in v2.
 
-    Contract: plan_week.json
+    This tool has been removed. Use plan_race_simple from app.planner.plan_race_simple instead.
+
+    Raises:
+        RuntimeError: Always, to prevent accidental usage
     """
-    state_dict = arguments.get("state")
-    user_id = arguments.get("user_id")
-    athlete_id = arguments.get("athlete_id")
-    user_feedback = arguments.get("user_feedback")
-
-    if not state_dict or not isinstance(state_dict, dict):
-        raise MCPError("INVALID_INPUT", "Missing or invalid state")
-
-    try:
-        state = _parse_athlete_state(state_dict)
-        result = asyncio.run(plan_week(state, user_id, athlete_id, user_feedback))
-    except MCPError:
-        raise
-    except Exception as e:
-        logger.error(f"Error planning week: {e}", exc_info=True)
-        raise MCPError("INTERNAL_ERROR", f"Failed to plan week: {e!s}") from e
-    else:
-        return {"message": result}
+    _ = arguments
+    raise RuntimeError(
+        "Deprecated MCP planner tool. Removed in v2. "
+        "Use plan_race_simple from app.planner.plan_race_simple instead."
+    )
 
 
 def run_analysis_tool(arguments: dict) -> dict:

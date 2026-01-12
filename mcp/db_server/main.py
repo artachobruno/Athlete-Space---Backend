@@ -7,9 +7,7 @@ Implements MCP-compliant tools for database operations:
 - get_yesterday_activities
 - save_planned_sessions
 - add_workout
-- plan_race_build
 - plan_season
-- plan_week
 - run_analysis
 - explain_training_state
 - adjust_training_load
@@ -123,12 +121,10 @@ save_context_tool = _context_module.save_context_tool
 
 _sessions_module = _load_module_from_path("mcp_db_sessions", _tools_dir / "sessions.py")
 add_workout_tool = _sessions_module.add_workout_tool
-plan_race_build_tool = _sessions_module.plan_race_build_tool
 plan_season_tool = _sessions_module.plan_season_tool
 save_planned_sessions_tool = _sessions_module.save_planned_sessions_tool
 
 _coach_tools_module = _load_module_from_path("mcp_db_coach_tools", _tools_dir / "coach_tools.py")
-plan_week_tool = _coach_tools_module.plan_week_tool
 run_analysis_tool = _coach_tools_module.run_analysis_tool
 explain_training_state_tool = _coach_tools_module.explain_training_state_tool
 adjust_training_load_tool = _coach_tools_module.adjust_training_load_tool
@@ -199,9 +195,7 @@ async def call_tool(request: Request) -> JSONResponse:
             "get_yesterday_activities": get_yesterday_activities_tool,
             "save_planned_sessions": save_planned_sessions_tool,
             "add_workout": add_workout_tool,
-            "plan_race_build": plan_race_build_tool,
             "plan_season": plan_season_tool,
-            "plan_week": plan_week_tool,
             "run_analysis": run_analysis_tool,
             "explain_training_state": explain_training_state_tool,
             "adjust_training_load": adjust_training_load_tool,

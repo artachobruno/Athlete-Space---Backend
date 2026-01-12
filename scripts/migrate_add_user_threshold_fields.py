@@ -30,7 +30,14 @@ from app.db.session import SessionLocal
 
 
 def migrate_add_user_threshold_fields() -> None:
-    """Add threshold configuration fields to user_settings table."""
+    """Add threshold configuration fields to user_settings table.
+
+    This migration is idempotent: it checks if columns exist before adding them.
+    Safe to run multiple times, including concurrent runs (PostgreSQL handles DDL locks).
+
+    Production note: After first successful run, consider removing from startup
+    and running migrations separately to avoid coupling schema evolution to web lifecycle.
+    """
     logger.info("Starting migration: add threshold configuration fields to user_settings table")
 
     db = SessionLocal()

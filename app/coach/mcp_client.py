@@ -31,9 +31,7 @@ MCP_TOOL_ROUTES: dict[str, str] = {
     "save_planned_sessions": MCP_DB_SERVER_URL,
     "get_planned_sessions": MCP_DB_SERVER_URL,
     "add_workout": MCP_DB_SERVER_URL,
-    "plan_race_build": MCP_DB_SERVER_URL,
     "plan_season": MCP_DB_SERVER_URL,
-    "plan_week": MCP_DB_SERVER_URL,
     "run_analysis": MCP_DB_SERVER_URL,
     "explain_training_state": MCP_DB_SERVER_URL,
     "adjust_training_load": MCP_DB_SERVER_URL,
@@ -50,11 +48,8 @@ MCP_TOOL_ROUTES: dict[str, str] = {
 HTTP_TIMEOUT = 30.0
 
 # Tool-specific timeouts (in seconds)
-# Hierarchical planner uses atomic LLM calls - much faster than monolithic approach
 TOOL_TIMEOUTS: dict[str, float] = {
-    "plan_race_build": 90.0,  # 90s for hierarchical planner (atomic calls, cached)
-    "plan_season": 300.0,  # 5 minutes for season planning (still monolithic)
-    "plan_week": 180.0,  # 3 minutes for week planning (legacy, not used by new planner)
+    "plan_season": 300.0,  # 5 minutes for season planning
     "run_analysis": 120.0,  # 2 minutes for analysis
 }
 
@@ -330,7 +325,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
     # Phase 6C: Reduced retries for heavy operations (planning, etc.)
     # Retries make sense for idempotent reads, not for heavy planners
     # Planning tools: 1 attempt (no retries). Other tools: 2 attempts (1 retry).
-    is_planning_tool = tool_name in {"plan_race_build", "plan_season", "plan_week"}
+    is_planning_tool = tool_name in {"plan_season"}
     max_retries = 1 if is_planning_tool else 2
 
     with trace(

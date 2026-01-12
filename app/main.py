@@ -2,13 +2,10 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 import time
 import traceback
 from contextlib import asynccontextmanager
-
-# Critical: Log immediately to catch import-time issues
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-logging.info(">>> app.main import reached <<<")
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -18,6 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
 from sqlalchemy.exc import ProgrammingError
+
+# Critical: Log immediately to catch import-time issues
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.info(">>> app.main import reached <<<")
 
 from app.analytics.api import router as analytics_router
 from app.api.activities.activities import router as activities_router
@@ -78,6 +79,7 @@ from scripts.migrate_add_profile_health_fields import migrate_add_profile_health
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
+from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_daily_summary import migrate_daily_summary
@@ -338,6 +340,25 @@ def initialize_database() -> None:
         migration_errors.append(f"migrate_user_settings_fields: {e}")
         logger.error(f"Migration failed: migrate_user_settings_fields - {e}", exc_info=True)
 
+    # ⚠️ ONE-TIME MIGRATION: Add threshold fields (ftp_watts, threshold_pace_ms, threshold_hr)
+    # This migration is idempotent (checks column existence before adding).
+    # PRODUCTION NOTE: After first successful deployment, consider removing this from startup
+    # and running migrations separately via: python scripts/run_migrations.py
+    # This avoids coupling schema evolution to web process lifecycle.
+    try:
+        logger.info("Running migration: user_settings threshold configuration fields (ftp_watts, threshold_pace_ms, threshold_hr)")
+        migrate_add_user_threshold_fields()
+        logger.info("✓ Migration completed: user_settings threshold configuration fields")
+    except Exception as e:
+        # Non-blocking: app continues even if migration fails
+        # Migration will be retried on next startup, or can be run manually
+        migration_errors.append(f"migrate_add_user_threshold_fields: {e}")
+        logger.error(
+            f"Migration failed: migrate_add_user_threshold_fields - {e} "
+            "(App will continue, but schema may be incomplete. Run manually: python scripts/migrate_add_user_threshold_fields.py)",
+            exc_info=True,
+        )
+
     try:
         logger.info("Running migration: LLM metadata fields and composite indexes")
         migrate_llm_metadata_fields()
@@ -405,7 +426,7 @@ async def lifespan(_app: FastAPI):
 
     CRITICAL: This function must NEVER raise exceptions or block for long periods.
     Render's port scanner requires the server to bind and stay alive immediately.
-    
+
     Heavy initialization (migrations, schedulers) is deferred to background tasks
     after the server has started and bound to the port.
     """
@@ -429,7 +450,7 @@ async def lifespan(_app: FastAPI):
         logging.info(">>> database initialized successfully <<<")
         print("DB INIT DONE", flush=True)
     except Exception as e:
-        logging.error(f">>> lifespan: database init failed: {e} <<<")
+        logging.exception(">>> lifespan: database init failed <<<")
         print(f"DB INIT FAILED: {e}", flush=True)
         logger.exception("Database initialization failed - running in degraded mode")
         traceback.print_exc(file=sys.stdout)
@@ -481,7 +502,10 @@ async def lifespan(_app: FastAPI):
             _app.state.scheduler = scheduler
             _app.state.scheduler_ready = True
             logger.info("[SCHEDULER] Started automatic background sync scheduler (runs every 6 hours)")
-            logger.info("[SCHEDULER] Started ingestion tick scheduler (runs every 30 minutes, dynamic quota allocation for history backfill)")
+            logger.info(
+                "[SCHEDULER] Started ingestion tick scheduler "
+                "(runs every 30 minutes, dynamic quota allocation for history backfill)"
+            )
             logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
             logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
         except Exception as e:
@@ -497,7 +521,7 @@ async def lifespan(_app: FastAPI):
     print("LIFESPAN YIELD", flush=True)
     await asyncio.sleep(0)
     yield
-    
+
     # Shutdown code (runs when app is shutting down)
     logging.info(">>> lifespan: shutdown <<<")
 
@@ -518,36 +542,36 @@ logging.info(">>> FastAPI app created <<<")
 @app.on_event("startup")
 async def deferred_heavy_init():
     """Run heavy initialization tasks after server has started and bound to port.
-    
+
     This runs AFTER the server is up and serving requests, so it doesn't block
     Render's port detection. Heavy operations like initial sync ticks are deferred here.
     """
     # Wait a short moment to ensure server is fully up
     await asyncio.sleep(2)
-    
+
     db_ready = getattr(app.state, "db_ready", False)
     if not db_ready:
         logger.warning("[DEFERRED INIT] Skipping deferred init - database not ready")
         return
-    
+
     logging.info(">>> deferred_heavy_init: starting background tasks <<<")
     try:
         # Run initial sync tick (non-blocking - don't wait for completion)
-        import threading
+
         def run_sync_tick():
             try:
                 sync_tick()
                 logger.info("[DEFERRED INIT] Initial background sync tick completed")
             except Exception as e:
                 logger.exception("[DEFERRED INIT] Initial background sync tick failed: {}", e)
-        
+
         def run_ingestion_tick():
             try:
                 ingestion_tick()
                 logger.info("[DEFERRED INIT] Initial ingestion tick completed")
             except Exception as e:
                 logger.exception("[DEFERRED INIT] Initial ingestion tick failed: {}", e)
-        
+
         threading.Thread(target=run_sync_tick, daemon=True).start()
         threading.Thread(target=run_ingestion_tick, daemon=True).start()
         logging.info(">>> deferred_heavy_init: background tasks started <<<")
@@ -632,7 +656,7 @@ app.add_middleware(
 
 
 # Register root and health endpoints first (before routers)
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def root():
     """Root endpoint - serves a simple HTML page with API information."""
     return """
@@ -660,13 +684,13 @@ def health():
     """Health check endpoint for monitoring and load balancers."""
     db_ready = getattr(app.state, "db_ready", False)
     scheduler_ready = getattr(app.state, "scheduler_ready", False)
-    
+
     # Server is always "ok" - it's running and responding
     # But we report component status for debugging
     status = "ok"
     if not db_ready:
         status = "degraded"
-    
+
     return {
         "status": status,
         "service": "Virtus AI Backend",
@@ -678,20 +702,18 @@ def health():
 @app.get("/healthz")
 def healthz():
     """Hard health check endpoint (Kubernetes-style).
-    
+
     Returns 200 if server is up and database is ready.
     Returns 503 if server is up but database is not ready (degraded mode).
     """
     db_ready = getattr(app.state, "db_ready", False)
-    
+
     if db_ready:
         return {"status": "ok", "db_ready": True}
-    else:
-        from fastapi import status as http_status
-        return JSONResponse(
-            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "degraded", "db_ready": False, "message": "Database not ready"}
-        )
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"status": "degraded", "db_ready": False, "message": "Database not ready"}
+    )
 
 
 @app.get("/debug/headers")

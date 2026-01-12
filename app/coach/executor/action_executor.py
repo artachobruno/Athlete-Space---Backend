@@ -27,6 +27,7 @@ from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
 from app.db.models import SeasonPlan
 from app.db.session import get_session
+from app.planner.plan_race_simple import plan_race_simple
 
 
 def serialize_for_mcp(obj: Any) -> Any:
@@ -350,6 +351,10 @@ class CoachActionExecutor:
             If slots are complete (should_execute = true), execute immediately.
             No confirmation. No waiting. Execute now.
         """
+        # Invariant guard: Legacy planner must never be called
+        if "plan_race_build" in (decision.action or ""):
+            raise RuntimeError("Legacy planner must never be called")
+
         # Phase 6C: Safe for background execution
         # Individual _execute_* methods have try-except blocks that return error messages
         # STATE 1: MISSING SLOTS - Ask exactly one blocking question
@@ -535,26 +540,20 @@ class CoachActionExecutor:
                 "ActionExecutor: Routing to plan_race_build execution",
                 conversation_id=conversation_id,
             )
-            # Mark execution in turn-scoped guard BEFORE calling tool to prevent re-entry
+            # Mark execution in turn-scoped guard BEFORE calling planner to prevent re-entry
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("plan_race_build")
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
 
         if target_action == "plan_week":
-            # Special rule: Weekly planning requires a race plan
-            # Check if race plan exists, if not, request race info first
-            race_plan_exists = await CoachActionExecutor._check_race_plan_exists(deps.user_id, deps.athlete_id)
-            if not race_plan_exists:
-                logger.info(
-                    "Weekly planning requires race plan - requesting race date",
-                    user_id=deps.user_id,
-                    athlete_id=deps.athlete_id,
-                    conversation_id=conversation_id,
-                )
-                return "I can plan your week once your marathon plan is created. What is your marathon date?"
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("plan_week")
-            return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
+            # Legacy planner removed - plan_week is no longer supported
+            logger.warning(
+                "plan_week action requested but legacy planner removed",
+                user_id=deps.user_id,
+                athlete_id=deps.athlete_id,
+                conversation_id=conversation_id,
+            )
+            return "Weekly planning has been replaced. Please create a race plan first using the new planner."
 
         # Fallback to intent/horizon mapping if no target_action
         if intent == "recommend" and horizon in {"next_session", "today"}:
@@ -878,6 +877,10 @@ class CoachActionExecutor:
             )
             await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
 
+        # Helper functions for error handling
+        def _raise_invalid_type_error(field_name: str, field_type: type) -> NoReturn:
+            raise TypeError(f"Invalid {field_name} type: {field_type}")
+
         # Tool execution is wrapped defensively - never surface errors to users
         try:
             # FIX 7: Invariant logging before execution (temporary but recommended)
@@ -907,68 +910,63 @@ class CoachActionExecutor:
                     constructed_message=race_description,
                 )
 
-            # B37: Pass filled_slots in context - tool reads ONLY from this
-            # B44: Serialize filled_slots before MCP call (convert date/datetime to ISO strings)
+            # Extract race_date and race_distance from slots
+            race_date_value = slots.get("race_date")
+            race_distance = slots.get("race_distance")
+
+            if not race_date_value:
+                raise RuntimeError("race_date is required but missing from filled_slots")
+            if not race_distance:
+                raise RuntimeError("race_distance is required but missing from filled_slots")
+
+            # Parse race_date - it might be a string, date, or datetime
+            if isinstance(race_date_value, str):
+                # Try parsing ISO format
+                try:
+                    race_date = datetime.fromisoformat(race_date_value.replace("Z", "+00:00"))
+                except ValueError:
+                    # Try parsing date format (YYYY-MM-DD)
+                    try:
+                        parsed_date = date.fromisoformat(race_date_value)
+                        race_date = datetime.combine(parsed_date, datetime.min.time())
+                    except ValueError as e:
+                        raise RuntimeError(f"Invalid race_date format: {race_date_value}") from e
+            elif isinstance(race_date_value, date):
+                race_date = datetime.combine(race_date_value, datetime.min.time())
+            elif isinstance(race_date_value, datetime):
+                race_date = race_date_value
+            else:
+                _raise_invalid_type_error("race_date", type(race_date_value))
+
+            if not isinstance(race_distance, str):
+                _raise_invalid_type_error("race_distance", type(race_distance))
+
             logger.debug(
-                "ActionExecutor: Preparing tool arguments for plan_race_build",
+                "ActionExecutor: Calling plan_race_simple directly",
                 user_id=deps.user_id,
                 athlete_id=deps.athlete_id,
-                conversation_id=conversation_id,
-                slots_keys=list(slots.keys()) if slots else [],
-                message_length=len(race_description),
-            )
-            tool_args = {
-                "message": race_description,
-                "user_id": deps.user_id,
-                "athlete_id": deps.athlete_id,
-                "context": {"filled_slots": serialize_for_mcp(slots)},
-            }
-            # Add conversation_id if available for stateful slot tracking
-            if conversation_id:
-                tool_args["conversation_id"] = conversation_id
-
-            # B47: Assert JSON safety in dev mode
-            if settings.log_level == "DEBUG":
-                try:
-                    json.dumps(tool_args)
-                    logger.debug(
-                        "ActionExecutor: Tool args JSON validation passed",
-                        tool=tool_name,
-                        tool_args_keys=list(tool_args.keys()),
-                    )
-                except (TypeError, ValueError) as e:
-                    logger.error(
-                        "Tool args are not JSON-safe (B47)",
-                        tool="plan_race_build",
-                        error=str(e),
-                        tool_args_keys=list(tool_args.keys()),
-                        conversation_id=conversation_id,
-                    )
-                    raise RuntimeError(f"Tool args are not JSON-safe: {e}") from e
-
-            logger.debug(
-                "ActionExecutor: Calling MCP tool plan_race_build",
-                tool=tool_name,
-                tool_args_keys=list(tool_args.keys()),
+                race_date=race_date.isoformat(),
+                race_distance=race_distance,
                 conversation_id=conversation_id,
             )
-            # Phase 6C: plan_race_build is fire-and-forget (event-emitting, side-effect based)
-            # Don't await a result - it emits progress events and writes to DB
+
+            # Call plan_race_simple directly - no MCP, no retries, no background task
             t_plan_start = time.monotonic()
             try:
-                await call_tool("plan_race_build", tool_args)
+                await plan_race_simple(
+                    race_date=race_date,
+                    distance=race_distance,
+                    user_id=deps.user_id,
+                    athlete_id=deps.athlete_id,
+                    athlete_state=deps.athlete_state,
+                )
             finally:
                 t_plan_end = time.monotonic()
                 plan_generation_time = t_plan_end - t_plan_start
                 logger.info(f"[PLAN] plan_generation={plan_generation_time:.1f}s")
-            logger.debug(
-                "ActionExecutor: MCP tool plan_race_build started (fire-and-forget)",
-                tool=tool_name,
-                conversation_id=conversation_id,
-            )
 
             logger.info(
-                "Tool execution started (fire-and-forget)",
+                "Plan generation completed",
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
@@ -976,68 +974,15 @@ class CoachActionExecutor:
                 "ActionExecutor: Triggering summarization if needed",
                 conversation_id=conversation_id,
             )
-            # Trigger summarization after successful tool execution (B34)
+            # Trigger summarization after successful plan generation (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
-            # Phase 6C: plan_race_build is fire-and-forget - no result to process
-            # Progress events are emitted via Phase 6B, plan is written to DB
-            # Don't emit "completed" event here - tool emits its own progress events
-            message = "Plan generation started. You'll see updates as I progress."
+            message = "Your training plan has been generated and saved to your calendar!"
             logger.debug(
-                "ActionExecutor: plan_race_build execution started (fire-and-forget)",
+                "ActionExecutor: plan_race_build execution completed",
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
             return message
-        except MCPError as e:
-            logger.debug(
-                "ActionExecutor: MCPError caught in plan_race_build",
-                tool=tool_name,
-                error_code=e.code,
-                error_message=e.message,
-                conversation_id=conversation_id,
-            )
-            # B39: TOOL_CONTRACT_VIOLATION or MISSING_RACE_INFO should never occur after slot validation
-            # If it does, this is a developer error
-            if e.code == "TOOL_CONTRACT_VIOLATION":
-                # B39: Tool contract violation - this is a developer error
-                logger.error(
-                    "Tool contract violation detected",
-                    tool=tool_name,
-                    error_code=e.code,
-                    error_message=e.message,
-                    conversation_id=conversation_id,
-                    exc_info=True,
-                )
-                raise RuntimeError(
-                    f"{tool_name} violated contract: {e.message}. "
-                    f"This is a developer error - slots should have been validated before tool execution."
-                ) from e
-            if e.code == "MISSING_RACE_INFO":
-                if decision.should_execute:
-                    raise RuntimeError(
-                        f"{tool_name} returned MISSING_RACE_INFO after slot validation. "
-                        f"This is a developer error - slots were validated before tool execution."
-                    ) from e
-                # Only allow clarification if slots weren't complete (shouldn't happen with B37)
-                logger.info(
-                    "Tool returned clarification request",
-                    tool=tool_name,
-                    conversation_id=conversation_id,
-                )
-                return e.message
-            if conversation_id and step_info:
-                step_id, label = step_info
-                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.exception(
-                "Tool execution failed",
-                extra={
-                    "tool": tool_name,
-                    "conversation_id": conversation_id,
-                    "error_code": e.code,
-                },
-            )
-            # Never surface tool errors to users
-            return "Something went wrong while generating your plan. Please try again."
         except Exception as e:
             if conversation_id and step_info:
                 step_id, label = step_info

@@ -2,7 +2,24 @@
 
 This module orchestrates the complete Phase 2 compilation pipeline:
 PlanSpec → WeekSkeletons → Time Allocation → Validation → WeekPlans → Template Selection (Phase 4) → Session Materialization (Phase 5)
+
+INVARIANT PIPELINE (Structure Resolution):
+StructureResolver → StructureSpecParser → StructureValidator → Frozen StructureSpec → Planner → LLM
+
+RAG RULE:
+- RAG is used for explanatory context only (philosophy_summary)
+- RAG never determines structure, session count, or placement
+- RAG can exclude templates (rag_bias) but never adds them
+- Philosophy config (loaded from disk) is the source of truth for constraints
+- Structure is determined BEFORE RAG is called
+
+STRUCTURE RULE:
+- Structure resolution must happen BEFORE session placement, volume logic, LLM calls
+- Once resolved, structure is frozen and immutable
+- LLM must not add, remove, or move sessions
 """
+
+from datetime import datetime, timezone
 
 from app.planning.materialization.metrics import log_materialization_metrics
 
@@ -10,14 +27,18 @@ from app.planning.compiler.assemble_week import assemble_week_plan
 from app.planning.compiler.skeleton_generator import generate_week_skeletons
 from app.planning.compiler.time_allocator import allocate_week_time
 from app.planning.compiler.validate_compiled_week import validate_compiled_week
+from app.planning.context import PlanningContext
 from app.planning.library.philosophy import TrainingPhilosophy
 from app.planning.library.session_template import SessionTemplate
 from app.planning.materialization.materialize_week import materialize_week
 from app.planning.materialization.validate import validate_materialized_sessions
 from app.planning.output.models import WeekPlan
+from app.planning.phase import resolve_phase
 from app.planning.progress.emitter import emit_planning_progress
 from app.planning.schemas.plan_spec import PlanSpec
 from app.planning.selection.integration import materialize_sessions_with_templates
+from app.planning.structure.resolver import resolve_structure
+from app.planning.structure.validator import validate_structure
 
 
 def compile_plan(
@@ -56,6 +77,31 @@ def compile_plan(
         PlanningInvariantError: If any week fails validation
     """
     weeks = []
+
+    # STRUCTURE RESOLUTION (BEFORE any session logic)
+    # TODO: These parameters need to be passed into compile_plan or computed here:
+    #   - audience: str (from athlete profile/context)
+    #   - days_to_race: int (calculated from plan_spec.end_date - today)
+    # For now, using placeholders - these MUST be provided for full integration
+    today = datetime.now(timezone.utc).date()
+    days_to_race = (plan_spec.end_date - today).days if plan_spec.end_date else 100
+    audience = "intermediate"  # TODO: Get from athlete profile/context
+    phase = resolve_phase(days_to_race)
+
+    planning_context = PlanningContext(
+        philosophy_id=philosophy.id,
+        race_type=plan_spec.race_type or "custom",
+        audience=audience,
+        phase=phase,
+        days_to_race=days_to_race,
+    )
+
+    # Resolve and validate structure (frozen after this point)
+    structure = resolve_structure(planning_context)
+    validate_structure(structure)
+
+    # Immutability guardrail: structure must not be mutated downstream
+    structure_hash = hash(structure)
 
     # Phase 2: Week Skeleton Generation
     skeletons = generate_week_skeletons(plan_spec, philosophy)
@@ -112,6 +158,10 @@ def compile_plan(
         )
 
         # Phase 4: Template selection if templates provided
+        # RAG RULE: RAG (rag_bias, philosophy_summary) is used here for:
+        # - Excluding inappropriate templates (rag_bias)
+        # - Providing explanatory context (philosophy_summary)
+        # Structure (skeleton) is already fixed - RAG does not change it
         if use_template_selection and all_templates:
             week_plan = materialize_sessions_with_templates(
                 week_plan=week_plan,
@@ -227,5 +277,9 @@ def compile_plan(
             summary={"status": "ready_for_execution"},
             conversation_id=conversation_id,
         )
+
+    # Immutability guardrail: structure must not be mutated during compilation
+    if hash(structure) != structure_hash:
+        raise RuntimeError("Structure was mutated during compilation")
 
     return weeks

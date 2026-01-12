@@ -1,0 +1,21 @@
+id: norwegian
+version: "1.0"
+
+structure_policy:
+  allow_doubles: true
+  max_quality_days: 2
+  long_run_required: true
+  back_to_back_longs: false
+
+intensity_policy:
+  threshold_bias: high
+  vo2max_bias: low
+
+volume_policy:
+  min_weekly_km: 70
+  max_weekly_km: 180
+
+constraints:
+  min_experience: advanced
+
+rag_context_id: philosophy_norwegian

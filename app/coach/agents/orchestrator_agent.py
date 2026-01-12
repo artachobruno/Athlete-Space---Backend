@@ -7,6 +7,7 @@ The orchestrator ONLY makes decisions - it NEVER executes tools or performs side
 All tool execution happens in the separate executor module.
 """
 
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -446,6 +447,8 @@ async def run_conversation(
     Returns:
         OrchestratorAgentResponse: Decision object with intent, horizon, action, etc.
     """
+    t0 = time.monotonic()
+
     logger.info("Starting orchestrator decision", user_input_preview=user_input[:100])
     logger.debug(
         "Orchestrator: Starting decision process",
@@ -491,6 +494,9 @@ async def run_conversation(
     try:
         result = await call_tool("load_context", {"athlete_id": deps.athlete_id, "limit": 20})
         message_history = result["messages"]
+        t1 = time.monotonic()
+        context_load_time = t1 - t0
+        logger.info(f"[PLAN] context_load={context_load_time:.1f}s")
         logger.debug(
             "Orchestrator: Conversation history loaded",
             athlete_id=deps.athlete_id,
@@ -498,6 +504,9 @@ async def run_conversation(
             has_history=bool(message_history),
         )
     except MCPError as e:
+        t1 = time.monotonic()
+        context_load_time = t1 - t0
+        logger.info(f"[PLAN] context_load={context_load_time:.1f}s")
         logger.debug(
             "Orchestrator: Failed to load context via MCP",
             athlete_id=deps.athlete_id,
@@ -524,6 +533,13 @@ async def run_conversation(
     prompt_parts.append(f"User Input: {user_input}")
     full_prompt_text = "\n\n".join(prompt_parts)
 
+    logger.debug(
+        "Orchestrator: Exact prompt sent to LLM",
+        system_prompt=ORCHESTRATOR_INSTRUCTIONS,
+        message_history=message_history,
+        user_input=user_input,
+        full_prompt=full_prompt_text,
+    )
     logger.debug(
         "Orchestrator prompt",
         prompt_length=len(full_prompt_text),
@@ -657,6 +673,7 @@ async def run_conversation(
     )
 
     try:
+        t2_start = time.monotonic()
         with trace(
             name="llm.orchestrator_decision",
             metadata=trace_meta,
@@ -666,6 +683,9 @@ async def run_conversation(
                 deps=deps,
                 message_history=cast(list[ModelMessage], typed_message_history) if typed_message_history else None,
             )
+        t2 = time.monotonic()
+        llm_generate_time = t2 - t2_start
+        logger.info(f"[PLAN] llm_generate={llm_generate_time:.1f}s")
 
         # Log detailed result structure immediately after agent.run()
         logger.debug(
@@ -806,6 +826,7 @@ async def run_conversation(
 
         # Compute slot state deterministically with persistence
         # Use provided conversation_id or fall back to athlete-based ID
+        t3_start = time.monotonic()
         conversation_id_for_slots = conversation_id or f"orchestrator_{deps.athlete_id}"
         logger.debug(
             "Orchestrator: Computing slot state",
@@ -819,6 +840,9 @@ async def run_conversation(
             user_message=user_input,
             conversation_id=conversation_id_for_slots,
         )
+        t3 = time.monotonic()
+        validation_time = t3 - t3_start
+        logger.info(f"[PLAN] validation={validation_time:.1f}s")
         logger.debug(
             "Orchestrator: Slot state computed",
             next_executable_action=next_executable_action,
@@ -1165,6 +1189,10 @@ async def run_conversation(
             athlete_id=deps.athlete_id,
             exc_info=True,
         )
+
+    t_total = time.monotonic()
+    total_time = t_total - t0
+    logger.info(f"[PLAN] total={total_time:.1f}s")
 
     logger.info(
         "Orchestrator decision completed",

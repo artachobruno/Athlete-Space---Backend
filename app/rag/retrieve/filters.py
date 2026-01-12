@@ -63,6 +63,34 @@ def filter_by_athlete_tags(chunks: list[RagChunk], athlete_tags: list[str]) -> l
     return filtered
 
 
+def filter_by_metadata(
+    chunks: list[RagChunk],
+    doc_type: str | None = None,
+    philosophy_id: str | None = None,
+) -> list[RagChunk]:
+    """Filter chunks by metadata fields.
+
+    Args:
+        chunks: Chunks to filter
+        doc_type: Filter by doc_type (e.g., "philosophy", "principle")
+        philosophy_id: Filter by philosophy_id (e.g., "norwegian")
+
+    Returns:
+        Filtered list of chunks
+    """
+    filtered: list[RagChunk] = chunks
+
+    if doc_type:
+        filtered = [chunk for chunk in filtered if chunk.metadata.get("doc_type") == doc_type]
+
+    if philosophy_id:
+        filtered = [
+            chunk for chunk in filtered if chunk.metadata.get("philosophy_id") == philosophy_id
+        ]
+
+    return filtered
+
+
 def is_retrieval_safe(chunks: list[RagChunk], min_chunks: int = 1) -> bool:
     """Check if retrieval result is safe to use.
 

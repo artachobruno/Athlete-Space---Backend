@@ -10,6 +10,7 @@ It handles:
 """
 
 import json
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -553,6 +554,8 @@ class CoachLLMClient:
             ValueError: If validation fails after all retries
             RuntimeError: If LLM call fails
         """
+        t0 = time.monotonic()
+
         logger.debug(
             "llm_client: Starting generate_training_plan_via_llm",
             goal_context_keys=list(goal_context.keys()) if goal_context else [],
@@ -590,6 +593,9 @@ class CoachLLMClient:
             "calendar_constraints": calendar_constraints,
         }
         context_str = json.dumps(base_context, indent=2, default=str)
+        t1 = time.monotonic()
+        context_load_time = t1 - t0
+        logger.info(f"[PLAN] context_load={context_load_time:.1f}s")
         logger.debug(
             "llm_client: Context prepared",
             context_length=len(context_str),
@@ -614,13 +620,26 @@ class CoachLLMClient:
                 )
                 logger.info(f"Generating training plan via LLM (attempt {attempt + 1}/{MAX_RETRIES + 1})")
                 # Use base context for deterministic retries - no accumulated errors
+                user_prompt = f"Context:\n{context_str}"
+                full_prompt = f"{prompt_text}\n\n{user_prompt}"
+                logger.debug(
+                    "llm_client: Exact prompt sent to LLM",
+                    attempt=attempt + 1,
+                    system_prompt=prompt_text,
+                    user_prompt=user_prompt,
+                    full_prompt=full_prompt,
+                )
                 logger.debug(
                     "llm_client: Calling agent.run",
                     attempt=attempt + 1,
                     prompt_prefix="Context:\n",
                     context_length=len(context_str),
                 )
-                result = await agent.run(f"Context:\n{context_str}")
+                t2_start = time.monotonic()
+                result = await agent.run(user_prompt)
+                t2 = time.monotonic()
+                llm_generate_time = t2 - t2_start
+                logger.info(f"[PLAN] llm_generate={llm_generate_time:.1f}s")
                 logger.debug(
                     "llm_client: Agent.run completed",
                     attempt=attempt + 1,
@@ -646,6 +665,7 @@ class CoachLLMClient:
                 )
 
                 # Validate plan sessions (extracted to reduce nesting)
+                t3_start = time.monotonic()
                 logger.debug(
                     "llm_client: Validating plan sessions",
                     attempt=attempt + 1,
@@ -675,6 +695,9 @@ class CoachLLMClient:
                     goal_context_keys=list(goal_context.keys()),
                 )
                 validation_error = self._validate_plan_type_requirements(plan, goal_context)
+                t3 = time.monotonic()
+                validation_time = t3 - t3_start
+                logger.info(f"[PLAN] validation={validation_time:.1f}s")
                 if validation_error:
                     logger.debug(
                         "llm_client: Plan type validation failed",
@@ -693,6 +716,9 @@ class CoachLLMClient:
                         attempt=attempt + 1,
                         plan_type=plan.plan_type,
                     )
+                    t_total = time.monotonic()
+                    total_time = t_total - t0
+                    logger.info(f"[PLAN] total={total_time:.1f}s")
                     logger.info(
                         "Training plan generated successfully",
                         plan_type=plan.plan_type,

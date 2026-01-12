@@ -1,0 +1,21 @@
+id: daniels
+version: "1.0"
+
+structure_policy:
+  allow_doubles: false
+  max_quality_days: 3
+  long_run_required: true
+  back_to_back_longs: false
+
+intensity_policy:
+  threshold_bias: moderate
+  vo2max_bias: moderate
+
+volume_policy:
+  min_weekly_km: 50
+  max_weekly_km: 150
+
+constraints:
+  min_experience: intermediate
+
+rag_context_id: philosophy_daniels

@@ -10,6 +10,11 @@ Filters are applied in order:
 4. phase compatible
 5. philosophy hard limits
 6. RAG filters (exclusions only, never additions)
+
+RAG RULE:
+- RAG can only EXCLUDE templates (via rag_bias), never add them
+- Structure and session count are determined BEFORE RAG filtering
+- RAG is explanatory context only, never structural authority
 """
 
 from app.planning.compiler.week_skeleton import Day, DayRole

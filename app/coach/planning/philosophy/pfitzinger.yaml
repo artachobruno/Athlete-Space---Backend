@@ -1,0 +1,21 @@
+id: pfitzinger
+version: "1.0"
+
+structure_policy:
+  allow_doubles: true
+  max_quality_days: 3
+  long_run_required: true
+  back_to_back_longs: true
+
+intensity_policy:
+  threshold_bias: high
+  vo2max_bias: moderate
+
+volume_policy:
+  min_weekly_km: 80
+  max_weekly_km: 200
+
+constraints:
+  min_experience: advanced
+
+rag_context_id: philosophy_pfitzinger

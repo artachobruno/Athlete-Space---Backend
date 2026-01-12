@@ -1,0 +1,21 @@
+id: ultra
+version: "1.0"
+
+structure_policy:
+  allow_doubles: true
+  max_quality_days: 2
+  long_run_required: true
+  back_to_back_longs: true
+
+intensity_policy:
+  threshold_bias: low
+  vo2max_bias: low
+
+volume_policy:
+  min_weekly_km: 60
+  max_weekly_km: 250
+
+constraints:
+  min_experience: intermediate
+
+rag_context_id: philosophy_ultra

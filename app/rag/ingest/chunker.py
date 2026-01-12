@@ -221,10 +221,14 @@ def chunk_document(doc: RagDocument) -> list[RagChunk]:
 
             chunk_id = generate_chunk_id(doc.doc_id, section_title, idx)
 
+            # Determine doc_type from domain
+            doc_type = "principle" if doc.domain == "training_principles" else "philosophy"
+
             # Build metadata
             metadata: dict[str, str] = {
                 "doc_id": doc.doc_id,
-                "philosophy_id": doc.doc_id,  # Same as doc_id for philosophies
+                "doc_type": doc_type,
+                "philosophy_id": doc.doc_id if doc_type == "philosophy" else "",
                 "domain": doc.domain,
                 "race_types": ",".join(doc.race_types),
                 "risk_level": doc.risk_level,

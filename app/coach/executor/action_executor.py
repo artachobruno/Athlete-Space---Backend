@@ -5,6 +5,7 @@ Owns all MCP tool calls, retries, rate limiting, and safety logic.
 """
 
 import json
+import time
 from datetime import date, datetime, timezone
 from typing import Any, NoReturn
 
@@ -972,7 +973,13 @@ class CoachActionExecutor:
             )
             # Phase 6C: plan_race_build is fire-and-forget (event-emitting, side-effect based)
             # Don't await a result - it emits progress events and writes to DB
-            await call_tool("plan_race_build", tool_args)
+            t_plan_start = time.monotonic()
+            try:
+                await call_tool("plan_race_build", tool_args)
+            finally:
+                t_plan_end = time.monotonic()
+                plan_generation_time = t_plan_end - t_plan_start
+                logger.info(f"[PLAN] plan_generation={plan_generation_time:.1f}s")
             logger.debug(
                 "ActionExecutor: MCP tool plan_race_build started (fire-and-forget)",
                 tool=tool_name,

@@ -20,6 +20,8 @@ class MetadataIndex:
 
         # Build inverted indices
         self.domain_index: dict[Domain, list[int]] = {}
+        self.doc_type_index: dict[str, list[int]] = {}
+        self.philosophy_id_index: dict[str, list[int]] = {}
         self.race_type_index: dict[str, list[int]] = {}
         self.risk_level_index: dict[str, list[int]] = {}
         self.audience_index: dict[str, list[int]] = {}
@@ -35,6 +37,20 @@ class MetadataIndex:
                 if domain not in self.domain_index:
                     self.domain_index[domain] = []
                 self.domain_index[domain].append(idx)
+
+            # Index by doc_type
+            doc_type = chunk.metadata.get("doc_type", "")
+            if doc_type:
+                if doc_type not in self.doc_type_index:
+                    self.doc_type_index[doc_type] = []
+                self.doc_type_index[doc_type].append(idx)
+
+            # Index by philosophy_id
+            philosophy_id = chunk.metadata.get("philosophy_id", "")
+            if philosophy_id:
+                if philosophy_id not in self.philosophy_id_index:
+                    self.philosophy_id_index[philosophy_id] = []
+                self.philosophy_id_index[philosophy_id].append(idx)
 
             # Index by race types
             race_types_str = chunk.metadata.get("race_types", "")
@@ -81,6 +97,8 @@ class MetadataIndex:
         self,
         *,
         domain: Domain | None = None,
+        doc_type: str | None = None,
+        philosophy_id: str | None = None,
         race_type: str | None = None,
         risk_level: str | None = None,
         audience: str | None = None,
@@ -91,6 +109,8 @@ class MetadataIndex:
 
         Args:
             domain: Filter by domain
+            doc_type: Filter by doc_type (e.g., "philosophy", "principle")
+            philosophy_id: Filter by philosophy_id (e.g., "norwegian")
             race_type: Filter by race type
             risk_level: Filter by risk level
             audience: Filter by audience
@@ -109,6 +129,22 @@ class MetadataIndex:
                 candidate_indices = domain_indices
             else:
                 candidate_indices &= domain_indices
+
+        # Filter by doc_type
+        if doc_type:
+            doc_type_indices = set(self.doc_type_index.get(doc_type, []))
+            if candidate_indices is None:
+                candidate_indices = doc_type_indices
+            else:
+                candidate_indices &= doc_type_indices
+
+        # Filter by philosophy_id
+        if philosophy_id:
+            philosophy_indices = set(self.philosophy_id_index.get(philosophy_id, []))
+            if candidate_indices is None:
+                candidate_indices = philosophy_indices
+            else:
+                candidate_indices &= philosophy_indices
 
         # Filter by race type
         if race_type:

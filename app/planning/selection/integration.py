@@ -2,6 +2,13 @@
 
 Wraps async selection logic for sync compiler integration.
 Handles LLM selection with fallback.
+
+RAG RULE:
+- RAG (rag_bias, philosophy_summary) is used for:
+  - Excluding inappropriate templates (rag_bias)
+  - Providing explanatory context (philosophy_summary)
+- Structure (skeleton_days, allocation) is already fixed - RAG does not change it
+- RAG is explanatory context only, never structural authority
 """
 
 import asyncio

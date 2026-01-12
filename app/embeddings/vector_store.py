@@ -76,6 +76,7 @@ class VectorStore:
         query_embedding: list[float],
         top_k: int = 5,
         min_similarity: float = 0.0,
+        candidate_ids: set[str] | None = None,
     ) -> list[tuple[str, float, dict[str, str | int | list[str]]]]:
         """Query the vector store for similar items.
 
@@ -83,6 +84,7 @@ class VectorStore:
             query_embedding: Query embedding vector
             top_k: Number of top results to return
             min_similarity: Minimum similarity threshold (0.0 to 1.0)
+            candidate_ids: Optional set of candidate IDs to filter by (only search within these)
 
         Returns:
             List of tuples: (item_id, similarity_score, metadata)
@@ -101,6 +103,11 @@ class VectorStore:
 
         # Compute cosine similarities (dot product of normalized vectors)
         similarities = np.dot(self.embeddings_matrix, query_vec)
+
+        # Filter by candidate IDs first (if provided)
+        if candidate_ids is not None:
+            candidate_mask = np.array([self.ids[i] in candidate_ids for i in range(len(self.ids))])
+            similarities = np.where(candidate_mask, similarities, -1.0)
 
         # Filter by minimum similarity
         mask = similarities >= min_similarity

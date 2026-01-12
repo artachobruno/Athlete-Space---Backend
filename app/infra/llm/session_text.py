@@ -3,12 +3,13 @@
 This module handles:
 - LLM call for session text generation
 - Post-LLM constraint validation
-- Retry logic (one retry on violation)
+- Retry logic with exponential backoff
 """
 
+import asyncio
 import json
+import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from loguru import logger
 from pydantic import ValidationError
@@ -18,9 +19,6 @@ from app.coach.config.models import USER_FACING_MODEL
 from app.domains.training_plan.models import SessionTextInput, SessionTextOutput
 from app.domains.training_plan.schemas import SessionTextOutputSchema
 from app.services.llm.model import get_model
-
-if TYPE_CHECKING:
-    from typing import Any
 
 
 def _load_prompt() -> str:
@@ -167,6 +165,57 @@ def _raise_constraint_violation_error(max_attempts: int, template_id: str) -> No
     )
 
 
+def _is_retryable_error(error: Exception) -> bool:
+    """Check if an error is retryable (transient).
+
+    Args:
+        error: Exception to check
+
+    Returns:
+        True if error is retryable, False otherwise
+    """
+    error_str = str(error).lower()
+    error_type = type(error).__name__
+
+    # Rate limit errors
+    if "rate limit" in error_str or "429" in error_str or "quota" in error_str:
+        return True
+
+    # Connection/timeout errors
+    if any(
+        keyword in error_str
+        for keyword in [
+            "timeout",
+            "connection",
+            "network",
+            "unavailable",
+            "service unavailable",
+            "503",
+            "502",
+            "500",
+        ]
+    ):
+        return True
+
+    # API errors that might be transient
+    return error_type in {"APIConnectionError", "APIError", "RateLimitError", "TimeoutError"}
+
+
+def _calculate_backoff_delay(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
+    """Calculate exponential backoff delay.
+
+    Args:
+        attempt: Current attempt number (0-indexed)
+        base_delay: Base delay in seconds
+        max_delay: Maximum delay in seconds
+
+    Returns:
+        Delay in seconds
+    """
+    delay = base_delay * (2 ** attempt)
+    return min(delay, max_delay)
+
+
 async def generate_session_text_llm(
     input_data: SessionTextInput,
     retry_on_violation: bool = True,
@@ -205,10 +254,15 @@ async def generate_session_text_llm(
         output_type=SessionTextOutputSchema,
     )
 
-    # Try up to 2 times (initial + 1 retry)
-    max_attempts = 2 if retry_on_violation else 1
+    # Retry configuration
+    # For constraint violations: 2 attempts (initial + 1 retry)
+    # For transient errors: 5 attempts with exponential backoff
+    max_attempts_constraint = 2 if retry_on_violation else 1
+    max_attempts_transient = 5
 
-    for attempt in range(max_attempts):
+    last_error: Exception | None = None
+
+    for attempt in range(max_attempts_transient):
         try:
             logger.debug("Calling LLM for session text", attempt=attempt + 1, template_id=input_data.template_id)
             result = await agent.run(user_message)
@@ -234,7 +288,7 @@ async def generate_session_text_llm(
                 return output
 
             # Constraint violation
-            if attempt < max_attempts - 1:
+            if attempt < max_attempts_constraint - 1:
                 logger.warning(
                     "Constraint violation detected, retrying",
                     attempt=attempt + 1,
@@ -247,19 +301,57 @@ async def generate_session_text_llm(
                 "Constraint validation failed after all attempts",
                 template_id=input_data.template_id,
             )
-            _raise_constraint_violation_error(max_attempts, input_data.template_id)
+            _raise_constraint_violation_error(max_attempts_constraint, input_data.template_id)
 
         except ValidationError as e:
-            if attempt < max_attempts - 1:
+            if attempt < max_attempts_constraint - 1:
                 logger.warning("Schema validation failed, retrying", attempt=attempt + 1, error=str(e))
                 continue
             logger.error("Schema validation failed after all attempts", error=str(e))
-            raise ValidationError(f"Schema validation failed after {max_attempts} attempts: {e}") from e
+            raise ValidationError(f"Schema validation failed after {max_attempts_constraint} attempts: {e}") from e
 
         except Exception as e:
-            logger.error("LLM call failed", error=str(e), error_type=type(e).__name__)
-            if attempt < max_attempts - 1:
-                continue
-            raise RuntimeError(f"LLM call failed: {type(e).__name__}: {e}") from e
+            last_error = e
+            error_traceback = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+            is_retryable = _is_retryable_error(e)
 
+            logger.error(
+                "LLM call failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                attempt=attempt + 1,
+                max_attempts=max_attempts_transient,
+                template_id=input_data.template_id,
+                model=USER_FACING_MODEL,
+                is_retryable=is_retryable,
+                traceback=error_traceback,
+            )
+
+            # If not retryable, fail immediately
+            if not is_retryable:
+                raise RuntimeError(f"LLM call failed with non-retryable error: {type(e).__name__}: {e}") from e
+
+            # If retryable and we have attempts left, wait and retry
+            if attempt < max_attempts_transient - 1:
+                delay = _calculate_backoff_delay(attempt)
+                logger.warning(
+                    "Retrying LLM call after backoff",
+                    attempt=attempt + 2,
+                    max_attempts=max_attempts_transient,
+                    delay_seconds=delay,
+                    error_type=type(e).__name__,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            # All retries exhausted
+            raise RuntimeError(
+                f"LLM call failed after {max_attempts_transient} attempts: {type(e).__name__}: {e}"
+            ) from e
+
+    # Should never reach here, but just in case
+    if last_error:
+        raise RuntimeError(
+            f"LLM call failed after {max_attempts_transient} attempts: {type(last_error).__name__}: {last_error}"
+        ) from last_error
     raise RuntimeError("Failed to generate session text after all attempts")

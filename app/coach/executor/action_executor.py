@@ -25,8 +25,10 @@ from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
 from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
-from app.db.models import SeasonPlan
+from app.db.models import PlannedSession, SeasonPlan
 from app.db.session import get_session
+from app.planner.modify_day_simple import modify_single_day
+from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
 
 
@@ -561,6 +563,11 @@ class CoachActionExecutor:
                 deps.execution_guard.mark_executed("recommend_next_session")
             return await CoachActionExecutor._execute_recommend_next_session(decision, deps, conversation_id)
 
+        if intent == "plan" and horizon == "day":
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("plan_single_day")
+            return await CoachActionExecutor._execute_plan_day(decision, deps, conversation_id)
+
         if intent == "plan" and horizon == "race":
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("plan_race_build")
@@ -570,6 +577,11 @@ class CoachActionExecutor:
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("plan_season")
             return await CoachActionExecutor._execute_plan_season(decision, deps, conversation_id)
+
+        if intent == "modify" and horizon == "day":
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("modify_single_day")
+            return await CoachActionExecutor._execute_modify_day(decision, deps, conversation_id)
 
         if intent == "adjust":
             if deps.execution_guard:
@@ -651,6 +663,216 @@ class CoachActionExecutor:
                 },
             )
             return "Something went wrong while generating your recommendation. Please try again."
+
+    @staticmethod
+    async def _execute_plan_day(
+        decision: OrchestratorAgentResponse,
+        deps: CoachDeps,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Execute single-day session planning.
+
+        Uses embedding-only selection to generate exactly one training session
+        for one day. No hard filters, no philosophy/phase enforcement, no fallbacks.
+
+        Args:
+            decision: Orchestrator decision
+            deps: Dependencies with athlete state and context
+            conversation_id: Optional conversation ID
+
+        Returns:
+            Success message with session details
+        """
+        tool_name = "plan_single_day"
+        step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
+
+        if conversation_id and step_info:
+            step_id, label = step_info
+            await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
+
+        try:
+            # Extract intent context from structured_data or message
+            intent_context: dict[str, str] = {}
+            structured_data = decision.structured_data or {}
+
+            # Extract session_type, focus, etc. from structured_data
+            if "session_type" in structured_data:
+                intent_context["session_type"] = str(structured_data["session_type"])
+            if "focus" in structured_data:
+                intent_context["focus"] = str(structured_data["focus"])
+
+            # Default domain
+            domain = structured_data.get("domain", "running")
+            if not isinstance(domain, str):
+                domain = "running"
+
+            # User context (optional)
+            user_context: dict[str, str | int | float | None] = {}
+            if deps.athlete_state:
+                user_context["fitness"] = deps.athlete_state.ctl
+                user_context["fatigue"] = deps.athlete_state.atl
+
+            # Call single-day planner
+            planned_session = plan_single_day(
+                domain=domain,
+                user_context=user_context,
+                intent_context=intent_context,
+            )
+
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+
+            logger.info(
+                "Single-day session planned successfully",
+                template_id=planned_session.template.template_id,
+                conversation_id=conversation_id,
+            )
+
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
+
+            # Return success message
+            template_kind = planned_session.template.kind
+            return f"Planned a {template_kind} session for today using template {planned_session.template.template_id}."
+
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(
+                    conversation_id, step_id, label, "failed", message=str(e)
+                )
+            logger.exception(
+                "Single-day planning failed",
+                tool=tool_name,
+                conversation_id=conversation_id,
+                error=str(e),
+            )
+            return "Something went wrong while planning your session. Please try again."
+
+    @staticmethod
+    async def _execute_modify_day(
+        decision: OrchestratorAgentResponse,
+        deps: CoachDeps,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Execute single-day session modification.
+
+        Uses embedding-only selection to replace one existing planned session
+        with a better template match. No hard filters, no thresholds, no fallbacks.
+
+        Args:
+            decision: Orchestrator decision
+            deps: Dependencies with athlete state and context
+            conversation_id: Optional conversation ID
+
+        Returns:
+            Success message with modification details
+        """
+        tool_name = "modify_single_day"
+        step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
+
+        if conversation_id and step_info:
+            step_id, label = step_info
+            await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
+
+        if not deps.user_id or not isinstance(deps.user_id, str):
+            return "I need your user ID to modify a session. Please check your account settings."
+        if deps.athlete_id is None:
+            return "I need your athlete ID to modify a session. Please check your account settings."
+
+        try:
+            # Extract modification context from structured_data or message
+            modification_context: dict[str, str] = {}
+            structured_data = decision.structured_data or {}
+
+            # Extract reason and adjustment from structured_data
+            if "reason" in structured_data:
+                modification_context["reason"] = str(structured_data["reason"])
+            if "adjustment" in structured_data:
+                modification_context["adjustment"] = str(structured_data["adjustment"])
+
+            # Fallback: extract from message if not in structured_data
+            if not modification_context.get("reason") and decision.message:
+                message_lower = decision.message.lower()
+                if "tired" in message_lower or "fatigue" in message_lower:
+                    modification_context["reason"] = "fatigue adjustment"
+                elif "shorten" in message_lower or "time" in message_lower:
+                    modification_context["reason"] = "time constraint"
+                    modification_context["adjustment"] = "shorten duration"
+                else:
+                    modification_context["reason"] = "user request"
+
+            # Get target date (default to today)
+            target_date = datetime.now(tz=timezone.utc).date()
+            if "target_date" in structured_data:
+                date_value = structured_data["target_date"]
+                if isinstance(date_value, date):
+                    target_date = date_value
+                elif isinstance(date_value, str):
+                    target_date = date.fromisoformat(date_value)
+
+            # Find existing session for target date
+            target_datetime_start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            target_datetime_end = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+
+            with get_session() as db_session:
+                existing_session = db_session.execute(
+                    select(PlannedSession)
+                    .where(
+                        PlannedSession.user_id == deps.user_id,
+                        PlannedSession.athlete_id == deps.athlete_id,
+                        PlannedSession.date >= target_datetime_start,
+                        PlannedSession.date <= target_datetime_end,
+                        PlannedSession.completed == False,  # noqa: E712
+                    )
+                    .order_by(PlannedSession.date)
+                    .limit(1)
+                ).scalar_one_or_none()
+
+                if not existing_session:
+                    return f"No planned session found for {target_date.isoformat()}. Please plan a session first."
+
+                # Modify the session
+                updated_session = modify_single_day(
+                    existing_session=existing_session,
+                    modification_context=modification_context,
+                )
+
+                # Save changes to database
+                db_session.commit()
+
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+
+            logger.info(
+                "Single-day session modified successfully",
+                old_template=existing_session.template_id,
+                new_template=updated_session.template_id,
+                reason=modification_context.get("reason", ""),
+                conversation_id=conversation_id,
+            )
+
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
+
+            # Return success message
+            return f"Modified your session for {target_date.isoformat()}. New template: {updated_session.template_id}."
+
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(
+                    conversation_id, step_id, label, "failed", message=str(e)
+                )
+            logger.exception(
+                "Single-day modification failed",
+                tool=tool_name,
+                conversation_id=conversation_id,
+                error=str(e),
+            )
+            return "Something went wrong while modifying your session. Please try again."
 
     @staticmethod
     async def _execute_plan_week(

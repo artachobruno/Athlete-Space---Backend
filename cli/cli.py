@@ -1,3 +1,4 @@
+
 """CLI for MCP-Wired Orchestrator.
 
 Developer CLI to run the system offline/locally that exercises the same
@@ -47,8 +48,10 @@ from sqlalchemy import select
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.services.chat_service import process_coach_chat
 from app.config.settings import settings
+from app.core.conversation_id import generate_conversation_id
 from app.db.models import AthleteProfile, StravaAccount, User
 from app.db.session import get_session
+from app.domains.training_plan.template_loader import initialize_template_library_from_cache
 
 # Initialize Rich console for output
 console = Console()
@@ -135,8 +138,16 @@ def _validate_mcp_servers() -> None:
 
     if not db_url or not fs_url:
         raise RuntimeError(
-            "Missing MCP server URLs.\nSet:\n  MCP_DB_SERVER_URL=https://athlete-space-mcp-db.onrender.com\n  MCP_FS_SERVER_URL=https://athlete-space-mcp-fs.onrender.com"
+            "Missing MCP server URLs.\n"
+            "Deployed servers are used by default (no configuration needed).\n"
+            "If you need to override, set:\n"
+            "  MCP_DB_SERVER_URL=https://athlete-space-mcp-db.onrender.com\n"
+            "  MCP_FS_SERVER_URL=https://athlete-space-mcp-fs.onrender.com"
         )
+
+    # Check if localhost is configured (common mistake)
+    localhost_urls = ["http://localhost", "http://127.0.0.1"]
+    is_localhost = any(url.startswith(prefix) for url in [db_url, fs_url] for prefix in localhost_urls)
 
     # Actively probe servers to verify they're reachable
     for name, url in [("DB", db_url), ("FS", fs_url)]:
@@ -144,7 +155,18 @@ def _validate_mcp_servers() -> None:
             response = httpx.get(f"{url}/health", timeout=2.0)
             response.raise_for_status()
         except httpx.RequestError as e:
-            raise RuntimeError(f"MCP {name} server not reachable at {url}. Make sure the server is running: {e}") from e
+            error_msg = f"MCP {name} server not reachable at {url}."
+            if is_localhost:
+                error_msg += (
+                    f"\n\nYou're trying to connect to localhost. "
+                    f"To use deployed servers (default), unset the environment variable:\n"
+                    f"  unset MCP_{name}_SERVER_URL\n"
+                    f"Or explicitly set it to the deployed server:\n"
+                    f"  export MCP_{name}_SERVER_URL=https://athlete-space-mcp-{name.lower()}.onrender.com"
+                )
+            else:
+                error_msg += f" Make sure the server is running: {e}"
+            raise RuntimeError(error_msg) from e
         except httpx.HTTPStatusError as e:
             raise RuntimeError(f"MCP {name} server at {url} returned error: {e.response.status_code}") from e
 
@@ -201,21 +223,26 @@ def check_mcp() -> None:
                 border_style="red",
             )
         )
-        console.print("\n[yellow]To start MCP servers:[/yellow]")
-        console.print("\n[yellow]MCP servers are configured via environment variables:[/yellow]")
-        console.print("  export MCP_DB_SERVER_URL=https://athlete-space-mcp-db.onrender.com")
-        console.print("  export MCP_FS_SERVER_URL=https://athlete-space-mcp-fs.onrender.com")
-        console.print("\n[yellow]Or use local servers:[/yellow]")
+        console.print("\n[yellow]MCP Server Configuration:[/yellow]")
+        console.print("\n[green]Default (Deployed Servers - No configuration needed):[/green]")
+        console.print("  The CLI uses deployed servers by default:")
+        console.print("  - DB: https://athlete-space-mcp-db.onrender.com")
+        console.print("  - FS: https://athlete-space-mcp-fs.onrender.com")
+        console.print("\n  [dim]If you have MCP_*_SERVER_URL set to localhost, unset them to use defaults:[/dim]")
+        console.print("  [dim]  unset MCP_DB_SERVER_URL MCP_FS_SERVER_URL[/dim]")
+        console.print("\n[yellow]To use local servers instead:[/yellow]")
         console.print("  Terminal 1: python mcp/db_server/main.py")
         console.print("  Terminal 2: python mcp/fs_server/main.py")
         console.print("  export MCP_DB_SERVER_URL=http://localhost:8080")
         console.print("  export MCP_FS_SERVER_URL=http://localhost:8081")
         raise typer.Exit(1) from e
 
+    db_url = settings.mcp_db_server_url
+    fs_url = settings.mcp_fs_server_url
     console.print(
         Panel(
             Text("MCP servers are running", style="bold green"),
-            subtitle="DB and FS servers reachable",
+            subtitle=f"DB: {db_url}\nFS: {fs_url}",
             border_style="green",
         )
     )
@@ -388,6 +415,20 @@ def _run_client_with_config(config: ClientConfig, debug: bool) -> None:
         console.print(f"[red]Error:[/red] {e}", style="bold red")
         raise typer.Exit(1) from e
 
+    # Initialize template library (required for planner)
+    try:
+        logger.info("Initializing template library from cache")
+        initialize_template_library_from_cache()
+        logger.info("Template library initialized successfully")
+    except Exception as e:
+        logger.exception("Failed to initialize template library: {}", e)
+        console.print(
+            "[yellow]Warning:[/yellow] Template library not initialized. "
+            "Planner will not work until templates are precomputed.\n"
+            "Run: python scripts/precompute_embeddings.py templates"
+        )
+        # Don't exit - allow CLI to run but planner will fail with clear error
+
     # Run async client
     asyncio.run(_run_client_async(config))
 
@@ -483,8 +524,8 @@ async def _run_orchestrator_single(
     )
 
     try:
-        # Generate a conversation_id for CLI (not a real conversation_id, but needed for tool execution)
-        conversation_id = f"cli_{deps.athlete_id}_{int(datetime.now(UTC).timestamp())}"
+        # Generate a conversation_id for CLI (uses proper format: c_<UUID>)
+        conversation_id = generate_conversation_id()
 
         # Call the same entry point as the API
         reply = await process_coach_chat(

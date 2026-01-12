@@ -18,6 +18,7 @@ Key constraints:
 - Must NOT invent workout types
 """
 
+import asyncio
 import hashlib
 import json
 
@@ -33,6 +34,20 @@ from app.domains.training_plan.models import (
 )
 from app.infra.llm.fallback import generate_fallback_session_text
 from app.infra.llm.session_text import generate_session_text_llm
+
+# Semaphore to limit concurrent LLM calls for session text generation
+# Prevents rate limit errors by limiting concurrent API calls
+_LLM_SEMAPHORE = asyncio.Semaphore(10)  # Max 10 concurrent LLM calls
+
+
+def _get_llm_semaphore() -> asyncio.Semaphore:
+    """Get the shared LLM semaphore.
+
+    Returns:
+        Shared semaphore limiting concurrent LLM calls
+    """
+    return _LLM_SEMAPHORE
+
 
 # Cache TTL: 7 days (sessions are deterministic for same inputs)
 CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -184,9 +199,11 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
         logger.debug("Using cached session text", template_id=session.template.template_id)
         return _session_text_output_from_dict(cached)
 
-    # Try LLM generation
+    # Try LLM generation (with semaphore to limit concurrent calls)
     try:
-        output = await generate_session_text_llm(input_data, retry_on_violation=True)
+        semaphore = _get_llm_semaphore()
+        async with semaphore:
+            output = await generate_session_text_llm(input_data, retry_on_violation=True)
         _set_cached_output(cache_key, output)
         logger.info(
             "Session text generated via LLM",

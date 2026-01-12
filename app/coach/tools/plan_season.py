@@ -1,10 +1,27 @@
+import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
-from app.coach.tools.session_planner import save_planned_sessions
+from app.coach.schemas.athlete_state import AthleteState
 from app.coach.utils.date_extraction import extract_dates_from_text
-from app.coach.utils.llm_client import CoachLLMClient
+from app.domains.training_plan.enums import PlanType, TrainingIntent
+from app.domains.training_plan.guards import (
+    assert_new_planner_only,
+    assert_planner_v2_only,
+    guard_no_recursion,
+    guard_no_repair,
+    log_planner_v2_entry,
+)
+from app.domains.training_plan.models import PlanContext, PlannedSession, PlannedWeek
+from app.domains.training_plan.observability import (
+    PlannerStage,
+    log_event,
+    log_stage_event,
+    log_stage_metric,
+)
+from app.planner.plan_race_simple import execute_canonical_pipeline
 
 # Cache to prevent duplicate calls within a short time window
 _recent_calls: dict[str, datetime] = {}
@@ -179,140 +196,97 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
             "that will be added to your calendar."
         )
 
-    # Generate plan via LLM if we have user_id and athlete_id
+    # Generate plan via canonical pipeline if we have user_id and athlete_id
     if user_id and athlete_id:
         logger.debug(
-            "plan_season: Starting LLM plan generation",
+            "plan_season: Starting canonical pipeline plan generation",
             user_id=user_id,
             athlete_id=athlete_id,
             season_start=season_start.isoformat(),
             season_end=season_end.isoformat(),
         )
         try:
-            # Generate plan via LLM - single source of truth
-            logger.debug("plan_season: Creating LLM client")
-            llm_client = CoachLLMClient()
-            goal_context = {
-                "plan_type": "season",
-                "season_start": season_start.isoformat(),
-                "season_end": season_end.isoformat(),
-            }
-            user_context = {
-                "user_id": user_id,
-                "athlete_id": athlete_id,
-            }
-            athlete_context = {}  # TODO: Fill with actual athlete context
-            calendar_constraints = {}  # TODO: Fill with actual calendar constraints
+            # Guards: Prevent legacy paths and forbidden behaviors
+            assert_new_planner_only()
+            assert_planner_v2_only()
+            guard_no_recursion(0)  # Entry point has depth 0
+            flags_dict: dict[str, bool | str | int | float] = {}
+            guard_no_repair(flags_dict)
 
-            logger.debug(
-                "plan_season: Preparing context for LLM generation",
-                goal_context_keys=list(goal_context.keys()),
-                user_context_keys=list(user_context.keys()),
-                athlete_context_keys=list(athlete_context.keys()),
-                calendar_constraints_keys=list(calendar_constraints.keys()),
-            )
-            logger.debug(
-                "plan_season: Calling generate_training_plan_via_llm",
-                goal_context=goal_context,
-                user_context=user_context,
-            )
-            training_plan = await llm_client.generate_training_plan_via_llm(
-                user_context=user_context,
-                athlete_context=athlete_context,
-                goal_context=goal_context,
-                calendar_constraints=calendar_constraints,
-            )
-            logger.debug(
-                "plan_season: Training plan generated via LLM",
-                plan_type=training_plan.plan_type,
-                session_count=len(training_plan.sessions),
-                has_rationale=bool(training_plan.rationale),
-                assumptions_count=len(training_plan.assumptions),
-            )
+            # Log entry point for monitoring
+            log_planner_v2_entry()
 
-            # Convert TrainingPlan to session dictionaries
-            # Phase 6: Persist exactly what LLM returns - only minimal field name mapping for DB compatibility
-            logger.debug(
-                "plan_season: Converting TrainingPlan to session dictionaries",
-                total_sessions=len(training_plan.sessions),
-            )
-            sessions = []
-            for idx, session in enumerate(training_plan.sessions):
-                logger.debug(
-                    "plan_season: Converting session to dict",
-                    index=idx,
-                    session_date=session.date.isoformat(),
-                    session_sport=session.sport,
-                    session_title=session.title,
-                    session_intensity=session.intensity,
-                    session_week_number=session.week_number,
-                )
-                # Map sport field to type field (database schema expects "type" not "sport")
-                # Preserve all other fields exactly as LLM provides
-                session_dict: dict = {
-                    "date": session.date,  # Exactly as LLM - timezone preserved
-                    "type": session.sport.capitalize() if session.sport != "rest" else "Rest",  # Field name mapping only
-                    "title": session.title,  # Exactly as LLM
-                    "description": session.description,  # Exactly as LLM
-                    "duration_minutes": session.duration_minutes,  # Exactly as LLM
-                    "distance_km": session.distance_km,  # Exactly as LLM
-                    "intensity": session.intensity,  # Exactly as LLM
-                    "notes": session.purpose,  # Exactly as LLM
-                    "week_number": session.week_number,  # Exactly as LLM
-                }
-                sessions.append(session_dict)
-            logger.debug(
-                "plan_season: Sessions converted",
-                total_sessions=len(sessions),
-                first_session_date=sessions[0]["date"].isoformat() if sessions else None,
-                last_session_date=sessions[-1]["date"].isoformat() if sessions else None,
-            )
+            # Generate plan_id for correlation
+            plan_id = str(uuid.uuid4())
 
-            plan_id = f"season_{season_start.strftime('%Y%m%d')}_{season_end.strftime('%Y%m%d')}"
-            logger.debug(
-                "plan_season: Calling save_planned_sessions via MCP",
-                plan_id=plan_id,
-                session_count=len(sessions),
-                plan_type="season",
+            logger.info(
+                "planner_v2_entry: Starting season plan generation",
+                season_start=season_start.isoformat(),
+                season_end=season_end.isoformat(),
                 user_id=user_id,
                 athlete_id=athlete_id,
+                plan_id=plan_id,
             )
-            result = await save_planned_sessions(
+
+            # Calculate total weeks
+            total_weeks = int((season_end.date() - season_start.date()).days / 7)
+            if total_weeks < 4:
+                total_weeks = 12  # Default to 12 weeks for season plans
+                season_end = season_start + timedelta(weeks=12)
+
+            # Create plan context
+            ctx = PlanContext(
+                plan_type=PlanType.SEASON,
+                intent=TrainingIntent.BUILD,
+                weeks=total_weeks,
+                race_distance=None,  # Season plans don't have race distance
+                target_date=season_end.date().isoformat(),
+            )
+
+            # Use default athlete state
+            athlete_state = AthleteState(
+                ctl=50.0,
+                atl=45.0,
+                tsb=5.0,
+                load_trend="stable",
+                volatility="low",
+                days_since_rest=2,
+                days_to_race=None,
+                seven_day_volume_hours=5.0,
+                fourteen_day_volume_hours=10.0,
+                flags=[],
+                confidence=0.9,
+            )
+
+            # Use canonical pipeline
+            def volume_calculator(week_idx: int) -> float:
+                """Calculate volume for a week (season plans use moderate progression)."""
+                base_volume = 40.0
+                return base_volume + (week_idx * 1.5)  # Moderate progression for season plans
+
+            _planned_weeks, persist_result = await execute_canonical_pipeline(
+                ctx=ctx,
+                athlete_state=athlete_state,
                 user_id=user_id,
                 athlete_id=athlete_id,
-                sessions=sessions,
-                plan_type="season",
                 plan_id=plan_id,
+                base_volume_calculator=volume_calculator,
             )
-            saved_count_raw = result.get("saved_count", 0)
-            saved_count = int(saved_count_raw) if isinstance(saved_count_raw, (int, str)) else 0
-            persistence_status = result.get("persistence_status", "degraded")
 
-            logger.debug(
-                "plan_season: save_planned_sessions completed",
-                plan_id=plan_id,
-                saved_count=saved_count,
-                persistence_status=persistence_status,
-                expected_count=len(sessions),
+            saved_count = persist_result.created
+            logger.info(
+                "planner_v2_entry: Season plan generation complete",
+                season_start=season_start.isoformat(),
+                season_end=season_end.isoformat(),
+                total_weeks=total_weeks,
+                persisted_count=saved_count,
                 user_id=user_id,
                 athlete_id=athlete_id,
             )
 
-            if persistence_status == "saved" and saved_count > 0:
-                logger.info(f"Successfully saved {saved_count} planned sessions for season plan")
-            else:
-                logger.warning(
-                    "Season plan generated but NOT persisted (MCP down) — returning plan anyway",
-                    plan_id=plan_id,
-                    persistence_status=persistence_status,
-                    expected_count=len(sessions),
-                )
-
-            weeks = (season_end - season_start).days // 7
-            return generate_season_plan_response(season_start, season_end, saved_count, weeks)
+            return generate_season_plan_response(season_start, season_end, saved_count, total_weeks)
         except Exception as e:
             logger.error(f"Error generating season plan: {e}", exc_info=True)
-            # Phase 7: User-visible error message
             raise RuntimeError(
                 "The AI coach failed to generate a valid training plan. Please retry."
             ) from e

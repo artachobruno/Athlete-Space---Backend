@@ -42,6 +42,7 @@ class PlanType(StrEnum):
 
     RACE = "race"
     SEASON = "season"
+    WEEK = "week"
 
 
 # -----------------------------

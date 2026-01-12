@@ -11,6 +11,7 @@ After this pipeline:
 - No cross-philosophy structure leaks
 """
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 from loguru import logger
@@ -128,8 +129,11 @@ async def build_plan_structure(
         log_stage_metric(PlannerStage.PHILOSOPHY, False)
         raise
 
+    # Create new PlanContext with philosophy set (PlanContext is immutable)
+    ctx_with_philosophy = replace(ctx, philosophy=philosophy)
+
     runtime_ctx = PlanRuntimeContext(
-        plan=ctx,
+        plan=ctx_with_philosophy,
         philosophy=philosophy,
     )
 

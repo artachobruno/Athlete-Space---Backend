@@ -1,3 +1,4 @@
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
@@ -9,10 +10,25 @@ from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.constraints import TrainingConstraints
 from app.coach.schemas.load_adjustment import LoadAdjustmentDecision
 from app.coach.tools.adjust_load import adjust_training_load
-from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.utils.constraints import RecoveryState
 from app.db.models import PlannedSession
 from app.db.session import get_session
+from app.domains.training_plan.enums import PlanType, TrainingIntent
+from app.domains.training_plan.guards import (
+    assert_new_planner_only,
+    assert_planner_v2_only,
+    guard_no_recursion,
+    guard_no_repair,
+    log_planner_v2_entry,
+)
+from app.domains.training_plan.models import PlanContext
+from app.domains.training_plan.observability import (
+    PlannerStage,
+    log_event,
+    log_stage_event,
+    log_stage_metric,
+)
+from app.planner.plan_race_simple import execute_canonical_pipeline
 
 # Cache to prevent duplicate calls within a short time window
 _recent_calls: dict[str, datetime] = {}
@@ -185,127 +201,95 @@ async def plan_week(
     monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
     sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
-    # B8: Generate planned sessions using adjusted values
-    logger.info("B8: Generating planned sessions...")
+    # Use canonical pipeline for weekly planning
+    logger.info("B8: Generating planned sessions using canonical pipeline...")
 
-    # Base volume from training summary or state
+    # Guards: Prevent legacy paths and forbidden behaviors
+    assert_new_planner_only()
+    assert_planner_v2_only()
+    guard_no_recursion(0)  # Entry point has depth 0
+    flags_dict: dict[str, bool | str | int | float] = {}
+    if state.flags:
+        flags_dict = dict.fromkeys(state.flags, True)
+    guard_no_repair(flags_dict)
+
+    # Log entry point for monitoring
+    log_planner_v2_entry()
+
+    # Generate plan_id for correlation
+    plan_id = str(uuid.uuid4())
+
+    logger.info(
+        "planner_v2_entry: Starting weekly plan generation",
+        week_start=monday.isoformat(),
+        week_end=sunday.isoformat(),
+        user_id=user_id,
+        athlete_id=athlete_id,
+        plan_id=plan_id,
+    )
+
+    # Create plan context for 1 week
+    ctx = PlanContext(
+        plan_type=PlanType.WEEK,
+        intent=TrainingIntent.BUILD,
+        weeks=1,
+        race_distance=None,  # Week plans don't have race distance
+        target_date=sunday.date().isoformat(),
+    )
+
+    # Calculate base volume from training summary or state
     base_volume_hours = training_summary.volume.get("total_duration_minutes", 0) / 60.0
     if base_volume_hours == 0:
-        # Fallback to state
         base_volume_hours = state.seven_day_volume_hours
 
     # Apply load adjustment if available
     if load_adjustment:
         adjusted_volume_hours = base_volume_hours * (1.0 + load_adjustment.volume_delta_pct)
-        intensity_cap = load_adjustment.intensity_cap
-        forced_rest_days = set(load_adjustment.forced_rest_days)
         logger.info(
             "B8: Applying LoadAdjustmentDecision to planning",
             base_volume_hours=base_volume_hours,
             adjusted_volume_hours=adjusted_volume_hours,
             volume_delta_pct=load_adjustment.volume_delta_pct,
-            intensity_cap=intensity_cap,
-            forced_rest_days_count=len(forced_rest_days),
         )
     else:
         adjusted_volume_hours = base_volume_hours
-        intensity_cap = "none"
-        forced_rest_days = set()
         logger.info(
             "B8: No load adjustment, using base values",
             base_volume_hours=base_volume_hours,
         )
 
-    # Generate sessions (5-7 sessions per week)
-    sessions = []
-    current_date = monday.date()
-    session_count = 0
+    # Use canonical pipeline
+    def volume_calculator(_week_idx: int) -> float:
+        """Calculate volume for the week (convert hours to miles)."""
+        # Convert hours to approximate miles (assuming ~8 min/mile pace)
+        # This is a rough conversion - the actual volume allocator will handle distribution
+        return adjusted_volume_hours * 7.5  # ~7.5 miles per hour at 8 min/mile
 
-    # Distribute sessions across the week
-    for day_offset in range(7):
-        session_date = current_date + timedelta(days=day_offset)
-        date_str = session_date.isoformat()
-
-        # Skip forced rest days
-        if date_str in forced_rest_days:
-            sessions.append({
-                "date": session_date.isoformat(),
-                "type": "Rest",
-                "title": "Rest Day",
-                "intensity": "rest",
-                "notes": "Recovery day",
-            })
-            continue
-
-        # Skip if we've generated enough sessions
-        if session_count >= 7:
-            break
-
-        # Determine session type based on day and constraints
-        if day_offset in {1, 3}:  # Tuesday, Thursday - quality days
-            if intensity_cap == "easy":
-                intensity = "easy"
-                duration_minutes = 45
-                title = "Easy Run"
-            elif intensity_cap == "moderate":
-                intensity = "moderate"
-                duration_minutes = 50
-                title = "Moderate Run"
-            else:
-                intensity = "hard"
-                duration_minutes = 60
-                title = "Hard Workout"
-        else:  # Other days - easy runs
-            intensity = "easy"
-            duration_minutes = int((adjusted_volume_hours * 60) / max(5, 1))
-            duration_minutes = max(30, min(duration_minutes, 90))
-            title = "Easy Run"
-
-        sessions.append({
-            "date": session_date.isoformat(),
-            "type": "Run",
-            "title": title,
-            "duration_minutes": duration_minutes,
-            "intensity": intensity,
-            "notes": "Weekly training session",
-        })
-        session_count += 1
-
-    # Save sessions via MCP - fail loudly if persistence fails
-    logger.info(
-        "B8: Saving planned sessions",
-        session_count=len(sessions),
-        week_start=monday.date().isoformat(),
-        week_end=sunday.date().isoformat(),
-    )
-
-    result = await save_planned_sessions(
+    planned_weeks, persist_result = await execute_canonical_pipeline(
+        ctx=ctx,
+        athlete_state=state,
         user_id=user_id,
         athlete_id=athlete_id,
-        sessions=sessions,
-        plan_type="weekly",
-        plan_id=None,
+        plan_id=plan_id,
+        base_volume_calculator=volume_calculator,
     )
-    saved_count_raw = result.get("saved_count", 0)
-    saved_count = int(saved_count_raw) if isinstance(saved_count_raw, (int, str)) else 0
-    persistence_status = result.get("persistence_status", "degraded")
 
-    if persistence_status == "saved" and saved_count > 0:
-        logger.info(
-            "B8: Planned sessions saved successfully",
-            saved_count=saved_count,
-            session_details=[{"date": s["date"], "title": s["title"], "intensity": s.get("intensity")} for s in sessions[:5]],
-        )
+    saved_count = persist_result.created
+    logger.info(
+        "planner_v2_entry: Weekly plan generation complete",
+        week_start=monday.isoformat(),
+        week_end=sunday.isoformat(),
+        persisted_count=saved_count,
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
+
+    if saved_count > 0:
         save_status = f"• **{saved_count} training sessions** added to your calendar\n"
         calendar_message = "Your planned sessions are now available in your calendar!"
     else:
-        logger.warning(
-            "B8: Weekly plan generated but NOT persisted (MCP down) — returning plan anyway",
-            session_count=len(sessions),
-            persistence_status=persistence_status,
-        )
         save_status = (
-            f"• **{len(sessions)} training sessions** generated "
+            f"• **{len(planned_weeks[0].sessions) if planned_weeks else 0} training sessions** generated "
             f"(not saved - calendar unavailable)\n"
         )
         calendar_message = (

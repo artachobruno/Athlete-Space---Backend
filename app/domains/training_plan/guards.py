@@ -110,12 +110,12 @@ def guard_invariants(
     total_distance = 0.0
     for session in planned_sessions:
         # Distance must be positive
-        if session.allocated_distance_km <= 0:
+        if session.distance <= 0:
             raise ValueError(
-                f"Session distance must be > 0, got: {session.allocated_distance_km}"
+                f"Session distance must be > 0, got: {session.distance}"
             )
 
-        total_distance += session.allocated_distance_km
+        total_distance += session.distance
 
         # Template must be valid
         if not session.template.template_id:

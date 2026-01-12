@@ -96,9 +96,9 @@ async def generate_macro_plan(
             raise InvalidMacroPlanError(
                 f"Race plan must end with taper or recovery, got {weeks[-1].focus.value}"
             )
-    elif ctx.plan_type == PlanType.SEASON:
+    elif ctx.plan_type in {PlanType.SEASON, PlanType.WEEK}:
         if parsed.race_distance is not None:
-            raise InvalidMacroPlanError("Season plan must not have race_distance")
+            raise InvalidMacroPlanError(f"{ctx.plan_type.value} plan must not have race_distance")
 
     # Validate all volumes are positive
     for week in weeks:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -300,7 +300,10 @@ def _persist_week_sessions(
                     "B7: Failed to persist session",
                     week_index=week.week_index,
                     day_index=day_idx,
+                    session_order=session_order,
                     error=str(e),
+                    error_type=type(e).__name__,
+                    exc_info=True,
                 )
                 week_warnings.append(f"Week {week.week_index}, day {day_idx}: Failed to persist: {e}")
                 week_skipped += 1
@@ -356,19 +359,42 @@ def _upsert_session(
 
     # Build unique constraint key for lookup
     # Using: user_id, athlete_id, plan_id, date, session_order
-    existing = db_session.execute(
-        select(DBPlannedSession).where(
+    try:
+        # Build query conditions
+        conditions = [
             DBPlannedSession.user_id == user_id,
             DBPlannedSession.athlete_id == athlete_id,
-            DBPlannedSession.plan_id == plan_id,
             DBPlannedSession.date == session_datetime,
             DBPlannedSession.session_order == session_order,
+        ]
+
+        # Handle plan_id (can be None for some plans)
+        if plan_id is not None:
+            conditions.append(DBPlannedSession.plan_id == plan_id)
+        else:
+            conditions.append(DBPlannedSession.plan_id.is_(None))
+
+        query = select(DBPlannedSession).where(and_(*conditions))
+        existing = db_session.execute(query).scalar_one_or_none()
+    except Exception as e:
+        logger.error(
+            "B7: Failed to query existing session",
+            week_index=week.week_index,
+            day_index=planned_session.day_index,
+            session_order=session_order,
+            user_id=user_id,
+            athlete_id=athlete_id,
+            plan_id=plan_id,
+            date=session_datetime.isoformat() if session_datetime else None,
+            error=str(e),
+            error_type=type(e).__name__,
+            exc_info=True,
         )
-    ).first()
+        raise
 
     if existing:
         # Update existing session
-        db_session_obj = existing[0]
+        db_session_obj = existing
         db_session_obj.title = title
         db_session_obj.notes = description
         db_session_obj.distance_km = distance_km
@@ -386,34 +412,47 @@ def _upsert_session(
         return "updated"
 
     # Create new session
-    db_session_obj = DBPlannedSession(
-        id=str(uuid.uuid4()),
-        user_id=user_id,
-        athlete_id=athlete_id,
-        plan_id=plan_id,
-        date=session_datetime,
-        time=time_str,
-        type="Run",  # Default to Run, can be extended later
-        title=title,
-        duration_minutes=duration_min,
-        distance_km=distance_km,
-        distance_mi=distance_mi,
-        intensity=session_type,
-        session_type=session_type,
-        notes=description,
-        plan_type=ctx.plan_type.value,
-        week_number=week.week_index,
-        session_order=session_order,
-        phase=phase,
-        source="planner_v2",
-        philosophy_id=philosophy_id,
-        template_id=template_id,
-        tags=tags if tags else None,
-        status="planned",
-        completed=False,
-    )
+    try:
+        db_session_obj = DBPlannedSession(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            athlete_id=athlete_id,
+            plan_id=plan_id,
+            date=session_datetime,
+            time=time_str,
+            type="Run",  # Default to Run, can be extended later
+            title=title,
+            duration_minutes=duration_min,
+            distance_km=distance_km,
+            distance_mi=distance_mi,
+            intensity=session_type,
+            session_type=session_type,
+            notes=description,
+            plan_type=ctx.plan_type.value,
+            week_number=week.week_index,
+            session_order=session_order,
+            phase=phase,
+            source="planner_v2",
+            philosophy_id=philosophy_id,
+            template_id=template_id,
+            tags=tags if tags else None,
+            status="planned",
+            completed=False,
+        )
 
-    db_session.add(db_session_obj)
+        db_session.add(db_session_obj)
+    except Exception as e:
+        logger.error(
+            "B7: Failed to create new session object",
+            week_index=week.week_index,
+            day_index=planned_session.day_index,
+            session_order=session_order,
+            error=str(e),
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+        raise
+
     return "created"
 
 

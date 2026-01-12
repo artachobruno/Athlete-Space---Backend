@@ -45,3 +45,9 @@ class TemplateSelectionError(PlannerError):
     """Raised when template selection fails (e.g., no matching templates)."""
 
     pass
+
+
+class TemplateValidationError(PlannerError):
+    """Raised when template validation fails (e.g., missing templates or insufficient coverage)."""
+
+    pass

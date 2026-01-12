@@ -51,6 +51,7 @@ from app.core.observe import init as observe_init
 from app.db.models import Base
 from app.db.schema_check import verify_schema
 from app.db.session import get_engine
+from app.domains.training_plan.template_loader import initialize_template_library_from_cache
 from app.ingestion.api import router as ingestion_strava_router
 from app.ingestion.scheduler import ingestion_tick
 from app.ingestion.sync_scheduler import sync_tick
@@ -514,6 +515,22 @@ async def lifespan(_app: FastAPI):
             # Don't fail startup if scheduler fails
     else:
         logger.warning("[SCHEDULER] Skipping scheduler startup - database not ready")
+
+    # Initialize template library (required for planner)
+    # This must succeed - if it fails, the planner will not work
+    try:
+        logger.info("[TEMPLATE_LIBRARY] Initializing template library from cache")
+        initialize_template_library_from_cache()
+        logger.info("[TEMPLATE_LIBRARY] Template library initialized successfully")
+    except Exception as e:
+        logger.exception("[TEMPLATE_LIBRARY] Failed to initialize template library: {}", e)
+        # This is a critical failure - planner will not work without templates
+        # But we don't want to crash the entire server, so we log the error
+        # The planner will fail with a clear error message if templates aren't loaded
+        logger.error(
+            "[TEMPLATE_LIBRARY] Planner will not work until template library is initialized. "
+            "Run: python scripts/precompute_embeddings.py --templates"
+        )
 
     # Yield control to FastAPI immediately - this allows the server to bind to the port
     # CRITICAL: Everything before yield runs during startup, everything after runs during shutdown

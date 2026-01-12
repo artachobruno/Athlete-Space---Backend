@@ -19,15 +19,65 @@ from app.domains.training_plan.models import DaySkeleton, DistributedDay, WeekSt
 
 # Session type to DayType mapping (reverse of week_structure.py mapping)
 # Used to map DayType back to possible session types
+# Must match all session types in week_structure.py SESSION_TYPE_TO_DAY_TYPE
 _SESSION_TYPE_TO_DAY_TYPE_MAP: dict[str, str] = {
+    # Easy/Recovery sessions
     "easy": "easy",
     "easy_plus_strides": "easy",
+    "easy_or_shakeout": "easy",
+    "easy_or_marathon_touch": "easy",
+    "easy_or_steady_short": "easy",
+    "easy_or_light_fartlek": "easy",
+    "easy_or_terrain_touch": "easy",
+    "medium_easy": "easy",
+    "recovery": "easy",
+    "pre_race_shakeout": "easy",
+    "aerobic": "easy",
+    "aerobic_plus_strides": "easy",
+    "aerobic_steady": "easy",
+    "aerobic_steady_light": "easy",
+    "aerobic_steady_or_climb": "easy",
+    # Quality/Intensity sessions
     "threshold": "quality",
+    "threshold_light": "quality",
+    "threshold_double": "quality",
+    "threshold_double_or_marathon": "quality",
+    "threshold_or_marathon": "quality",
+    "threshold_or_speed_endurance": "quality",
+    "threshold_or_steady": "quality",
     "vo2": "quality",
+    "vo2_light": "quality",
+    "vo2_or_hill_reps": "quality",
+    "vo2_or_speed": "quality",
+    "speed_or_vo2": "quality",
+    "marathon_pace": "quality",
+    "marathon_pace_light": "quality",
+    "economy_light": "quality",
+    "economy_or_specific": "quality",
+    "hill_strength_or_fartlek": "quality",
+    "marathon_specific_or_progression": "quality",
+    # Long runs
     "long": "long",
+    "long_back_to_back": "long",
+    "long_back_to_back_hike": "long",
+    "long_mountain": "long",
+    "long_progressive": "long",
+    "long_specific": "long",
+    "medium_long": "long",
+    "moderate_long": "long",
+    "short_long": "long",
+    # Rest
     "rest": "rest",
+    # Race
     "race": "race",
+    "race_day": "race",
+    # Cross/Terrain
     "cross": "cross",
+    "downhill_economy_or_technical": "cross",
+    "uphill_light": "cross",
+    "uphill_strength_or_hike": "cross",
+    "short_mountain": "cross",
+    "short_specific": "cross",
 }
 
 _RAG_PATH = Path(__file__).resolve().parents[3] / "data" / "rag" / "session_group_ratios.yaml"
@@ -96,8 +146,16 @@ def allocate_week_volume(
         raise VolumeAllocationError("Invalid session group ratio RAG format")
 
     # Step 1: Map day -> group
+    # Skip race days and rest days - they don't need volume allocation
     day_to_group: dict[int, str] = {}
     for day in structure.days:
+        # Race days: skip volume allocation (race distance is determined by the race itself)
+        if day.day_type.value == "race":
+            continue
+        # Rest days: skip volume allocation (no training)
+        if day.day_type.value == "rest":
+            continue
+
         group = _map_day_to_group(day.day_type.value, structure.session_groups)
         if group is None:
             raise VolumeAllocationError(
@@ -150,15 +208,22 @@ def allocate_week_volume(
     rounded: dict[int, float] = {k: round(v, 1) for k, v in allocations.items()}
     drift = round(weekly_distance - sum(rounded.values()), 1)
 
-    # Step 7: Drift → long run
+    # Step 7: Drift correction
+    # Prefer long run, fallback to highest volume day if no long run exists
     long_days = [
         day_index for day_index, group in day_to_group.items() if group == "long"
     ]
 
-    if not long_days:
-        raise VolumeAllocationError("No long run for drift correction")
+    if long_days:
+        # Assign drift to first long run day (preferred)
+        drift_day_index = long_days[0]
+    else:
+        # Fallback: assign drift to day with highest volume
+        if not rounded:
+            raise VolumeAllocationError("No days available for drift correction")
+        drift_day_index = max(rounded.items(), key=lambda x: x[1])[0]
 
-    rounded[long_days[0]] = round(rounded[long_days[0]] + drift, 1)
+    rounded[drift_day_index] = round(rounded[drift_day_index] + drift, 1)
 
     # Final validation
     total_allocated = round(sum(rounded.values()), 1)
@@ -167,11 +232,16 @@ def allocate_week_volume(
             f"Volume mismatch after allocation: {total_allocated} != {weekly_distance}"
         )
 
+    # Build final allocation - race and rest days get 0 distance
     return [
         DistributedDay(
             day_index=day.day_index,
             day_type=day.day_type,
-            distance=rounded.get(day.day_index, 0.0),
+            distance=(
+                0.0
+                if day.day_type.value in {"race", "rest"}
+                else rounded.get(day.day_index, 0.0)
+            ),
         )
         for day in structure.days
     ]

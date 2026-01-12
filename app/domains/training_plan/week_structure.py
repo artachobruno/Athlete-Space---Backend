@@ -38,14 +38,63 @@ DAY_NAME_TO_INDEX: dict[str, int] = {
 
 # Session type to DayType mapping
 SESSION_TYPE_TO_DAY_TYPE: dict[str, DayType] = {
+    # Easy/Recovery sessions
     "easy": DayType.EASY,
     "easy_plus_strides": DayType.EASY,
+    "easy_or_shakeout": DayType.EASY,
+    "easy_or_marathon_touch": DayType.EASY,
+    "easy_or_steady_short": DayType.EASY,
+    "easy_or_light_fartlek": DayType.EASY,
+    "easy_or_terrain_touch": DayType.EASY,
+    "medium_easy": DayType.EASY,
+    "recovery": DayType.EASY,
+    "pre_race_shakeout": DayType.EASY,
+    "aerobic": DayType.EASY,
+    "aerobic_plus_strides": DayType.EASY,
+    "aerobic_steady": DayType.EASY,
+    "aerobic_steady_light": DayType.EASY,
+    "aerobic_steady_or_climb": DayType.EASY,
+    # Quality/Intensity sessions
     "threshold": DayType.QUALITY,
+    "threshold_light": DayType.QUALITY,
+    "threshold_double": DayType.QUALITY,
+    "threshold_double_or_marathon": DayType.QUALITY,
+    "threshold_or_marathon": DayType.QUALITY,
+    "threshold_or_speed_endurance": DayType.QUALITY,
+    "threshold_or_steady": DayType.QUALITY,
     "vo2": DayType.QUALITY,
+    "vo2_light": DayType.QUALITY,
+    "vo2_or_hill_reps": DayType.QUALITY,
+    "vo2_or_speed": DayType.QUALITY,
+    "speed_or_vo2": DayType.QUALITY,
+    "marathon_pace": DayType.QUALITY,
+    "marathon_pace_light": DayType.QUALITY,
+    "economy_light": DayType.QUALITY,
+    "economy_or_specific": DayType.QUALITY,
+    "hill_strength_or_fartlek": DayType.QUALITY,
+    "marathon_specific_or_progression": DayType.QUALITY,
+    # Long runs
     "long": DayType.LONG,
+    "long_back_to_back": DayType.LONG,
+    "long_back_to_back_hike": DayType.LONG,
+    "long_mountain": DayType.LONG,
+    "long_progressive": DayType.LONG,
+    "long_specific": DayType.LONG,
+    "medium_long": DayType.LONG,
+    "moderate_long": DayType.LONG,
+    "short_long": DayType.LONG,
+    # Rest
     "rest": DayType.REST,
+    # Race
     "race": DayType.RACE,
+    "race_day": DayType.RACE,
+    # Cross/Terrain
     "cross": DayType.CROSS,
+    "downhill_economy_or_technical": DayType.CROSS,
+    "uphill_light": DayType.CROSS,
+    "uphill_strength_or_hike": DayType.CROSS,
+    "short_mountain": DayType.CROSS,
+    "short_specific": DayType.CROSS,
 }
 
 
@@ -197,13 +246,22 @@ def load_week_structure(
     )
 
     # Filter by exact matches (steps 3-6)
+    # Audience filter:
+    # - If philosophy audience is "all", accept any structure
+    # - If structure audience is "all", accept for any target audience
+    # - Otherwise, require exact match
+    def audience_matches(spec_audience: str, target_audience: str) -> bool:
+        if target_audience == "all":
+            return True
+        return spec_audience in {"all", target_audience}
+
     matches = [
         spec
         for spec in all_structures
         if spec.metadata.philosophy_id == ctx.philosophy.philosophy_id
         and spec.metadata.race_types
         and ctx.plan.race_distance.value in spec.metadata.race_types
-        and spec.metadata.audience == ctx.philosophy.audience
+        and audience_matches(spec.metadata.audience, ctx.philosophy.audience)
         and spec.metadata.phase == week.focus.value
     ]
 

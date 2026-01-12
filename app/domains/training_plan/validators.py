@@ -14,7 +14,7 @@ def validate_plan_context(ctx: PlanContext) -> None:
 
     Rules:
     - Race plans must have a race_distance
-    - Season plans must not have a race_distance
+    - Season and Week plans must not have a race_distance
 
     Args:
         ctx: Plan context to validate
@@ -25,8 +25,8 @@ def validate_plan_context(ctx: PlanContext) -> None:
     if ctx.plan_type == PlanType.RACE and ctx.race_distance is None:
         raise InvalidPlanContextError("Race plan requires race_distance")
 
-    if ctx.plan_type == PlanType.SEASON and ctx.race_distance is not None:
-        raise InvalidPlanContextError("Season plan must not specify race_distance")
+    if ctx.plan_type in {PlanType.SEASON, PlanType.WEEK} and ctx.race_distance is not None:
+        raise InvalidPlanContextError(f"{ctx.plan_type.value} plan must not specify race_distance")
 
 
 def validate_macro_plan(

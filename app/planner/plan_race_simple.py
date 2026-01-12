@@ -16,6 +16,7 @@ Pipeline stages:
 No recursion. No repair. No retries. No mutations after generation.
 """
 
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
@@ -65,6 +66,8 @@ async def _generate_week_with_text(
 ) -> PlannedWeek:
     """Generate session text for a week and return PlannedWeek.
 
+    Parallelizes session text generation within the week for better performance.
+
     Args:
         week_idx: Week index (0-based)
         structure: Week structure
@@ -77,7 +80,6 @@ async def _generate_week_with_text(
         PlannedWeek with sessions that have text_output set
     """
     log_stage_event(PlannerStage.TEXT, "start", plan_id, {"week_index": week_idx + 1})
-    planned_week: PlannedWeek | None = None
     try:
         with timing("planner.stage.text"):
             context_dict = {
@@ -87,15 +89,21 @@ async def _generate_week_with_text(
                 "week_index": week_idx + 1,
             }
 
-            sessions_with_text = []
-            for session in planned_sessions:
+            # Parallelize session text generation within the week
+            # Semaphore is handled inside generate_session_text to limit concurrent LLM calls
+            async def generate_session_with_text(session: PlannedSession) -> PlannedSession:
                 session_text = await generate_session_text(session, context_dict)
-                sessions_with_text.append(session.with_text(session_text))
+                return session.with_text(session_text)
+
+            # Generate all session texts in parallel (limited by semaphore)
+            sessions_with_text = await asyncio.gather(
+                *[generate_session_with_text(session) for session in planned_sessions]
+            )
 
             planned_week = PlannedWeek(
                 week_index=week_idx + 1,
                 focus=structure.focus,
-                sessions=sessions_with_text,
+                sessions=list(sessions_with_text),
             )
         log_stage_event(
             PlannerStage.TEXT,
@@ -109,9 +117,209 @@ async def _generate_week_with_text(
         log_stage_metric(PlannerStage.TEXT, False)
         raise
     else:
-        if planned_week is None:
-            raise RuntimeError("planned_week was not created")
         return planned_week
+
+
+async def execute_canonical_pipeline(
+    ctx: PlanContext,
+    athlete_state: AthleteState,
+    user_id: str,
+    athlete_id: int,
+    plan_id: str,
+    *,
+    progress_callback: Callable[[int, int, str], Awaitable[None] | None] | None = None,
+    base_volume_calculator: Callable[[int], float] | None = None,
+) -> tuple[list[PlannedWeek], PersistResult]:
+    """Execute the canonical planner pipeline (B2 → B7).
+
+    This is the shared core pipeline used by all plan types (race, season, week).
+
+    Args:
+        ctx: Plan context
+        athlete_state: Athlete state snapshot
+        user_id: User ID
+        athlete_id: Athlete ID
+        plan_id: Plan ID for correlation
+        progress_callback: Optional callback(week_number, total_weeks, phase) for progress tracking
+        base_volume_calculator: Optional function(week_idx) -> volume for volume calculation
+
+    Returns:
+        Tuple of (list of PlannedWeek objects, PersistResult)
+
+    Raises:
+        RuntimeError: If planning fails at any stage
+    """
+    # B2 → B2.5 → B3: Build plan structure
+    logger.debug("B2-B3: Building plan structure")
+    runtime_ctx, week_structures = await build_plan_structure(
+        ctx=ctx,
+        athlete_state=athlete_state,
+        user_preference=None,
+    )
+
+    # B4: Allocate volume for each week (parallelized)
+    log_stage_event(PlannerStage.VOLUME, "start", plan_id)
+    try:
+        with timing("planner.stage.volume"):
+            def allocate_week_volume_sync(week_idx: int, structure: WeekStructure) -> list:
+                """Allocate volume for a single week (synchronous helper for parallelization)."""
+                # Use custom calculator if provided, otherwise use default
+                if base_volume_calculator:
+                    week_volume = base_volume_calculator(week_idx)
+                else:
+                    # Default: simple progression
+                    base_volume = 40.0
+                    week_volume = base_volume + (week_idx * 2.0)
+                return allocate_week_volume(
+                    weekly_distance=week_volume,
+                    structure=structure,
+                )
+
+            # Parallelize volume allocation across weeks
+            loop = asyncio.get_event_loop()
+            distributed_weeks = await asyncio.gather(
+                *[
+                    loop.run_in_executor(None, allocate_week_volume_sync, week_idx, structure)
+                    for week_idx, structure in enumerate(week_structures)
+                ]
+            )
+        log_stage_event(PlannerStage.VOLUME, "success", plan_id, {"week_count": len(distributed_weeks)})
+        log_stage_metric(PlannerStage.VOLUME, True)
+        log_event("volume_allocated", week_count=len(distributed_weeks), plan_id=plan_id)
+    except Exception as e:
+        log_stage_event(PlannerStage.VOLUME, "fail", plan_id, {"error": str(e)})
+        log_stage_metric(PlannerStage.VOLUME, False)
+        raise
+
+    # B5: Select templates for each week (parallelized)
+    # B6: Generate session text (parallelized)
+    log_stage_event(PlannerStage.TEMPLATE, "start", plan_id)
+    try:
+        with timing("planner.stage.template"):
+            async def process_week(
+                week_idx: int,
+                structure: WeekStructure,
+                distributed_days: list,
+            ) -> PlannedWeek:
+                """Process a single week: template selection + text generation."""
+                try:
+                    if progress_callback:
+                        total_weeks = ctx.weeks
+                        phase_str = "base" if week_idx < total_weeks * 0.5 else ("build" if week_idx < total_weeks * 0.8 else "peak")
+                        result = progress_callback(week_idx + 1, total_weeks, phase_str)
+                        if isinstance(result, Awaitable):
+                            await result
+
+                    # Determine phase from structure focus
+                    phase = "taper" if structure.focus in {WeekFocus.TAPER, WeekFocus.SHARPENING} else "build"
+
+                    # B5: Select templates (synchronous, run in executor for parallelization)
+                    loop = asyncio.get_event_loop()
+                    planned_sessions = await loop.run_in_executor(
+                        None,
+                        select_templates_for_week,
+                        runtime_ctx,
+                        week_idx + 1,
+                        phase,
+                        distributed_days,
+                        structure.day_index_to_session_type,
+                    )
+
+                    # B6: Generate session text (already parallelized within week)
+                    return await _generate_week_with_text(
+                        week_idx=week_idx,
+                        structure=structure,
+                        planned_sessions=planned_sessions,
+                        runtime_ctx=runtime_ctx,
+                        phase=phase,
+                        plan_id=plan_id,
+                    )
+                except Exception as e:
+                    # Add week context to error for better debugging
+                    logger.error(
+                        "Failed to process week",
+                        week_index=week_idx + 1,
+                        phase=phase if "phase" in locals() else "unknown",
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
+                    raise
+
+            # Process all weeks in parallel
+            planned_weeks = await asyncio.gather(
+                *[
+                    process_week(week_idx, structure, distributed_days)
+                    for week_idx, (structure, distributed_days) in enumerate(zip(week_structures, distributed_weeks, strict=False))
+                ]
+            )
+            # Sort by week_index to maintain order
+            planned_weeks = sorted(planned_weeks, key=lambda w: w.week_index)
+        log_stage_event(PlannerStage.TEMPLATE, "success", plan_id, {"week_count": len(planned_weeks)})
+        log_stage_metric(PlannerStage.TEMPLATE, True)
+        log_event("template_selected", week_count=len(planned_weeks), plan_id=plan_id)
+    except Exception as e:
+        log_stage_event(PlannerStage.TEMPLATE, "fail", plan_id, {"error": str(e)})
+        log_stage_metric(PlannerStage.TEMPLATE, False)
+        raise
+
+    # Guard invariants before persistence
+    # Extract planned_sessions for guard check
+    # Filter out sessions with distance <= 0 (rest days, race days)
+    all_planned_sessions: list[PlannedSession] = []
+    for week in planned_weeks:
+        all_planned_sessions.extend(
+            session
+            for session in week.sessions
+            if isinstance(session, PlannedSession) and session.distance > 0
+        )
+
+    # Note: macro_weeks check is skipped if list is empty (will be added when available from build_plan_structure)
+    guard_invariants([], all_planned_sessions)
+
+    # B7: Persist to calendar
+    log_stage_event(PlannerStage.PERSIST, "start", plan_id)
+    try:
+        with timing("planner.stage.persist"):
+            # Create PlanContext with philosophy set (required for persistence)
+            ctx_with_philosophy = PlanContext(
+                plan_type=runtime_ctx.plan.plan_type,
+                intent=runtime_ctx.plan.intent,
+                weeks=runtime_ctx.plan.weeks,
+                race_distance=runtime_ctx.plan.race_distance,
+                target_date=runtime_ctx.plan.target_date,
+                philosophy=runtime_ctx.philosophy,
+            )
+            persist_result: PersistResult = persist_plan(
+                ctx=ctx_with_philosophy,
+                weeks=planned_weeks,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                plan_id=plan_id,
+            )
+        log_stage_event(
+            PlannerStage.PERSIST,
+            "success",
+            plan_id,
+            {
+                "created": persist_result.created,
+                "updated": persist_result.updated,
+                "skipped": persist_result.skipped,
+            },
+        )
+        log_stage_metric(PlannerStage.PERSIST, True)
+        log_event(
+            "calendar_persisted",
+            plan_id=plan_id,
+            created=persist_result.created,
+            updated=persist_result.updated,
+            skipped=persist_result.skipped,
+        )
+    except Exception as e:
+        log_stage_event(PlannerStage.PERSIST, "fail", plan_id, {"error": str(e)})
+        log_stage_metric(PlannerStage.PERSIST, False)
+        raise
+
+    return planned_weeks, persist_result
 
 
 def _map_distance_string_to_enum(distance: str) -> RaceDistance:
@@ -227,123 +435,21 @@ async def plan_race_simple(
             confidence=0.9,
         )
 
-    # B2 → B2.5 → B3: Build plan structure
-    logger.debug("B2-B3: Building plan structure")
-    runtime_ctx, week_structures = await build_plan_structure(
+    # Use canonical pipeline
+    def volume_calculator(week_idx: int) -> float:
+        """Calculate volume for a week based on distance."""
+        base_volume = 50.0 if distance == "Marathon" else 40.0
+        return base_volume + (week_idx * 2.0)  # Simple progression
+
+    planned_weeks, persist_result = await execute_canonical_pipeline(
         ctx=ctx,
         athlete_state=athlete_state,
-        user_preference=None,
+        user_id=user_id,
+        athlete_id=athlete_id,
+        plan_id=plan_id,
+        progress_callback=progress_callback,
+        base_volume_calculator=volume_calculator,
     )
-
-    # B4: Allocate volume for each week
-    log_stage_event(PlannerStage.VOLUME, "start", plan_id)
-    try:
-        with timing("planner.stage.volume"):
-            distributed_weeks: list[list] = []
-            for week_idx, structure in enumerate(week_structures):
-                # TODO: Get week volume from macro plan when available
-                # For now, use a simple calculation
-                base_volume = 50.0 if distance == "Marathon" else 40.0
-                week_volume = base_volume + (week_idx * 2.0)  # Simple progression
-
-                distributed_days = allocate_week_volume(
-                    weekly_distance=week_volume,
-                    structure=structure,
-                )
-                distributed_weeks.append(distributed_days)
-        log_stage_event(PlannerStage.VOLUME, "success", plan_id, {"week_count": len(distributed_weeks)})
-        log_stage_metric(PlannerStage.VOLUME, True)
-        log_event("volume_allocated", week_count=len(distributed_weeks), plan_id=plan_id)
-    except Exception as e:
-        log_stage_event(PlannerStage.VOLUME, "fail", plan_id, {"error": str(e)})
-        log_stage_metric(PlannerStage.VOLUME, False)
-        raise
-
-    # B5: Select templates for each week
-    log_stage_event(PlannerStage.TEMPLATE, "start", plan_id)
-    try:
-        with timing("planner.stage.template"):
-            planned_weeks: list[PlannedWeek] = []
-            for week_idx, (structure, distributed_days) in enumerate(zip(week_structures, distributed_weeks, strict=False)):
-                if progress_callback:
-                    phase = "base" if week_idx < total_weeks * 0.5 else ("build" if week_idx < total_weeks * 0.8 else "peak")
-                    result = progress_callback(week_idx + 1, total_weeks, phase)
-                    if isinstance(result, Awaitable):
-                        await result
-
-                # Determine phase from structure focus
-                phase = "taper" if structure.focus in {WeekFocus.TAPER, WeekFocus.SHARPENING} else "build"
-
-                planned_sessions = select_templates_for_week(
-                    context=runtime_ctx,
-                    week_index=week_idx + 1,
-                    phase=phase,
-                    days=distributed_days,
-                    day_index_to_session_type=structure.day_index_to_session_type,
-                )
-
-                # B6: Generate session text
-                planned_week = await _generate_week_with_text(
-                    week_idx=week_idx,
-                    structure=structure,
-                    planned_sessions=planned_sessions,
-                    runtime_ctx=runtime_ctx,
-                    phase=phase,
-                    plan_id=plan_id,
-                )
-                planned_weeks.append(planned_week)
-        log_stage_event(PlannerStage.TEMPLATE, "success", plan_id, {"week_count": len(planned_weeks)})
-        log_stage_metric(PlannerStage.TEMPLATE, True)
-        log_event("template_selected", week_count=len(planned_weeks), plan_id=plan_id)
-    except Exception as e:
-        log_stage_event(PlannerStage.TEMPLATE, "fail", plan_id, {"error": str(e)})
-        log_stage_metric(PlannerStage.TEMPLATE, False)
-        raise
-
-    # Guard invariants before persistence
-    # Extract planned_sessions for guard check
-    all_planned_sessions: list[PlannedSession] = []
-    for week in planned_weeks:
-        all_planned_sessions.extend(
-            session for session in week.sessions if isinstance(session, PlannedSession)
-        )
-
-    # Note: macro_weeks check is skipped if list is empty (will be added when available from build_plan_structure)
-    guard_invariants([], all_planned_sessions)
-
-    # B7: Persist to calendar
-    log_stage_event(PlannerStage.PERSIST, "start", plan_id)
-    try:
-        with timing("planner.stage.persist"):
-            persist_result: PersistResult = persist_plan(
-                ctx=runtime_ctx.plan,
-                weeks=planned_weeks,
-                user_id=user_id,
-                athlete_id=athlete_id,
-                plan_id=plan_id,
-            )
-        log_stage_event(
-            PlannerStage.PERSIST,
-            "success",
-            plan_id,
-            {
-                "created": persist_result.created,
-                "updated": persist_result.updated,
-                "skipped": persist_result.skipped,
-            },
-        )
-        log_stage_metric(PlannerStage.PERSIST, True)
-        log_event(
-            "calendar_persisted",
-            plan_id=plan_id,
-            created=persist_result.created,
-            updated=persist_result.updated,
-            skipped=persist_result.skipped,
-        )
-    except Exception as e:
-        log_stage_event(PlannerStage.PERSIST, "fail", plan_id, {"error": str(e)})
-        log_stage_metric(PlannerStage.PERSIST, False)
-        raise
 
     # Convert to legacy session dict format for compatibility
     all_sessions = []
@@ -359,15 +465,43 @@ async def plan_race_simple(
             )
             session_date_dt = datetime.combine(session_date, datetime.min.time()).replace(tzinfo=timezone.utc)
 
+            # Extract title and description from text_output
+            text_output = session.text_output
+            title = text_output.title if text_output else f"{session.day_type.value.title()} Run"
+            description = text_output.description if text_output else ""
+
+            # Extract distance in km
+            distance_km = None
+            if text_output and "total_distance_mi" in text_output.computed:
+                computed_dist = text_output.computed["total_distance_mi"]
+                if isinstance(computed_dist, (int, float)):
+                    distance_km = float(computed_dist) * 1.60934  # Convert miles to km
+            if distance_km is None and session.distance > 0:
+                # Fallback: use session distance (assumed to be in miles)
+                distance_km = float(session.distance) * 1.60934
+
+            # Extract duration in minutes
+            duration_minutes = None
+            if text_output and "total_duration_min" in text_output.computed:
+                computed_dur = text_output.computed["total_duration_min"]
+                if isinstance(computed_dur, (int, float)):
+                    duration_minutes = int(computed_dur)
+            if duration_minutes is None and text_output and "intensity_minutes" in text_output.computed:
+                intensity = text_output.computed["intensity_minutes"]
+                if isinstance(intensity, dict) and "total" in intensity:
+                    total = intensity["total"]
+                    if isinstance(total, int):
+                        duration_minutes = total
+
             session_dict = {
                 "date": session_date_dt,
                 "type": "Run",
-                "title": session.title,
-                "description": session.description,
-                "distance_km": session.allocated_distance_km,
-                "duration_minutes": session.allocated_duration_min,
+                "title": title,
+                "description": description,
+                "distance_km": distance_km,
+                "duration_minutes": duration_minutes,
                 "intensity": session.day_type.value if hasattr(session, "day_type") else "moderate",
-                "notes": session.description,
+                "notes": description,
                 "week_number": week.week_index,
             }
             all_sessions.append(session_dict)

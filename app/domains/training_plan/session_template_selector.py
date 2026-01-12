@@ -27,6 +27,7 @@ from app.domains.training_plan.models import (
     SessionTemplate,
     SessionTemplateSet,
 )
+from app.domains.training_plan.template_selector_embedding import get_template_library
 
 
 class TemplateParseError(RuntimeError):
@@ -56,14 +57,61 @@ _SESSION_TYPE_TO_DAY_TYPE: dict[str, DayType] = {
     "cross": DayType.CROSS,
 }
 
+# Fallback mapping for session types when exact template is not found
+# Maps session_type -> list of fallback session_types to try
+_SESSION_TYPE_FALLBACKS: dict[str, list[str]] = {
+    # Easy variations
+    "easy_plus_strides": ["easy"],
+    "easy_or_shakeout": ["easy"],
+    "easy_or_marathon_touch": ["easy"],
+    "easy_or_steady_short": ["easy"],
+    "easy_or_light_fartlek": ["easy"],
+    "easy_or_terrain_touch": ["easy"],
+    "medium_easy": ["easy"],
+    "recovery": ["easy"],
+    "pre_race_shakeout": ["easy"],
+    "aerobic": ["easy"],
+    "aerobic_plus_strides": ["easy"],
+    "aerobic_steady": ["easy"],
+    "aerobic_steady_light": ["easy"],
+    "aerobic_steady_or_climb": ["easy"],
+    # Quality/Intensity variations
+    "vo2_light": ["vo2", "threshold"],
+    "threshold_light": ["threshold", "vo2"],
+    "marathon_pace_light": ["marathon_pace", "threshold"],
+    "economy_light": ["economy", "vo2"],
+    "vo2_or_hill_reps": ["vo2", "threshold"],
+    "vo2_or_speed": ["vo2", "threshold"],
+    "speed_or_vo2": ["vo2", "threshold"],
+    "threshold_or_marathon": ["threshold", "marathon_pace"],
+    "threshold_or_steady": ["threshold"],
+    "threshold_or_speed_endurance": ["threshold", "vo2"],
+    "threshold_double": ["threshold"],
+    "threshold_double_or_marathon": ["threshold", "marathon_pace"],
+    "economy_or_specific": ["economy", "vo2"],
+    "hill_strength_or_fartlek": ["vo2", "threshold"],
+    "marathon_specific_or_progression": ["marathon_pace", "threshold"],
+    # Long run variations
+    "long_back_to_back": ["long"],
+    "long_back_to_back_hike": ["long"],
+    "long_mountain": ["long"],
+    "long_progressive": ["long"],
+    "long_specific": ["long"],
+    "medium_long": ["long"],
+    "moderate_long": ["long"],
+    "short_long": ["long"],
+    # Race
+    "race_day": ["race"],
+}
 
-def _get_templates_dir() -> Path:
+
+def get_templates_dir() -> Path:
     """Get path to templates directory.
 
     Returns:
         Path to data/rag/planning/templates directory
     """
-    project_root = Path(__file__).parent.parent.parent
+    project_root = Path(__file__).parent.parent.parent.parent
     return project_root / "data" / "rag" / "planning" / "templates"
 
 
@@ -367,7 +415,10 @@ def _template_set_matches(
         return False
     if template_set.session_type != criteria["session_type"]:
         return False
-    if template_set.audience != criteria["audience"]:
+    # Audience matching: if criteria audience is "all", accept any template audience
+    # If criteria audience is specific, require exact match or template audience is "all"
+    criteria_audience = criteria["audience"]
+    if criteria_audience != "all" and template_set.audience not in {"all", criteria_audience}:
         return False
     race_distance_str = criteria["race_distance_str"]
     return race_distance_str is None or race_distance_str in template_set.race_types
@@ -388,7 +439,7 @@ def _find_matching_template_set(
     Returns:
         Matching SessionTemplateSet or None if not found
     """
-    templates_dir = _get_templates_dir()
+    templates_dir = get_templates_dir()
     domain = context.philosophy.domain
     philosophy_id = context.philosophy.philosophy_id
 
@@ -406,7 +457,9 @@ def _find_matching_template_set(
 
     # Search for matching template file
     # Pattern: <philosophy_id>__<race>__<audience>__<phase>__<session_type>__v*.md
-    pattern = f"{philosophy_id}__{race_distance_str}__{context.philosophy.audience}__{phase}__{session_type}__*.md"
+    # If audience is "all", use wildcard to match any audience value
+    audience_pattern = "*" if context.philosophy.audience == "all" else context.philosophy.audience
+    pattern = f"{philosophy_id}__{race_distance_str}__{audience_pattern}__{phase}__{session_type}__*.md"
 
     matching_files = list(philosophy_dir.glob(pattern))
 
@@ -472,12 +525,19 @@ def select_template_for_day(
 
 def select_templates_for_week(
     context: PlanRuntimeContext,
-    week_index: int,
+    _week_index: int,
     phase: str,
     days: list[DistributedDay],
     day_index_to_session_type: dict[int, str] | None = None,
 ) -> list[PlannedSession]:
-    """Select templates for all days in a week.
+    """Select templates for all days in a week using embedding-only selection.
+
+    This function uses the embedding-only selector which:
+    - Always returns exactly one template
+    - No thresholds
+    - No fallbacks
+    - O(N) complexity
+    - Uses embeddings only
 
     Args:
         context: Plan runtime context
@@ -492,8 +552,15 @@ def select_templates_for_week(
 
     Raises:
         TemplateSelectionError: If template selection fails for any day
+        RuntimeError: If template library not initialized
     """
+    template_library = get_template_library()
     planned_sessions: list[PlannedSession] = []
+
+    # Get race distance as string
+    race_distance_str = None
+    if context.plan.race_distance:
+        race_distance_str = context.plan.race_distance.value
 
     for day in days:
         # Get session_type for this day (uses structure mapping if available)
@@ -504,18 +571,15 @@ def select_templates_for_week(
                 f"No session_type mapping for day_type '{day.day_type.value}' at day_index {day.day_index}",
             )
 
-        # Find matching template set
-        template_set = _find_matching_template_set(context, phase, session_type)
-
-        if template_set is None:
-            raise TemplateSelectionError(
-                f"No template set found for domain={context.philosophy.domain}, "
-                f"philosophy={context.philosophy.philosophy_id}, phase={phase}, "
-                f"session_type={session_type}, audience={context.philosophy.audience}",
-            )
-
-        # Select template deterministically
-        template = select_template_for_day(template_set, week_index, day.day_index)
+        # Select template using embedding-only selector
+        # This always returns exactly one template (no exceptions, no fallbacks)
+        template = template_library.select_template(
+            domain=context.philosophy.domain,
+            session_type=session_type,
+            race_distance=race_distance_str,
+            phase=phase,
+            philosophy=context.philosophy.philosophy_id,
+        )
 
         # Create planned session
         planned_session = PlannedSession(

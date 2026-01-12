@@ -204,8 +204,11 @@ def load_week_structure_semantic(
         if not spec.metadata.race_types or ctx.plan.race_distance.value not in spec.metadata.race_types:
             continue
 
-        # Audience (soft filter - "all" matches any)
-        if spec.metadata.audience not in {"all", ctx.philosophy.audience}:
+        # Audience filter:
+        # - If philosophy audience is "all", accept any structure
+        # - If structure audience is "all", accept for any target audience
+        # - Otherwise, require exact match
+        if ctx.philosophy.audience != "all" and spec.metadata.audience not in {"all", ctx.philosophy.audience}:
             continue
 
         candidates.append(spec)
@@ -281,8 +284,13 @@ def load_week_structure_semantic(
         days_to_race=days_to_race,
     )
 
-    # Search vector store
-    semantic_results = vector_store.query(query_embedding, top_k=min(10, len(candidates)))
+    # Search vector store - constrain to hard-filtered candidates only
+    candidate_ids = {c.metadata.id for c in candidates}
+    semantic_results = vector_store.query(
+        query_embedding,
+        top_k=min(10, len(candidates)),
+        candidate_ids=candidate_ids,
+    )
 
     logger.debug(
         "Semantic search results",

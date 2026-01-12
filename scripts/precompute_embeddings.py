@@ -35,6 +35,8 @@ project_root_str = str(project_root)
 if project_root_str not in sys.path:
     sys.path.insert(0, project_root_str)
 
+from pathlib import Path
+
 import typer
 from loguru import logger
 
@@ -43,6 +45,8 @@ from app.domains.training_plan.philosophy_embedding import (
     load_philosophy_with_body,
 )
 from app.domains.training_plan.philosophy_loader import load_philosophies
+from app.domains.training_plan.session_template_selector import parse_template_file
+from app.domains.training_plan.template_embedding import build_template_canonical_text
 from app.domains.training_plan.week_structure import get_structures_dir, load_structures_from_philosophy
 from app.domains.training_plan.week_structure_embedding import build_week_structure_canonical_text
 from app.embeddings.embedding_service import compute_text_hash, get_embedding_service
@@ -54,6 +58,7 @@ app = typer.Typer()
 CACHE_DIR = Path(__file__).parent.parent / "data" / "embeddings"
 PHILOSOPHIES_CACHE = CACHE_DIR / "philosophies.json"
 WEEK_STRUCTURES_CACHE = CACHE_DIR / "week_structures.json"
+TEMPLATES_CACHE = CACHE_DIR / "templates.json"
 
 
 def _ensure_cache_dir() -> None:
@@ -290,11 +295,14 @@ def _compute_week_structure_embeddings(force: bool = False) -> int:
 def all(
     force: bool = typer.Option(False, "--force", help="Recompute all embeddings even if unchanged"),
 ) -> None:
-    """Precompute all embeddings (philosophies and week structures)."""
+    """Precompute all embeddings (philosophies, week structures, and templates)."""
     logger.info("Starting full embedding precomputation")
     philo_count = _compute_philosophy_embeddings(force=force)
     struct_count = _compute_week_structure_embeddings(force=force)
-    logger.info(f"Completed: {philo_count} philosophy + {struct_count} structure embeddings")
+    template_count = _compute_template_embeddings(force=force)
+    logger.info(
+        f"Completed: {philo_count} philosophy + {struct_count} structure + {template_count} template embeddings"
+    )
 
 
 @app.command()
@@ -311,6 +319,144 @@ def week_structures(
 ) -> None:
     """Precompute week structure embeddings only."""
     _compute_week_structure_embeddings(force=force)
+
+
+def _get_templates_dir() -> Path:
+    """Get path to templates directory.
+
+    Returns:
+        Path to data/rag/planning/templates directory
+    """
+    project_root = Path(__file__).parent.parent
+    return project_root / "data" / "rag" / "planning" / "templates"
+
+
+def _process_template_file(
+    template_file: Path,
+    cache: dict[str, dict],
+    force: bool,
+    items_to_compute: list[tuple[str, str, dict]],
+    items_to_skip: list[dict],
+) -> None:
+    """Process a single template file for embedding.
+
+    Args:
+        template_file: Path to template file
+        cache: Existing cache dictionary
+        force: If True, recompute even if unchanged
+        items_to_compute: List to append items that need embedding
+        items_to_skip: List to append items that can be skipped
+    """
+    try:
+        template_set = parse_template_file(template_file)
+
+        # Process each template in the set
+        for template in template_set.templates:
+            template_id = (
+                f"{template_set.domain}__{template_set.philosophy_id}__"
+                f"{template_set.phase}__{template_set.session_type}__{template.template_id}"
+            )
+
+            # Build canonical text
+            canonical_text = build_template_canonical_text(template_set, template)
+            text_hash = compute_text_hash(canonical_text)
+
+            # Check cache
+            cached_item = cache.get(template_id)
+            if cached_item and not force:
+                cached_hash = cached_item.get("text_hash")
+                if cached_hash == text_hash:
+                    items_to_skip.append(cached_item)
+                    logger.debug(f"Skipping unchanged template: {template_id}")
+                    continue
+
+            metadata = {
+                "domain": template_set.domain,
+                "philosophy_id": template_set.philosophy_id,
+                "phase": template_set.phase,
+                "session_type": template_set.session_type,
+                "race_types": template_set.race_types,
+                "audience": template_set.audience,
+                "template_id": template.template_id,
+            }
+
+            items_to_compute.append((template_id, canonical_text, metadata))
+
+    except Exception as e:
+        logger.warning(f"Failed to process template file {template_file}: {e}")
+
+
+def _compute_template_embeddings(force: bool = False) -> int:
+    """Precompute embeddings for all templates.
+
+    Args:
+        force: If True, recompute all embeddings even if unchanged
+
+    Returns:
+        Number of embeddings computed
+    """
+    logger.info("Starting template embedding precomputation")
+    _ensure_cache_dir()
+
+    # Load existing cache
+    cache = _load_cache(TEMPLATES_CACHE)
+
+    templates_dir = _get_templates_dir()
+    embedding_service = get_embedding_service()
+
+    items_to_compute: list[tuple[str, str, dict]] = []  # (template_id, canonical_text, metadata)
+    items_to_skip: list[dict] = []
+
+    # Load all template files
+    for domain_dir in templates_dir.iterdir():
+        if not domain_dir.is_dir():
+            continue
+
+        for philosophy_dir in domain_dir.iterdir():
+            if not philosophy_dir.is_dir():
+                continue
+
+            for template_file in philosophy_dir.glob("*.md"):
+                _process_template_file(template_file, cache, force, items_to_compute, items_to_skip)
+
+    # Compute embeddings in batch
+    computed_count = 0
+    if items_to_compute:
+        texts = [text for _, text, _ in items_to_compute]
+        ids = [item_id for item_id, _, _ in items_to_compute]
+        metadata_list = [metadata for _, _, metadata in items_to_compute]
+
+        logger.info(f"Computing {len(texts)} template embeddings")
+        embeddings = embedding_service.embed_batch(texts)
+
+        # Build cache entries
+        for item_id, canonical_text, metadata, embedding in zip(ids, texts, metadata_list, embeddings, strict=True):
+            text_hash = compute_text_hash(canonical_text)
+            cache[item_id] = {
+                "id": item_id,
+                "embedding": embedding,
+                "text_hash": text_hash,
+                "metadata": metadata,
+            }
+            computed_count += 1
+
+    # Save cache
+    all_items = list(cache.values())
+    _save_cache(TEMPLATES_CACHE, all_items)
+
+    logger.info(
+        f"Template embeddings: {computed_count} computed, {len(items_to_skip)} skipped, "
+        f"{len(all_items)} total"
+    )
+    return computed_count
+
+
+@app.command()
+def templates(
+    force: bool = typer.Option(False, "--force", help="Recompute all embeddings even if unchanged"),
+) -> None:
+    """Precompute template embeddings only."""
+    _compute_template_embeddings(force=force)
 
 
 if __name__ == "__main__":

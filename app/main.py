@@ -87,13 +87,6 @@ from scripts.migrate_user_settings_fields import migrate_user_settings_fields
 # Initialize logger with level from settings (defaults to INFO, can be overridden via LOG_LEVEL env var)
 setup_logger(level=settings.log_level)
 
-# Initialize Observe SDK for LLM observability
-observe_init(
-    api_key=settings.observe_api_key,
-    enabled=settings.observe_enabled,
-    sample_rate=settings.observe_sample_rate,
-)
-
 # Set OPENAI_API_KEY from settings if not already set in environment
 # This ensures pydantic_ai and other libraries can find it
 if settings.openai_api_key and not os.getenv("OPENAI_API_KEY"):
@@ -102,14 +95,27 @@ if settings.openai_api_key and not os.getenv("OPENAI_API_KEY"):
 elif not settings.openai_api_key:
     logger.warning("OPENAI_API_KEY is not set. Coach features may not work.")
 
-# Ensure database tables exist
-logger.info("Ensuring database tables exist")
-Base.metadata.create_all(bind=engine)
-logger.info("Database tables verified")
+def initialize_database() -> None:
+    """Initialize database tables and run migrations.
 
-# Run migrations for derived tables
-logger.info("Running database migrations")
-migration_errors = []
+    This function is called during application startup (in lifespan),
+    not at import time, to avoid Render deployment failures.
+    """
+    # Initialize Observe SDK for LLM observability
+    observe_init(
+        api_key=settings.observe_api_key,
+        enabled=settings.observe_enabled,
+        sample_rate=settings.observe_sample_rate,
+    )
+
+    # Ensure database tables exist
+    logger.info("Ensuring database tables exist")
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables verified")
+
+    # Run migrations for derived tables
+    logger.info("Running database migrations")
+    migration_errors = []
 try:
     migrate_strava_accounts()
 except Exception as e:
@@ -340,33 +346,37 @@ except Exception as e:
     migration_errors.append(f"migrate_add_conversation_summary: {e}")
     logger.error(f"Migration failed: migrate_add_conversation_summary - {e}", exc_info=True)
 
-if migration_errors:
-    logger.error(
-        f"Some migrations failed ({len(migration_errors)} errors). "
-        "The application will continue, but database schema may be incomplete. "
-        "Run 'python scripts/run_migrations.py' manually to fix."
-    )
-else:
-    logger.info("Database migrations completed successfully")
+    if migration_errors:
+        logger.error(
+            f"Some migrations failed ({len(migration_errors)} errors). "
+            "The application will continue, but database schema may be incomplete. "
+            "Run 'python scripts/run_migrations.py' manually to fix."
+        )
+    else:
+        logger.info("Database migrations completed successfully")
 
-# Verify schema after migrations (fail fast if columns are missing)
-try:
-    logger.info("Verifying database schema...")
-    verify_schema()
-    logger.info("✓ Database schema verification completed")
-except RuntimeError as e:
-    logger.error(f"Schema verification failed: {e}")
-    logger.error("Application startup aborted. Run migrations to fix schema issues.")
-    raise
+    # Verify schema after migrations (fail fast if columns are missing)
+    try:
+        logger.info("Verifying database schema...")
+        verify_schema()
+        logger.info("✓ Database schema verification completed")
+    except RuntimeError as e:
+        logger.error(f"Schema verification failed: {e}")
+        logger.error("Application startup aborted. Run migrations to fix schema issues.")
+        raise
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Manage application lifespan - start scheduler on startup.
+    """Manage application lifespan - initialize database and start scheduler on startup.
 
     Note: FastAPI requires async for lifespan context manager,
     even if no await operations are used.
     """
+    # Initialize database (tables, migrations, schema verification)
+    # This must run in lifespan, not at import time, to avoid Render deployment failures
+    initialize_database()
+
     # Start scheduler
     scheduler = BackgroundScheduler()
     # Run background sync every 6 hours (Step 5: automated sync)

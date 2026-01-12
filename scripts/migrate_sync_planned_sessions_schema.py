@@ -1,8 +1,8 @@
 """Sync planned_sessions table schema with model.
 
 This migration adds missing columns to planned_sessions table:
-- philosophy_id: UUID
-- template_id: UUID
+- philosophy_id: VARCHAR (philosophy slug/key, e.g., "5k_speed", "daniels")
+- template_id: VARCHAR (template identifier)
 - session_type: VARCHAR
 - distance_mi: FLOAT
 - tags: JSONB
@@ -112,8 +112,8 @@ def migrate_sync_planned_sessions_schema() -> None:
     logger.info("Starting migration: sync planned_sessions schema")
 
     with engine.begin() as conn:
-        _add_column_if_missing(conn, "planned_sessions", "philosophy_id", "UUID")
-        _add_column_if_missing(conn, "planned_sessions", "template_id", "UUID")
+        _add_column_if_missing(conn, "planned_sessions", "philosophy_id", "VARCHAR")
+        _add_column_if_missing(conn, "planned_sessions", "template_id", "VARCHAR")
         _add_column_if_missing(conn, "planned_sessions", "session_type", "VARCHAR")
         _add_column_if_missing(conn, "planned_sessions", "distance_mi", "FLOAT")
         # JSONB for PostgreSQL, JSON for SQLite

@@ -1161,6 +1161,8 @@ async def run_conversation(
                 "user_message": user_message_text,
                 "assistant_message": assistant_message,
             }
+            if conversation_id is not None:
+                payload["conversation_id"] = conversation_id
             await call_tool("save_context", payload)
     except MCPError as e:
         if e.code == "USER_NOT_FOUND":

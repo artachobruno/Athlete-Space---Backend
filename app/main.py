@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -45,6 +46,10 @@ from app.db.session import engine
 from app.ingestion.api import router as ingestion_strava_router
 from app.ingestion.scheduler import ingestion_tick
 from app.ingestion.sync_scheduler import sync_tick
+from app.internal.ops.latency import record_latency_ms
+from app.internal.ops.router import router as ops_router
+from app.internal.ops.summary import set_process_start_time
+from app.internal.ops.traffic import record_request
 from app.services.intelligence.scheduler import generate_daily_decisions_for_all_users
 from app.services.intelligence.weekly_report_metrics import update_all_recent_weekly_reports_for_all_users
 from app.webhooks.strava import router as webhooks_router
@@ -418,6 +423,11 @@ async def lifespan(_app: FastAPI):
     except Exception as e:
         logger.exception("[SCHEDULER] Initial ingestion tick failed: {}", e)
 
+    # Initialize ops metrics (process start time)
+
+    set_process_start_time(time.time())
+    logger.info("[OPS] Initialized ops metrics tracking")
+
     # Yield control to FastAPI (use await to satisfy async requirement)
     await asyncio.sleep(0)
     yield
@@ -436,6 +446,28 @@ app = FastAPI(title="Virtus AI", lifespan=lifespan)
 async def conversation_id_middleware_wrapper(request: Request, call_next):
     """Wrapper to register conversation_id_middleware."""
     return await conversation_id_middleware(request, call_next)
+
+
+# Request latency tracking middleware (after conversation_id, before CORS)
+@app.middleware("http")
+async def latency_tracking_middleware(request: Request, call_next):
+    """Track request latency and traffic metrics."""
+    start_time = time.time()
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Record latency even on errors
+        elapsed_ms = (time.time() - start_time) * 1000
+        record_latency_ms(elapsed_ms)
+        record_request()
+        raise
+    else:
+        # Record latency and traffic on success
+        elapsed_ms = (time.time() - start_time) * 1000
+        record_latency_ms(elapsed_ms)
+        record_request()
+        return response
 
 
 # Configure CORS
@@ -567,6 +599,7 @@ app.include_router(me_router)
 app.include_router(onboarding_router)
 app.include_router(strava_router)
 app.include_router(manual_upload_router)
+app.include_router(ops_router)
 app.include_router(state_router)
 app.include_router(training_router)
 app.include_router(webhooks_router)

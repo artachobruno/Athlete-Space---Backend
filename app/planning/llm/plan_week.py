@@ -4,6 +4,11 @@ from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
+from app.planning.llm.week_skeleton import (
+    WeekSkeleton,
+    generate_week_skeleton,
+    validate_skeleton_match,
+)
 from app.planning.repair.volume_repair import (
     RepairImpossibleError,
     WeekVolumeMismatchError,
@@ -19,7 +24,7 @@ Your task is to design ONE training week.
 
 Rules:
 - You must respect the total weekly volume.
-- You must include exactly one long run.
+- The week MUST contain exactly one session with type `long`. If missing or duplicated, the output is invalid.
 - You must not schedule more than 2 hard sessions.
 - You must space hard sessions by at least 48 hours.
 - You must output ONLY SessionSpec objects.
@@ -38,12 +43,22 @@ class PlanWeekInput(BaseModel):
     athlete_context: dict | None = None
 
 
-def build_plan_week_prompt(input: PlanWeekInput) -> str:
-    """Build prompt for week planning."""
+def build_plan_week_prompt(input: PlanWeekInput, skeleton: WeekSkeleton | None = None) -> str:
+    """Build prompt for week planning.
+
+    Args:
+        input: PlanWeekInput with week parameters
+        skeleton: Optional WeekSkeleton to constrain session types
+    """
     days_str = ", ".join(str(d) for d in input.days_available)
     context_str = ""
     if input.athlete_context:
         context_str = f"\nAthlete context: {input.athlete_context}"
+
+    skeleton_str = ""
+    if skeleton:
+        skeleton_lines = [f"Day {day}: {st.value}" for day, st in sorted(skeleton.days.items())]
+        skeleton_str = "\n\nRequired session structure (you must match these session types exactly):\n" + "\n".join(skeleton_lines)
 
     return f"""Design a {input.sport.value} training week.
 
@@ -51,7 +66,7 @@ Week number: {input.week_number}
 Phase: {input.phase}
 Total volume (km): {input.total_volume_km}
 Long run target (km): {input.long_run_km}
-Available days (0=Mon, 1=Tue, ..., 6=Sun): {days_str}{context_str}
+Available days (0=Mon, 1=Tue, ..., 6=Sun): {days_str}{context_str}{skeleton_str}
 
 Return a JSON list of SessionSpec objects with:
 - sport
@@ -129,6 +144,9 @@ def validate_week(specs: list[SessionSpec], input: PlanWeekInput) -> None:
         )
 
 
+MAX_WEEK_RETRIES = 2
+
+
 def _raise_invalid_output_type_error(specs: list[SessionSpec] | object) -> None:
     """Raise error for invalid output type from LLM."""
     raise TypeError(f"Expected list of SessionSpec, got {type(specs)}")
@@ -137,12 +155,24 @@ def _raise_invalid_output_type_error(specs: list[SessionSpec] | object) -> None:
 async def plan_week_llm(input: PlanWeekInput) -> list[SessionSpec]:
     """Generate week plan via LLM.
 
+    Phase 2: Uses WeekSkeleton internally to ensure structural invariants.
+    LLM generates details (distance, pace, description) but must match skeleton structure.
+
+    Includes retry logic for structural validation failures.
+
     Args:
         input: PlanWeekInput with week parameters
 
     Returns:
         List of SessionSpec objects for the week
+
+    Raises:
+        RuntimeError: If generation fails after all retries
+        ValueError: If validation fails after all retries (non-retryable structural errors)
     """
+    # Phase 2: Generate skeleton deterministically before LLM generation
+    skeleton = generate_week_skeleton(input)
+
     model = get_model("openai", "gpt-4o-mini")
     agent = Agent(
         model=model,
@@ -150,46 +180,110 @@ async def plan_week_llm(input: PlanWeekInput) -> list[SessionSpec]:
         output_type=list[SessionSpec],
     )
 
-    user_prompt = build_plan_week_prompt(input)
+    user_prompt = build_plan_week_prompt(input, skeleton)
 
     logger.debug(
-        "plan_week_llm: Calling LLM for week generation",
+        "plan_week_llm: Starting week generation",
         week_number=input.week_number,
         phase=input.phase,
         total_volume_km=input.total_volume_km,
         long_run_km=input.long_run_km,
         days_available=input.days_available,
+        max_retries=MAX_WEEK_RETRIES,
+        skeleton_hash=hash(skeleton),
     )
 
-    try:
-        result = await agent.run(user_prompt)
-        specs_raw = result.output
+    for attempt in range(MAX_WEEK_RETRIES + 1):
+        try:
+            logger.debug(
+                "plan_week_llm: Calling LLM for week generation",
+                week_number=input.week_number,
+                attempt=attempt + 1,
+                max_attempts=MAX_WEEK_RETRIES + 1,
+            )
 
-        if not isinstance(specs_raw, list):
-            _raise_invalid_output_type_error(specs_raw)
+            result = await agent.run(user_prompt)
+            specs_raw = result.output
 
-        specs = cast(list[SessionSpec], specs_raw)
+            if not isinstance(specs_raw, list):
+                _raise_invalid_output_type_error(specs_raw)
 
-        for spec in specs:
-            spec.validate_volume()
+            specs = cast(list[SessionSpec], specs_raw)
 
-        validate_week(specs, input)
+            for spec in specs:
+                spec.validate_volume()
 
-        logger.debug(
-            "plan_week_llm: Week generated successfully",
-            week_number=input.week_number,
-            session_count=len(specs),
-            total_volume=sum(s.target_distance_km or 0.0 for s in specs),
-        )
-    except Exception as e:
-        logger.error(
-            "plan_week_llm: Failed to generate week",
-            error_type=type(e).__name__,
-            error_message=str(e),
-            week_number=input.week_number,
-            phase=input.phase,
-            exc_info=True,
-        )
-        raise RuntimeError(f"Failed to generate week plan: {e}") from e
-    else:
-        return specs
+            # Phase 2: Validate skeleton match (immutability guardrail)
+            validate_skeleton_match(specs, skeleton)
+
+            validate_week(specs, input)
+
+            logger.debug(
+                "plan_week_llm: Week generated successfully",
+                week_number=input.week_number,
+                attempt=attempt + 1,
+                session_count=len(specs),
+                total_volume=sum(s.target_distance_km or 0.0 for s in specs),
+                skeleton_hash=hash(skeleton),
+            )
+        except ValueError as e:
+            # Validation errors - retry on structural issues (missing long run, skeleton mismatch, etc.)
+            error_msg = str(e)
+            is_validation_error = (
+                "long run" in error_msg.lower()
+                or "invalid days" in error_msg.lower()
+                or "skeleton" in error_msg.lower()
+            )
+
+            if is_validation_error and attempt < MAX_WEEK_RETRIES:
+                logger.warning(
+                    "plan_week_llm: Week generation failed validation, retrying",
+                    week_number=input.week_number,
+                    attempt=attempt + 1,
+                    max_attempts=MAX_WEEK_RETRIES + 1,
+                    error=error_msg,
+                )
+                continue
+
+            # Non-retryable validation error or final attempt
+            logger.error(
+                "plan_week_llm: Failed to generate week (validation error)",
+                error_type=type(e).__name__,
+                error_message=error_msg,
+                week_number=input.week_number,
+                phase=input.phase,
+                attempt=attempt + 1,
+                exc_info=True,
+            )
+            raise RuntimeError(f"Failed to generate week plan: {e}") from e
+
+        except (WeekVolumeMismatchError, RepairImpossibleError) as e:
+            # Volume repair errors - don't retry (these indicate fundamental issues)
+            logger.error(
+                "plan_week_llm: Failed to generate week (volume repair error)",
+                error_type=type(e).__name__,
+                error_message=str(e),
+                week_number=input.week_number,
+                phase=input.phase,
+                attempt=attempt + 1,
+                exc_info=True,
+            )
+            raise RuntimeError(f"Failed to generate week plan: {e}") from e
+
+        except Exception as e:
+            # API errors, network errors, etc. - don't retry
+            logger.error(
+                "plan_week_llm: Failed to generate week (non-retryable error)",
+                error_type=type(e).__name__,
+                error_message=str(e),
+                week_number=input.week_number,
+                phase=input.phase,
+                attempt=attempt + 1,
+                exc_info=True,
+            )
+            raise RuntimeError(f"Failed to generate week plan: {e}") from e
+        else:
+            return specs
+
+    # Should never reach here, but handle gracefully
+    raise RuntimeError(f"Failed to generate week plan after {MAX_WEEK_RETRIES + 1} attempts")

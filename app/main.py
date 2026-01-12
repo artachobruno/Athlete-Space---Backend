@@ -403,109 +403,162 @@ def initialize_database() -> None:
 async def lifespan(_app: FastAPI):
     """Manage application lifespan - initialize database and start scheduler on startup.
 
-    Note: FastAPI requires async for lifespan context manager,
-    even if no await operations are used.
+    CRITICAL: This function must NEVER raise exceptions or block for long periods.
+    Render's port scanner requires the server to bind and stay alive immediately.
+    
+    Heavy initialization (migrations, schedulers) is deferred to background tasks
+    after the server has started and bound to the port.
     """
     logging.info(">>> lifespan startup begin <<<")
     print("LIFESPAN START", flush=True)
 
-    # Initialize database (tables, migrations, schema verification)
-    # This must run in lifespan, not at import time, to avoid Render deployment failures
-    try:
-        initialize_database()
-    except Exception as e:
-        logging.error(f">>> lifespan: database init failed: {e} <<<")
-        print(f"LIFESPAN DB INIT FAILED: {e}", flush=True)
-        traceback.print_exc(file=sys.stdout)
-        raise
+    # Initialize app state to track initialization status
+    _app.state.db_ready = False
+    _app.state.scheduler_ready = False
+    _app.state.scheduler = None
 
-    logging.info(">>> lifespan: database initialized, starting scheduler <<<")
-
-    # Start scheduler
-    scheduler = BackgroundScheduler()
-    # Run background sync every 6 hours (Step 5: automated sync)
-    scheduler.add_job(
-        sync_tick,
-        trigger=IntervalTrigger(hours=6),
-        id="strava_background_sync",
-        name="Strava Background Sync",
-        replace_existing=True,
-    )
-    # Run ingestion tasks (including history backfill) every 30 minutes
-    # Uses dynamic quota allocation: distributes available API quota across users
-    # Automatically stops when quota is exhausted, redistributes as users complete
-    # Maximizes throughput by using as much available quota as possible
-    scheduler.add_job(
-        ingestion_tick,
-        trigger=IntervalTrigger(minutes=30),
-        id="strava_ingestion_tick",
-        name="Strava Ingestion Tick (History Backfill - Dynamic Quota)",
-        replace_existing=True,
-    )
-    # Run daily decision generation overnight at 2 AM UTC
-    scheduler.add_job(
-        generate_daily_decisions_for_all_users,
-        trigger=CronTrigger(hour=2, minute=0),
-        id="daily_decision_generation",
-        name="Daily Decision Generation",
-        replace_existing=True,
-    )
-    # Run weekly report metrics update on Sundays at 3 AM UTC (after week ends)
-    scheduler.add_job(
-        update_all_recent_weekly_reports_for_all_users,
-        trigger=CronTrigger(day_of_week=6, hour=3, minute=0),  # Sunday 3 AM UTC
-        id="weekly_report_metrics_update",
-        name="Weekly Report Metrics Update",
-        replace_existing=True,
-    )
-    scheduler.start()
-    logger.info("[SCHEDULER] Started automatic background sync scheduler (runs every 6 hours)")
-    logger.info("[SCHEDULER] Started ingestion tick scheduler (runs every 30 minutes, dynamic quota allocation for history backfill)")
-    logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
-    logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
-
-    # Run initial sync tick (non-blocking - don't wait for completion)
-    # These are long-running operations that should not block startup
-    logging.info(">>> lifespan: scheduling initial background tasks <<<")
-    try:
-        # Run in background thread to avoid blocking startup
-        import threading
-        def run_sync_tick():
-            try:
-                sync_tick()
-                logger.info("[SCHEDULER] Initial background sync tick completed")
-            except Exception as e:
-                logger.exception("[SCHEDULER] Initial background sync tick failed: {}", e)
-        
-        def run_ingestion_tick():
-            try:
-                ingestion_tick()
-                logger.info("[SCHEDULER] Initial ingestion tick completed")
-            except Exception as e:
-                logger.exception("[SCHEDULER] Initial ingestion tick failed: {}", e)
-        
-        threading.Thread(target=run_sync_tick, daemon=True).start()
-        threading.Thread(target=run_ingestion_tick, daemon=True).start()
-        logging.info(">>> lifespan: initial background tasks started (non-blocking) <<<")
-    except Exception as e:
-        logger.exception("[SCHEDULER] Failed to start initial background tasks: {}", e)
-        # Don't fail startup if background tasks fail
-
-    # Initialize ops metrics (process start time)
-
+    # Initialize ops metrics (process start time) - lightweight, safe to do here
     set_process_start_time(time.time())
     logger.info("[OPS] Initialized ops metrics tracking")
 
-    # Yield control to FastAPI (use await to satisfy async requirement)
-    logging.info(">>> lifespan: yielding to FastAPI <<<")
+    # Attempt database initialization - but DO NOT raise on failure
+    # This allows the server to start even if DB is temporarily unavailable
+    try:
+        initialize_database()
+        _app.state.db_ready = True
+        logging.info(">>> database initialized successfully <<<")
+        print("DB INIT DONE", flush=True)
+    except Exception as e:
+        logging.error(f">>> lifespan: database init failed: {e} <<<")
+        print(f"DB INIT FAILED: {e}", flush=True)
+        logger.exception("Database initialization failed - running in degraded mode")
+        traceback.print_exc(file=sys.stdout)
+        # DO NOT raise - allow server to start in degraded mode
+        _app.state.db_ready = False
+
+    # Start scheduler - but only if DB is ready
+    # Scheduler startup is relatively lightweight, but we still don't want to block
+    if _app.state.db_ready:
+        try:
+            logging.info(">>> lifespan: starting scheduler <<<")
+            scheduler = BackgroundScheduler()
+            # Run background sync every 6 hours (Step 5: automated sync)
+            scheduler.add_job(
+                sync_tick,
+                trigger=IntervalTrigger(hours=6),
+                id="strava_background_sync",
+                name="Strava Background Sync",
+                replace_existing=True,
+            )
+            # Run ingestion tasks (including history backfill) every 30 minutes
+            # Uses dynamic quota allocation: distributes available API quota across users
+            # Automatically stops when quota is exhausted, redistributes as users complete
+            # Maximizes throughput by using as much available quota as possible
+            scheduler.add_job(
+                ingestion_tick,
+                trigger=IntervalTrigger(minutes=30),
+                id="strava_ingestion_tick",
+                name="Strava Ingestion Tick (History Backfill - Dynamic Quota)",
+                replace_existing=True,
+            )
+            # Run daily decision generation overnight at 2 AM UTC
+            scheduler.add_job(
+                generate_daily_decisions_for_all_users,
+                trigger=CronTrigger(hour=2, minute=0),
+                id="daily_decision_generation",
+                name="Daily Decision Generation",
+                replace_existing=True,
+            )
+            # Run weekly report metrics update on Sundays at 3 AM UTC (after week ends)
+            scheduler.add_job(
+                update_all_recent_weekly_reports_for_all_users,
+                trigger=CronTrigger(day_of_week=6, hour=3, minute=0),  # Sunday 3 AM UTC
+                id="weekly_report_metrics_update",
+                name="Weekly Report Metrics Update",
+                replace_existing=True,
+            )
+            scheduler.start()
+            _app.state.scheduler = scheduler
+            _app.state.scheduler_ready = True
+            logger.info("[SCHEDULER] Started automatic background sync scheduler (runs every 6 hours)")
+            logger.info("[SCHEDULER] Started ingestion tick scheduler (runs every 30 minutes, dynamic quota allocation for history backfill)")
+            logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
+            logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
+        except Exception as e:
+            logger.exception("[SCHEDULER] Failed to start scheduler: {}", e)
+            _app.state.scheduler_ready = False
+            # Don't fail startup if scheduler fails
+    else:
+        logger.warning("[SCHEDULER] Skipping scheduler startup - database not ready")
+
+    # Schedule deferred heavy initialization tasks (migrations, initial sync)
+    # These run AFTER the server has bound to the port and started serving requests
+    async def deferred_heavy_init():
+        """Run heavy initialization tasks after server has started."""
+        # Wait a short moment to ensure server is fully up
+        await asyncio.sleep(2)
+        
+        if not _app.state.db_ready:
+            logger.warning("[DEFERRED INIT] Skipping deferred init - database not ready")
+            return
+        
+        logging.info(">>> deferred_heavy_init: starting background tasks <<<")
+        try:
+            # Run initial sync tick (non-blocking - don't wait for completion)
+            import threading
+            def run_sync_tick():
+                try:
+                    sync_tick()
+                    logger.info("[DEFERRED INIT] Initial background sync tick completed")
+                except Exception as e:
+                    logger.exception("[DEFERRED INIT] Initial background sync tick failed: {}", e)
+            
+            def run_ingestion_tick():
+                try:
+                    ingestion_tick()
+                    logger.info("[DEFERRED INIT] Initial ingestion tick completed")
+                except Exception as e:
+                    logger.exception("[DEFERRED INIT] Initial ingestion tick failed: {}", e)
+            
+            threading.Thread(target=run_sync_tick, daemon=True).start()
+            threading.Thread(target=run_ingestion_tick, daemon=True).start()
+            logging.info(">>> deferred_heavy_init: background tasks started <<<")
+        except Exception as e:
+            logger.exception("[DEFERRED INIT] Failed to start background tasks: {}", e)
+            # Don't fail if deferred init fails
+    
+    # Store deferred task in app state so we can cancel it on shutdown
+    _app.state.deferred_init_task = None
+
+    # Yield control to FastAPI immediately - this allows the server to bind to the port
+    logging.info(">>> lifespan: yielding to FastAPI (server will bind now) <<<")
     print("LIFESPAN YIELD", flush=True)
     await asyncio.sleep(0)
     yield
+    
+    # After yield, server is up - start deferred heavy init
+    if _app.state.db_ready:
+        _app.state.deferred_init_task = asyncio.create_task(deferred_heavy_init())
+        logger.info("[DEFERRED INIT] Scheduled deferred heavy initialization")
+
     logging.info(">>> lifespan: shutdown <<<")
 
+    # Cancel deferred task if still running
+    deferred_task = getattr(_app.state, "deferred_init_task", None)
+    if deferred_task and not deferred_task.done():
+        deferred_task.cancel()
+        try:
+            await deferred_task
+        except asyncio.CancelledError:
+            pass
+
     # Shutdown scheduler
-    scheduler.shutdown()
-    logger.info("[SCHEDULER] Stopped ingestion scheduler")
+    if _app.state.scheduler:
+        try:
+            _app.state.scheduler.shutdown()
+            logger.info("[SCHEDULER] Stopped scheduler")
+        except Exception as e:
+            logger.exception("[SCHEDULER] Error during shutdown: {}", e)
 
 
 logging.info(">>> creating FastAPI app <<<")
@@ -615,7 +668,40 @@ def root():
 @app.get("/health")
 def health():
     """Health check endpoint for monitoring and load balancers."""
-    return {"status": "ok", "service": "Virtus AI Backend"}
+    db_ready = getattr(app.state, "db_ready", False)
+    scheduler_ready = getattr(app.state, "scheduler_ready", False)
+    
+    # Server is always "ok" - it's running and responding
+    # But we report component status for debugging
+    status = "ok"
+    if not db_ready:
+        status = "degraded"
+    
+    return {
+        "status": status,
+        "service": "Virtus AI Backend",
+        "db_ready": db_ready,
+        "scheduler_ready": scheduler_ready,
+    }
+
+
+@app.get("/healthz")
+def healthz():
+    """Hard health check endpoint (Kubernetes-style).
+    
+    Returns 200 if server is up and database is ready.
+    Returns 503 if server is up but database is not ready (degraded mode).
+    """
+    db_ready = getattr(app.state, "db_ready", False)
+    
+    if db_ready:
+        return {"status": "ok", "db_ready": True}
+    else:
+        from fastapi import status as http_status
+        return JSONResponse(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "degraded", "db_ready": False, "message": "Database not ready"}
+        )
 
 
 @app.get("/debug/headers")

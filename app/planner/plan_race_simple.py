@@ -50,7 +50,7 @@ from app.domains.training_plan.observability import (
 from app.domains.training_plan.plan_pipeline import build_plan_structure
 from app.domains.training_plan.session_template_selector import select_templates_for_week
 from app.domains.training_plan.session_text_generator import generate_session_text
-from app.domains.training_plan.volume_allocator import allocate_volume
+from app.domains.training_plan.volume_allocator import allocate_week_volume
 from app.planner.calendar_persistence import PersistResult, persist_plan
 
 
@@ -246,8 +246,8 @@ async def plan_race_simple(
                 base_volume = 50.0 if distance == "Marathon" else 40.0
                 week_volume = base_volume + (week_idx * 2.0)  # Simple progression
 
-                distributed_days = allocate_volume(
-                    week_volume=week_volume,
+                distributed_days = allocate_week_volume(
+                    weekly_distance=week_volume,
                     structure=structure,
                 )
                 distributed_weeks.append(distributed_days)

@@ -491,66 +491,15 @@ async def lifespan(_app: FastAPI):
     else:
         logger.warning("[SCHEDULER] Skipping scheduler startup - database not ready")
 
-    # Schedule deferred heavy initialization tasks (migrations, initial sync)
-    # These run AFTER the server has bound to the port and started serving requests
-    async def deferred_heavy_init():
-        """Run heavy initialization tasks after server has started."""
-        # Wait a short moment to ensure server is fully up
-        await asyncio.sleep(2)
-        
-        if not _app.state.db_ready:
-            logger.warning("[DEFERRED INIT] Skipping deferred init - database not ready")
-            return
-        
-        logging.info(">>> deferred_heavy_init: starting background tasks <<<")
-        try:
-            # Run initial sync tick (non-blocking - don't wait for completion)
-            import threading
-            def run_sync_tick():
-                try:
-                    sync_tick()
-                    logger.info("[DEFERRED INIT] Initial background sync tick completed")
-                except Exception as e:
-                    logger.exception("[DEFERRED INIT] Initial background sync tick failed: {}", e)
-            
-            def run_ingestion_tick():
-                try:
-                    ingestion_tick()
-                    logger.info("[DEFERRED INIT] Initial ingestion tick completed")
-                except Exception as e:
-                    logger.exception("[DEFERRED INIT] Initial ingestion tick failed: {}", e)
-            
-            threading.Thread(target=run_sync_tick, daemon=True).start()
-            threading.Thread(target=run_ingestion_tick, daemon=True).start()
-            logging.info(">>> deferred_heavy_init: background tasks started <<<")
-        except Exception as e:
-            logger.exception("[DEFERRED INIT] Failed to start background tasks: {}", e)
-            # Don't fail if deferred init fails
-    
-    # Store deferred task in app state so we can cancel it on shutdown
-    _app.state.deferred_init_task = None
-
     # Yield control to FastAPI immediately - this allows the server to bind to the port
+    # CRITICAL: Everything before yield runs during startup, everything after runs during shutdown
     logging.info(">>> lifespan: yielding to FastAPI (server will bind now) <<<")
     print("LIFESPAN YIELD", flush=True)
     await asyncio.sleep(0)
     yield
     
-    # After yield, server is up - start deferred heavy init
-    if _app.state.db_ready:
-        _app.state.deferred_init_task = asyncio.create_task(deferred_heavy_init())
-        logger.info("[DEFERRED INIT] Scheduled deferred heavy initialization")
-
+    # Shutdown code (runs when app is shutting down)
     logging.info(">>> lifespan: shutdown <<<")
-
-    # Cancel deferred task if still running
-    deferred_task = getattr(_app.state, "deferred_init_task", None)
-    if deferred_task and not deferred_task.done():
-        deferred_task.cancel()
-        try:
-            await deferred_task
-        except asyncio.CancelledError:
-            pass
 
     # Shutdown scheduler
     if _app.state.scheduler:
@@ -564,6 +513,47 @@ async def lifespan(_app: FastAPI):
 logging.info(">>> creating FastAPI app <<<")
 app = FastAPI(title="Virtus AI", lifespan=lifespan)
 logging.info(">>> FastAPI app created <<<")
+
+
+@app.on_event("startup")
+async def deferred_heavy_init():
+    """Run heavy initialization tasks after server has started and bound to port.
+    
+    This runs AFTER the server is up and serving requests, so it doesn't block
+    Render's port detection. Heavy operations like initial sync ticks are deferred here.
+    """
+    # Wait a short moment to ensure server is fully up
+    await asyncio.sleep(2)
+    
+    db_ready = getattr(app.state, "db_ready", False)
+    if not db_ready:
+        logger.warning("[DEFERRED INIT] Skipping deferred init - database not ready")
+        return
+    
+    logging.info(">>> deferred_heavy_init: starting background tasks <<<")
+    try:
+        # Run initial sync tick (non-blocking - don't wait for completion)
+        import threading
+        def run_sync_tick():
+            try:
+                sync_tick()
+                logger.info("[DEFERRED INIT] Initial background sync tick completed")
+            except Exception as e:
+                logger.exception("[DEFERRED INIT] Initial background sync tick failed: {}", e)
+        
+        def run_ingestion_tick():
+            try:
+                ingestion_tick()
+                logger.info("[DEFERRED INIT] Initial ingestion tick completed")
+            except Exception as e:
+                logger.exception("[DEFERRED INIT] Initial ingestion tick failed: {}", e)
+        
+        threading.Thread(target=run_sync_tick, daemon=True).start()
+        threading.Thread(target=run_ingestion_tick, daemon=True).start()
+        logging.info(">>> deferred_heavy_init: background tasks started <<<")
+    except Exception as e:
+        logger.exception("[DEFERRED INIT] Failed to start background tasks: {}", e)
+        # Don't fail if deferred init fails
 
 
 # Register conversation ID middleware FIRST (before CORS, auth, rate limiting, logging)

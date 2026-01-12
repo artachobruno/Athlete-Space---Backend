@@ -1,9 +1,14 @@
 import asyncio
+import logging
 import os
 import sys
 import time
 import traceback
 from contextlib import asynccontextmanager
+
+# Critical: Log immediately to catch import-time issues
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.info(">>> app.main import reached <<<")
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -105,8 +110,15 @@ def initialize_database() -> None:
     This function is called during application startup (in lifespan),
     not at import time, to avoid Render deployment failures.
     """
+    # Guard: Check DATABASE_URL is set
+    if not settings.database_url:
+        error_msg = "DATABASE_URL environment variable is not set"
+        logging.error(f">>> {error_msg} <<<")
+        raise RuntimeError(error_msg)
+
     try:
         print("DB INIT START", flush=True)
+        logging.info(">>> initializing database <<<")
         logger.info("Starting database initialization...")
 
         # Initialize Observe SDK for LLM observability
@@ -372,6 +384,7 @@ def initialize_database() -> None:
         logger.info("Verifying database schema...")
         verify_schema()
         logger.info("✓ Database schema verification completed")
+        logging.info(">>> database initialized <<<")
         print("DB INIT DONE", flush=True)
     except RuntimeError as e:
         logger.error(f"Schema verification failed: {e}")
@@ -393,9 +406,20 @@ async def lifespan(_app: FastAPI):
     Note: FastAPI requires async for lifespan context manager,
     even if no await operations are used.
     """
+    logging.info(">>> lifespan startup begin <<<")
+    print("LIFESPAN START", flush=True)
+
     # Initialize database (tables, migrations, schema verification)
     # This must run in lifespan, not at import time, to avoid Render deployment failures
-    initialize_database()
+    try:
+        initialize_database()
+    except Exception as e:
+        logging.error(f">>> lifespan: database init failed: {e} <<<")
+        print(f"LIFESPAN DB INIT FAILED: {e}", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        raise
+
+    logging.info(">>> lifespan: database initialized, starting scheduler <<<")
 
     # Start scheduler
     scheduler = BackgroundScheduler()
@@ -440,19 +464,32 @@ async def lifespan(_app: FastAPI):
     logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
     logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
 
-    # Run initial sync tick
+    # Run initial sync tick (non-blocking - don't wait for completion)
+    # These are long-running operations that should not block startup
+    logging.info(">>> lifespan: scheduling initial background tasks <<<")
     try:
-        sync_tick()
-        logger.info("[SCHEDULER] Initial background sync tick completed")
+        # Run in background thread to avoid blocking startup
+        import threading
+        def run_sync_tick():
+            try:
+                sync_tick()
+                logger.info("[SCHEDULER] Initial background sync tick completed")
+            except Exception as e:
+                logger.exception("[SCHEDULER] Initial background sync tick failed: {}", e)
+        
+        def run_ingestion_tick():
+            try:
+                ingestion_tick()
+                logger.info("[SCHEDULER] Initial ingestion tick completed")
+            except Exception as e:
+                logger.exception("[SCHEDULER] Initial ingestion tick failed: {}", e)
+        
+        threading.Thread(target=run_sync_tick, daemon=True).start()
+        threading.Thread(target=run_ingestion_tick, daemon=True).start()
+        logging.info(">>> lifespan: initial background tasks started (non-blocking) <<<")
     except Exception as e:
-        logger.exception("[SCHEDULER] Initial background sync tick failed: {}", e)
-
-    # Run initial ingestion tick to start history backfill
-    try:
-        ingestion_tick()
-        logger.info("[SCHEDULER] Initial ingestion tick completed")
-    except Exception as e:
-        logger.exception("[SCHEDULER] Initial ingestion tick failed: {}", e)
+        logger.exception("[SCHEDULER] Failed to start initial background tasks: {}", e)
+        # Don't fail startup if background tasks fail
 
     # Initialize ops metrics (process start time)
 
@@ -460,15 +497,20 @@ async def lifespan(_app: FastAPI):
     logger.info("[OPS] Initialized ops metrics tracking")
 
     # Yield control to FastAPI (use await to satisfy async requirement)
+    logging.info(">>> lifespan: yielding to FastAPI <<<")
+    print("LIFESPAN YIELD", flush=True)
     await asyncio.sleep(0)
     yield
+    logging.info(">>> lifespan: shutdown <<<")
 
     # Shutdown scheduler
     scheduler.shutdown()
     logger.info("[SCHEDULER] Stopped ingestion scheduler")
 
 
+logging.info(">>> creating FastAPI app <<<")
 app = FastAPI(title="Virtus AI", lifespan=lifespan)
+logging.info(">>> FastAPI app created <<<")
 
 
 # Register conversation ID middleware FIRST (before CORS, auth, rate limiting, logging)

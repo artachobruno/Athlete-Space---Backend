@@ -171,6 +171,77 @@ async def emit_progress_event_safe(
         )
 
 
+async def call_tool_safe(
+    tool_name: str,
+    arguments: dict[str, Any],
+    timeout: float = 5.0,
+) -> dict[str, Any] | None:
+    """Call an MCP tool with single-attempt, non-blocking logic.
+
+    This function NEVER retries, uses a SHORT timeout, and NEVER propagates exceptions.
+    Persistence operations must not block plan generation.
+
+    Args:
+        tool_name: Name of the tool to call
+        arguments: Tool arguments
+        timeout: Request timeout in seconds (default: 5.0)
+
+    Returns:
+        Tool result dictionary on success, None on failure
+    """
+    try:
+        server_url = MCP_TOOL_ROUTES.get(tool_name)
+        if not server_url:
+            logger.warning(
+                "Tool call skipped (no route configured)",
+                tool=tool_name,
+            )
+            return None
+
+        endpoint = f"{server_url}/mcp/tools/call"
+        client = _get_client()
+
+        response = await client.post(
+            endpoint,
+            json={
+                "tool": tool_name,
+                "arguments": arguments,
+            },
+            timeout=timeout,
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        if "error" in data:
+            error = data["error"]
+            error_code = error.get("code", "UNKNOWN_ERROR")
+            error_message = error.get("message", "Unknown error")
+            logger.error(
+                "Non-fatal MCP failure",
+                tool=tool_name,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            return None
+
+        if "result" not in data:
+            logger.error(
+                "Non-fatal MCP failure - missing result",
+                tool=tool_name,
+            )
+            return None
+
+        return data["result"]
+    except Exception as e:
+        logger.error(
+            "Non-fatal MCP failure",
+            tool=tool_name,
+            error=str(e),
+        )
+        return None
+
+
 async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Call an MCP tool with automatic retry on network errors.
 

@@ -46,6 +46,7 @@ from app.db.session import engine
 from app.ingestion.api import router as ingestion_strava_router
 from app.ingestion.scheduler import ingestion_tick
 from app.ingestion.sync_scheduler import sync_tick
+from app.internal.ai_ops.router import router as ai_ops_router
 from app.internal.ops.latency import record_latency_ms
 from app.internal.ops.router import router as ops_router
 from app.internal.ops.summary import set_process_start_time
@@ -600,6 +601,7 @@ app.include_router(onboarding_router)
 app.include_router(strava_router)
 app.include_router(manual_upload_router)
 app.include_router(ops_router)
+app.include_router(ai_ops_router)
 app.include_router(state_router)
 app.include_router(training_router)
 app.include_router(webhooks_router)

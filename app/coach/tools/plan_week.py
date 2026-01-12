@@ -279,44 +279,29 @@ async def plan_week(
         week_end=sunday.date().isoformat(),
     )
 
-    try:
-        saved_count = await save_planned_sessions(
-            user_id=user_id,
-            athlete_id=athlete_id,
-            sessions=sessions,
-            plan_type="weekly",
-            plan_id=None,
-        )
-    except Exception as e:
-        logger.error(
-            "B8: Failed to save planned sessions — plan generation failed",
-            session_count=len(sessions),
-            error_type=type(e).__name__,
-            error_message=str(e),
-            exc_info=True,
-        )
-        raise RuntimeError(
-            "The AI coach failed to generate a valid training plan. Please retry."
-        ) from e
-
-    if saved_count == 0:
-        logger.error(
-            "B8: No sessions saved — plan generation failed",
-            session_count=len(sessions),
-        )
-        raise RuntimeError(
-            f"Failed to save weekly training plan: expected to save {len(sessions)} sessions but saved 0."
-        )
-
-    logger.info(
-        "B8: Planned sessions saved successfully",
-        saved_count=saved_count,
-        session_details=[{"date": s["date"], "title": s["title"], "intensity": s.get("intensity")} for s in sessions[:5]],
+    saved_count = await save_planned_sessions(
+        user_id=user_id,
+        athlete_id=athlete_id,
+        sessions=sessions,
+        plan_type="weekly",
+        plan_id=None,
     )
 
-    # Generate response
-    save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-    calendar_message = "Your planned sessions are now available in your calendar!"
+    if saved_count > 0:
+        logger.info(
+            "B8: Planned sessions saved successfully",
+            saved_count=saved_count,
+            session_details=[{"date": s["date"], "title": s["title"], "intensity": s.get("intensity")} for s in sessions[:5]],
+        )
+        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+        calendar_message = "Your planned sessions are now available in your calendar!"
+    else:
+        logger.warning(
+            "B8: Weekly plan generated but NOT persisted (MCP down) — returning plan anyway",
+            session_count=len(sessions),
+        )
+        save_status = f"• **{len(sessions)} training sessions** generated (not saved - calendar unavailable)\n"
+        calendar_message = "⚠️ **Note:** Your training plan was generated successfully, but we couldn't save it to your calendar right now. Please try again later or contact support."
 
     return (
         f"✅ **Weekly Training Plan Created!**\n\n"

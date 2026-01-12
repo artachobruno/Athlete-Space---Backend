@@ -10,10 +10,10 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import cast
 
-from loguru import logger
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
 from app.metrics.training_load import DailyTrainingRow
 
@@ -30,19 +30,33 @@ def aggregate_daily_training(user_id: str) -> None:
     - Ignore duplicate activities (handled by unique constraint)
     - Always recompute last 60 days (idempotent)
     - Missing days = no row (explicit gaps)
+    - Skips if all activities are already fetched and no activities exist in date range
 
     Args:
         user_id: Clerk user ID (string) to aggregate for
     """
-    logger.info(f"[AGGREGATION] Starting daily aggregation for user_id={user_id}")
-
     with get_session() as session:
         # Calculate date range (last 60 days)
         end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=60)
 
+        # Check if all activities are already fetched
+        account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).scalar_one_or_none()
+        if account and account.full_history_synced:
+            # Check if there are any activities in the date range
+            activity_count = session.execute(
+                select(Activity.id).where(
+                    Activity.user_id == user_id,
+                    func.date(Activity.start_time) >= start_date,
+                    func.date(Activity.start_time) <= end_date,
+                ).limit(1)
+            ).scalar()
+
+            # If no activities in range, skip aggregation
+            if not activity_count:
+                return
+
         # Delete existing rows for this user in the date range (idempotent)
-        logger.info(f"[AGGREGATION] Deleting existing daily summary rows for user_id={user_id} (date range: {start_date} to {end_date})")
         session.execute(
             text(
                 """
@@ -58,10 +72,8 @@ def aggregate_daily_training(user_id: str) -> None:
                 "end_date": end_date.isoformat(),
             },
         )
-        logger.info(f"[AGGREGATION] Deleted existing rows for user_id={user_id}")
 
         # Aggregate activities by UTC date for this user
-        logger.info(f"[AGGREGATION] Aggregating activities for user_id={user_id} (date range: {start_date} to {end_date})")
         rows = session.execute(
             text(
                 """
@@ -85,10 +97,7 @@ def aggregate_daily_training(user_id: str) -> None:
             },
         ).fetchall()
 
-        logger.info(f"[AGGREGATION] Found {len(rows)} days with activities for user_id={user_id}")
-
         # Insert aggregated rows
-        inserted_count = 0
         for row in rows:
             date_str = row.date if isinstance(row.date, str) else row.date.isoformat()
             duration_seconds = int(row.duration_seconds) if row.duration_seconds else 0
@@ -115,13 +124,8 @@ def aggregate_daily_training(user_id: str) -> None:
                     "load_score": load_score,
                 },
             )
-            inserted_count += 1
 
         session.commit()
-        logger.info(
-            f"[AGGREGATION] Aggregated {inserted_count} days of training data for user_id={user_id} "
-            f"(date range: {start_date} to {end_date})"
-        )
 
 
 def get_daily_rows(session: Session, user_id: str, days: int = 60) -> list[DailyTrainingRow]:

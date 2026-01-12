@@ -1,7 +1,7 @@
 """Helper functions for generating and storing planned training sessions."""
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, NoReturn, cast
+from typing import Any, cast
 
 from loguru import logger
 from sqlalchemy import select
@@ -11,7 +11,7 @@ from app.calendar.conflicts import (
     detect_conflicts,
     get_resolution_mode,
 )
-from app.coach.mcp_client import MCPError, call_tool
+from app.coach.mcp_client import call_tool_safe
 from app.db.models import PlannedSession
 from app.db.session import get_session
 
@@ -21,15 +21,6 @@ def _raise_timezone_naive_error(session_date_raw: str) -> None:
     raise ValueError(f"Timezone-naive date from ISO string: {session_date_raw}")
 
 
-def _raise_mcp_save_failed_error(expected_count: int) -> NoReturn:
-    """Raise error when MCP tool fails to save sessions.
-
-    This function always raises RuntimeError and never returns.
-    """
-    raise RuntimeError(
-        f"Failed to save planned sessions: MCP tool returned saved_count=0. "
-        f"Expected to save {expected_count} sessions but none were saved."
-    )
 
 
 def _parse_session_date(session_date_raw: date | datetime | str | None) -> datetime | None:
@@ -385,68 +376,62 @@ async def save_planned_sessions(
         first_session_date=sessions_for_mcp[0].get("date") if sessions_for_mcp else None,
     )
 
-    try:
-        logger.debug(
-            "session_planner: Calling MCP tool save_planned_sessions",
+    logger.debug(
+        "session_planner: Calling MCP tool save_planned_sessions",
+        user_id=user_id,
+        athlete_id=athlete_id,
+        session_count=len(sessions_for_mcp),
+        plan_type=plan_type,
+        plan_id=plan_id,
+    )
+    result = await call_tool_safe(
+        "save_planned_sessions",
+        {
+            "user_id": user_id,
+            "athlete_id": athlete_id,
+            "sessions": sessions_for_mcp,
+            "plan_type": plan_type,
+            "plan_id": plan_id,
+        },
+    )
+
+    if result is None:
+        logger.error(
+            "Planned sessions NOT persisted (MCP down) — returning plan anyway",
             user_id=user_id,
             athlete_id=athlete_id,
-            session_count=len(sessions_for_mcp),
+            session_count=len(sessions),
             plan_type=plan_type,
-            plan_id=plan_id,
         )
-        result = await call_tool(
-            "save_planned_sessions",
-            {
-                "user_id": user_id,
-                "athlete_id": athlete_id,
-                "sessions": sessions_for_mcp,
-                "plan_type": plan_type,
-                "plan_id": plan_id,
-            },
-        )
-        logger.debug(
-            "session_planner: MCP tool save_planned_sessions completed",
-            result_keys=list(result.keys()) if isinstance(result, dict) else None,
-            has_saved_count="saved_count" in result if isinstance(result, dict) else False,
-        )
-        saved_count = result.get("saved_count", 0)
-        logger.debug(
-            "session_planner: Extracted saved_count from result",
+        return 0
+
+    logger.debug(
+        "session_planner: MCP tool save_planned_sessions completed",
+        result_keys=list(result.keys()) if isinstance(result, dict) else None,
+        has_saved_count="saved_count" in result if isinstance(result, dict) else False,
+    )
+    saved_count = result.get("saved_count", 0)
+    logger.debug(
+        "session_planner: Extracted saved_count from result",
+        saved_count=saved_count,
+        expected_count=len(sessions),
+    )
+
+    if saved_count > 0:
+        logger.info(
+            "Saved planned sessions via MCP",
+            user_id=user_id,
+            athlete_id=athlete_id,
             saved_count=saved_count,
+            plan_type=plan_type,
+        )
+    else:
+        logger.warning(
+            "MCP tool returned saved_count=0 (degraded mode)",
+            user_id=user_id,
+            athlete_id=athlete_id,
             expected_count=len(sessions),
+            plan_type=plan_type,
         )
-        if saved_count == 0:
-            _raise_mcp_save_failed_error(len(sessions))
-        else:
-            logger.info(
-                "Saved planned sessions via MCP",
-                user_id=user_id,
-                athlete_id=athlete_id,
-                saved_count=saved_count,
-                plan_type=plan_type,
-            )
-            return saved_count
-    except MCPError as e:
-        logger.error(
-            "Failed to persist planned sessions via MCP — plan creation failed",
-            error_code=e.code,
-            error_message=e.message,
-            user_id=user_id,
-            athlete_id=athlete_id,
-            exc_info=True,
-        )
-        raise RuntimeError(
-            f"Failed to save training plan: MCP error {e.code}: {e.message}"
-        ) from e
-    except Exception as e:
-        logger.error(
-            "Unexpected error persisting planned sessions — plan creation failed",
-            error_type=type(e).__name__,
-            error_message=str(e),
-            user_id=user_id,
-            athlete_id=athlete_id,
-            exc_info=True,
-        )
-        raise RuntimeError(
-            f"Failed to save training plan: {type(e).__name__}: {e!s}"
-        ) from e
+
+    return saved_count

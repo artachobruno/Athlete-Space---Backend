@@ -7,9 +7,6 @@ from app.coach.utils.date_extraction import extract_dates_from_text
 from app.coach.utils.llm_client import CoachLLMClient
 
 
-def _raise_season_save_failed_error() -> None:
-    """Raise error when season plan save fails."""
-    raise RuntimeError("Failed to save season training plan: no sessions were saved")
 
 
 # Cache to prevent duplicate calls within a short time window
@@ -299,15 +296,14 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
                 athlete_id=athlete_id,
             )
 
-            if saved_count == 0:
-                logger.debug(
-                    "plan_season: Save failed - no sessions saved",
+            if saved_count > 0:
+                logger.info(f"Successfully saved {saved_count} planned sessions for season plan")
+            else:
+                logger.warning(
+                    "Season plan generated but NOT persisted (MCP down) — returning plan anyway",
                     plan_id=plan_id,
                     expected_count=len(sessions),
                 )
-                _raise_season_save_failed_error()
-
-            logger.info(f"Successfully saved {saved_count} planned sessions for season plan")
 
             weeks = (season_end - season_start).days // 7
             return generate_season_plan_response(season_start, season_end, saved_count, weeks)

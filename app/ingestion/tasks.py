@@ -159,15 +159,6 @@ def history_backfill_task(user_id: str) -> None:
                 backfill_user_history(user_id)
                 elapsed = time.time() - task_start
                 logger.info(f"[INGESTION] History backfill completed successfully for user_id={user_id} in {elapsed:.2f}s")
-
-                # Trigger daily aggregation to update CTL, ATL, TSB metrics
-                try:
-                    logger.debug(f"[INGESTION] Triggering daily aggregation for user_id={user_id} after history backfill")
-                    aggregate_daily_training(user_id)
-                    logger.info(f"[INGESTION] Daily aggregation completed for user_id={user_id} after history backfill")
-                except Exception as e:
-                    logger.error(f"[INGESTION] Daily aggregation failed for user_id={user_id}: {e}", exc_info=True)
-                    # Don't fail history backfill if aggregation fails
             except RateLimitError as e:
                 elapsed = time.time() - task_start
                 logger.warning(f"[INGESTION] History backfill rate limited for user_id={user_id} after {elapsed:.2f}s: {e}")

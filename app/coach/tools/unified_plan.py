@@ -9,16 +9,9 @@ from typing import Any, Literal, cast
 
 from loguru import logger
 
-from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.canonical_plan import CanonicalPlan, PlanSession
+from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.utils.llm_client import CoachLLMClient
-
-
-def _raise_unified_plan_save_error(horizon: str, expected_count: int) -> None:
-    """Raise error when unified plan save fails."""
-    raise RuntimeError(
-        f"Failed to save {horizon} plan: expected to save {expected_count} sessions but saved 0"
-    )
 
 
 async def plan_tool(
@@ -200,76 +193,37 @@ async def plan_tool(
         logger.debug("unified_plan: No sessions to save - raising error", horizon=horizon)
         raise RuntimeError("The AI coach failed to generate a valid training plan. Please retry.")
 
-    try:
-        # Use MCP tool to save sessions
-        plan_type = _horizon_to_plan_type(horizon)
-        logger.debug(
-            "unified_plan: Calling MCP tool save_planned_sessions",
-            horizon=horizon,
-            plan_type=plan_type,
-            session_count=len(sessions_dict),
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-        result = await call_tool(
-            "save_planned_sessions",
-            {
-                "user_id": user_id,
-                "athlete_id": athlete_id,
-                "sessions": sessions_dict,
-                "plan_type": plan_type,
-                "plan_id": None,
-            },
-        )
-        logger.debug(
-            "unified_plan: MCP tool save_planned_sessions completed",
-            horizon=horizon,
-            result_keys=list(result.keys()) if isinstance(result, dict) else None,
-            has_saved_count="saved_count" in result if isinstance(result, dict) else False,
-        )
-        saved_count = result.get("saved_count", 0)
-        logger.debug(
-            "unified_plan: Extracted saved_count from result",
-            horizon=horizon,
-            saved_count=saved_count,
-            expected_count=len(sessions_dict),
-        )
-        if saved_count == 0:
-            logger.debug(
-                "unified_plan: Save failed - no sessions saved",
-                horizon=horizon,
-                expected_count=len(sessions_dict),
-            )
-            _raise_unified_plan_save_error(horizon, len(sessions_dict))
+    plan_type = _horizon_to_plan_type(horizon)
+    logger.debug(
+        "unified_plan: Calling save_planned_sessions",
+        horizon=horizon,
+        plan_type=plan_type,
+        session_count=len(sessions_dict),
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
+    saved_count = await save_planned_sessions(
+        user_id=user_id,
+        athlete_id=athlete_id,
+        sessions=sessions_dict,
+        plan_type=plan_type,
+        plan_id=None,
+    )
+    logger.debug(
+        "unified_plan: save_planned_sessions completed",
+        horizon=horizon,
+        saved_count=saved_count,
+        expected_count=len(sessions_dict),
+    )
+
+    if saved_count > 0:
         logger.info(f"Saved {saved_count} sessions for {horizon} plan")
-        logger.debug(
-            "unified_plan: Plan saved successfully",
+    else:
+        logger.warning(
+            "Unified plan generated but NOT persisted (MCP down) — returning plan anyway",
             horizon=horizon,
-            saved_count=saved_count,
             expected_count=len(sessions_dict),
         )
-    except MCPError as e:
-        logger.debug(
-            "unified_plan: MCPError caught during save",
-            horizon=horizon,
-            error_code=e.code,
-            error_message=e.message,
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-        logger.error(f"Failed to save plan sessions via MCP: {e.code}: {e.message}")
-        raise RuntimeError(f"Failed to save plan: {e.message}") from e
-    except Exception as e:
-        logger.debug(
-            "unified_plan: Exception caught during save",
-            horizon=horizon,
-            error_type=type(e).__name__,
-            error_message=str(e),
-            user_id=user_id,
-            athlete_id=athlete_id,
-        )
-        logger.error(f"Failed to save plan sessions: {e}", exc_info=True)
-        raise RuntimeError(f"Failed to save plan: {type(e).__name__}: {e!s}") from e
 
     # Generate response
     logger.debug(
@@ -472,12 +426,19 @@ def _generate_plan_response(plan: CanonicalPlan, saved_count: int) -> str:
     """
     horizon_name = {"day": "daily", "week": "weekly", "season": "season"}[plan.horizon]
 
+    if saved_count > 0:
+        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+        calendar_note = "Your planned sessions are now available in your calendar!"
+    else:
+        save_status = f"• **{len(plan.sessions)} training sessions** generated (not saved - calendar unavailable)\n"
+        calendar_note = "⚠️ **Note:** Your training plan was generated successfully, but we couldn't save it to your calendar right now. Please try again later or contact support."
+
     return (
         f"✅ **{horizon_name.capitalize()} Training Plan Created!**\n\n"
         f"I've generated a {horizon_name} plan from **{plan.start_date}** "
         f"to **{plan.end_date}**.\n\n"
         f"**Plan Summary:**\n"
-        f"• **{saved_count} training sessions** added to your calendar\n"
+        f"{save_status}"
         f"• Plan duration: {(plan.end_date - plan.start_date).days + 1} days\n\n"
-        f"Your planned sessions are now available in your calendar!"
+        f"{calendar_note}"
     )

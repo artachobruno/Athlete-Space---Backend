@@ -36,12 +36,6 @@ def _raise_invalid_date_type_error(first_date: date | datetime) -> None:
     raise TypeError(f"Invalid date type in training plan: {type(first_date)}")
 
 
-def _raise_save_failed_error() -> None:
-    """Raise error when plan save fails."""
-    raise RuntimeError(
-        "Failed to save race training plan: no sessions were saved. "
-        "Plan generation must be retried."
-    )
 
 
 class RaceInformation(BaseModel):
@@ -986,12 +980,13 @@ async def create_and_save_plan_new(
             plan_id=plan_id,
         )
 
-        if saved_count == 0:
-            _raise_save_failed_error()
-
         target_time_str = f"\nTarget time: {target_time}" if target_time else ""
-        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-        calendar_note = "Your planned sessions are now available in your calendar!"
+        if saved_count == 0:
+            save_status = f"• **{len(sessions)} training sessions** generated (not saved - calendar unavailable)\n"
+            calendar_note = "⚠️ **Note:** Your training plan was generated successfully, but we couldn't save it to your calendar right now. Please try again later or contact support."
+        else:
+            save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+            calendar_note = "Your planned sessions are now available in your calendar!"
 
         success_message = (
             f"✅ **Race Training Plan Created!**\n\n"

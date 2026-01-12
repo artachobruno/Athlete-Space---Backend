@@ -12,7 +12,7 @@ from __future__ import annotations
 from loguru import logger
 from sqlalchemy import inspect
 
-from app.db.models import AthleteProfile, User, UserSettings
+from app.db.models import AthleteProfile, PlannedSession, User, UserSettings
 from app.db.session import engine
 
 
@@ -64,6 +64,20 @@ def verify_schema() -> None:
                 f"Run migrations to add these columns."
             )
         logger.debug(f"✓ user_settings table verified ({len(model_cols)} columns match)")
+
+    # Check PlannedSession model (critical for calendar persistence and B7)
+    if inspector.has_table("planned_sessions"):
+        db_cols = {col["name"] for col in inspector.get_columns("planned_sessions")}
+        model_cols = set(PlannedSession.__table__.columns.keys())
+        missing = model_cols - db_cols
+        if missing:
+            raise RuntimeError(
+                f"DB schema mismatch in planned_sessions table. "
+                f"Model columns missing in DB: {missing}. "
+                f"Run migrations to add these columns. "
+                f"Missing columns will cause B7 calendar persistence failures."
+            )
+        logger.debug(f"✓ planned_sessions table verified ({len(model_cols)} columns match)")
 
     logger.info("✓ Database schema verification completed - all model columns exist in DB")
 

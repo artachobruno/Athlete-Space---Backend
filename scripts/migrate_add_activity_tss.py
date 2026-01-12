@@ -17,9 +17,26 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+# Add project root to Python path (must be absolute for Render/production)
+script_dir = Path(__file__).parent.resolve()
+project_root = script_dir.parent.resolve()
+
+# Verify project root contains app directory or pyproject.toml
+if not (project_root / "app").exists() and not (project_root / "pyproject.toml").exists():
+    # If parent doesn't have app/ or pyproject.toml, try current working directory
+    cwd = Path.cwd().resolve()
+    if (cwd / "app").exists() or (cwd / "pyproject.toml").exists():
+        project_root = cwd
+    else:
+        # Last resort: try going up one more level (for cases where script is in src/scripts/)
+        parent_parent = script_dir.parent.parent.resolve()
+        if (parent_parent / "app").exists() or (parent_parent / "pyproject.toml").exists():
+            project_root = parent_parent
+
+# Ensure project root is in path
+project_root_str = str(project_root)
+if project_root_str not in sys.path:
+    sys.path.insert(0, project_root_str)
 
 from loguru import logger
 from sqlalchemy import text

@@ -31,6 +31,7 @@ from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fie
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
+from scripts.migrate_add_source_to_planned_sessions import migrate_add_source_to_planned_sessions
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
@@ -63,6 +64,7 @@ def run_all_migrations() -> None:
         ("onboarding data fields (onboarding_completed, etc.)", migrate_onboarding_data_fields),
         ("planned_sessions athlete_id column", migrate_add_athlete_id_to_planned_sessions),
         ("planned_sessions completion tracking columns", migrate_add_planned_session_completion_fields),
+        ("planned_sessions source column", migrate_add_source_to_planned_sessions),
         ("activities id column (integer to UUID)", migrate_activities_id_to_uuid),
         ("activities schema (add missing columns)", migrate_activities_schema),
         ("activities user_id column", migrate_activities_user_id),

@@ -48,7 +48,9 @@ def _get_llm_semaphore() -> asyncio.Semaphore:
     """
     global _LLM_SEMAPHORE
     if _LLM_SEMAPHORE is None:
-        _LLM_SEMAPHORE = asyncio.Semaphore(10)  # Max 10 concurrent LLM calls
+        # Reduced to 3 for Render deployment to avoid overwhelming resources
+        # and prevent rate limit errors
+        _LLM_SEMAPHORE = asyncio.Semaphore(3)  # Max 3 concurrent LLM calls
     return _LLM_SEMAPHORE
 
 

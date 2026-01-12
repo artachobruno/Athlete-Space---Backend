@@ -83,6 +83,8 @@ def _get_planned_sessions_safe(
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
             logger.warning(f"[CALENDAR] Database schema issue querying planned sessions. Missing column. Returning empty: {e!r}")
+            # Rollback the transaction to prevent "InFailedSqlTransaction" errors on subsequent queries
+            session.rollback()
             return []
         raise
 
@@ -125,6 +127,8 @@ def _get_activities_safe(
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
             logger.warning(f"[CALENDAR] Database schema issue querying activities. Missing column. Returning empty: {e!r}")
+            # Rollback the transaction to prevent "InFailedSqlTransaction" errors on subsequent queries
+            session.rollback()
             return []
         raise
 
@@ -447,6 +451,8 @@ def get_today(user_id: str = Depends(get_current_user_id)):
                 error_msg = str(e).lower()
                 if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
                     logger.warning(f"[CALENDAR] Database schema issue querying planned sessions. Missing column. Returning empty: {e!r}")
+                    # Rollback the transaction to prevent "InFailedSqlTransaction" errors on subsequent queries
+                    session.rollback()
                     planned_list = []
                 else:
                     raise

@@ -76,6 +76,7 @@ from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
+from scripts.migrate_add_session_order_to_planned_sessions import migrate_add_session_order_to_planned_sessions
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
@@ -238,6 +239,14 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_add_planned_session_completion_fields: {e}")
         logger.error(f"✗ Migration failed: migrate_add_planned_session_completion_fields - {e}", exc_info=True)
+
+    try:
+        logger.info("Running migration: planned_sessions session_order column")
+        migrate_add_session_order_to_planned_sessions()
+        logger.info("✓ Migration completed: planned_sessions session_order column")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_session_order_to_planned_sessions: {e}")
+        logger.error(f"✗ Migration failed: migrate_add_session_order_to_planned_sessions - {e}", exc_info=True)
 
     try:
         logger.info("Running migration: activities id column (integer to UUID)")

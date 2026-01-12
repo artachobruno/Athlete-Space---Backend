@@ -75,6 +75,7 @@ from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracte
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
+from scripts.migrate_add_phase_to_planned_sessions import migrate_add_phase_to_planned_sessions
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_session_order_to_planned_sessions import migrate_add_session_order_to_planned_sessions
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
@@ -247,6 +248,14 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_add_session_order_to_planned_sessions: {e}")
         logger.error(f"✗ Migration failed: migrate_add_session_order_to_planned_sessions - {e}", exc_info=True)
+
+    try:
+        logger.info("Running migration: planned_sessions phase column")
+        migrate_add_phase_to_planned_sessions()
+        logger.info("✓ Migration completed: planned_sessions phase column")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_phase_to_planned_sessions: {e}")
+        logger.error(f"✗ Migration failed: migrate_add_phase_to_planned_sessions - {e}", exc_info=True)
 
     try:
         logger.info("Running migration: activities id column (integer to UUID)")

@@ -23,6 +23,9 @@ from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
+from app.coach.conversation_store import ConversationStore
+from app.coach.progress import PlanProgressStage
+from app.coach.progress_emitter import emit_plan_progress
 from app.coach.schemas.athlete_state import AthleteState
 from app.domains.training_plan.enums import PlanType, RaceDistance, TrainingIntent, WeekFocus
 from app.domains.training_plan.guards import (
@@ -129,6 +132,7 @@ async def execute_canonical_pipeline(
     *,
     progress_callback: Callable[[int, int, str], Awaitable[None] | None] | None = None,
     base_volume_calculator: Callable[[int], float] | None = None,
+    conversation_id: str | None = None,
 ) -> tuple[list[PlannedWeek], PersistResult]:
     """Execute the canonical planner pipeline (B2 → B7).
 
@@ -142,6 +146,7 @@ async def execute_canonical_pipeline(
         plan_id: Plan ID for correlation
         progress_callback: Optional callback(week_number, total_weeks, phase) for progress tracking
         base_volume_calculator: Optional function(week_idx) -> volume for volume calculation
+        conversation_id: Optional conversation ID for progress tracking
 
     Returns:
         Tuple of (list of PlannedWeek objects, PersistResult)
@@ -149,13 +154,33 @@ async def execute_canonical_pipeline(
     Raises:
         RuntimeError: If planning fails at any stage
     """
+    # Emit STRUCTURE stage progress
+    if conversation_id:
+        await emit_plan_progress(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            stage=PlanProgressStage.STRUCTURE,
+            message="🧠 Planning structure",
+        )
+
     # B2 → B2.5 → B3: Build plan structure
     logger.debug("B2-B3: Building plan structure")
     runtime_ctx, week_structures = await build_plan_structure(
         ctx=ctx,
         athlete_state=athlete_state,
         user_preference=None,
+        conversation_id=conversation_id,
+        user_id=user_id,
     )
+
+    # Emit WEEKS stage progress
+    if conversation_id:
+        await emit_plan_progress(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            stage=PlanProgressStage.WEEKS,
+            message="📆 Planning weeks",
+        )
 
     # B4: Allocate volume for each week (parallelized)
     log_stage_event(PlannerStage.VOLUME, "start", plan_id)
@@ -203,6 +228,16 @@ async def execute_canonical_pipeline(
             ) -> PlannedWeek:
                 """Process a single week: template selection + text generation."""
                 try:
+                    # Emit WEEK_DETAIL progress
+                    if conversation_id:
+                        await emit_plan_progress(
+                            conversation_id=conversation_id,
+                            user_id=user_id,
+                            stage=PlanProgressStage.WEEK_DETAIL,
+                            message=f"🏃 Planning week {week_idx + 1}",
+                            metadata={"week_number": str(week_idx + 1), "total_weeks": str(ctx.weeks)},
+                        )
+
                     if progress_callback:
                         total_weeks = ctx.weeks
                         phase_str = "base" if week_idx < total_weeks * 0.5 else ("build" if week_idx < total_weeks * 0.8 else "peak")
@@ -224,6 +259,15 @@ async def execute_canonical_pipeline(
                         distributed_days,
                         structure.day_index_to_session_type,
                     )
+
+                    # Emit INSTRUCTIONS progress before text generation
+                    if conversation_id and week_idx == 0:
+                        await emit_plan_progress(
+                            conversation_id=conversation_id,
+                            user_id=user_id,
+                            stage=PlanProgressStage.INSTRUCTIONS,
+                            message="✍️ Generating instructions",
+                        )
 
                     # B6: Generate session text (already parallelized within week)
                     return await _generate_week_with_text(
@@ -355,6 +399,7 @@ async def plan_race_simple(
     start_date: datetime | None = None,
     athlete_state: AthleteState | None = None,
     progress_callback: Callable[[int, int, str], Awaitable[None] | None] | None = None,
+    conversation_id: str | None = None,
 ) -> tuple[list[dict], int]:
     """Generate complete race plan using linear pipeline (B2 → B7).
 
@@ -368,6 +413,7 @@ async def plan_race_simple(
         start_date: Training start date (optional, defaults to 16 weeks before race)
         athlete_state: Athlete state snapshot (optional, will use defaults if None)
         progress_callback: Optional callback(week_number, total_weeks, phase) for progress tracking
+        conversation_id: Optional conversation ID for progress tracking
 
     Returns:
         Tuple of (list of session dictionaries, total weeks)
@@ -449,6 +495,7 @@ async def plan_race_simple(
         plan_id=plan_id,
         progress_callback=progress_callback,
         base_volume_calculator=volume_calculator,
+        conversation_id=conversation_id,
     )
 
     # Convert to legacy session dict format for compatibility
@@ -516,5 +563,38 @@ async def plan_race_simple(
         athlete_id=athlete_id,
         persisted_count=persist_result.created,
     )
+
+    # Emit final conclusion message
+    if conversation_id:
+        race_date_str = race_date.strftime("%B %d, %Y")
+        start_date_str = start_date.strftime("%B %d, %Y") if start_date else "TBD"
+        final_summary = (
+            f"✅ **Done — here's your plan**\n\n"
+            f"I've generated a {total_weeks}-week training plan for your **{distance}** "
+            f"race on **{race_date_str}**.\n\n"
+            f"**Plan Summary:**\n"
+            f"• **{len(all_sessions)} training sessions** generated\n"
+            f"• Training starts: {start_date_str}\n"
+            f"• Race date: {race_date_str}\n\n"
+            f"Your plan is complete and ready to use!"
+        )
+
+        await ConversationStore.append_message(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="assistant",
+            content=final_summary,
+            message_type="final",
+            show_plan=True,
+            planned_weeks=planned_weeks,
+        )
+
+        # Emit DONE progress stage
+        await emit_plan_progress(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            stage=PlanProgressStage.DONE,
+            message="✅ Done — here's your plan",
+        )
 
     return all_sessions, total_weeks

@@ -57,6 +57,9 @@ async def build_plan_structure(
     ctx: PlanContext,
     athlete_state: AthleteState,
     user_preference: str | None = None,
+    *,
+    conversation_id: str | None = None,
+    user_id: str | None = None,
 ) -> tuple[PlanRuntimeContext, list[WeekStructure]]:
     """Execute B2 → B2.5 → B3 pipeline.
 
@@ -74,6 +77,8 @@ async def build_plan_structure(
         ctx: Plan context with intent, race_distance, weeks
         athlete_state: Athlete state with metrics and flags
         user_preference: Optional explicit philosophy ID override
+        conversation_id: Optional conversation ID for progress tracking
+        user_id: Optional user ID for progress tracking
 
     Returns:
         Tuple of:

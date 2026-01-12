@@ -22,6 +22,48 @@ from app.domains.training_plan.validators import validate_macro_plan
 from app.infra.llm.macro_plan import generate_macro_plan_llm
 
 
+def enforce_race_plan_tail(macro_weeks: list[MacroWeek]) -> list[MacroWeek]:
+    """Enforce that race plans end with taper or recovery.
+
+    This function deterministically ensures the final week of a race plan
+    is either TAPER or RECOVERY, replacing it if necessary. This prevents
+    LLM-generated plans from violating structural invariants.
+
+    Args:
+        macro_weeks: List of macro weeks (may end with any phase)
+
+    Returns:
+        List of macro weeks with final week guaranteed to be TAPER or RECOVERY
+    """
+    if not macro_weeks:
+        return macro_weeks
+
+    last = macro_weeks[-1]
+
+    if last.focus not in {WeekFocus.TAPER, WeekFocus.RECOVERY}:
+        # Force final week to taper
+        # Preserve week_index and use a reasonable taper volume (60% of original)
+        taper_distance = last.total_distance * 0.6
+        enforced_week = MacroWeek(
+            week_index=last.week_index,
+            focus=WeekFocus.TAPER,
+            total_distance=taper_distance,
+        )
+
+        logger.info(
+            "[MACRO] Forced taper on final week",
+            original_phase=last.focus.value,
+            original_distance=last.total_distance,
+            taper_distance=taper_distance,
+            week_index=last.week_index,
+        )
+
+        # Replace last week with enforced taper week
+        return macro_weeks[:-1] + [enforced_week]
+
+    return macro_weeks
+
+
 async def generate_macro_plan(
     ctx: PlanContext,
     athlete_state: AthleteState,
@@ -91,7 +133,9 @@ async def generate_macro_plan(
                 f"Race distance mismatch: expected {ctx.race_distance.value if ctx.race_distance else None}, "
                 f"got {parsed.race_distance.value if parsed.race_distance else None}"
             )
-        # Hard check: race plans must end with taper
+        # Enforce deterministic invariant: race plans must end with taper
+        weeks = enforce_race_plan_tail(weeks)
+        # Safety check: this should never trigger after enforcement
         if weeks[-1].focus not in {WeekFocus.TAPER, WeekFocus.RECOVERY}:
             raise InvalidMacroPlanError(
                 f"Race plan must end with taper or recovery, got {weeks[-1].focus.value}"

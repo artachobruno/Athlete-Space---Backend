@@ -25,13 +25,14 @@ import redis
 from loguru import logger
 
 from app.config.settings import settings
-from app.domains.training_plan.enums import DayType as DomainDayType
-from app.domains.training_plan.models import SessionTextInput as DomainSessionTextInput
-from app.domains.training_plan.models import SessionTextOutput as DomainSessionTextOutput
-from app.planner.enums import DayType
-from app.planner.llm.fallback import generate_fallback_session_text
-from app.planner.llm.session_text import generate_session_text_llm
-from app.planner.models import PlannedSession, PlannedWeek, SessionTextOutput
+from app.domains.training_plan.models import (
+    PlannedSession,
+    PlannedWeek,
+    SessionTextInput,
+    SessionTextOutput,
+)
+from app.infra.llm.fallback import generate_fallback_session_text
+from app.infra.llm.session_text import generate_session_text_llm
 
 # Cache TTL: 7 days (sessions are deterministic for same inputs)
 CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -46,7 +47,7 @@ def _get_redis_client() -> redis.Redis:
     return redis.from_url(settings.redis_url, decode_responses=True)
 
 
-def _generate_cache_key(input_data: DomainSessionTextInput) -> str:
+def _generate_cache_key(input_data: SessionTextInput) -> str:
     """Generate cache key for session text input.
 
     Cache key format:
@@ -99,7 +100,7 @@ def _get_cached_output(cache_key: str) -> dict | None:
     return None
 
 
-def _set_cached_output(cache_key: str, output: SessionTextOutput) -> None:
+def _set_cached_output(cache_key: str, output: "SessionTextOutput") -> None:
     """Cache session text output.
 
     Args:
@@ -119,23 +120,6 @@ def _set_cached_output(cache_key: str, output: SessionTextOutput) -> None:
         logger.debug("Redis cache write failed (non-fatal)", error=str(e))
     except Exception as e:
         logger.debug("Unexpected error writing cache", error=str(e))
-
-
-def _convert_domain_to_planner_output(domain_output: DomainSessionTextOutput) -> SessionTextOutput:
-    """Convert domain SessionTextOutput to planner SessionTextOutput.
-
-    Args:
-        domain_output: Domain model output
-
-    Returns:
-        Planner model output
-    """
-    return SessionTextOutput(
-        title=domain_output.title,
-        description=domain_output.description,
-        structure=domain_output.structure,
-        computed=domain_output.computed,
-    )
 
 
 def _session_text_output_from_dict(data: dict) -> SessionTextOutput:
@@ -178,14 +162,13 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
     Raises:
         ValueError: If generation fails completely
     """
-    # Build input - convert DayType from planner to domain
-    day_type_domain = DomainDayType(session.day_type.value)
-    input_data = DomainSessionTextInput(
+    # Build input
+    input_data = SessionTextInput(
         philosophy_id=context["philosophy_id"],
         race_distance=context["race_distance"],
         phase=context["phase"],
         week_index=context["week_index"],
-        day_type=day_type_domain,
+        day_type=session.day_type,
         allocated_distance_mi=session.distance,
         allocated_duration_min=None,  # TODO: Add duration allocation if needed
         template_id=session.template.template_id,
@@ -203,8 +186,7 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
 
     # Try LLM generation
     try:
-        domain_output = await generate_session_text_llm(input_data, retry_on_violation=True)
-        output = _convert_domain_to_planner_output(domain_output)
+        output = await generate_session_text_llm(input_data, retry_on_violation=True)
         _set_cached_output(cache_key, output)
         logger.info(
             "Session text generated via LLM",
@@ -218,25 +200,24 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
             error=str(e),
         )
         # Fallback to deterministic generation
-        domain_output = generate_fallback_session_text(input_data)
+        output = generate_fallback_session_text(input_data)
         # Mark as fallback in metadata (stored in computed)
         # Create new computed dict with generated_by marker
-        computed_with_metadata = dict(domain_output.computed)
+        computed_with_metadata = dict(output.computed)
         computed_with_metadata["generated_by"] = "fallback"
-        fallback_domain_output = DomainSessionTextOutput(
-            title=domain_output.title,
-            description=domain_output.description,
-            structure=domain_output.structure,
+        fallback_output = SessionTextOutput(
+            title=output.title,
+            description=output.description,
+            structure=output.structure,
             computed=computed_with_metadata,
         )
-        output = _convert_domain_to_planner_output(fallback_domain_output)
-        _set_cached_output(cache_key, output)
+        _set_cached_output(cache_key, fallback_output)
         logger.info(
             "Session text generated via fallback",
             template_id=session.template.template_id,
             status="fallback",
         )
-        return output
+        return fallback_output
     else:
         return output
 

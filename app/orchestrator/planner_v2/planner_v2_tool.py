@@ -1,4 +1,9 @@
-"""B8.6 — Tool entry point (MCP).
+"""DEPRECATED — B8.6 — Tool entry point (MCP).
+
+⚠️  THIS MODULE IS DEPRECATED ⚠️
+
+This module is part of the legacy planner implementation and will be removed.
+All planning should use the canonical planner: app.planner.plan_race_simple
 
 This module provides the main entry point for planner v2 execution.
 It guarantees:
@@ -185,7 +190,11 @@ def build_plan_context(input_data: PlannerInput) -> PlanContext:
 
 
 async def planner_v2_tool(input_data: PlannerInput) -> PlannerResult:
-    """Main planner v2 tool entry point.
+    """DEPRECATED — Main planner v2 tool entry point.
+
+    ⚠️  THIS FUNCTION IS DEPRECATED ⚠️
+
+    Use app.planner.plan_race_simple instead.
 
     This function:
     1. Initializes state
@@ -209,8 +218,14 @@ async def planner_v2_tool(input_data: PlannerInput) -> PlannerResult:
         ValidationError: If input validation fails
         StepExecutionError: If any step fails (except B7 with partial success)
     """
-    if input_data.athlete_state is None:
-        raise ValidationError("athlete_state is required")
+    logger.error(
+        "DEPRECATED: legacy planner path invoked (planner_v2_tool). "
+        "Use app.services.training_plan_service.plan_race instead.",
+        plan_type=input_data.plan_type.value if input_data.plan_type else None,
+    )
+    raise RuntimeError(
+        "Legacy planner path disabled. Use app.services.training_plan_service.plan_race instead."
+    )
 
     # Initialize state
     plan_id = generate_plan_id()

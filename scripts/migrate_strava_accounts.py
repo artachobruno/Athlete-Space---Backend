@@ -13,11 +13,12 @@ This migration creates the strava_accounts table with:
 from sqlalchemy import text
 
 from app.db.models import Base
-from app.db.session import engine
+from app.db.session import get_engine
 
 
 def migrate_strava_accounts() -> None:
     """Create strava_accounts table if it doesn't exist."""
+    engine = get_engine()
     with engine.connect() as conn:
         # Check if table exists
         if "sqlite" in str(engine.url).lower():
@@ -38,7 +39,7 @@ def migrate_strava_accounts() -> None:
 
         try:
             # Create table using SQLAlchemy metadata
-            Base.metadata.create_all(bind=engine, tables=[Base.metadata.tables["strava_accounts"]])
+            Base.metadata.create_all(bind=get_engine(), tables=[Base.metadata.tables["strava_accounts"]])
 
             trans.commit()
             print("Migration complete: Created strava_accounts table.")

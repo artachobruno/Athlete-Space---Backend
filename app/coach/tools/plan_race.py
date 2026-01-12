@@ -16,8 +16,8 @@ from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.tools.slot_utils import merge_slots, parse_date_loose
 from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import ConversationProgress
-from app.planner.plan_race_simple import plan_race_simple
 from app.services.llm.model import get_model
+from app.services.training_plan_service import plan_race
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
 _recent_calls: dict[str, datetime] = {}
@@ -612,6 +612,22 @@ async def plan_race_build_legacy(
     conversation_id: str | None = None,
     return_structured: bool = False,
 ) -> str | tuple[str, int | None]:
+    """DEPRECATED — Legacy planner path disabled.
+
+    ⚠️  THIS FUNCTION IS DEPRECATED ⚠️
+
+    Use app.services.training_plan_service.plan_race instead.
+
+    Raises:
+        RuntimeError: Always, to prevent accidental usage
+    """
+    logger.warning(
+        "DEPRECATED: legacy planner path invoked (plan_race_build_legacy). "
+        "Use app.services.training_plan_service.plan_race instead.",
+    )
+    raise RuntimeError(
+        "Legacy planner path disabled. Use app.services.training_plan_service.plan_race (planner v2)."
+    )
     """Plan a race build and generate training sessions (LEGACY - monolithic LLM approach).
 
     Uses stateful slot extraction with cumulative accumulation and awaited slot resolution.
@@ -933,7 +949,7 @@ async def create_and_save_plan_new(
                     message=message,
                 )
 
-        sessions, total_weeks = await plan_race_simple(
+        sessions, total_weeks = await plan_race(
             race_date=race_date,
             distance=distance,
             user_id=user_id,

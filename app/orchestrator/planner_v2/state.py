@@ -1,4 +1,9 @@
-"""B8.1 — Planner execution state (single source of truth).
+"""DEPRECATED — B8.1 — Planner execution state (single source of truth).
+
+⚠️  THIS MODULE IS DEPRECATED ⚠️
+
+This module is part of the legacy planner implementation and will be removed.
+All planning should use the canonical planner: app.planner.plan_race_simple
 
 This module defines the PlannerV2State dataclass that tracks all artifacts
 produced during plan execution. State is append-only - steps may read previous

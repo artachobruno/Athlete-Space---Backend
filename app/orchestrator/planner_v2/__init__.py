@@ -1,4 +1,9 @@
-"""B8 — Orchestrator Wiring (Planner v2 Execution).
+"""DEPRECATED — B8 — Orchestrator Wiring (Planner v2 Execution).
+
+⚠️  THIS MODULE IS DEPRECATED ⚠️
+
+This module is part of the legacy planner implementation and will be removed.
+All planning should use the canonical planner: app.planner.plan_race_simple
 
 This module provides the orchestrator that wires B2 → B2.5 → B3 → B4 → B5 → B6 → B7
 into a single deterministic orchestration path.

@@ -1,4 +1,9 @@
-"""B8.2 — Step registry and execution.
+"""DEPRECATED — B8.2 — Step registry and execution.
+
+⚠️  THIS MODULE IS DEPRECATED ⚠️
+
+This module is part of the legacy planner implementation and will be removed.
+All planning should use the canonical planner: app.planner.plan_race_simple
 
 This module defines the explicit, ordered step registry and provides
 thin wrapper functions that call B2-B7 implementations.
@@ -10,6 +15,39 @@ from datetime import date, timedelta
 from loguru import logger
 
 from app.coach.schemas.athlete_state import AthleteState
+from app.domains.training_plan.enums import (
+    DayType as DomainDayType,
+)
+from app.domains.training_plan.enums import (
+    PlanType as DomainPlanType,
+)
+from app.domains.training_plan.enums import (
+    RaceDistance as DomainRaceDistance,
+)
+from app.domains.training_plan.enums import (
+    TrainingIntent as DomainTrainingIntent,
+)
+from app.domains.training_plan.enums import (
+    WeekFocus as DomainWeekFocus,
+)
+from app.domains.training_plan.models import (
+    PhilosophySelection as DomainPhilosophySelection,
+)
+from app.domains.training_plan.models import (
+    PlanContext as DomainPlanContext,
+)
+from app.domains.training_plan.models import (
+    PlannedSession as DomainPlannedSession,
+)
+from app.domains.training_plan.models import (
+    PlannedWeek as DomainPlannedWeek,
+)
+from app.domains.training_plan.models import (
+    SessionTemplate as DomainSessionTemplate,
+)
+from app.domains.training_plan.models import (
+    SessionTextOutput as DomainSessionTextOutput,
+)
 from app.orchestrator.planner_v2.errors import StepExecutionError, ValidationError
 from app.orchestrator.planner_v2.progress import emit_step_complete, emit_step_failed, emit_step_start
 from app.orchestrator.planner_v2.state import PlannerV2State
@@ -17,9 +55,13 @@ from app.planner.calendar_persistence import persist_plan
 from app.planner.macro_plan import generate_macro_plan
 from app.planner.models import (
     DistributedDay,
+    PhilosophySelection,
     PlanContext,
+    PlannedSession,
     PlannedWeek,
     PlanRuntimeContext,
+    SessionTemplate,
+    SessionTextOutput,
     WeekStructure,
 )
 from app.planner.philosophy_selector import select_philosophy
@@ -49,6 +91,115 @@ STEP_PERCENTS = {
     "session_text": 80,
     "persist": 100,
 }
+
+
+def _convert_philosophy_selection(philosophy: PhilosophySelection | None) -> DomainPhilosophySelection | None:
+    """Convert PhilosophySelection from planner models to domain models.
+
+    Args:
+        philosophy: PhilosophySelection from app.planner.models
+
+    Returns:
+        PhilosophySelection from app.domains.training_plan.models
+    """
+    if philosophy is None:
+        return None
+    return DomainPhilosophySelection(
+        philosophy_id=philosophy.philosophy_id,
+        domain=philosophy.domain,
+        audience=philosophy.audience,
+    )
+
+
+def _convert_session_text_output(text_output: SessionTextOutput | None) -> DomainSessionTextOutput | None:
+    """Convert SessionTextOutput from planner models to domain models.
+
+    Args:
+        text_output: SessionTextOutput from app.planner.models
+
+    Returns:
+        SessionTextOutput from app.domains.training_plan.models
+    """
+    if text_output is None:
+        return None
+    return DomainSessionTextOutput(
+        title=text_output.title,
+        description=text_output.description,
+        structure=text_output.structure,
+        computed=text_output.computed,
+    )
+
+
+def _convert_session_template(template: SessionTemplate) -> DomainSessionTemplate:
+    """Convert SessionTemplate from planner models to domain models.
+
+    Args:
+        template: SessionTemplate from app.planner.models
+
+    Returns:
+        SessionTemplate from app.domains.training_plan.models
+    """
+    return DomainSessionTemplate(
+        template_id=template.template_id,
+        description_key=template.description_key,
+        kind=template.kind,
+        params=template.params,
+        constraints=template.constraints,
+        tags=template.tags,
+    )
+
+
+def _convert_planned_session(session: PlannedSession) -> DomainPlannedSession:
+    """Convert PlannedSession from planner models to domain models.
+
+    Args:
+        session: PlannedSession from app.planner.models
+
+    Returns:
+        PlannedSession from app.domains.training_plan.models
+    """
+    return DomainPlannedSession(
+        day_index=session.day_index,
+        day_type=DomainDayType(session.day_type.value),
+        distance=session.distance,
+        template=_convert_session_template(session.template),
+        text_output=_convert_session_text_output(session.text_output),
+    )
+
+
+def _convert_planned_week(week: PlannedWeek) -> DomainPlannedWeek:
+    """Convert PlannedWeek from planner models to domain models.
+
+    Args:
+        week: PlannedWeek from app.planner.models
+
+    Returns:
+        PlannedWeek from app.domains.training_plan.models
+    """
+    return DomainPlannedWeek(
+        week_index=week.week_index,
+        focus=DomainWeekFocus(week.focus.value),
+        sessions=[_convert_planned_session(session) for session in week.sessions],
+    )
+
+
+def _convert_plan_context(ctx: PlanContext) -> DomainPlanContext:
+    """Convert PlanContext from planner models to domain models.
+
+    Args:
+        ctx: PlanContext from app.planner.models
+
+    Returns:
+        PlanContext from app.domains.training_plan.models
+    """
+    return DomainPlanContext(
+        plan_type=DomainPlanType(ctx.plan_type.value),
+        intent=DomainTrainingIntent(ctx.intent.value),
+        weeks=ctx.weeks,
+        race_distance=DomainRaceDistance(ctx.race_distance.value) if ctx.race_distance is not None else None,
+        target_date=ctx.target_date,
+        philosophy=_convert_philosophy_selection(ctx.philosophy),
+    )
 
 
 def _compute_days_to_race(ctx, week) -> int:
@@ -416,9 +567,13 @@ def run_b7_persist(
         # Update ctx with philosophy before persistence
         ctx_with_philosophy = replace(state.ctx, philosophy=state.structure.philosophy)
 
+        # Convert from planner models to domain models for persist_plan
+        domain_ctx = _convert_plan_context(ctx_with_philosophy)
+        domain_weeks = [_convert_planned_week(week) for week in state.text_weeks]
+
         persist_result = persist_plan(
-            ctx=ctx_with_philosophy,
-            weeks=state.text_weeks,
+            ctx=domain_ctx,
+            weeks=domain_weeks,
             user_id=user_id,
             athlete_id=athlete_id,
             plan_id=state.plan_id,

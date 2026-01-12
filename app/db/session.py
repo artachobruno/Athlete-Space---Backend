@@ -34,7 +34,7 @@ def _validate_postgresql_driver() -> None:
 def _test_database_connection() -> None:
     """Test database connection on startup."""
     try:
-        with engine.connect() as conn:
+        with _get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
         logger.info("✅ Database connection test successful")
     except Exception as e:
@@ -48,43 +48,78 @@ def _test_database_connection() -> None:
         raise
 
 
-logger.info(f"Initializing database engine: {settings.database_url}")
+# Lazy initialization to avoid import-time database connections (Render deployment requirement)
+_engine = None
+_SessionLocal = None
 
-# Validate PostgreSQL driver BEFORE creating engine (SQLAlchemy imports psycopg2 on engine creation)
-_is_postgresql = "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower()
-if _is_postgresql:
-    _validate_postgresql_driver()  # Must happen before create_engine() for PostgreSQL
-    logger.info("Using PostgreSQL database (production-ready)")
-else:
-    logger.warning("Using SQLite database (local development only)")
 
-# Create engine with appropriate connection args
-connect_args = {}
-if "sqlite" in settings.database_url.lower():
-    connect_args = {"check_same_thread": False}
-elif _is_postgresql:
-    # PostgreSQL connection pooling settings
-    connect_args = {
-        "connect_timeout": 10,
-        "application_name": "virtus-ai",
-    }
+def _get_engine():
+    """Get or create the database engine (lazy initialization).
 
-engine = create_engine(
-    settings.database_url,
-    connect_args=connect_args,
-    echo=False,  # Set to True for SQL query logging
-    pool_pre_ping=True,  # Verify connections before using (important for cloud DBs)
-    pool_recycle=3600,  # Recycle connections after 1 hour
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    This function ensures the engine is only created when first accessed,
+    not at import time, to avoid Render deployment failures.
+    """
+    global _engine
+    if _engine is None:
+        logger.info(f"Initializing database engine: {settings.database_url}")
 
-logger.info("Database engine and session factory initialized")
+        # Validate PostgreSQL driver BEFORE creating engine (SQLAlchemy imports psycopg2 on engine creation)
+        is_postgresql = "postgresql" in settings.database_url.lower() or "postgres" in settings.database_url.lower()
+        if is_postgresql:
+            _validate_postgresql_driver()  # Must happen before create_engine() for PostgreSQL
+            logger.info("Using PostgreSQL database (production-ready)")
+        else:
+            logger.warning("Using SQLite database (local development only)")
 
-# Test connection on module load
-with suppress(Exception):
-    # Don't fail on import, but log the error
-    # The app will fail on first DB operation if connection is bad
-    _test_database_connection()
+        # Create engine with appropriate connection args
+        connect_args = {}
+        if "sqlite" in settings.database_url.lower():
+            connect_args = {"check_same_thread": False}
+        elif is_postgresql:
+            # PostgreSQL connection pooling settings
+            connect_args = {
+                "connect_timeout": 10,
+                "application_name": "virtus-ai",
+            }
+
+        _engine = create_engine(
+            settings.database_url,
+            connect_args=connect_args,
+            echo=False,  # Set to True for SQL query logging
+            pool_pre_ping=True,  # Verify connections before using (important for cloud DBs)
+            pool_recycle=3600,  # Recycle connections after 1 hour
+        )
+        logger.info("Database engine initialized")
+    return _engine
+
+
+def get_engine():
+    """Get or create the database engine (public API).
+
+    This is a public wrapper around _get_engine() to avoid importing
+    private functions from external modules.
+    """
+    return _get_engine()
+
+
+def _get_session_local():
+    """Get or create the session factory (lazy initialization)."""
+    global _SessionLocal
+    if _SessionLocal is None:
+        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_get_engine())
+        logger.info("Database session factory initialized")
+    return _SessionLocal
+
+
+# For backward compatibility, use __getattr__ to provide lazy access
+# This allows existing code like `from app.db.session import engine` to work
+def __getattr__(name: str):
+    """Lazy attribute access for backward compatibility."""
+    if name == "engine":
+        return _get_engine()
+    if name == "SessionLocal":
+        return _get_session_local()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _handle_session_commit(session: Session) -> None:
@@ -140,7 +175,7 @@ def get_session() -> Generator[Session, None, None]:
     - Other exceptions: Logged as database errors and rolled back
     """
     logger.debug("Creating new database session")
-    session = SessionLocal()
+    session = _get_session_local()()
     try:
         logger.debug(f"Yielding session: dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}")
         yield session

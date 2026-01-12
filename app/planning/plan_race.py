@@ -1,3 +1,11 @@
+"""DEPRECATED — Legacy race planning module.
+
+⚠️  THIS MODULE IS DEPRECATED ⚠️
+
+This module is part of the legacy planner implementation and will be removed.
+All planning should use the canonical planner: app.planner.plan_race_simple
+"""
+
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 

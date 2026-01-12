@@ -14,8 +14,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import PlannedSession as DBPlannedSession
-from app.planner.enums import DayType, WeekFocus
-from app.planner.models import PlanContext, PlannedSession, PlannedWeek, SessionTextOutput
+from app.domains.training_plan.enums import DayType, WeekFocus
+from app.domains.training_plan.models import PlanContext, PlannedSession, PlannedWeek, SessionTextOutput
 
 
 @dataclass

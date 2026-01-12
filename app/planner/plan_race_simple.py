@@ -1,4 +1,6 @@
-"""Complete linear planner pipeline entry point (B2 → B7).
+"""CANONICAL PLANNER — DO NOT DUPLICATE.
+
+Complete linear planner pipeline entry point (B2 → B7).
 
 This is the ONLY planner entry point. All planning traffic must flow through this function.
 
@@ -21,9 +23,8 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from app.coach.schemas.athlete_state import AthleteState
-from app.planner.calendar_persistence import PersistResult, persist_plan
-from app.planner.enums import PlanType, RaceDistance, TrainingIntent, WeekFocus
-from app.planner.guards import (
+from app.domains.training_plan.enums import PlanType, RaceDistance, TrainingIntent, WeekFocus
+from app.domains.training_plan.guards import (
     assert_new_planner_only,
     assert_planner_v2_only,
     guard_invariants,
@@ -31,7 +32,7 @@ from app.planner.guards import (
     guard_no_repair,
     log_planner_v2_entry,
 )
-from app.planner.models import (
+from app.domains.training_plan.models import (
     MacroWeek,
     PlanContext,
     PlannedSession,
@@ -39,11 +40,18 @@ from app.planner.models import (
     PlanRuntimeContext,
     WeekStructure,
 )
-from app.planner.observability import PlannerStage, log_stage_event, log_stage_metric, timing
-from app.planner.plan_pipeline import build_plan_structure
-from app.planner.session_template_selector import select_templates_for_week
-from app.planner.session_text_generator import generate_session_text
-from app.planner.volume_allocator import allocate_volume
+from app.domains.training_plan.observability import (
+    PlannerStage,
+    log_event,
+    log_stage_event,
+    log_stage_metric,
+    timing,
+)
+from app.domains.training_plan.plan_pipeline import build_plan_structure
+from app.domains.training_plan.session_template_selector import select_templates_for_week
+from app.domains.training_plan.session_text_generator import generate_session_text
+from app.domains.training_plan.volume_allocator import allocate_volume
+from app.planner.calendar_persistence import PersistResult, persist_plan
 
 
 async def _generate_week_with_text(
@@ -245,6 +253,7 @@ async def plan_race_simple(
                 distributed_weeks.append(distributed_days)
         log_stage_event(PlannerStage.VOLUME, "success", plan_id, {"week_count": len(distributed_weeks)})
         log_stage_metric(PlannerStage.VOLUME, True)
+        log_event("volume_allocated", week_count=len(distributed_weeks), plan_id=plan_id)
     except Exception as e:
         log_stage_event(PlannerStage.VOLUME, "fail", plan_id, {"error": str(e)})
         log_stage_metric(PlannerStage.VOLUME, False)
@@ -285,6 +294,7 @@ async def plan_race_simple(
                 planned_weeks.append(planned_week)
         log_stage_event(PlannerStage.TEMPLATE, "success", plan_id, {"week_count": len(planned_weeks)})
         log_stage_metric(PlannerStage.TEMPLATE, True)
+        log_event("template_selected", week_count=len(planned_weeks), plan_id=plan_id)
     except Exception as e:
         log_stage_event(PlannerStage.TEMPLATE, "fail", plan_id, {"error": str(e)})
         log_stage_metric(PlannerStage.TEMPLATE, False)
@@ -323,6 +333,13 @@ async def plan_race_simple(
             },
         )
         log_stage_metric(PlannerStage.PERSIST, True)
+        log_event(
+            "calendar_persisted",
+            plan_id=plan_id,
+            created=persist_result.created,
+            updated=persist_result.updated,
+            skipped=persist_result.skipped,
+        )
     except Exception as e:
         log_stage_event(PlannerStage.PERSIST, "fail", plan_id, {"error": str(e)})
         log_stage_metric(PlannerStage.PERSIST, False)

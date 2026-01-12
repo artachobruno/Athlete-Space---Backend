@@ -12,11 +12,12 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.db.models import Base
-from app.db.session import engine
+from app.db.session import get_engine
 
 
 def _is_postgresql() -> bool:
     """Check if database is PostgreSQL."""
+    engine = get_engine()
     return "postgresql" in str(engine.url).lower() or "postgres" in str(engine.url).lower()
 
 
@@ -25,6 +26,7 @@ def recreate_activities_table() -> None:
     logger.warning("⚠️  WARNING: This will DROP the existing activities table!")
     logger.warning("⚠️  Only use this for local development databases!")
 
+    engine = get_engine()
     with engine.begin() as conn:
         # Check if table exists
         if _is_postgresql():
@@ -56,7 +58,7 @@ def recreate_activities_table() -> None:
 
         # Create new table using SQLAlchemy models
         logger.info("Creating new activities table from models...")
-        Base.metadata.create_all(bind=engine, tables=[Base.metadata.tables["activities"]])
+        Base.metadata.create_all(bind=get_engine(), tables=[Base.metadata.tables["activities"]])
         logger.info("✓ Created new activities table with correct schema")
 
         # Verify the schema

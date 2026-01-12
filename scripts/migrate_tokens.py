@@ -15,11 +15,12 @@ This preserves existing refresh tokens while removing access tokens
 from sqlalchemy import text
 
 from app.db.models import Base
-from app.db.session import engine
+from app.db.session import get_engine
 
 
 def migrate_tokens() -> None:
     """Migrate strava_auth table to remove access_token column."""
+    engine = get_engine()
     with engine.connect() as conn:
         # Check if table exists
         result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='strava_auth'"))
@@ -29,7 +30,7 @@ def migrate_tokens() -> None:
             print("strava_auth table does not exist. Creating new table...")
             # Table doesn't exist - create it fresh
 
-            Base.metadata.create_all(bind=engine)
+            Base.metadata.create_all(bind=get_engine())
             print("Migration complete: Created new strava_auth table.")
             return
 

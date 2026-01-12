@@ -32,7 +32,7 @@ def _load_prompt() -> str:
     Raises:
         FileNotFoundError: If prompt file doesn't exist
     """
-    prompt_dir = Path(__file__).parent.parent / "prompts"
+    prompt_dir = Path(__file__).parent.parent.parent / "planner" / "prompts"
     prompt_path = prompt_dir / "session_text_generator.txt"
 
     if not prompt_path.exists():

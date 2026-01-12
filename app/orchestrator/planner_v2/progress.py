@@ -1,4 +1,9 @@
-"""B8.5 — Progress emission (UI + logs).
+"""DEPRECATED — B8.5 — Progress emission (UI + logs).
+
+⚠️  THIS MODULE IS DEPRECATED ⚠️
+
+This module is part of the legacy planner implementation and will be removed.
+All planning should use the canonical planner: app.planner.plan_race_simple
 
 This module emits progress events after each step for UI tracking
 and debugging. Progress is emitted as structured logs and can be

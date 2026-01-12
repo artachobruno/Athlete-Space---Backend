@@ -12,11 +12,12 @@ These columns enable SLA monitoring and auto-healing of stuck backfills.
 from sqlalchemy import text
 
 from app.db.models import Base
-from app.db.session import engine
+from app.db.session import get_engine
 
 
 def migrate_sync_tracking() -> None:
     """Add sync tracking columns to strava_auth table."""
+    engine = get_engine()
     with engine.connect() as conn:
         # Check if table exists
         result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='strava_auth'"))
@@ -25,7 +26,7 @@ def migrate_sync_tracking() -> None:
         if not table_exists:
             print("strava_auth table does not exist. Creating new table...")
             # Table doesn't exist - create it fresh using SQLAlchemy models
-            Base.metadata.create_all(bind=engine)
+            Base.metadata.create_all(bind=get_engine())
             print("Migration complete: Created new strava_auth table with sync tracking columns.")
             return
 

@@ -18,7 +18,7 @@ from app.coach.clarification import (
     generate_slot_clarification,
 )
 from app.coach.errors import ToolContractViolationError
-from app.coach.mcp_client import MCPError, call_tool
+from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import get_conversation_progress
 from app.config.settings import settings
@@ -61,7 +61,7 @@ class CoachActionExecutor:
         status: str,
         message: str | None = None,
     ) -> None:
-        """Emit a progress event.
+        """Emit a progress event (non-blocking, safe).
 
         Args:
             conversation_id: Conversation ID
@@ -70,32 +70,13 @@ class CoachActionExecutor:
             status: Event status
             message: Optional message
         """
-        try:
-            await call_tool(
-                "emit_progress_event",
-                {
-                    "conversation_id": conversation_id,
-                    "step_id": step_id,
-                    "label": label,
-                    "status": status,
-                    "message": message,
-                },
-            )
-            logger.info(
-                "Progress event emitted",
-                conversation_id=conversation_id,
-                step_id=step_id,
-                label=label,
-                status=status,
-                has_message=message is not None,
-            )
-        except MCPError as e:
-            logger.warning(
-                f"Failed to emit progress event: {e.code}: {e.message}",
-                conversation_id=conversation_id,
-                step_id=step_id,
-                status=status,
-            )
+        await emit_progress_event_safe(
+            conversation_id=conversation_id,
+            step_id=step_id,
+            label=label,
+            status=status,
+            message=message,
+        )
 
     @staticmethod
     async def _find_step_id_for_tool(

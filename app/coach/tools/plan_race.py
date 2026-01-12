@@ -5,7 +5,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from app.coach.mcp_client import call_tool
+from app.coach.mcp_client import call_tool, emit_progress_event_safe
 from app.coach.schemas.training_plan_schemas import TrainingPlan
 from app.coach.services.conversation_progress import (
     clear_progress,
@@ -933,32 +933,13 @@ async def create_and_save_plan_new(
                 step_id = f"plan_race_week_{week_number}"
                 label = f"Week {week_number} of {total_weeks} ({phase})"
                 message = f"Planning week {week_number} of {total_weeks} - {percentage}% complete"
-                try:
-                    await call_tool(
-                        "emit_progress_event",
-                        {
-                            "conversation_id": conversation_id,
-                            "step_id": step_id,
-                            "label": label,
-                            "status": "in_progress",
-                            "message": message,
-                        },
-                    )
-                    logger.info(
-                        "Progress event emitted for week planning",
-                        conversation_id=conversation_id,
-                        week_number=week_number,
-                        total_weeks=total_weeks,
-                        percentage=percentage,
-                        phase=phase,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to emit progress event for week planning",
-                        conversation_id=conversation_id,
-                        week_number=week_number,
-                        error=str(e),
-                    )
+                await emit_progress_event_safe(
+                    conversation_id=conversation_id,
+                    step_id=step_id,
+                    label=label,
+                    status="in_progress",
+                    message=message,
+                )
 
         sessions, total_weeks = await plan_race_build_new(
             race_date=race_date,

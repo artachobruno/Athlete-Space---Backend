@@ -136,6 +136,7 @@ def get_session() -> Generator[Session, None, None]:
 
     Handles database errors vs HTTP exceptions separately:
     - HTTPException: Re-raised without logging (expected API responses)
+    - NoTrainingDataError: Re-raised without logging (business logic error, not DB error)
     - Other exceptions: Logged as database errors and rolled back
     """
     logger.debug("Creating new database session")
@@ -154,6 +155,14 @@ def get_session() -> Generator[Session, None, None]:
         session.rollback()
         raise
     except Exception as e:
+        # Check if this is a business logic error (not a database error)
+        # Import here to avoid circular imports
+        from app.state.errors import NoTrainingDataError
+
+        if isinstance(e, NoTrainingDataError):
+            logger.debug("NoTrainingDataError in session, rolling back (business logic error, not DB error)")
+            session.rollback()
+            raise
         logger.error(
             f"Database session error during commit, rolling back: {e}. "
             f"Error type: {type(e).__name__}, Error args: {e.args}, session state: "

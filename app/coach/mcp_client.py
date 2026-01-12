@@ -91,6 +91,86 @@ def _raise_mcp_error(code: str, message: str) -> None:
     raise MCPError(code, message)
 
 
+async def emit_progress_event_safe(
+    conversation_id: str,
+    step_id: str,
+    label: str,
+    status: str,
+    message: str | None = None,
+) -> None:
+    """Emit a progress event with single-attempt, non-blocking logic.
+
+    This function NEVER retries, NEVER blocks, and NEVER propagates exceptions.
+    Progress events are observability only and must not block planning.
+
+    Args:
+        conversation_id: Conversation ID
+        step_id: Step ID
+        label: Step label
+        status: Event status
+        message: Optional message
+    """
+    # Feature flag check - progress events disabled by default for production stability
+    if not settings.enable_progress_events:
+        return
+
+    try:
+        server_url = MCP_TOOL_ROUTES.get("emit_progress_event")
+        if not server_url:
+            logger.warning(
+                "Progress event emit skipped (no route configured)",
+                conversation_id=conversation_id,
+                step_id=step_id,
+            )
+            return
+
+        endpoint = f"{server_url}/mcp/tools/call"
+        client = _get_client()
+
+        # Use a short timeout (5 seconds) - fail fast, don't block
+        timeout = 5.0
+
+        response = await client.post(
+            endpoint,
+            json={
+                "tool": "emit_progress_event",
+                "arguments": {
+                    "conversation_id": conversation_id,
+                    "step_id": step_id,
+                    "label": label,
+                    "status": status,
+                    "message": message,
+                },
+            },
+            timeout=timeout,
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        if "error" in data:
+            error = data["error"]
+            error_code = error.get("code", "UNKNOWN_ERROR")
+            error_message = error.get("message", "Unknown error")
+            logger.warning(
+                "Progress event emit failed (non-blocking); continuing",
+                conversation_id=conversation_id,
+                step_id=step_id,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            return
+
+        # Success - silently continue
+    except Exception as e:
+        logger.warning(
+            "Progress event emit failed (non-blocking); continuing",
+            conversation_id=conversation_id,
+            step_id=step_id,
+            error=str(e),
+        )
+
+
 async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Call an MCP tool with automatic retry on network errors.
 

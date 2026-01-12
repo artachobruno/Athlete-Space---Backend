@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.calendar.conflicts import CalendarConflict, ConflictType, detect_execution_conflicts_batch
 from app.calendar.write_service import CalendarWriteService, WriteResult
-from app.db.models import AthleteProfile, PlannedSession, StravaAccount, User
+from app.db.models import AthleteProfile, AuthProvider, PlannedSession, StravaAccount, User
 from app.db.session import get_session
 from app.metrics.compliance import SessionCompliance, get_session_compliance, record_completion, record_manual_edit, record_skip
 from app.planning.execution.contracts import ExecutableSession
@@ -40,6 +40,7 @@ def test_user_id() -> str:
             id=user_id,
             email=f"test_{user_id}@example.com",
             password_hash=None,
+            auth_provider=AuthProvider.password,
             strava_athlete_id=athlete_id,
             created_at=datetime.now(UTC),
             last_login_at=None,
@@ -62,7 +63,7 @@ def test_user_id() -> str:
             athlete_id=str(athlete_id),
             access_token="test_token",
             refresh_token="test_refresh",
-            expires_at=9999999999,
+            expires_at=2147483647,  # Max PostgreSQL integer (Jan 19, 2038)
             last_sync_at=None,
             oldest_synced_at=None,
             full_history_synced=False,

@@ -11,7 +11,7 @@ from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
 from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
-from app.coach.mcp_client import MCPError, call_tool
+from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.db.models import AthleteProfile, StravaAccount, UserSettings
@@ -213,28 +213,12 @@ async def process_coach_chat(
             step_count=len(decision.action_plan.steps),
         )
         for step in decision.action_plan.steps:
-            try:
-                await call_tool(
-                    "emit_progress_event",
-                    {
-                        "conversation_id": conversation_id,
-                        "step_id": step.id,
-                        "label": step.label,
-                        "status": "planned",
-                    },
-                )
-                logger.info(
-                    "Planned event emitted",
-                    conversation_id=conversation_id,
-                    step_id=step.id,
-                    step_label=step.label,
-                )
-            except MCPError as e:
-                logger.warning(
-                    f"Failed to emit planned event for step {step.id}: {e.code}: {e.message}",
-                    conversation_id=conversation_id,
-                    step_id=step.id,
-                )
+            await emit_progress_event_safe(
+                conversation_id=conversation_id,
+                step_id=step.id,
+                label=step.label,
+                status="planned",
+            )
 
     # Execute action if needed (executor will also guard against NO_ACTION)
     return await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
@@ -428,16 +412,12 @@ def dispatch_coach_chat(
 
         if decision.action == "EXECUTE" and decision.action_plan:
             for step in decision.action_plan.steps:
-                with contextlib.suppress(MCPError):
-                    await call_tool(
-                        "emit_progress_event",
-                        {
-                            "conversation_id": conversation_id,
-                            "step_id": step.id,
-                            "label": step.label,
-                            "status": "planned",
-                        },
-                    )
+                await emit_progress_event_safe(
+                    conversation_id=conversation_id,
+                    step_id=step.id,
+                    label=step.label,
+                    status="planned",
+                )
 
         reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
         return (decision.intent, reply)

@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.db.models import DailyTrainingLoad, StravaAccount
 from app.db.session import get_session
+from app.state.errors import NoTrainingDataError
 
 
 @dataclass(slots=True)
@@ -48,7 +49,7 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
         TrainingData with CTL, ATL, TSB metrics from computed DTL
 
     Raises:
-        RuntimeError: If no training data is available
+        NoTrainingDataError: If no training data is available
     """
     since_date = datetime.now(timezone.utc).date() - timedelta(days=days)
 
@@ -64,7 +65,7 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
         ).all()
 
         if not rows:
-            raise RuntimeError("No training data available")
+            raise NoTrainingDataError("No training data available")
 
         # Extract data from pre-computed metrics
         dates: list[str] = []

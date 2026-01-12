@@ -100,6 +100,11 @@ class Settings(BaseSettings):
         validation_alias="OBSERVE_API_KEY",
         description="Observe API key",
     )
+    enable_progress_events: bool = Field(
+        default=False,
+        validation_alias="ENABLE_PROGRESS_EVENTS",
+        description="Enable progress event emission (default: false for production stability)",
+    )
 
     @field_validator("log_level")
     @classmethod

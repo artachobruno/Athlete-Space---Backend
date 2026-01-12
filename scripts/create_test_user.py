@@ -15,7 +15,7 @@ if str(_project_root) not in sys.path:
 
 from sqlalchemy import select
 
-from app.db.models import StravaAccount, User
+from app.db.models import AuthProvider, StravaAccount, User
 from app.db.session import get_session
 
 
@@ -55,8 +55,9 @@ def create_test_user(athlete_id: int = 1) -> str:
         user_id = str(uuid.uuid4())
         new_user = User(
             id=user_id,
-            email=None,
+            email=f"test_{user_id}@example.com",
             password_hash=None,
+            auth_provider=AuthProvider.password,
             strava_athlete_id=athlete_id,
             created_at=datetime.now(UTC),
             last_login_at=None,
@@ -70,7 +71,7 @@ def create_test_user(athlete_id: int = 1) -> str:
             athlete_id=str(athlete_id),
             access_token="test_access_token_encrypted",  # Placeholder - would be encrypted in production
             refresh_token="test_refresh_token_encrypted",  # Placeholder - would be encrypted in production
-            expires_at=9999999999,  # Far future timestamp
+            expires_at=2147483647,  # Max PostgreSQL integer (Jan 19, 2038)
             last_sync_at=None,
             oldest_synced_at=None,
             full_history_synced=False,

@@ -18,7 +18,7 @@ from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.mcp_client import MCP_CALL_LOG
 from app.coach.services.state_builder import build_athlete_state
 from app.config.settings import settings
-from app.db.models import StravaAccount, User
+from app.db.models import AuthProvider, StravaAccount, User
 from app.db.session import get_session
 
 # Test constants
@@ -79,8 +79,9 @@ def test_user_id():
         user_id = str(uuid.uuid4())
         new_user = User(
             id=user_id,
-            email=None,
+            email=f"test_{user_id}@example.com",
             password_hash=None,
+            auth_provider=AuthProvider.password,
             strava_athlete_id=TEST_ATHLETE_ID,
             created_at=datetime.now(UTC),
             last_login_at=None,
@@ -93,7 +94,7 @@ def test_user_id():
             athlete_id=str(TEST_ATHLETE_ID),
             access_token="test_access_token_encrypted",
             refresh_token="test_refresh_token_encrypted",
-            expires_at=9999999999,
+            expires_at=2147483647,  # Max PostgreSQL integer (Jan 19, 2038)
             last_sync_at=None,
             oldest_synced_at=None,
             full_history_synced=False,

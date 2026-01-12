@@ -396,8 +396,8 @@ async def save_planned_sessions(
     )
 
     if result is None:
-        logger.error(
-            "Planned sessions NOT persisted (MCP down) — returning plan anyway",
+        logger.warning(
+            "MCP save failed — returning plan in degraded mode",
             user_id=user_id,
             athlete_id=athlete_id,
             session_count=len(sessions),

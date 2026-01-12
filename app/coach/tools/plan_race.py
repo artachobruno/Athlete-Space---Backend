@@ -972,13 +972,39 @@ async def create_and_save_plan_new(
             athlete_id=athlete_id,
         )
 
-        saved_count = await save_planned_sessions(
+        result = await save_planned_sessions(
             user_id=user_id,
             athlete_id=athlete_id,
             sessions=sessions,
             plan_type="race",
             plan_id=plan_id,
         )
+
+        # Track persistence status for degraded mode detection
+        saved_count = result
+        persistence_status = "ok" if saved_count > 0 else "degraded"
+        
+        # Log persistence status for frontend banner, AI dashboard, ops tracking, future retry jobs
+        logger.info(
+            "Plan persistence status",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            plan_id=plan_id,
+            persistence_status=persistence_status,
+            saved_count=saved_count,
+            total_sessions=len(sessions),
+        )
+        
+        if saved_count == 0:
+            logger.warning(
+                "MCP save failed — returning plan in degraded mode",
+                user_id=user_id,
+                athlete_id=athlete_id,
+                session_count=len(sessions),
+                plan_type="race",
+                plan_id=plan_id,
+                persistence_status=persistence_status,
+            )
 
         target_time_str = f"\nTarget time: {target_time}" if target_time else ""
         if saved_count == 0:

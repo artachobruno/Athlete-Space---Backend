@@ -1,30 +1,31 @@
-"""Semantic week structure selection with constraint → embedding → score pipeline.
+"""Semantic week structure selection with pure embedding pipeline.
 
 This module implements semantic retrieval for week structure selection:
-1. Hard filters (philosophy namespace, race distance, audience, phase, days_to_race)
-2. Embedding similarity search
-3. Structured scoring (60% embedding, 20% phase match, 10% audience, 10% days_to_race)
-4. Deterministic selection with minimum threshold
-5. Graceful fallback to priority-based selection
+1. Load ALL structures (no filtering)
+2. Embed query text
+3. Score ALL candidates using cosine similarity
+4. Pick best match
 
-Replaces brittle exact matching with semantic understanding.
+No filters. No thresholds. No fallbacks. Pure embedding selection.
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 
 from app.coach.schemas.athlete_state import AthleteState
-from app.domains.training_plan.enums import DayType, WeekFocus
+from app.domains.training_plan.enums import DayType
 from app.domains.training_plan.errors import InvalidSkeletonError
 from app.domains.training_plan.models import DaySkeleton, MacroWeek, PlanRuntimeContext, WeekStructure
 from app.domains.training_plan.observability import log_event
 from app.domains.training_plan.query_builder import build_week_structure_query_text
+from app.domains.training_plan.selectors.embedding_selector import select_best_by_embedding
 from app.domains.training_plan.week_structure import (
     DAY_NAME_TO_INDEX,
     SESSION_TYPE_TO_DAY_TYPE,
-    load_structures_from_philosophy,
+    _load_all_structures,
 )
 from app.embeddings.embedding_service import get_embedding_service
 from app.embeddings.vector_store import EmbeddedItem, VectorStore
@@ -34,14 +35,23 @@ from app.planning.structure.types import StructureSpec
 CACHE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "embeddings"
 WEEK_STRUCTURES_CACHE = CACHE_DIR / "week_structures.json"
 
-# Scoring weights
-EMBEDDING_WEIGHT = 0.60
-PHASE_WEIGHT = 0.20
-AUDIENCE_WEIGHT = 0.10
-DAYS_TO_RACE_WEIGHT = 0.10
 
-# Minimum score threshold
-MIN_SCORE_THRESHOLD = 0.72
+@dataclass
+class EmbeddedStructureSpec:
+    """Wrapper for StructureSpec with embedding.
+
+    Attributes:
+        spec: Structure specification
+        embedding: Embedding vector for the structure
+    """
+
+    spec: StructureSpec
+    embedding: list[float]
+
+    @property
+    def id(self) -> str:
+        """Get structure ID for logging."""
+        return self.spec.metadata.id
 
 
 def _load_week_structure_vector_store() -> VectorStore:
@@ -74,6 +84,35 @@ def _load_week_structure_vector_store() -> VectorStore:
     return VectorStore(items)
 
 
+def _load_all_structures_with_embeddings() -> list[EmbeddedStructureSpec]:
+    """Load all structures with their embeddings.
+
+    Returns:
+        List of EmbeddedStructureSpec objects
+
+    Raises:
+        RuntimeError: If cache not found or structures can't be loaded
+    """
+    # Load all structures from files
+    all_structures = _load_all_structures()
+
+    # Load vector store with embeddings
+    vector_store = _load_week_structure_vector_store()
+
+    # Match structures with embeddings
+    embedded_structures: list[EmbeddedStructureSpec] = []
+    for spec in all_structures:
+        embedded_item = vector_store.get_item(spec.metadata.id)
+        if embedded_item:
+            embedded_structures.append(
+                EmbeddedStructureSpec(spec=spec, embedding=embedded_item.embedding)
+            )
+        else:
+            logger.warning(f"No embedding found for structure {spec.metadata.id}, skipping")
+
+    return embedded_structures
+
+
 def _map_session_type_to_day_type(session_type: str) -> DayType:
     """Map RAG session type to DayType enum.
 
@@ -92,77 +131,19 @@ def _map_session_type_to_day_type(session_type: str) -> DayType:
     return day_type
 
 
-def _compute_structured_score(
-    embedding_similarity: float,
-    spec: StructureSpec,
-    target_phase: str,
-    target_audience: str,
-    days_to_race: int,
-) -> float:
-    """Compute structured score combining embedding and metadata.
-
-    Args:
-        embedding_similarity: Cosine similarity from embedding (0-1)
-        spec: Structure specification
-        target_phase: Target phase (week.focus.value)
-        target_audience: Target audience
-        days_to_race: Days until race
-
-    Returns:
-        Combined score (0-1)
-    """
-    # Phase match score
-    if spec.metadata.phase == target_phase:
-        phase_score = 1.0
-    else:
-        # Soft penalty for phase mismatch (base -> build is acceptable)
-        phase_fallback: dict[str, str] = {"base": "build", "recovery": "build", "exploration": "build"}
-        if target_phase in phase_fallback and spec.metadata.phase == phase_fallback[target_phase]:
-            phase_score = 0.8
-        else:
-            phase_score = 0.3
-
-    # Audience match score
-    if spec.metadata.audience in {"all", target_audience}:
-        audience_score = 1.0
-    else:
-        audience_score = 0.5
-
-    # Days to race match score
-    if spec.metadata.days_to_race_min <= days_to_race <= spec.metadata.days_to_race_max:
-        days_score = 1.0
-    else:
-        # Soft penalty based on distance from range
-        if days_to_race < spec.metadata.days_to_race_min:
-            distance = spec.metadata.days_to_race_min - days_to_race
-        else:
-            distance = days_to_race - spec.metadata.days_to_race_max
-
-        # Normalize penalty (max penalty at 30+ days away)
-        days_score = max(0.0, 1.0 - (distance / 30.0))
-
-    # Weighted combination
-    return (
-        EMBEDDING_WEIGHT * embedding_similarity
-        + PHASE_WEIGHT * phase_score
-        + AUDIENCE_WEIGHT * audience_score
-        + DAYS_TO_RACE_WEIGHT * days_score
-    )
-
-
 def load_week_structure_semantic(
     ctx: PlanRuntimeContext,
     week: MacroWeek,
     _athlete_state: AthleteState,
     days_to_race: int,
 ) -> WeekStructure:
-    """Load week structure using semantic retrieval with guardrails.
+    """Load week structure using pure embedding selection.
 
     Pipeline:
-    1. Hard filters (philosophy namespace, race distance, audience)
-    2. Embedding similarity search
-    3. Structured scoring
-    4. Deterministic selection
+    1. Load ALL structures (no filtering)
+    2. Embed query text
+    3. Score ALL candidates using cosine similarity
+    4. Pick best match
 
     Args:
         ctx: Runtime context with plan and selected philosophy
@@ -174,96 +155,26 @@ def load_week_structure_semantic(
         WeekStructure with days, rules, session_groups, guards
 
     Raises:
-        InvalidSkeletonError: If no matching structure is found
+        RuntimeError: If structures or embeddings can't be loaded
     """
-    if ctx.plan.race_distance is None:
-        raise InvalidSkeletonError("Race distance is required for structure selection")
-
     logger.debug(
-        "Loading week structure (semantic)",
-        philosophy_id=ctx.philosophy.philosophy_id,
+        "Loading week structure (semantic - pure embedding)",
+        philosophy_id=ctx.philosophy.philosophy_id if ctx.philosophy else None,
         focus=week.focus.value,
-        race=ctx.plan.race_distance.value,
+        race=ctx.plan.race_distance.value if ctx.plan.race_distance else None,
         days_to_race=days_to_race,
     )
 
-    # STEP 1: Hard filters - load structures from philosophy namespace
-    all_structures = load_structures_from_philosophy(
-        domain=ctx.philosophy.domain,
-        philosophy_id=ctx.philosophy.philosophy_id,
+    # Load ALL structures with embeddings (no filtering)
+    all_embedded_structures = _load_all_structures_with_embeddings()
+
+    if not all_embedded_structures:
+        raise RuntimeError("No structures found with embeddings. Run precompute_embeddings.py first.")
+
+    logger.info(
+        "Loaded all structures for embedding selection",
+        total_count=len(all_embedded_structures),
     )
-
-    # Filter by hard constraints
-    candidates: list[StructureSpec] = []
-    for spec in all_structures:
-        # Philosophy namespace (already guaranteed by _load_structures_from_philosophy)
-        if spec.metadata.philosophy_id != ctx.philosophy.philosophy_id:
-            continue
-
-        # Race distance
-        if not spec.metadata.race_types or ctx.plan.race_distance.value not in spec.metadata.race_types:
-            continue
-
-        # Audience filter:
-        # - If philosophy audience is "all", accept any structure
-        # - If structure audience is "all", accept for any target audience
-        # - Otherwise, require exact match
-        if ctx.philosophy.audience != "all" and spec.metadata.audience not in {"all", ctx.philosophy.audience}:
-            continue
-
-        candidates.append(spec)
-
-    logger.debug(f"After hard filters: {len(candidates)} candidates")
-
-    log_event(
-        "week_structure_candidate_filtered",
-        philosophy_id=ctx.philosophy.philosophy_id,
-        race_distance=ctx.plan.race_distance.value,
-        audience=ctx.philosophy.audience,
-        focus=week.focus.value,
-        candidates_count=len(candidates),
-    )
-
-    if not candidates:
-        raise InvalidSkeletonError(
-            f"No plan_structure found for philosophy={ctx.philosophy.philosophy_id}, "
-            f"race={ctx.plan.race_distance.value}, audience={ctx.philosophy.audience}"
-        )
-
-    # STEP 2: Embedding similarity
-    try:
-        vector_store = _load_week_structure_vector_store()
-    except RuntimeError as e:
-        logger.warning(f"Failed to load vector store, falling back to priority: {e}")
-        log_event(
-            "week_structure_fallback_triggered",
-            reason="vector_store_unavailable",
-            error=str(e),
-            fallback_method="priority",
-        )
-        # Fallback to priority-based selection with phase matching
-        phase_matches = [s for s in candidates if s.metadata.phase == week.focus.value]
-        if phase_matches:
-            candidates = phase_matches
-
-        # Filter by days_to_race
-        days_matches = [
-            s
-            for s in candidates
-            if s.metadata.days_to_race_min <= days_to_race <= s.metadata.days_to_race_max
-        ]
-        if days_matches:
-            candidates = days_matches
-
-        if not candidates:
-            raise InvalidSkeletonError(
-                f"No plan_structure found for philosophy={ctx.philosophy.philosophy_id}, "
-                f"focus={week.focus.value}, race={ctx.plan.race_distance.value}, "
-                f"audience={ctx.philosophy.audience}, days_to_race={days_to_race}"
-            ) from None
-
-        best = sorted(candidates, key=lambda s: s.metadata.priority, reverse=True)[0]
-        return _build_week_structure_from_spec(best, week)
 
     # Build query
     query_text = build_week_structure_query_text(
@@ -274,118 +185,39 @@ def load_week_structure_semantic(
 
     # Embed query
     embedding_service = get_embedding_service()
-    query_embedding = embedding_service.embed_text(query_text)
+    embed_fn = embedding_service.embed_text
 
     log_event(
         "week_structure_embedding_query",
         query_text=query_text,
         query_length=len(query_text),
-        candidates_count=len(candidates),
+        candidates_count=len(all_embedded_structures),
         days_to_race=days_to_race,
     )
 
-    # Search vector store - constrain to hard-filtered candidates only
-    candidate_ids = {c.metadata.id for c in candidates}
-    semantic_results = vector_store.query(
-        query_embedding,
-        top_k=min(10, len(candidates)),
-        candidate_ids=candidate_ids,
+    # Select best using pure embedding similarity
+    best_embedded = select_best_by_embedding(
+        items=all_embedded_structures,
+        query_text=query_text,
+        embed_fn=embed_fn,
+        vector_attr="embedding",
     )
 
-    logger.debug(
-        "Semantic search results",
-        query_preview=query_text[:100],
-        results_count=len(semantic_results),
-    )
-
-    # STEP 3: Structured scoring
-    structure_dict = {s.metadata.id: s for s in candidates}
-    scored_candidates: list[tuple[StructureSpec, float]] = []
-
-    for item_id, embedding_sim, _metadata in semantic_results:
-        spec = structure_dict.get(item_id)
-        if not spec:
-            continue
-
-        score = _compute_structured_score(
-            embedding_sim,
-            spec,
-            target_phase=week.focus.value,
-            target_audience=ctx.philosophy.audience,
-            days_to_race=days_to_race,
-        )
-        scored_candidates.append((spec, score))
-
-        log_event(
-            "week_structure_semantic_rank",
-            structure_id=spec.metadata.id,
-            phase=spec.metadata.phase,
-            embedding_similarity=round(embedding_sim, 4),
-            structured_score=round(score, 4),
-            phase_match=spec.metadata.phase == week.focus.value,
-            days_to_race_in_range=(
-                spec.metadata.days_to_race_min <= days_to_race <= spec.metadata.days_to_race_max
-            ),
-        )
-
-        logger.debug(
-            "Scored candidate",
-            structure_id=spec.metadata.id,
-            phase=spec.metadata.phase,
-            embedding_sim=embedding_sim,
-            score=score,
-        )
-
-    # If no semantic matches, fall back to priority
-    if not scored_candidates:
-        logger.warning("No semantic matches, falling back to priority")
-        log_event(
-            "week_structure_fallback_triggered",
-            reason="no_semantic_matches",
-            fallback_method="priority",
-        )
-        # Try phase match first
-        phase_matches = [s for s in candidates if s.metadata.phase == week.focus.value]
-        if phase_matches:
-            candidates = phase_matches
-
-        best = sorted(candidates, key=lambda s: s.metadata.priority, reverse=True)[0]
-        return _build_week_structure_from_spec(best, week)
-
-    # Sort by score
-    scored_candidates.sort(key=lambda x: x[1], reverse=True)
-
-    # Filter by threshold
-    passing_candidates = [(s, sc) for s, sc in scored_candidates if sc >= MIN_SCORE_THRESHOLD]
-
-    if not passing_candidates:
-        logger.warning(
-            f"No candidates pass threshold {MIN_SCORE_THRESHOLD}, using best available",
-            best_score=scored_candidates[0][1] if scored_candidates else 0.0,
-        )
-        log_event(
-            "week_structure_fallback_triggered",
-            reason="threshold_not_met",
-            threshold=MIN_SCORE_THRESHOLD,
-            best_score=scored_candidates[0][1] if scored_candidates else 0.0,
-        )
-        passing_candidates = [scored_candidates[0]] if scored_candidates else []
-
-    best_spec, best_score = passing_candidates[0]
+    best_spec = best_embedded.spec
 
     log_event(
         "week_structure_final_selection",
         structure_id=best_spec.metadata.id,
         phase=best_spec.metadata.phase,
-        score=round(best_score, 4),
-        method="semantic",
+        philosophy_id=best_spec.metadata.philosophy_id,
+        method="pure_embedding",
     )
 
     logger.info(
-        "Selected week structure (semantic)",
+        "Selected week structure (pure embedding)",
         structure_id=best_spec.metadata.id,
         phase=best_spec.metadata.phase,
-        score=best_score,
+        philosophy_id=best_spec.metadata.philosophy_id,
     )
 
     return _build_week_structure_from_spec(best_spec, week)

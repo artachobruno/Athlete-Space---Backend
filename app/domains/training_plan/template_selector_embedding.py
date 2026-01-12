@@ -107,19 +107,9 @@ class TemplateLibrary:
         embedding_service = get_embedding_service()
         query_embedding = embedding_service.embed_text(query_text)
 
-        # Optional: Filter by session_type for safety (still guaranteed to return one)
-        candidates = [t for t in self.templates if t.session_type == session_type]
-        if not candidates:
-            # If no exact session_type match, use all templates
-            logger.warning(
-                f"No templates found for session_type={session_type}, using all templates",
-                session_type=session_type,
-            )
-            candidates = self.templates
-
-        # Compute cosine similarity and find argmax
+        # Compute cosine similarity for ALL templates and find argmax (no filtering)
         best_template = max(
-            candidates,
+            self.templates,
             key=lambda t: _cosine_similarity(query_embedding, t.embedding),
         )
 

@@ -39,17 +39,26 @@ class PhilosophyDoc:
     prohibits: list[str]
 
 
-def _get_philosophies_dir() -> Path:
+def get_philosophies_dir() -> Path:
     """Get path to philosophies directory.
 
-    Returns:
-        Path to data/rag/planning/philosophies directory
+    Expected layout:
+    <project_root>/data/rag/planning/philosophies
     """
-    project_root = Path(__file__).parent.parent.parent
-    return project_root / "data" / "rag" / "planning" / "philosophies"
+    project_root = Path(__file__).resolve().parents[3]
+    philosophies_dir = project_root / "data" / "rag" / "planning" / "philosophies"
+
+    if not philosophies_dir.exists():
+        raise RuntimeError(
+            f"Philosophies directory not found: {philosophies_dir}\n"
+            f"Resolved project_root: {project_root}\n"
+            "Expected layout: <project_root>/data/rag/planning/philosophies"
+        )
+
+    return philosophies_dir
 
 
-def _parse_frontmatter(content: str) -> tuple[dict[str, str | int | list[str]], str]:
+def parse_frontmatter(content: str) -> tuple[dict[str, str | int | list[str]], str]:
     """Parse YAML frontmatter from markdown content.
 
     Args:
@@ -130,7 +139,7 @@ def load_philosophies() -> list[PhilosophyDoc]:
     Raises:
         RuntimeError: If loading fails
     """
-    philosophies_dir = _get_philosophies_dir()
+    philosophies_dir = get_philosophies_dir()
 
     if not philosophies_dir.exists():
         raise RuntimeError(f"Philosophies directory not found: {philosophies_dir}")
@@ -140,7 +149,7 @@ def load_philosophies() -> list[PhilosophyDoc]:
     for md_file in philosophies_dir.rglob("*.md"):
         try:
             content = md_file.read_text(encoding="utf-8")
-            frontmatter, _body = _parse_frontmatter(content)
+            frontmatter, _body = parse_frontmatter(content)
 
             # Extract required fields
             philosophy_id = str(frontmatter.get("id", ""))

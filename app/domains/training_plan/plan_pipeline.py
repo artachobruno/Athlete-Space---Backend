@@ -25,8 +25,8 @@ from app.domains.training_plan.observability import (
     log_stage_metric,
     timing,
 )
-from app.domains.training_plan.philosophy_selector import select_philosophy
-from app.domains.training_plan.week_structure import load_week_structure
+from app.domains.training_plan.philosophy_selector_semantic import select_philosophy_semantic as select_philosophy
+from app.domains.training_plan.week_structure_selector_semantic import load_week_structure_semantic as load_week_structure
 
 
 def _compute_days_to_race(ctx: PlanContext, week: MacroWeek) -> int:
@@ -154,7 +154,7 @@ async def build_plan_structure(
                 structure = load_week_structure(
                     ctx=runtime_ctx,
                     week=week,
-                    athlete_state=athlete_state,
+                    _athlete_state=athlete_state,
                     days_to_race=days_to_race,
                 )
 

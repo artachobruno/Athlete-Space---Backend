@@ -26,7 +26,7 @@ from app.planning.structure.types import StructureSpec
 from app.planning.structure.validator import StructureValidationError, validate_structure
 
 # Day name to index mapping (0 = Monday, 6 = Sunday)
-_DAY_NAME_TO_INDEX: dict[str, int] = {
+DAY_NAME_TO_INDEX: dict[str, int] = {
     "mon": 0,
     "tue": 1,
     "wed": 2,
@@ -37,7 +37,7 @@ _DAY_NAME_TO_INDEX: dict[str, int] = {
 }
 
 # Session type to DayType mapping
-_SESSION_TYPE_TO_DAY_TYPE: dict[str, DayType] = {
+SESSION_TYPE_TO_DAY_TYPE: dict[str, DayType] = {
     "easy": DayType.EASY,
     "easy_plus_strides": DayType.EASY,
     "threshold": DayType.QUALITY,
@@ -49,17 +49,17 @@ _SESSION_TYPE_TO_DAY_TYPE: dict[str, DayType] = {
 }
 
 
-def _get_structures_dir() -> Path:
+def get_structures_dir() -> Path:
     """Get path to structures directory.
 
     Returns:
         Path to data/rag/planning/structures directory
     """
-    project_root = Path(__file__).parent.parent.parent
+    project_root = Path(__file__).resolve().parents[3]
     return project_root / "data" / "rag" / "planning" / "structures"
 
 
-def _load_structures_from_philosophy(
+def load_structures_from_philosophy(
     domain: str,
     philosophy_id: str,
 ) -> list[StructureSpec]:
@@ -78,7 +78,7 @@ def _load_structures_from_philosophy(
     Raises:
         InvalidSkeletonError: If loading fails or namespace doesn't exist
     """
-    structures_dir = _get_structures_dir()
+    structures_dir = get_structures_dir()
     philosophy_dir = structures_dir / domain / philosophy_id
 
     if not philosophy_dir.exists():
@@ -113,7 +113,7 @@ def _load_all_structures() -> list[StructureSpec]:
     Raises:
         InvalidSkeletonError: If loading fails
     """
-    structures_dir = _get_structures_dir()
+    structures_dir = get_structures_dir()
 
     if not structures_dir.exists():
         raise InvalidSkeletonError(f"Structures directory not found: {structures_dir}")
@@ -147,7 +147,7 @@ def _map_session_type_to_day_type(session_type: str) -> DayType:
     Raises:
         InvalidSkeletonError: If session type is not recognized
     """
-    day_type = _SESSION_TYPE_TO_DAY_TYPE.get(session_type.lower())
+    day_type = SESSION_TYPE_TO_DAY_TYPE.get(session_type.lower())
     if day_type is None:
         raise InvalidSkeletonError(f"Unknown session type: {session_type}")
     return day_type
@@ -191,7 +191,7 @@ def load_week_structure(
         raise InvalidSkeletonError("Race distance is required for structure selection")
 
     # Load structures only from philosophy namespace (prevents cross-philosophy leaks)
-    all_structures = _load_structures_from_philosophy(
+    all_structures = load_structures_from_philosophy(
         domain=ctx.philosophy.domain,
         philosophy_id=ctx.philosophy.philosophy_id,
     )
@@ -231,7 +231,7 @@ def load_week_structure(
     days: list[DaySkeleton] = []
     day_index_to_session_type: dict[int, str] = {}
     for day_name, session_type in best.week_pattern.items():
-        day_index = _DAY_NAME_TO_INDEX.get(day_name.lower())
+        day_index = DAY_NAME_TO_INDEX.get(day_name.lower())
         if day_index is None:
             raise InvalidSkeletonError(f"Unknown day name: {day_name}")
 

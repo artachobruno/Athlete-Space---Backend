@@ -30,7 +30,7 @@ _SESSION_TYPE_TO_DAY_TYPE_MAP: dict[str, str] = {
     "cross": "cross",
 }
 
-_RAG_PATH = Path(__file__).parent.parent.parent / "data" / "rag" / "session_group_ratios.yaml"
+_RAG_PATH = Path(__file__).resolve().parents[3] / "data" / "rag" / "session_group_ratios.yaml"
 
 
 def _map_day_to_group(day_type_value: str, session_groups: dict[str, list[str]]) -> str | None:

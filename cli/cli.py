@@ -135,7 +135,7 @@ def _validate_mcp_servers() -> None:
 
     if not db_url or not fs_url:
         raise RuntimeError(
-            "Missing MCP server URLs.\nSet:\n  MCP_DB_SERVER_URL=http://localhost:8080\n  MCP_FS_SERVER_URL=http://localhost:8081"
+            "Missing MCP server URLs.\nSet:\n  MCP_DB_SERVER_URL=https://athlete-space-mcp-db.onrender.com\n  MCP_FS_SERVER_URL=https://athlete-space-mcp-fs.onrender.com"
         )
 
     # Actively probe servers to verify they're reachable
@@ -202,9 +202,12 @@ def check_mcp() -> None:
             )
         )
         console.print("\n[yellow]To start MCP servers:[/yellow]")
+        console.print("\n[yellow]MCP servers are configured via environment variables:[/yellow]")
+        console.print("  export MCP_DB_SERVER_URL=https://athlete-space-mcp-db.onrender.com")
+        console.print("  export MCP_FS_SERVER_URL=https://athlete-space-mcp-fs.onrender.com")
+        console.print("\n[yellow]Or use local servers:[/yellow]")
         console.print("  Terminal 1: python mcp/db_server/main.py")
         console.print("  Terminal 2: python mcp/fs_server/main.py")
-        console.print("\n[yellow]Then set environment variables:[/yellow]")
         console.print("  export MCP_DB_SERVER_URL=http://localhost:8080")
         console.print("  export MCP_FS_SERVER_URL=http://localhost:8081")
         raise typer.Exit(1) from e

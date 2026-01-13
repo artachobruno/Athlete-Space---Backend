@@ -153,6 +153,21 @@ def auto_match_sessions(
                 # Step 5: Update activity.workout_id to point to planned workout
                 activity.workout_id = planned_workout.id
 
+                # Step 6: Update workout.activity_id to link workout to activity (CRITICAL FIX)
+                planned_workout.activity_id = activity.id
+
+                # Step 7: Update workout distance/duration from actual activity (activity has real values)
+                if activity.distance_meters is not None:
+                    planned_workout.total_distance_meters = int(activity.distance_meters)
+                if activity.duration_seconds is not None:
+                    planned_workout.total_duration_seconds = int(activity.duration_seconds)
+
+                # Step 8: Update workout status based on reconciliation result
+                if result.status == SessionStatus.COMPLETED:
+                    planned_workout.status = "matched"
+                elif result.status == SessionStatus.PARTIAL:
+                    planned_workout.status = "matched"  # Still matched even if partial
+
                 # Update planned session
                 planned_session.completed_activity_id = result.matched_activity_id
                 planned_session.completed = True

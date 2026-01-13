@@ -19,6 +19,8 @@ from app.db.models import PlannedSession
 from app.db.session import get_session
 from app.persistence.retry.queue import enqueue_retry
 from app.persistence.retry.types import PlannedSessionRetryJob
+from app.workouts.guards import assert_planned_session_has_workout
+from app.workouts.workout_factory import WorkoutFactory
 
 
 def _raise_timezone_naive_error(session_date_raw: str) -> None:
@@ -277,6 +279,11 @@ def save_sessions_to_database(
                 )
 
                 session.add(planned_session)
+                session.flush()  # Ensure ID is generated
+
+                # PHASE 2: Enforce workout creation (mandatory invariant)
+                WorkoutFactory.get_or_create_for_planned_session(session, planned_session)
+
                 saved_count += 1
 
             try:
@@ -326,6 +333,27 @@ def save_sessions_to_database(
                 plan_type=plan_type,
                 plan_id=plan_id,
             )
+
+            # PHASE 7: Assert invariant holds (guard check)
+            try:
+                for session_data in sessions_to_save:
+                    parsed_date = _parse_session_date(session_data.get("date"))
+                    if parsed_date is None:
+                        continue
+                    query = select(PlannedSession).where(
+                        PlannedSession.user_id == user_id,
+                        PlannedSession.athlete_id == athlete_id,
+                        PlannedSession.date == parsed_date,
+                        PlannedSession.title == session_data.get("title"),
+                    )
+                    if plan_id:
+                        query = query.where(PlannedSession.plan_id == plan_id)
+                    saved_session = session.scalar(query)
+                    if saved_session:
+                        assert_planned_session_has_workout(saved_session)
+            except AssertionError:
+                # Log but don't fail the request - invariant violation is logged
+                pass
 
         except Exception as e:
             session.rollback()

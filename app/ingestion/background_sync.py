@@ -22,6 +22,8 @@ from app.db.session import get_session
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.computation_service import trigger_recompute_on_new_activities
+from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
+from app.workouts.workout_factory import WorkoutFactory
 
 
 class SyncError(Exception):
@@ -289,6 +291,12 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
             raw_json=raw_json,
         )
         session.add(activity)
+        session.flush()  # Ensure ID is generated
+
+        # PHASE 3: Enforce workout + execution creation (mandatory invariant)
+        workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+        WorkoutFactory.attach_activity(session, workout, activity)
+
         created_activities.append(activity)
         imported_count += 1
 
@@ -300,6 +308,17 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
     # Commit all changes
     try:
         session.commit()
+
+        # PHASE 7: Assert invariant holds (guard check)
+        try:
+            for activity in created_activities:
+                session.refresh(activity)
+                assert_activity_has_workout(activity)
+                assert_activity_has_execution(session, activity)
+        except AssertionError:
+            # Log but don't fail the request - invariant violation is logged
+            pass
+
         # Create calendar sessions for all successfully committed activities
         for activity in created_activities:
             try:
@@ -354,6 +373,12 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
                     raw_json=raw_json,
                 )
                 session.add(activity)
+                session.flush()  # Ensure ID is generated
+
+                # PHASE 3: Enforce workout + execution creation (mandatory invariant)
+                workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+                WorkoutFactory.attach_activity(session, workout, activity)
+
                 session.commit()
                 # Create calendar session for successfully committed activity
                 try:

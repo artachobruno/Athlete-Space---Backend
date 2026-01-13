@@ -54,6 +54,8 @@ from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
+from scripts.migrate_add_workout_id_to_activities import migrate_add_workout_id_to_activities
+from scripts.migrate_add_workout_id_to_planned_sessions import migrate_add_workout_id_to_planned_sessions
 from scripts.migrate_calendar_sessions import migrate_calendar_sessions
 from scripts.migrate_create_workout_execution_tables import migrate_create_workout_execution_tables
 from scripts.migrate_create_workout_exports_table import migrate_create_workout_exports_table
@@ -61,6 +63,7 @@ from scripts.migrate_create_workouts_tables import migrate_create_workouts_table
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
+from scripts.migrate_set_workout_id_not_null import migrate_set_workout_id_not_null
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 from scripts.migrate_user_auth_fields import migrate_user_auth_fields
@@ -103,7 +106,11 @@ def run_all_migrations() -> None:
         ("workouts and workout_steps tables", migrate_create_workouts_tables),
         ("workout_exports table", migrate_create_workout_exports_table),
         ("workout execution and compliance tables", migrate_create_workout_execution_tables),
+        ("planned_sessions workout_id column", migrate_add_workout_id_to_planned_sessions),
+        ("activities workout_id column", migrate_add_workout_id_to_activities),
         ("LLM interpretation fields", migrate_add_llm_interpretation_fields),
+        # NOTE: migrate_set_workout_id_not_null should be run AFTER backfill_workouts.py completes
+        # It is NOT included here - run it manually after backfilling data
     ]
 
     for migration_name, migration_func in migrations:

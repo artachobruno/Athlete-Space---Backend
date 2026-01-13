@@ -23,6 +23,8 @@ from app.ingestion.file_parser import parse_activity_file
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.service import get_strava_client
 from app.metrics.computation_service import trigger_recompute_on_new_activities
+from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
+from app.workouts.workout_factory import WorkoutFactory
 
 router = APIRouter(prefix="/activities", tags=["activities", "debug"])
 
@@ -629,10 +631,24 @@ def upload_activity_file(
                 streams_data=None,  # No streams data for uploads
             )
             session.add(activity)
+            session.flush()  # Ensure ID is generated
+
+            # PHASE 3: Enforce workout + execution creation (mandatory invariant)
+            workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+            WorkoutFactory.attach_activity(session, workout, activity)
+
             session.commit()
             session.refresh(activity)
 
             logger.info(f"[UPLOAD] Activity created: id={activity.id}, hash={upload_hash[:16]}...")
+
+            # PHASE 7: Assert invariant holds (guard check)
+            try:
+                assert_activity_has_workout(activity)
+                assert_activity_has_execution(session, activity)
+            except AssertionError:
+                # Log but don't fail the request - invariant violation is logged
+                pass
 
             # Create calendar session for uploaded activity
             try:

@@ -153,6 +153,10 @@ class Activity(Base):
     normalized_power: Mapped[float | None] = mapped_column(Float, nullable=True)
     effort_source: Mapped[str | None] = mapped_column(String, nullable=True)
     intensity_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Workout relationship (mandatory invariant)
+    workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
@@ -576,6 +580,9 @@ class PlannedSession(Base):
     completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_activity_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Link to actual Activity if completed
+
+    # Workout relationship (mandatory invariant)
+    workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

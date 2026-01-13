@@ -910,13 +910,72 @@ def database_schema_error_handler(request: Request, exc: ProgrammingError):
     return response
 
 
+@app.exception_handler(HTTPException)
+def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTPExceptions, with special handling for /me endpoint contract violations.
+
+    The /me endpoint contract requires:
+    - 200: Authenticated and valid
+    - 401: Not authenticated
+    - 500: Server error
+    - NEVER 404: This is a contract violation
+
+    If a 404 is raised for any /me route, convert it to 401 to maintain the contract.
+    """
+    # CRITICAL: /me endpoint contract - never return 404
+    # Convert any 404 for /me routes to 401 (not authenticated)
+    if exc.status_code == status.HTTP_404_NOT_FOUND and request.url.path.startswith("/me"):
+        logger.error(
+            f"[AUTH CONTRACT] /me endpoint returned 404 - CONTRACT VIOLATION. "
+            f"Path: {request.url.path}, Method: {request.method}. "
+            f"Converting to 401 to maintain auth contract."
+        )
+        # Convert 404 to 401 with proper response shape
+        origin = request.headers.get("origin")
+        response = JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={
+                "authenticated": False,
+                "detail": "Not authenticated. Please provide a valid Bearer token in the Authorization header or a session cookie.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        # Add CORS headers if origin is in allowed list
+        if origin and origin in cors_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
+            )
+        return response
+
+    # For all other HTTPExceptions, let FastAPI handle them normally
+    # But ensure CORS headers are present
+    origin = request.headers.get("origin")
+    response = JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=dict(exc.headers) if exc.headers else {},
+    )
+    # Add CORS headers if origin is in allowed list
+    if origin and origin in cors_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
+        )
+    return response
+
+
 @app.exception_handler(Exception)
 def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler for unhandled exceptions.
 
     Ensures CORS headers are added to error responses even when exceptions occur.
     """
-    # Don't handle HTTPException - FastAPI handles those automatically with CORS
+    # HTTPException is handled by http_exception_handler above
     if isinstance(exc, HTTPException):
         raise exc
 
@@ -949,15 +1008,40 @@ async def ensure_cors_headers(request: Request, call_next):
 
     This runs after CORS middleware and adds headers to responses that might
     have bypassed the CORS middleware (e.g., from exception handlers).
+    Also enforces /me endpoint contract by converting 404s to 401s.
     """
     origin = request.headers.get("origin")
 
     response = await call_next(request)
 
+    # CRITICAL: /me endpoint contract enforcement
+    # If we get a 404 for any /me route, convert it to 401
+    # This is a defensive measure in case any 404s slip through exception handlers
+    if response.status_code == status.HTTP_404_NOT_FOUND and request.url.path.startswith("/me"):
+        logger.error(
+            f"[AUTH CONTRACT] Middleware caught 404 for /me route - CONTRACT VIOLATION. "
+            f"Path: {request.url.path}, Method: {request.method}. "
+            f"Converting to 401 to maintain auth contract."
+        )
+        # Convert 404 to 401 with proper response shape
+        response = JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={
+                "authenticated": False,
+                "detail": "Not authenticated. Please provide a valid Bearer token in the Authorization header or a session cookie.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # Ensure CORS headers are present if origin is provided and allowed
-    if origin and origin in cors_origins and "Access-Control-Allow-Origin" not in response.headers:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
+    if origin and origin in cors_origins:
+        if "Access-Control-Allow-Origin" not in response.headers:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
+            )
 
     logger.debug(f"Response: {response.status_code} for {request.method} {request.url.path}")
     return response

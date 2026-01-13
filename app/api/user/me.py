@@ -69,20 +69,30 @@ async def options_me():
 def _get_user_info(session, user_id: str) -> tuple[str, str, str]:
     """Get user email, auth provider, and timezone.
 
+    This function is called AFTER authentication has already validated the user exists.
+    If user is not found here, it indicates an internal server error (race condition
+    or database inconsistency), not a "not found" error.
+
     Args:
         session: Database session
-        user_id: User ID
+        user_id: User ID (already validated by auth dependency)
 
     Returns:
         Tuple of (email, auth_provider, timezone)
 
     Raises:
-        HTTPException: If user not found
+        HTTPException: 500 if user not found (internal server error)
     """
     user_result = session.execute(select(User).where(User.id == user_id)).first()
     if not user_result:
-        logger.error(f"[API] User not found: user_id={user_id}")
-        raise HTTPException(status_code=404, detail="User not found")
+        logger.error(
+            f"[API] /me: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
+            "This indicates an internal server error (race condition or DB inconsistency)."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: User data inconsistency. Please try again or contact support.",
+        )
 
     user = user_result[0]
     email = user.email
@@ -282,7 +292,7 @@ def get_me(user_id: str = Depends(get_current_user_id)):
     """
     logger.info(f"[API] /me endpoint called for user_id={user_id}")
 
-    # Store user info for exception handler
+    # Store user info for exception handler (defaults for fallback response)
     user_email = ""
     user_auth_provider = "password"
     user_timezone = "UTC"
@@ -290,7 +300,19 @@ def get_me(user_id: str = Depends(get_current_user_id)):
     try:
         with get_session() as session:
             # Get user info
-            user_email, user_auth_provider, user_timezone = _get_user_info(session, user_id)
+            # This can raise 500 if user not found (should not happen after auth validation)
+            try:
+                user_email, user_auth_provider, user_timezone = _get_user_info(session, user_id)
+            except HTTPException as e:
+                # Re-raise HTTPExceptions from _get_user_info (will be 500, not 404)
+                raise
+            except Exception as e:
+                # Catch any other unexpected errors in user lookup
+                logger.error(f"[API] /me: Unexpected error getting user info for user_id={user_id}: {e!r}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal server error: Failed to retrieve user information. Please try again.",
+                ) from e
 
             # Get onboarding status from profile
             onboarding_complete = _get_onboarding_status(session, user_id)
@@ -379,20 +401,31 @@ def get_me(user_id: str = Depends(get_current_user_id)):
                 "notifications": notifications_response,
                 "privacy": privacy_response,
             }
-    except HTTPException:
+    except HTTPException as e:
+        # Re-raise HTTPExceptions but ensure they're not 404
+        # /me endpoint contract: valid auth = 200, no auth = 401, errors = 500
+        if e.status_code == 404:
+            logger.error(
+                f"[API] /me: INTERNAL ERROR - 404 raised internally for user_id={user_id}. "
+                "Converting to 500 as this violates /me endpoint contract."
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error. Please try again or contact support.",
+            ) from e
         raise
     except ProgrammingError as e:
         # Catch any ProgrammingError that wasn't handled above
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
             logger.error(
-                f"[API] /me: Unhandled database schema error for user_id={user_id}: {e!r}. Returning default onboarding_complete=False."
+                f"[API] /me: Unhandled database schema error for user_id={user_id}: {e!r}. Returning default response."
             )
-            # Return a valid response even on schema errors - this endpoint must always return 200 OK
+            # Return a valid response even on schema errors - this endpoint must always return 200 OK if authenticated
             return {
                 "user_id": user_id,
                 "authenticated": True,
-                "email": user_email,
+                "email": user_email if user_email else "",
                 "auth_provider": user_auth_provider,
                 "timezone": user_timezone,
                 "onboarding_complete": False,
@@ -401,7 +434,21 @@ def get_me(user_id: str = Depends(get_current_user_id)):
                 "notifications": None,
                 "privacy": None,
             }
-        raise
+        logger.error(f"[API] /me: Unhandled ProgrammingError for user_id={user_id}: {e!r}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: Database query failed. Please try again.",
+        ) from e
+    except Exception as e:
+        # Catch-all for any other unexpected errors
+        logger.error(
+            f"[API] /me: Unexpected error for user_id={user_id}: {e!r}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: An unexpected error occurred. Please try again.",
+        ) from e
 
 
 @router.get("/strava")
@@ -2132,10 +2179,6 @@ def update_timezone(request: TimezoneUpdateRequest, user_id: str = Depends(get_c
     """
     logger.info(f"[API] PATCH /users/me (timezone) called for user_id={user_id}")
 
-    def _raise_user_not_found() -> None:
-        """Raise HTTPException for user not found."""
-        raise HTTPException(status_code=404, detail="User not found")
-
     try:
         # Validate timezone
         try:
@@ -2147,7 +2190,15 @@ def update_timezone(request: TimezoneUpdateRequest, user_id: str = Depends(get_c
         with get_session() as session:
             user_result = session.execute(select(User).where(User.id == user_id)).first()
             if not user_result:
-                _raise_user_not_found()
+                # User was validated by auth dependency, so not found = internal server error
+                logger.error(
+                    f"[API] PATCH /me: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
+                    "This indicates an internal server error."
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal server error: User data inconsistency. Please try again or contact support.",
+                )
 
             user = user_result[0]
             user.timezone = request.timezone
@@ -2256,16 +2307,20 @@ def export_data(
     if format not in {"json", "csv"}:
         raise HTTPException(status_code=400, detail="Format must be 'json' or 'csv'")
 
-    def _raise_user_not_found() -> None:
-        """Raise HTTPException for user not found."""
-        raise HTTPException(status_code=404, detail="User not found")
-
     try:
         with get_session() as session:
             # Get user data
             user = session.query(User).filter_by(id=user_id).first()
             if not user:
-                _raise_user_not_found()
+                # User was validated by auth dependency, so not found = internal server error
+                logger.error(
+                    f"[API] /me/export: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
+                    "This indicates an internal server error."
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal server error: User data inconsistency. Please try again or contact support.",
+                )
 
             profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
@@ -2446,10 +2501,6 @@ def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_c
     """
     logger.info(f"[API] /me/change-password endpoint called for user_id={user_id}")
 
-    def _raise_user_not_found() -> None:
-        """Raise HTTPException for user not found."""
-        raise HTTPException(status_code=404, detail="User not found")
-
     def _raise_oauth_account() -> None:
         """Raise HTTPException for OAuth account password change."""
         raise HTTPException(status_code=400, detail="Password change not available for OAuth accounts")
@@ -2470,6 +2521,15 @@ def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_c
         with get_session() as session:
             user_result = session.execute(select(User).where(User.id == user_id)).first()
             if not user_result:
+                # User was validated by auth dependency, so not found = internal server error
+                logger.error(
+                    f"[API] /me/change-password: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
+                    "This indicates an internal server error."
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal server error: User data inconsistency. Please try again or contact support.",
+                )
                 _raise_user_not_found()
 
             user = user_result[0]

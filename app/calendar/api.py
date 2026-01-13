@@ -211,11 +211,14 @@ def _planned_session_to_calendar(
     # Use reconciliation status if provided, otherwise use planned status
     status = reconciliation_status if reconciliation_status else planned.status
 
+    # Capitalize first letter of session type
+    session_type: str = planned.type.capitalize()
+
     return CalendarSession(
         id=planned.id,
         date=planned.date.strftime("%Y-%m-%d"),
         time=time_str,
-        type=planned.type,
+        type=session_type,
         title=planned.title,
         duration_minutes=planned.duration_minutes,
         distance_km=round(planned.distance_km, 2) if planned.distance_km else None,
@@ -630,6 +633,67 @@ def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_cu
         sessions=sessions,
         total=total,
     )
+
+
+@router.get("/sessions/{session_id}", response_model=CalendarSession)
+def get_session_by_id(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Get a single planned session by ID.
+
+    This endpoint returns the full details of a planned session, including
+    reconciliation status if available. This allows the frontend to display
+    session details when clicked, similar to how activities are displayed.
+
+    Args:
+        session_id: ID of the planned session to retrieve
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        CalendarSession with full session details
+
+    Raises:
+        HTTPException: If session not found or doesn't belong to user
+    """
+    logger.info(f"[CALENDAR] GET /calendar/sessions/{session_id} called for user_id={user_id}")
+
+    with get_session() as db_session:
+        # Find the planned session
+        planned_session = db_session.execute(
+            select(PlannedSession).where(
+                PlannedSession.id == session_id,
+                PlannedSession.user_id == user_id,
+            )
+        ).scalar_one_or_none()
+
+        if not planned_session:
+            raise HTTPException(status_code=404, detail="Planned session not found")
+
+        # Get athlete_id for reconciliation
+        athlete_id = _get_athlete_id(db_session, user_id)
+
+        # Run reconciliation if we have athlete_id
+        reconciliation_status: str | None = None
+        if athlete_id:
+            try:
+                # Get the date range for reconciliation (just the session date)
+                session_date = planned_session.date.date() if isinstance(planned_session.date, datetime) else planned_session.date
+                reconciliation_results = reconcile_calendar(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    start_date=session_date,
+                    end_date=session_date,
+                )
+                # Find the reconciliation result for this session
+                for result in reconciliation_results:
+                    if result.session_id == session_id:
+                        reconciliation_status = result.status.value
+                        break
+            except Exception as e:
+                logger.warning(f"[CALENDAR] Reconciliation failed for session {session_id}: {e!r}")
+
+        return _planned_session_to_calendar(planned_session, reconciliation_status)
 
 
 class UpdateSessionStatusRequest(BaseModel):

@@ -606,54 +606,6 @@ class PlannedSession(Base):
     )
 
 
-class CalendarSession(Base):
-    """Calendar sessions for completed activities.
-
-    Materialized calendar sessions that represent completed activities in the calendar.
-    Every completed activity should have exactly one CalendarSession.
-
-    Schema:
-    - id: UUID primary key
-    - user_id: Foreign key to users.id
-    - date: Session date (datetime, indexed)
-    - type: Activity type (Run, Bike, Swim, etc.)
-    - title: Session title
-    - duration_minutes: Duration in minutes
-    - distance_km: Distance in kilometers
-    - status: Session status (always "completed" for activities)
-    - activity_id: Foreign key to activities.id (UNIQUE, prevents duplicates)
-
-    Constraints:
-    - Unique constraint on activity_id ensures one calendar session per activity
-    - All dates are UTC (no timezone ambiguity)
-    """
-
-    __tablename__ = "calendar_sessions"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
-    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    date: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    type: Mapped[str] = mapped_column(String, nullable=False)
-    title: Mapped[str] = mapped_column(String, nullable=False)
-    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
-    status: Mapped[str] = mapped_column(String, nullable=False, default="completed")
-    activity_id: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
-
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    __table_args__ = (
-        Index("idx_calendar_sessions_user_date", "user_id", "date"),  # Common query: user sessions by date range
-    )
-
-
 class AthleteProfile(Base):
     """Athlete profile information for onboarding and coaching.
 

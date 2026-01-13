@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 script_dir = Path(__file__).parent.resolve()
@@ -58,27 +59,37 @@ def _check_schema(db) -> tuple[bool, bool]:
         Tuple of (planned_sessions_has_workout_id, activities_has_workout_id)
     """
     try:
-        inspector = inspect(db.bind) if hasattr(db, 'bind') and db.bind else None
+        inspector = inspect(db.bind) if hasattr(db, "bind") and db.bind else None
         if not inspector:
             logger.warning("Could not inspect database schema - assuming columns exist")
             return True, True
 
-        planned_sessions_columns = [col['name'] for col in inspector.get_columns('planned_sessions')]
-        activities_columns = [col['name'] for col in inspector.get_columns('activities')]
+        planned_sessions_columns = [col["name"] for col in inspector.get_columns("planned_sessions")]
+        activities_columns = [col["name"] for col in inspector.get_columns("activities")]
 
-        planned_has_workout_id = 'workout_id' in planned_sessions_columns
-        activities_has_workout_id = 'workout_id' in activities_columns
+        planned_has_workout_id = "workout_id" in planned_sessions_columns
+        activities_has_workout_id = "workout_id" in activities_columns
 
         logger.info(
             "Schema check complete",
             planned_sessions_has_workout_id=planned_has_workout_id,
             activities_has_workout_id=activities_has_workout_id,
         )
-
-        return planned_has_workout_id, activities_has_workout_id
     except Exception as e:
         logger.warning(f"Could not check schema: {e} - assuming columns exist")
         return True, True
+    else:
+        return planned_has_workout_id, activities_has_workout_id
+
+
+def _raise_missing_columns_error(planned_has_workout_id: bool, activities_has_workout_id: bool) -> None:
+    """Raise error for missing workout_id columns."""
+    raise ValueError(
+        f"Missing workout_id columns. "
+        f"planned_sessions.workout_id exists: {planned_has_workout_id}, "
+        f"activities.workout_id exists: {activities_has_workout_id}. "
+        f"Run migrations first."
+    )
 
 
 def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
@@ -112,7 +123,7 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
 
         # Check schema first
         planned_has_workout_id, activities_has_workout_id = _check_schema(db)
-        
+
         if not planned_has_workout_id or not activities_has_workout_id:
             logger.error(
                 "Required columns missing in database schema!",
@@ -122,16 +133,11 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
             logger.error(
                 "Please run migrations first: python scripts/run_migrations.py"
             )
-            raise ValueError(
-                f"Missing workout_id columns. "
-                f"planned_sessions.workout_id exists: {planned_has_workout_id}, "
-                f"activities.workout_id exists: {activities_has_workout_id}. "
-                f"Run migrations first."
-            )
+            _raise_missing_columns_error(planned_has_workout_id, activities_has_workout_id)
 
         # Step 1: Planned sessions without workout
         logger.info("Step 1: Processing planned sessions without workout...")
-        
+
         # First, check if workout_id column exists
         try:
             result = db.execute(
@@ -145,17 +151,16 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
                 exc_info=True,
             )
             # Try to check if column exists
-            from sqlalchemy import inspect, text
-            inspector = inspect(db.bind) if hasattr(db, 'bind') else None
+            inspector = inspect(db.bind) if hasattr(db, "bind") else None
             if inspector:
                 try:
-                    columns = [col['name'] for col in inspector.get_columns('planned_sessions')]
+                    columns = [col["name"] for col in inspector.get_columns("planned_sessions")]
                     logger.info(f"Columns in planned_sessions table: {columns}")
-                    has_workout_id = 'workout_id' in columns
+                    has_workout_id = "workout_id" in columns
                     logger.info(f"workout_id column exists: {has_workout_id}")
                 except Exception as inspect_error:
                     logger.warning(f"Could not inspect table schema: {inspect_error}")
-            
+
             # If workout_id doesn't exist, skip this step
             logger.warning("Skipping planned sessions step - workout_id column may not exist. Run migrations first.")
             planned_sessions_without_workout = []
@@ -167,13 +172,13 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
             try:
                 # Debug: Log what type of object we got
                 logger.debug(
-                    f"Processing planned_session",
+                    "Processing planned_session",
                     object_type=type(planned_session).__name__,
                     is_dict=isinstance(planned_session, dict),
                     has_id_attr=hasattr(planned_session, "id"),
                     dir_sample=list(dir(planned_session))[:10] if hasattr(planned_session, "__dict__") else None,
                 )
-                
+
                 # Ensure planned_session has an id
                 session_id = getattr(planned_session, "id", None)
                 if session_id is None:
@@ -436,7 +441,6 @@ def main() -> int:
         return 0 if stats["errors"] == 0 else 1
 
     except KeyError as e:
-        import traceback
         error_msg = str(e).replace("{", "{{").replace("}", "}}")
         logger.error(
             "Backfill failed with KeyError: {}",
@@ -448,7 +452,6 @@ def main() -> int:
         traceback.print_exc()
         return 1
     except Exception as e:
-        import traceback
         error_msg = str(e).replace("{", "{{").replace("}", "}}")
         logger.error(
             "Backfill failed: {}",

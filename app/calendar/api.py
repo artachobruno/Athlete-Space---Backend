@@ -105,7 +105,7 @@ def _get_activities_safe(
     start_date: datetime,
     end_date: datetime,
     matched_activity_ids: set[str],
-) -> list[CalendarSession]:
+) -> list[CalendarSession]:  # CalendarSession is Pydantic schema from schemas.py
     """Get activities with safe error handling.
 
     Args:

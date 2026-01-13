@@ -56,11 +56,11 @@ from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
 from scripts.migrate_add_workout_id_to_activities import migrate_add_workout_id_to_activities
 from scripts.migrate_add_workout_id_to_planned_sessions import migrate_add_workout_id_to_planned_sessions
-from scripts.migrate_calendar_sessions import migrate_calendar_sessions
 from scripts.migrate_create_workout_execution_tables import migrate_create_workout_execution_tables
 from scripts.migrate_create_workout_exports_table import migrate_create_workout_exports_table
 from scripts.migrate_create_workouts_tables import migrate_create_workouts_tables
 from scripts.migrate_daily_summary import migrate_daily_summary
+from scripts.migrate_drop_calendar_sessions_table import migrate_drop_calendar_sessions_table
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
 from scripts.migrate_set_workout_id_not_null import migrate_set_workout_id_not_null
@@ -96,7 +96,6 @@ def run_all_migrations() -> None:
         ("activities tss and tss_version columns", migrate_add_activity_tss),
         ("activities effort computation fields (normalized_power, effort_source, intensity_factor)", migrate_add_activity_effort_fields),
         ("user_settings threshold configuration fields (ftp_watts, threshold_pace_ms, threshold_hr)", migrate_add_user_threshold_fields),
-        ("calendar_sessions table", migrate_calendar_sessions),
         ("daily_summary tables", migrate_daily_summary),
         ("history cursor fields", migrate_history_cursor),
         ("strava_accounts sync tracking columns", migrate_strava_accounts_sync_tracking),
@@ -109,6 +108,7 @@ def run_all_migrations() -> None:
         ("planned_sessions workout_id column", migrate_add_workout_id_to_planned_sessions),
         ("activities workout_id column", migrate_add_workout_id_to_activities),
         ("LLM interpretation fields", migrate_add_llm_interpretation_fields),
+        ("drop calendar_sessions table", migrate_drop_calendar_sessions_table),
         # NOTE: migrate_set_workout_id_not_null should be run AFTER backfill_workouts.py completes
         # It is NOT included here - run it manually after backfilling data
     ]

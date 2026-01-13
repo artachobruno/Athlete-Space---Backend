@@ -4,6 +4,7 @@ PHASE 7: Hard assertions (GUARDS)
 These checks enforce the invariant at runtime:
 - No activity without workout
 - No activity without execution
+- No CalendarSession model exists (deprecated)
 
 Fail loudly in logs.
 """
@@ -14,8 +15,23 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+import app.db.models as models_module
 from app.db.models import Activity, PlannedSession
 from app.workouts.execution_models import WorkoutExecution
+
+
+def assert_calendar_session_does_not_exist() -> None:
+    """Assert that CalendarSession model does not exist in app.db.models.
+
+    Fails loudly in logs if CalendarSession is found (deprecated model).
+
+    Raises:
+        AssertionError: If CalendarSession exists in models
+    """
+    if hasattr(models_module, "CalendarSession"):
+        error_msg = "INVARIANT VIOLATION: CalendarSession model still exists in app.db.models (deprecated)"
+        logger.error(error_msg)
+        raise AssertionError(error_msg)
 
 
 def assert_activity_has_workout(activity: Activity) -> None:

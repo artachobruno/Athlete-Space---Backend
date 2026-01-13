@@ -89,14 +89,14 @@ class WorkoutFactory:
         session_type = getattr(planned_session, "type", None)
         if session_type is None:
             raise ValueError("planned_session.type is required but is None")
-        
+
         sport = _map_sport_type(session_type)
-        
+
         duration_minutes = getattr(planned_session, "duration_minutes", None)
         total_duration_seconds = (
             int(duration_minutes * 60) if duration_minutes else None
         )
-        
+
         distance_km = getattr(planned_session, "distance_km", None)
         total_distance_meters = (
             int(distance_km * 1000) if distance_km else None
@@ -105,7 +105,7 @@ class WorkoutFactory:
         session_id = getattr(planned_session, "id", None)
         if session_id is None:
             raise ValueError("planned_session.id is required but is None")
-        
+
         user_id = getattr(planned_session, "user_id", None)
         if user_id is None:
             raise ValueError("planned_session.user_id is required but is None")

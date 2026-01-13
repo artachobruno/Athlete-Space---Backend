@@ -26,6 +26,7 @@ from app.api.admin.admin_activities import router as admin_activities_router
 from app.api.admin.admin_ingestion_status import router as admin_ingestion_router
 from app.api.admin.admin_memory import router as admin_memory_router
 from app.api.admin.admin_retry import router as admin_retry_router
+from app.api.admin.admin_sql import router as admin_sql_router
 from app.api.admin.ingestion_reliability import router as ingestion_reliability_router
 from app.api.auth.auth import router as auth_router
 from app.api.auth.auth_google import router as auth_google_router
@@ -824,6 +825,7 @@ app.include_router(admin_retry_router)
 app.include_router(admin_ingestion_router)
 app.include_router(admin_activities_router)
 app.include_router(admin_memory_router)
+app.include_router(admin_sql_router)
 app.include_router(ingestion_reliability_router)
 app.include_router(analytics_router)
 app.include_router(auth_router)

@@ -63,6 +63,7 @@ from app.internal.ops.traffic import record_request
 from app.services.intelligence.scheduler import generate_daily_decisions_for_all_users
 from app.services.intelligence.weekly_report_metrics import update_all_recent_weekly_reports_for_all_users
 from app.webhooks.strava import router as webhooks_router
+from app.workouts.routes import router as workouts_router
 from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_source_default import migrate_activities_source_default
@@ -86,6 +87,9 @@ from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
+from scripts.migrate_create_workout_execution_tables import migrate_create_workout_execution_tables
+from scripts.migrate_create_workout_exports_table import migrate_create_workout_exports_table
+from scripts.migrate_create_workouts_tables import migrate_create_workouts_tables
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_daily_summary_user_id import migrate_daily_summary_user_id
 from scripts.migrate_drop_activity_id import migrate_drop_activity_id
@@ -418,6 +422,30 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_add_conversation_summary: {e}")
         logger.error(f"Migration failed: migrate_add_conversation_summary - {e}", exc_info=True)
+
+    try:
+        logger.info("Running migration: create workouts tables")
+        migrate_create_workouts_tables()
+        logger.info("✓ Migration completed: create workouts tables")
+    except Exception as e:
+        migration_errors.append(f"migrate_create_workouts_tables: {e}")
+        logger.error(f"Migration failed: migrate_create_workouts_tables - {e}", exc_info=True)
+
+    try:
+        logger.info("Running migration: create workout_exports table")
+        migrate_create_workout_exports_table()
+        logger.info("✓ Migration completed: create workout_exports table")
+    except Exception as e:
+        migration_errors.append(f"migrate_create_workout_exports_table: {e}")
+        logger.error(f"Migration failed: migrate_create_workout_exports_table - {e}", exc_info=True)
+
+    try:
+        logger.info("Running migration: create workout execution and compliance tables")
+        migrate_create_workout_execution_tables()
+        logger.info("✓ Migration completed: create workout execution and compliance tables")
+    except Exception as e:
+        migration_errors.append(f"migrate_create_workout_execution_tables: {e}")
+        logger.error(f"Migration failed: migrate_create_workout_execution_tables - {e}", exc_info=True)
 
     if migration_errors:
         logger.error(
@@ -819,6 +847,7 @@ app.include_router(ai_ops_router)
 app.include_router(state_router)
 app.include_router(training_router)
 app.include_router(webhooks_router)
+app.include_router(workouts_router)
 
 logger.info("FastAPI application initialized")
 logger.info("Root endpoint available at: /")

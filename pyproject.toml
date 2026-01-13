@@ -125,6 +125,7 @@ ignore = [
     "PLR0911",  # allow many return statements
     "PLR0912",  # allow many branches (complex business logic)
     "PLR0914",  # allow many local variables (complex functions)
+    "PLR0917",  # allow many positional arguments (legitimate function signatures)
     "C901",     # allow high complexity (complex business logic)
     "TRY002",   # allow broad exceptions
     "TRY003",

@@ -46,6 +46,7 @@ from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracte
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
+from scripts.migrate_add_llm_interpretation_fields import migrate_add_llm_interpretation_fields
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
 from scripts.migrate_add_source_to_planned_sessions import migrate_add_source_to_planned_sessions
@@ -54,6 +55,9 @@ from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
 from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
 from scripts.migrate_calendar_sessions import migrate_calendar_sessions
+from scripts.migrate_create_workout_execution_tables import migrate_create_workout_execution_tables
+from scripts.migrate_create_workout_exports_table import migrate_create_workout_exports_table
+from scripts.migrate_create_workouts_tables import migrate_create_workouts_tables
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
@@ -96,6 +100,10 @@ def run_all_migrations() -> None:
         ("user_settings fields (units, timezone, notifications_enabled)", migrate_user_settings_fields),
         ("conversation summary columns (B34)", migrate_add_conversation_summary),
         ("conversation_summaries table (B35)", migrate_add_conversation_summaries_table),
+        ("workouts and workout_steps tables", migrate_create_workouts_tables),
+        ("workout_exports table", migrate_create_workout_exports_table),
+        ("workout execution and compliance tables", migrate_create_workout_execution_tables),
+        ("LLM interpretation fields", migrate_add_llm_interpretation_fields),
     ]
 
     for migration_name, migration_func in migrations:

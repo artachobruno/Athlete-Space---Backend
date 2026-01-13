@@ -99,6 +99,7 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+exports/
 
 # ==================================================
 # UI assets (generated)

@@ -364,8 +364,10 @@ def get_week(user_id: str = Depends(get_current_user_id)):
     now = datetime.now(timezone.utc)
     # Get Monday of current week
     days_since_monday = now.weekday()
-    monday = now - timedelta(days=days_since_monday)
-    sunday = monday + timedelta(days=6)
+    monday = (now - timedelta(days=days_since_monday)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
     try:
         with get_session() as session:
@@ -428,9 +430,10 @@ def get_today(user_id: str = Depends(get_current_user_id)):
         CalendarTodayResponse with sessions for today
     """
     logger.info(f"[CALENDAR] GET /calendar/today called for user_id={user_id}")
-    today = datetime.now(timezone.utc)
-    today_start = today.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
+    today = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    today_end = today + timedelta(days=1) - timedelta(microseconds=1)
     today_str = today.strftime("%Y-%m-%d")
 
     try:
@@ -444,7 +447,7 @@ def get_today(user_id: str = Depends(get_current_user_id)):
                     select(PlannedSession)
                     .where(
                         PlannedSession.user_id == user_id,
-                        PlannedSession.date >= today_start,
+                        PlannedSession.date >= today,
                         PlannedSession.date <= today_end,
                     )
                     .order_by(PlannedSession.date, PlannedSession.time)
@@ -462,13 +465,13 @@ def get_today(user_id: str = Depends(get_current_user_id)):
 
             # Run reconciliation if we have athlete_id and planned sessions
             reconciliation_map, matched_activity_ids = (
-                _run_reconciliation_safe(user_id, athlete_id, today_start.date(), today_end.date())
+                _run_reconciliation_safe(user_id, athlete_id, today.date(), today_end.date())
                 if athlete_id and planned_list
                 else ({}, set())
             )
 
             # Get completed activities
-            activity_sessions = _get_activities_safe(session, user_id, today_start, today_end, matched_activity_ids)
+            activity_sessions = _get_activities_safe(session, user_id, today, today_end, matched_activity_ids)
 
             # Convert planned sessions with reconciliation status
             planned_calendar_sessions = [_planned_session_to_calendar(p, reconciliation_map.get(p.id)) for p in planned_list]

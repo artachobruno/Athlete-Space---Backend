@@ -765,3 +765,113 @@ def update_session_status(
         session.refresh(planned_session)
 
         return _planned_session_to_calendar(planned_session)
+
+
+# Separate router for planned-sessions endpoints (different prefix)
+planned_sessions_router = APIRouter(prefix="/planned-sessions", tags=["planned-sessions"])
+
+
+class UpdatePlannedSessionRequest(BaseModel):
+    """Request to update a planned session (for drag/move operations)."""
+
+    date: str | None = Field(default=None, description="New date in YYYY-MM-DD format")
+    time: str | None = Field(default=None, description="New time in HH:MM format")
+
+
+@planned_sessions_router.patch("/{planned_session_id}", response_model=CalendarSession)
+def update_planned_session(
+    planned_session_id: str,
+    request: UpdatePlannedSessionRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Update a planned session (date/time for drag/move operations).
+
+    CANONICAL RULE: Only planned_sessions.id may be mutated.
+    Calendar sessions, workouts, and activities are READ-ONLY views.
+
+    This endpoint:
+    - ONLY accepts planned_sessions.id
+    - NEVER accepts workout_id, calendar_session_id, or activity_id
+    - Returns 404 if the ID is not a valid planned_sessions.id
+
+    Args:
+        planned_session_id: MUST be a planned_sessions.id (not activity_id, workout_id, etc.)
+        request: Update request with new date/time
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Updated CalendarSession
+
+    Raises:
+        HTTPException: 404 if planned_session_id is not a valid planned_sessions.id
+    """
+    logger.info(
+        f"[PLANNED-SESSIONS] PATCH /planned-sessions/{planned_session_id} called for user_id={user_id}"
+    )
+
+    with get_session() as session:
+        # STRICT VALIDATION: Only query PlannedSession table
+        # This ensures we ONLY accept planned_sessions.id
+        # If the ID is an activity_id, workout_id, or calendar_session_id, this query will return None
+        planned_session = session.execute(
+            select(PlannedSession).where(
+                PlannedSession.id == planned_session_id,
+                PlannedSession.user_id == user_id,
+            )
+        ).scalar_one_or_none()
+
+        if not planned_session:
+            # This correctly rejects:
+            # - activity_id (not in planned_sessions table)
+            # - workout_id (not in planned_sessions table)
+            # - calendar_session_id (not in planned_sessions table)
+            # - any other non-planned_sessions.id
+            logger.warning(
+                f"[PLANNED-SESSIONS] Planned session not found: id={planned_session_id}, user_id={user_id}. "
+                "This ID is likely an activity_id, workout_id, or calendar_session_id (all are REJECTED)."
+            )
+            raise HTTPException(
+                status_code=404,
+                detail="Planned session not found. Only planned_sessions.id may be mutated.",
+            )
+
+        # Update date if provided
+        if request.date is not None:
+            try:
+                # Parse date string (YYYY-MM-DD) using fromisoformat
+                new_date = date.fromisoformat(request.date)
+                # Convert to datetime (midnight UTC) preserving existing time if any
+                existing_time = planned_session.date.time() if isinstance(planned_session.date, datetime) else datetime.min.time()
+                planned_session.date = datetime.combine(new_date, existing_time).replace(tzinfo=timezone.utc)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid date format. Expected YYYY-MM-DD: {e!s}",
+                ) from e
+
+        # Update time if provided
+        if request.time is not None:
+            # Validate time format (HH:MM) by parsing it
+            def validate_time_format(time_str: str) -> None:
+                """Validate time format (HH:MM) and raise ValueError if invalid."""
+                time_parts = time_str.split(":")
+                if len(time_parts) != 2:
+                    raise ValueError("Time must be in HH:MM format")
+                hour = int(time_parts[0])
+                minute = int(time_parts[1])
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError("Hour must be 0-23, minute must be 0-59")
+
+            try:
+                validate_time_format(request.time)
+                planned_session.time = request.time
+            except (ValueError, IndexError) as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid time format. Expected HH:MM: {e!s}",
+                ) from e
+
+        session.commit()
+        session.refresh(planned_session)
+
+        return _planned_session_to_calendar(planned_session)

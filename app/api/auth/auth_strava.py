@@ -326,7 +326,7 @@ def strava_callback(
 
     Validates state (CSRF protection), extracts user_id from state,
     exchanges code for tokens, encrypts tokens, and stores them in strava_accounts table.
-    On success, redirects to frontend with JWT token in URL query parameter.
+    On success, sets HTTP-only cookie and redirects to frontend (no token in URL).
 
     Args:
         code: Authorization code from Strava
@@ -335,7 +335,7 @@ def strava_callback(
         background_tasks: Optional FastAPI background tasks for async operations
 
     Returns:
-        RedirectResponse to frontend with token in URL on success,
+        RedirectResponse to frontend with HTTP-only cookie on success,
         HTMLResponse with error message on failure
     """
     logger.info(f"[STRAVA_OAUTH] Callback received with state: {state[:16]}...")
@@ -427,11 +427,8 @@ def strava_callback(
         logger.exception("[STRAVA_OAUTH] Error in OAuth callback")
         return _create_error_html(redirect_url, str(e))
 
-    # Redirect to frontend with JWT token in URL query parameter
-    redirect_with_token = f"{redirect_url}?token={jwt_token}"
-
-    # Set authentication cookie for persistence
-    response = RedirectResponse(url=redirect_with_token)
+    # Set HTTP-only cookie and redirect to frontend (no token in URL)
+    response = RedirectResponse(url=redirect_url)
 
     # Determine cookie domain
     host = request.headers.get("host", "")
@@ -445,10 +442,11 @@ def strava_callback(
         httponly=True,
         secure=True,  # HTTPS only in production
         samesite="none",  # Required for cross-origin cookie
+        path="/",  # Available for all paths
         max_age=30 * 24 * 60 * 60,  # 30 days
         domain=cookie_domain,
     )
-    logger.info(f"[STRAVA_OAUTH] Redirecting to frontend with cookie and token for user_id={user_id}")
+    logger.info(f"[STRAVA_OAUTH] Redirecting to frontend with HTTP-only cookie (no token in URL) for user_id={user_id}")
     return response
 
 

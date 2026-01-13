@@ -43,6 +43,7 @@ from app.api.training.manual_upload import router as manual_upload_router
 from app.api.training.state import router as state_router
 from app.api.training.training import router as training_router
 from app.api.user.me import router as me_router
+from app.calendar.api import planned_sessions_router
 from app.calendar.api import router as calendar_router
 from app.coach.api import router as coach_router
 from app.coach.api_chat import router as coach_chat_router
@@ -834,6 +835,7 @@ app.include_router(auth_router)
 app.include_router(auth_google_router)
 app.include_router(auth_strava_router)
 app.include_router(calendar_router)
+app.include_router(planned_sessions_router)
 app.include_router(coach_router)
 app.include_router(coach_athletes_router)
 app.include_router(coach_chat_router)

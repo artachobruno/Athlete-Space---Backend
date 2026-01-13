@@ -292,7 +292,7 @@ def google_callback(
     Validates state (CSRF protection), extracts user_id from state,
     exchanges code for tokens, gets user info, creates/updates user account,
     encrypts tokens, and stores them in google_accounts table.
-    On success, redirects to frontend with JWT token in URL query parameter.
+    On success, sets HTTP-only cookie and redirects to frontend (no token in URL).
 
     Args:
         code: Authorization code from Google
@@ -300,7 +300,7 @@ def google_callback(
         request: FastAPI request object
 
     Returns:
-        RedirectResponse to frontend with token in URL on success,
+        RedirectResponse to frontend with HTTP-only cookie on success,
         HTMLResponse with error message on failure
     """
     logger.info(f"[GOOGLE_OAUTH] Callback received with state: {state[:16]}...")
@@ -442,8 +442,8 @@ def google_callback(
             mobile_redirect = f"capacitor://localhost/auth/callback?token={jwt_token}"
             logger.info(f"[GOOGLE_OAUTH] Redirecting to mobile deep link for user_id={resolved_user_id}")
             return RedirectResponse(url=mobile_redirect)
-        # Web: Set cookie and redirect to frontend with token in URL (React extracts from URL)
-        response = RedirectResponse(url=f"{redirect_url}?token={jwt_token}")
+        # Web: Set HTTP-only cookie and redirect to frontend (no token in URL)
+        response = RedirectResponse(url=redirect_url)
 
         # Determine cookie domain
         host = request.headers.get("host", "")
@@ -457,10 +457,11 @@ def google_callback(
             httponly=True,
             secure=True,  # HTTPS only in production
             samesite="none",  # Required for cross-origin cookie
+            path="/",  # Available for all paths
             max_age=30 * 24 * 60 * 60,  # 30 days
             domain=cookie_domain,
         )
-        logger.info(f"[GOOGLE_OAUTH] Redirecting to web frontend with cookie and token for user_id={resolved_user_id}")
+        logger.info(f"[GOOGLE_OAUTH] Redirecting to web frontend with HTTP-only cookie (no token in URL) for user_id={resolved_user_id}")
         return response
 
     except HTTPException:

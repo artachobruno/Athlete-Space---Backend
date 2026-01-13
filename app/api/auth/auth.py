@@ -11,7 +11,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import select
@@ -24,6 +25,51 @@ from app.db.models import AuthProvider, User
 from app.db.session import get_session
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _get_cookie_domain(request: Request) -> str | None:
+    """Get cookie domain from request host.
+
+    For production (onrender.com), returns '.virtus-ai.onrender.com' to allow
+    cookie sharing across subdomains. For localhost, returns None (browser default).
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        Cookie domain string (with leading dot for subdomain sharing) or None for localhost
+    """
+    host = request.headers.get("host", "")
+    if "onrender.com" in host:
+        return ".virtus-ai.onrender.com"
+    return None
+
+
+def _set_auth_cookie(response: Response, token: str, request: Request) -> None:
+    """Set authentication cookie with correct settings for cross-origin persistence.
+
+    Sets cookie with:
+    - httponly=True (prevents XSS)
+    - secure=True (HTTPS only in production)
+    - samesite="none" (required for cross-origin)
+    - domain (for production subdomain sharing)
+    - max_age (7 days)
+
+    Args:
+        response: FastAPI response object
+        token: JWT token to set in cookie
+        request: FastAPI request object (for domain detection)
+    """
+    cookie_domain = _get_cookie_domain(request)
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=60 * 60 * 24 * 7,  # 7 days
+        domain=cookie_domain,
+    )
 
 
 class SignupRequest(BaseModel):
@@ -54,13 +100,14 @@ def _normalize_email(email: str) -> str:
 
 
 @router.post("/signup")
-def signup(request: SignupRequest):
+def signup(request: SignupRequest, http_request: Request):
     """Sign up with email and password.
 
     Email and password are mandatory. There is no anonymous account path.
 
     Args:
         request: Signup request containing email and password
+        http_request: FastAPI request object for setting authentication cookies
 
     Returns:
         JWT token and user information
@@ -143,15 +190,21 @@ def signup(request: SignupRequest):
             "email": normalized_email,
         }
         logger.debug(f"[AUTH] Returning signup response with token for user_id={user_id}")
-        return response_data
+
+        # Create response and set cookie
+        response = JSONResponse(content=response_data)
+        _set_auth_cookie(response, token, http_request)
+        logger.debug(f"[AUTH] Set authentication cookie for user_id={user_id}")
+        return response
 
 
 @router.post("/login")
-def login(request: LoginRequest):
+def login(request: LoginRequest, http_request: Request):
     """Login with email and password.
 
     Args:
         request: Login request containing email and password
+        http_request: FastAPI request object for setting authentication cookies
 
     Returns:
         JWT token and user information
@@ -222,12 +275,18 @@ def login(request: LoginRequest):
 
         logger.info(f"[AUTH] Login successful for user_id={user.id}, email={normalized_email}")
 
-        return {
+        response_data = {
             "access_token": token,
             "token_type": "bearer",
             "user_id": user.id,
             "email": user.email,
         }
+
+        # Create response and set cookie
+        response = JSONResponse(content=response_data)
+        _set_auth_cookie(response, token, http_request)
+        logger.debug(f"[AUTH] Set authentication cookie for user_id={user.id}")
+        return response
 
 
 @router.post("/change-email")

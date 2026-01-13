@@ -444,6 +444,13 @@ def google_callback(
             return RedirectResponse(url=mobile_redirect)
         # Web: Set cookie and redirect to frontend with token in URL (React extracts from URL)
         response = RedirectResponse(url=f"{redirect_url}?token={jwt_token}")
+
+        # Determine cookie domain
+        host = request.headers.get("host", "")
+        cookie_domain: str | None = None
+        if "onrender.com" in host:
+            cookie_domain = ".virtus-ai.onrender.com"
+
         response.set_cookie(
             key="session",
             value=jwt_token,
@@ -451,6 +458,7 @@ def google_callback(
             secure=True,  # HTTPS only in production
             samesite="none",  # Required for cross-origin cookie
             max_age=30 * 24 * 60 * 60,  # 30 days
+            domain=cookie_domain,
         )
         logger.info(f"[GOOGLE_OAUTH] Redirecting to web frontend with cookie and token for user_id={resolved_user_id}")
         return response

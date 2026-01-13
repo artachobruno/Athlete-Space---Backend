@@ -429,8 +429,27 @@ def strava_callback(
 
     # Redirect to frontend with JWT token in URL query parameter
     redirect_with_token = f"{redirect_url}?token={jwt_token}"
-    logger.info(f"[STRAVA_OAUTH] Redirecting to frontend with token for user_id={user_id}")
-    return RedirectResponse(url=redirect_with_token)
+
+    # Set authentication cookie for persistence
+    response = RedirectResponse(url=redirect_with_token)
+
+    # Determine cookie domain
+    host = request.headers.get("host", "")
+    cookie_domain: str | None = None
+    if "onrender.com" in host:
+        cookie_domain = ".virtus-ai.onrender.com"
+
+    response.set_cookie(
+        key="session",
+        value=jwt_token,
+        httponly=True,
+        secure=True,  # HTTPS only in production
+        samesite="none",  # Required for cross-origin cookie
+        max_age=30 * 24 * 60 * 60,  # 30 days
+        domain=cookie_domain,
+    )
+    logger.info(f"[STRAVA_OAUTH] Redirecting to frontend with cookie and token for user_id={user_id}")
+    return response
 
 
 @router.post("/disconnect")

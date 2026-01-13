@@ -4,7 +4,7 @@ This module provides an admin-only endpoint for executing read-only SQL queries.
 Only SELECT queries are allowed for safety.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -54,9 +54,18 @@ def run_sql(
         - row_count: Number of rows returned
 
     Raises:
+        HTTPException: 401 if authentication is missing or invalid
         HTTPException: 403 if user is not admin
         HTTPException: 400 if query is not SELECT or execution fails
     """
+    # B1: Explicit auth check - fail cleanly when unauthenticated
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+    # B2: Admin guard - ensure only admins can execute SQL queries
     require_admin(user_id, session)
 
     sql = payload.sql.strip()

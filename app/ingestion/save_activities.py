@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity, StravaAccount, UserSettings
 from app.metrics.effort_service import compute_activity_effort
+from app.pairing.auto_pairing_service import try_auto_pair
 from app.state.models import ActivityRecord
 
 
@@ -222,6 +223,13 @@ def _create_new_activity(
     # Compute effort metrics if streams data is available
     if streams_data is not None:
         _compute_and_persist_effort(session, activity)
+
+    # Attempt auto-pairing with planned sessions
+    try:
+        try_auto_pair(activity=activity, session=session)
+    except Exception as e:
+        logger.warning(f"[SAVE_ACTIVITIES] Auto-pairing failed for activity {strava_id}: {e}")
+
     logger.info(f"[SAVE_ACTIVITIES] Added new activity: {strava_id} for user {user_id}")
     return activity
 

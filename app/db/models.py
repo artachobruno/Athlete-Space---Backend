@@ -157,6 +157,9 @@ class Activity(Base):
     # Workout relationship (mandatory invariant)
     workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
 
+    # Pairing relationship
+    planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
@@ -604,6 +607,24 @@ class PlannedSession(Base):
         ),
         Index("idx_planned_sessions_user_date", "user_id", "date"),  # Common query: user sessions by date range
     )
+
+
+class PairingDecision(Base):
+    """Audit table for pairing decisions between planned sessions and activities.
+
+    Tracks all pairing attempts and decisions for observability and debugging.
+    """
+
+    __tablename__ = "pairing_decisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    planned_session_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    activity_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    decision: Mapped[str] = mapped_column(String, nullable=False)  # paired, rejected, manual_unpair
+    duration_diff_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class AthleteProfile(Base):

@@ -17,6 +17,7 @@ from app.coach.mcp_client import call_tool_safe
 from app.coach.mcp_health import mcp_is_healthy
 from app.db.models import PlannedSession
 from app.db.session import get_session
+from app.pairing.auto_pairing_service import try_auto_pair
 from app.persistence.retry.queue import enqueue_retry
 from app.persistence.retry.types import PlannedSessionRetryJob
 from app.workouts.guards import assert_planned_session_has_workout
@@ -283,6 +284,16 @@ def save_sessions_to_database(
 
                 # PHASE 2: Enforce workout creation (mandatory invariant)
                 WorkoutFactory.get_or_create_for_planned_session(session, planned_session)
+
+                # Attempt auto-pairing with activities
+                try:
+                    try_auto_pair(planned=planned_session, session=session)
+                except Exception as e:
+                    logger.warning(
+                        f"Auto-pairing failed for planned session {planned_session.id}: {e}",
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                    )
 
                 saved_count += 1
 

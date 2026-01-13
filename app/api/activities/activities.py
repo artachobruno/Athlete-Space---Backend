@@ -15,13 +15,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_user_id
-from app.db.models import Activity, StravaAccount
+from app.db.models import Activity, PairingDecision, PlannedSession, StravaAccount
 from app.db.session import get_session
 from app.ingestion.fetch_streams import fetch_and_save_streams
 from app.ingestion.file_parser import parse_activity_file
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.service import get_strava_client
 from app.metrics.computation_service import trigger_recompute_on_new_activities
+from app.pairing.auto_pairing_service import try_auto_pair
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -636,6 +637,12 @@ def upload_activity_file(
             workout = WorkoutFactory.get_or_create_for_activity(session, activity)
             WorkoutFactory.attach_activity(session, workout, activity)
 
+            # Attempt auto-pairing with planned sessions
+            try:
+                try_auto_pair(activity=activity, session=session)
+            except Exception as e:
+                logger.warning(f"[UPLOAD] Auto-pairing failed for activity {activity.id}: {e}")
+
             session.commit()
             session.refresh(activity)
 
@@ -693,4 +700,92 @@ def upload_activity_file(
                 "status": "ok",
                 "activity_id": activity.id,
                 "deduplicated": False,
+            }
+
+
+@router.post("/{activity_id}/unpair")
+def unpair_activity(
+    activity_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Manually unpair an activity from its planned session.
+
+    Args:
+        activity_id: Activity ID to unpair
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Response with unpair status
+
+    Raises:
+        HTTPException: 404 if activity not found
+        HTTPException: 403 if activity doesn't belong to user
+        HTTPException: 400 if activity is not paired
+    """
+    logger.info(f"[UNPAIR] Unpair request for activity_id={activity_id}, user_id={user_id}")
+
+    with get_session() as session:
+        # Get activity
+        activity = session.query(Activity).filter(Activity.id == activity_id).first()
+        if not activity:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Activity not found",
+            )
+
+        # Verify ownership
+        if activity.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Activity does not belong to user",
+            )
+
+        # Check if paired
+        if not activity.planned_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Activity is not paired",
+            )
+
+        # Get planned session
+        planned = session.query(PlannedSession).filter(PlannedSession.id == activity.planned_session_id).first()
+
+        try:
+            # Unpair both sides
+            planned_session_id = activity.planned_session_id
+            activity.planned_session_id = None
+
+            if planned:
+                planned.completed_activity_id = None
+
+            # Log decision
+            pairing_decision = PairingDecision(
+                user_id=user_id,
+                planned_session_id=planned.id if planned else None,
+                activity_id=activity.id,
+                decision="manual_unpair",
+                duration_diff_pct=None,
+                reason="user_action",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(pairing_decision)
+
+            session.commit()
+
+            logger.info(
+                f"[UNPAIR] Successfully unpaired activity {activity_id} from planned session {planned_session_id}",
+            )
+        except Exception as e:
+            session.rollback()
+            logger.error(f"[UNPAIR] Failed to unpair activity {activity_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to unpair activity",
+            ) from e
+        else:
+            return {
+                "status": "ok",
+                "activity_id": activity_id,
+                "planned_session_id": planned_session_id,
+                "unpaired": True,
             }

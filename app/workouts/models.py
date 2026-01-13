@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.models import Base
@@ -29,9 +29,12 @@ class Workout(Base):
     - source_ref: Optional reference to source system (e.g., template ID, file name)
     - total_duration_seconds: Total workout duration (nullable)
     - total_distance_meters: Total workout distance (nullable)
-    - status: Workout status (matched, analyzed, failed)
+    - status: Workout status (matched, analyzed, failed, parse_failed)
     - activity_id: Foreign key to activities.id (for matched workouts)
     - planned_session_id: Foreign key to planned_sessions.id (for matched workouts)
+    - raw_notes: Original notes from user input (for auditability)
+    - llm_output_json: LLM-generated structured workout JSON (for reproducibility)
+    - parse_status: Parse status (success, parse_failed)
     - created_at: Record creation timestamp
     """
 
@@ -47,6 +50,9 @@ class Workout(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="matched")
     activity_id: Mapped[str | None] = mapped_column(String, ForeignKey("activities.id"), nullable=True, index=True)
     planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)
+    raw_notes: Mapped[str | None] = mapped_column(Text, nullable=True, description="Original notes from user input")
+    llm_output_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, description="LLM-generated structured workout JSON")
+    parse_status: Mapped[str | None] = mapped_column(String, nullable=True, description="Parse status: success, parse_failed")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     steps: Mapped[list[WorkoutStep]] = relationship("WorkoutStep", back_populates="workout")

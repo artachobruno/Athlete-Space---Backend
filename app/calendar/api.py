@@ -22,10 +22,16 @@ from app.api.schemas.schemas import (
     CalendarWeekResponse,
 )
 from app.calendar.reconciliation_service import reconcile_calendar
-from app.db.models import Activity, PlannedSession, StravaAccount
+from app.db.models import Activity, PlannedSession, StravaAccount, User
 from app.db.session import get_session
+from app.utils.timezone import now_user, to_utc
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
+
+
+def _raise_user_not_found() -> None:
+    """Raise HTTPException for user not found."""
+    raise HTTPException(status_code=404, detail="User not found")
 
 
 def _get_athlete_id(session: Session, user_id: str) -> int | None:
@@ -267,13 +273,30 @@ def get_season(user_id: str = Depends(get_current_user_id)):
         CalendarSeasonResponse with all sessions in the season
     """
     logger.info(f"[CALENDAR] GET /calendar/season called for user_id={user_id}")
-    now = datetime.now(timezone.utc)
-    season_start = now - timedelta(days=90)
-    season_end = now + timedelta(days=90)
-    start_date = season_start.date()
-    end_date = season_end.date()
-
     with get_session() as session:
+        # Get user for timezone
+        user_result = session.execute(select(User).where(User.id == user_id)).first()
+        if not user_result:
+            raise HTTPException(status_code=404, detail="User not found")
+        user = user_result[0]
+
+        # Get current time in user's timezone
+        now_local = now_user(user)
+
+        # Calculate season boundaries in user's timezone
+        season_start_local = now_local - timedelta(days=90)
+        season_end_local = now_local + timedelta(days=90)
+
+        # Convert to UTC for database queries
+        season_start = to_utc(season_start_local)
+        season_end = to_utc(season_end_local)
+        start_date = season_start_local.date()
+        end_date = season_end_local.date()
+
+        logger.info(
+            f"[CALENDAR] user={user_id} tz={user.timezone} season={start_date}-{end_date}"
+        )
+
         # Get athlete_id for reconciliation
         athlete_id = _get_athlete_id(session, user_id)
 
@@ -338,8 +361,8 @@ def get_season(user_id: str = Depends(get_current_user_id)):
         planned = len([s for s in planned_calendar_sessions if (reconciliation_map.get(s.id) or s.status) == "planned"])
 
     return CalendarSeasonResponse(
-        season_start=season_start.strftime("%Y-%m-%d"),
-        season_end=season_end.strftime("%Y-%m-%d"),
+        season_start=season_start_local.strftime("%Y-%m-%d"),
+        season_end=season_end_local.strftime("%Y-%m-%d"),
         sessions=all_sessions,
         total_sessions=len(all_sessions),
         completed_sessions=completed,
@@ -361,16 +384,32 @@ def get_week(user_id: str = Depends(get_current_user_id)):
         CalendarWeekResponse with sessions for this week
     """
     logger.info(f"[CALENDAR] GET /calendar/week called for user_id={user_id}")
-    now = datetime.now(timezone.utc)
-    # Get Monday of current week
-    days_since_monday = now.weekday()
-    monday = (now - timedelta(days=days_since_monday)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
-
     try:
         with get_session() as session:
+            # Get user for timezone
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if not user_result:
+                _raise_user_not_found()
+            user = user_result[0]
+
+            # Get current time in user's timezone
+            now_local = now_user(user)
+
+            # Get Monday of current week in user's timezone
+            days_since_monday = now_local.weekday()
+            monday_local = (now_local - timedelta(days=days_since_monday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            sunday_local = monday_local + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+            # Convert to UTC for database queries
+            monday = to_utc(monday_local)
+            sunday = to_utc(sunday_local)
+
+            logger.info(
+                f"[CALENDAR] user={user_id} tz={user.timezone} week={monday_local.date()}-{sunday_local.date()}"
+            )
+
             # Get athlete_id for reconciliation
             athlete_id = _get_athlete_id(session, user_id)
 
@@ -378,9 +417,12 @@ def get_week(user_id: str = Depends(get_current_user_id)):
             planned_list = _get_planned_sessions_safe(session, user_id, monday, sunday)
 
             # Run reconciliation if we have athlete_id and planned sessions
-            reconciliation_map, matched_activity_ids = (
-                _run_reconciliation_safe(user_id, athlete_id, monday.date(), sunday.date()) if athlete_id and planned_list else ({}, set())
-            )
+            if athlete_id and planned_list:
+                reconciliation_map, matched_activity_ids = _run_reconciliation_safe(
+                    user_id, athlete_id, monday_local.date(), sunday_local.date()
+                )
+            else:
+                reconciliation_map, matched_activity_ids = ({}, set())
 
             # Get completed activities
             activity_sessions = _get_activities_safe(session, user_id, monday, sunday, matched_activity_ids)
@@ -393,8 +435,8 @@ def get_week(user_id: str = Depends(get_current_user_id)):
             sessions.sort(key=lambda s: (s.date, s.time or ""))
 
         return CalendarWeekResponse(
-            week_start=monday.strftime("%Y-%m-%d"),
-            week_end=sunday.strftime("%Y-%m-%d"),
+            week_start=monday_local.strftime("%Y-%m-%d"),
+            week_end=sunday_local.strftime("%Y-%m-%d"),
             sessions=sessions,
         )
     except HTTPException:
@@ -430,14 +472,28 @@ def get_today(user_id: str = Depends(get_current_user_id)):
         CalendarTodayResponse with sessions for today
     """
     logger.info(f"[CALENDAR] GET /calendar/today called for user_id={user_id}")
-    today = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    today_end = today + timedelta(days=1) - timedelta(microseconds=1)
-    today_str = today.strftime("%Y-%m-%d")
-
     try:
         with get_session() as session:
+            # Get user for timezone
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if not user_result:
+                _raise_user_not_found()
+            user = user_result[0]
+
+            # Get current time in user's timezone
+            now_local = now_user(user)
+
+            # Get today boundaries in user's timezone
+            today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end_local = today_local + timedelta(days=1) - timedelta(microseconds=1)
+
+            # Convert to UTC for database queries
+            today = to_utc(today_local)
+            today_end = to_utc(today_end_local)
+            today_str = today_local.strftime("%Y-%m-%d")
+
+            logger.info(f"[CALENDAR] user={user_id} tz={user.timezone} today={today_local.date()}")
+
             # Get athlete_id for reconciliation
             athlete_id = _get_athlete_id(session, user_id)
 
@@ -465,7 +521,7 @@ def get_today(user_id: str = Depends(get_current_user_id)):
 
             # Run reconciliation if we have athlete_id and planned sessions
             reconciliation_map, matched_activity_ids = (
-                _run_reconciliation_safe(user_id, athlete_id, today.date(), today_end.date())
+                _run_reconciliation_safe(user_id, athlete_id, today_local.date(), today_end_local.date())
                 if athlete_id and planned_list
                 else ({}, set())
             )

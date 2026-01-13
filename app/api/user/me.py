@@ -11,6 +11,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
@@ -29,6 +30,7 @@ from app.api.schemas.schemas import (
     PrivacySettingsResponse,
     PrivacySettingsUpdateRequest,
     TargetEvent,
+    TimezoneUpdateRequest,
     TrainingPreferencesResponse,
     TrainingPreferencesUpdateRequest,
 )
@@ -64,15 +66,15 @@ async def options_me():
     return Response(status_code=200)
 
 
-def _get_user_info(session, user_id: str) -> tuple[str, str]:
-    """Get user email and auth provider.
+def _get_user_info(session, user_id: str) -> tuple[str, str, str]:
+    """Get user email, auth provider, and timezone.
 
     Args:
         session: Database session
         user_id: User ID
 
     Returns:
-        Tuple of (email, auth_provider)
+        Tuple of (email, auth_provider, timezone)
 
     Raises:
         HTTPException: If user not found
@@ -85,7 +87,8 @@ def _get_user_info(session, user_id: str) -> tuple[str, str]:
     user = user_result[0]
     email = user.email
     auth_provider = user.auth_provider.value if user.auth_provider else "password"
-    return (email, auth_provider)
+    timezone_str = getattr(user, "timezone", "UTC") or "UTC"
+    return (email, auth_provider, timezone_str)
 
 
 def _get_onboarding_status(session, user_id: str) -> bool:
@@ -282,11 +285,12 @@ def get_me(user_id: str = Depends(get_current_user_id)):
     # Store user info for exception handler
     user_email = ""
     user_auth_provider = "password"
+    user_timezone = "UTC"
 
     try:
         with get_session() as session:
             # Get user info
-            user_email, user_auth_provider = _get_user_info(session, user_id)
+            user_email, user_auth_provider, user_timezone = _get_user_info(session, user_id)
 
             # Get onboarding status from profile
             onboarding_complete = _get_onboarding_status(session, user_id)
@@ -368,6 +372,7 @@ def get_me(user_id: str = Depends(get_current_user_id)):
                 "authenticated": True,
                 "email": user_email,
                 "auth_provider": user_auth_provider,
+                "timezone": user_timezone,
                 "onboarding_complete": onboarding_complete,
                 "profile": profile_response,
                 "training_preferences": training_prefs_response,
@@ -389,6 +394,7 @@ def get_me(user_id: str = Depends(get_current_user_id)):
                 "authenticated": True,
                 "email": user_email,
                 "auth_provider": user_auth_provider,
+                "timezone": user_timezone,
                 "onboarding_complete": False,
                 "profile": None,
                 "training_preferences": None,
@@ -2108,6 +2114,53 @@ def update_notifications(request: NotificationsUpdateRequest, user_id: str = Dep
     except Exception as e:
         logger.error(f"Error updating notifications: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update notifications: {e!s}") from e
+
+
+@router.patch("")
+def update_timezone(request: TimezoneUpdateRequest, user_id: str = Depends(get_current_user_id)):
+    """Update user timezone.
+
+    Args:
+        request: Timezone update request with IANA timezone string
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        Success message with updated timezone
+
+    Raises:
+        HTTPException: If timezone is invalid
+    """
+    logger.info(f"[API] PATCH /users/me (timezone) called for user_id={user_id}")
+
+    def _raise_user_not_found() -> None:
+        """Raise HTTPException for user not found."""
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        # Validate timezone
+        try:
+            ZoneInfo(request.timezone)
+        except Exception as e:
+            logger.warning(f"[API] Invalid timezone '{request.timezone}': {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid timezone: {request.timezone}") from e
+
+        with get_session() as session:
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if not user_result:
+                _raise_user_not_found()
+
+            user = user_result[0]
+            user.timezone = request.timezone
+            session.commit()
+            session.refresh(user)
+
+            logger.info(f"[API] Timezone updated for user_id={user_id} to {request.timezone}")
+            return {"timezone": user.timezone}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating timezone: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update timezone: {e!s}") from e
 
 
 @router.delete("")

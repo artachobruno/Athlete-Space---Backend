@@ -59,7 +59,7 @@ def enforce_race_plan_tail(macro_weeks: list[MacroWeek]) -> list[MacroWeek]:
         )
 
         # Replace last week with enforced taper week
-        return macro_weeks[:-1] + [enforced_week]
+        return [*macro_weeks[:-1], enforced_week]
 
     return macro_weeks
 

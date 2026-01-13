@@ -11,7 +11,7 @@ from app.coach.schemas.constraints import TrainingConstraints
 from app.coach.schemas.load_adjustment import LoadAdjustmentDecision
 from app.coach.tools.adjust_load import adjust_training_load
 from app.coach.utils.constraints import RecoveryState
-from app.db.models import PlannedSession
+from app.db.models import PlannedSession, User
 from app.db.session import get_session
 from app.domains.training_plan.enums import PlanType, TrainingIntent
 from app.domains.training_plan.guards import (
@@ -29,6 +29,7 @@ from app.domains.training_plan.observability import (
     log_stage_metric,
 )
 from app.planner.plan_race_simple import execute_canonical_pipeline
+from app.utils.timezone import now_user, to_utc
 
 # Cache to prevent duplicate calls within a short time window
 _recent_calls: dict[str, datetime] = {}
@@ -48,13 +49,25 @@ def _check_weekly_plan_exists(user_id: str | None, athlete_id: int | None) -> bo
         return False
 
     try:
-        now = datetime.now(timezone.utc)
-        # Get Monday of current week
-        days_since_monday = now.weekday()
-        monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-        sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
-
         with get_session() as session:
+            # Get user for timezone
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if user_result:
+                user = user_result[0]
+                now_local = now_user(user)
+                days_since_monday = now_local.weekday()
+                monday_local = (now_local - timedelta(days=days_since_monday)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                sunday_local = monday_local + timedelta(days=6, hours=23, minutes=59, seconds=59)
+                monday = to_utc(monday_local)
+                sunday = to_utc(sunday_local)
+            else:
+                # Fallback to UTC
+                now = datetime.now(timezone.utc)
+                days_since_monday = now.weekday()
+                monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
             result = session.execute(
                 select(PlannedSession)
                 .where(
@@ -195,11 +208,40 @@ async def plan_week(
             logger.warning(f"B8: Failed to compute constraints/adjustment, using defaults: {e}")
             load_adjustment = None
 
-    # Calculate week dates
-    now = datetime.now(timezone.utc)
-    days_since_monday = now.weekday()
-    monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-    sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
+    # Calculate week dates in user's timezone
+    if user_id:
+        try:
+            with get_session() as session:
+                user_result = session.execute(select(User).where(User.id == user_id)).first()
+                if user_result:
+                    user = user_result[0]
+                    now_local = now_user(user)
+                    days_since_monday = now_local.weekday()
+                    monday_local = (now_local - timedelta(days=days_since_monday)).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    sunday_local = monday_local + timedelta(days=6, hours=23, minutes=59, seconds=59)
+                    monday = to_utc(monday_local)
+                    sunday = to_utc(sunday_local)
+                    logger.info(f"[PLAN_WEEK] user={user_id} tz={user.timezone} week={monday_local.date()}-{sunday_local.date()}")
+                else:
+                    # Fallback to UTC
+                    now = datetime.now(timezone.utc)
+                    days_since_monday = now.weekday()
+                    monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        except Exception as e:
+            logger.warning(f"[PLAN_WEEK] Failed to get user timezone, using UTC: {e}")
+            now = datetime.now(timezone.utc)
+            days_since_monday = now.weekday()
+            monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
+    else:
+        # Fallback to UTC if no user_id
+        now = datetime.now(timezone.utc)
+        days_since_monday = now.weekday()
+        monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+        sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
     # Use canonical pipeline for weekly planning
     logger.info("B8: Generating planned sessions using canonical pipeline...")

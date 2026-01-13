@@ -25,7 +25,7 @@ from app.domains.training_plan.selectors.embedding_selector import select_best_b
 from app.domains.training_plan.week_structure import (
     DAY_NAME_TO_INDEX,
     SESSION_TYPE_TO_DAY_TYPE,
-    _load_all_structures,
+    load_all_structures,
 )
 from app.embeddings.embedding_service import get_embedding_service
 from app.embeddings.vector_store import EmbeddedItem, VectorStore
@@ -94,7 +94,7 @@ def _load_all_structures_with_embeddings() -> list[EmbeddedStructureSpec]:
         RuntimeError: If cache not found or structures can't be loaded
     """
     # Load all structures from files
-    all_structures = _load_all_structures()
+    all_structures = load_all_structures()
 
     # Load vector store with embeddings
     vector_store = _load_week_structure_vector_store()

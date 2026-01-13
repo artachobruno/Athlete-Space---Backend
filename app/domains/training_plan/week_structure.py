@@ -153,7 +153,7 @@ def load_structures_from_philosophy(
     return loaded_structures
 
 
-def _load_all_structures() -> list[StructureSpec]:
+def load_all_structures() -> list[StructureSpec]:
     """Load all structure files from the structures directory.
 
     Returns:

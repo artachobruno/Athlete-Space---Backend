@@ -10,7 +10,8 @@ Guarantees:
 - No exceptions (unless items is empty, which is a programming error)
 """
 
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 import numpy as np
 from loguru import logger
@@ -71,9 +72,11 @@ def select_best_by_embedding(
         Item with the highest similarity score
 
     Raises:
-        AssertionError: If items list is empty (programming error)
+        ValueError: If items list is empty (programming error)
+        RuntimeError: If no item was selected (should never happen)
     """
-    assert items, "Embedding selector received empty item list"
+    if not items:
+        raise ValueError("Embedding selector received empty item list")
 
     query_vec = embed_fn(query_text)
 
@@ -87,11 +90,18 @@ def select_best_by_embedding(
             best_item = item
             best_score = score
 
-    assert best_item is not None, "Failed to select item (should never happen)"
+    if best_item is None:
+        raise RuntimeError("Failed to select item (should never happen)")
 
+    selected_id = (
+        getattr(best_item, "id", None)
+        or getattr(best_item, "template_id", None)
+        or getattr(best_item, "philosophy_id", None)
+        or "unknown"
+    )
     logger.info(
         "embedding_selection",
-        selected_id=getattr(best_item, "id", None) or getattr(best_item, "template_id", None) or getattr(best_item, "philosophy_id", None) or "unknown",
+        selected_id=selected_id,
         score=round(best_score, 4),
         candidates_count=len(items),
     )

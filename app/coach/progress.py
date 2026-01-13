@@ -3,10 +3,10 @@
 This module defines the stages of plan generation for progress tracking.
 """
 
-from enum import Enum
+from enum import StrEnum
 
 
-class PlanProgressStage(str, Enum):
+class PlanProgressStage(StrEnum):
     """Plan generation progress stages.
 
     These stages represent the major phases of plan generation:

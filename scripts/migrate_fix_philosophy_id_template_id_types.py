@@ -115,7 +115,7 @@ def _alter_column_type(conn, table_name: str, column_name: str, new_type: str) -
         # For UUID -> VARCHAR, we need to cast via text
         logger.info(f"Altering column {table_name}.{column_name} to {new_type}...")
         conn.execute(
-            text(f'ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE {new_type} USING {column_name}::text'),
+            text(f"ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE {new_type} USING {column_name}::text"),
         )
         logger.info(f"Altered column {table_name}.{column_name} to {new_type}")
     else:
@@ -157,7 +157,7 @@ def migrate_fix_philosophy_id_template_id_types() -> None:
                     f"Column planned_sessions.{column_name} is UUID type, converting to VARCHAR...",
                 )
                 _alter_column_type(conn, "planned_sessions", column_name, "VARCHAR")
-            elif current_type in ("varchar", "character varying", "text", "string"):
+            elif current_type in {"varchar", "character varying", "text", "string"}:
                 logger.info(
                     f"Column planned_sessions.{column_name} is already VARCHAR/text type, no change needed",
                 )

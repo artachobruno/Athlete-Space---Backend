@@ -434,3 +434,9 @@ class ChangeEmailRequest(BaseModel):
 
     password: str = Field(description="Current password for verification")
     new_email: str = Field(description="New email address")
+
+
+class TimezoneUpdateRequest(BaseModel):
+    """Request for PATCH /users/me."""
+
+    timezone: str = Field(description="IANA timezone string (e.g., 'America/Chicago', 'Europe/London')")

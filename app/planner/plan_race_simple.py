@@ -169,8 +169,6 @@ async def execute_canonical_pipeline(
         ctx=ctx,
         athlete_state=athlete_state,
         user_preference=None,
-        conversation_id=conversation_id,
-        user_id=user_id,
     )
 
     # Emit WEEKS stage progress

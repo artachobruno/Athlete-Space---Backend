@@ -5,6 +5,7 @@ It wraps the underlying Redis-based storage with a clean API.
 """
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from loguru import logger
 
@@ -26,7 +27,7 @@ class ConversationStore:
     async def append_message(
         conversation_id: str,
         user_id: str,
-        role: str,
+        role: Literal["user", "assistant", "system"] | None,
         content: str,
         *,
         message_type: str | None = None,

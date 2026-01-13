@@ -8,12 +8,16 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, cast
 
 from loguru import logger
+from sqlalchemy import select
 
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.canonical_plan import CanonicalPlan, PlanSession
 from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.utils.llm_client import CoachLLMClient
+from app.db.models import User
+from app.db.session import get_session
 from app.internal.ops.traffic import record_persistence_degraded, record_persistence_saved
+from app.utils.timezone import now_user
 
 
 async def plan_tool(
@@ -79,7 +83,22 @@ async def plan_tool(
 
     # Calculate date range based on horizon
     logger.debug("unified_plan: Calculating date range", horizon=horizon, has_current_plan=bool(current_plan))
-    today = datetime.now(timezone.utc).date()
+    # Get today in user's timezone if user_id is available
+    if user_id:
+        try:
+            with get_session() as session:
+                user_result = session.execute(select(User).where(User.id == user_id)).first()
+                if user_result:
+                    user = user_result[0]
+                    today = now_user(user).date()
+                    logger.debug(f"unified_plan: Using user timezone {user.timezone} for date calculation")
+                else:
+                    today = datetime.now(timezone.utc).date()
+        except Exception as e:
+            logger.warning(f"unified_plan: Failed to get user timezone, using UTC: {e}")
+            today = datetime.now(timezone.utc).date()
+    else:
+        today = datetime.now(timezone.utc).date()
     start_date, end_date = _calculate_date_range(horizon, today, current_plan)
     logger.debug(
         "unified_plan: Date range calculated",

@@ -21,7 +21,7 @@ from app.db.models import AuthProvider, User
 from app.db.session import get_session
 
 
-def create_local_test_user(email: str | None = None) -> str:
+def create_local_test_user(email: str | None = None, user_number: int | None = None) -> str:
     with get_session() as db:
         if email:
             existing = db.execute(
@@ -32,11 +32,7 @@ def create_local_test_user(email: str | None = None) -> str:
                 return existing.id
 
         user_id = str(uuid.uuid4())
-        if user_id:
-            user_id = str(user_id)
-        else:
-            user_id = str(uuid.uuid4())
-        email = email or f"test_{user_id}@athlete.com"
+        email = email or f"test_{user_number}@athlete.com"
 
         user = User(
             id=user_id,
@@ -47,7 +43,6 @@ def create_local_test_user(email: str | None = None) -> str:
             created_at=datetime.now(UTC),
             last_login_at=None,
             is_active=True,
-            role="athlete",
             timezone="UTC",
         )
 
@@ -72,14 +67,14 @@ if __name__ == "__main__":
         help="Optional email (defaults to generated local_test_*)",
     )
     parser.add_argument(
-        "--user_id",
+        "--user_number",
         type=int,
         default=None,
     )
     args = parser.parse_args()
 
     try:
-        create_local_test_user(email=args.email)
+        create_local_test_user(email=args.email, user_number=args.user_number)
     except Exception as e:
         print(f"❌ Failed to create test user: {e}", file=sys.stderr)
         sys.exit(1)

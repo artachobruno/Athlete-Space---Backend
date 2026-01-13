@@ -49,6 +49,13 @@ dependencies = [
 
     # --- Scheduling ---
     "apscheduler>=3.11.0",
+
+    # --- Activity File Parsing ---
+    "fitparse>=1.2.0",
+    "gpxpy>=1.5.0",
+    "lxml>=5.0.0",
+    "garmin-fit-sdk>=21.140.0",
+    "fit-tool>=0.1.0",
 ]
 
 [dependency-groups]

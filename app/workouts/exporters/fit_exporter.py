@@ -5,10 +5,23 @@ Converts Workout + Steps into a Garmin FIT workout file.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import ClassVar
 
-from garmin_fit_sdk import Decoder, Encoder, Profile, Stream
+from fit_tool.fit_file_builder import FitFileBuilder
+from fit_tool.profile.messages.file_id_message import FileIdMessage
+from fit_tool.profile.messages.workout_message import WorkoutMessage
+from fit_tool.profile.messages.workout_step_message import WorkoutStepMessage
+from fit_tool.profile.profile_type import (
+    FileType,
+    Intensity,
+    Manufacturer,
+    Sport,
+    WorkoutStepDuration,
+    WorkoutStepTarget,
+)
+from garmin_fit_sdk import Decoder
 from loguru import logger
 
 from app.workouts.exporters.base import WorkoutExporter
@@ -21,32 +34,32 @@ class FitWorkoutExporter(WorkoutExporter):
     export_type = "fit"
 
     # Sport type mapping
-    SPORT_MAP: ClassVar[dict[str, Profile.Sport]] = {
-        "run": Profile.Sport.running,
-        "running": Profile.Sport.running,
-        "bike": Profile.Sport.cycling,
-        "cycling": Profile.Sport.cycling,
-        "ride": Profile.Sport.cycling,
-        "swim": Profile.Sport.swimming,
-        "swimming": Profile.Sport.swimming,
+    SPORT_MAP: ClassVar[dict[str, Sport]] = {
+        "run": Sport.RUNNING,
+        "running": Sport.RUNNING,
+        "bike": Sport.CYCLING,
+        "cycling": Sport.CYCLING,
+        "ride": Sport.CYCLING,
+        "swim": Sport.SWIMMING,
+        "swimming": Sport.SWIMMING,
     }
 
     # Step type to intensity mapping
-    INTENSITY_MAP: ClassVar[dict[str, Profile.Intensity]] = {
-        "warmup": Profile.Intensity.warmup,
-        "steady": Profile.Intensity.active,
-        "interval": Profile.Intensity.active,
-        "recovery": Profile.Intensity.rest,
-        "cooldown": Profile.Intensity.cooldown,
-        "free": Profile.Intensity.active,
+    INTENSITY_MAP: ClassVar[dict[str, Intensity]] = {
+        "warmup": Intensity.WARMUP,
+        "steady": Intensity.ACTIVE,
+        "interval": Intensity.ACTIVE,
+        "recovery": Intensity.REST,
+        "cooldown": Intensity.COOLDOWN,
+        "free": Intensity.ACTIVE,
     }
 
     # Target metric to FIT target type mapping
-    TARGET_METRIC_MAP: ClassVar[dict[str, Profile.WorkoutStepTargetType]] = {
-        "pace": Profile.WorkoutStepTargetType.speed,
-        "hr": Profile.WorkoutStepTargetType.heart_rate,
-        "power": Profile.WorkoutStepTargetType.power,
-        "rpe": Profile.WorkoutStepTargetType.open,  # RPE not directly supported
+    TARGET_METRIC_MAP: ClassVar[dict[str, WorkoutStepTarget]] = {
+        "pace": WorkoutStepTarget.SPEED,
+        "hr": WorkoutStepTarget.HEART_RATE,
+        "power": WorkoutStepTarget.POWER,
+        "rpe": WorkoutStepTarget.OPEN,  # RPE not directly supported
     }
 
     def build(self, workout: Workout, steps: list[WorkoutStep]) -> bytes:
@@ -76,76 +89,107 @@ class FitWorkoutExporter(WorkoutExporter):
                     f"Distance-based steps are not supported. Step {step.id} has distance_meters but no duration_seconds"
                 )
 
-        # Create FIT file stream
-        stream = Stream()
-        encoder = Encoder(stream)
+        # Create FIT file builder
+        builder = FitFileBuilder(auto_define=True, min_string_size=50)
+
+        # Create File ID message
+        # FIT epoch is UTC 00:00:00 December 31, 1989
+        fit_epoch = datetime(1989, 12, 31, 0, 0, 0, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        time_since_fit_epoch = (now - fit_epoch).total_seconds()
+
+        file_id_message = FileIdMessage()
+        file_id_message.type = FileType.WORKOUT
+        file_id_message.manufacturer = Manufacturer.DEVELOPMENT.value
+        file_id_message.product = 0
+        file_id_message.time_created = round(time_since_fit_epoch)
+        file_id_message.serial_number = 0x12345678
+        builder.add(file_id_message)
 
         # Map sport type
         sport_lower = workout.sport.lower()
-        fit_sport = self.SPORT_MAP.get(sport_lower, Profile.Sport.running)
+        fit_sport = self.SPORT_MAP.get(sport_lower, Sport.RUNNING)
 
         # Create workout message
-        workout_msg = Profile.WorkoutMessage()
+        workout_msg = WorkoutMessage()
         workout_msg.sport = fit_sport
         workout_msg.num_valid_steps = len(sorted_steps)
         if workout.source_ref:
-            workout_msg.wkt_name = workout.source_ref[:15]  # FIT limit is 15 chars
-        encoder.write(workout_msg)
+            workout_msg.workout_name = workout.source_ref[:15]  # FIT limit is 15 chars
+        builder.add(workout_msg)
 
         # Create workout steps
         for step_idx, step in enumerate(sorted_steps):
-            step_msg = Profile.WorkoutStepMessage()
-            step_msg.message_index = Profile.MessageIndex()
-            step_msg.message_index.value = step_idx
+            step_msg = WorkoutStepMessage()
+            step_msg.message_index = step_idx
 
             # Set duration
             if step.duration_seconds is not None:
-                step_msg.duration_type = Profile.WorkoutStepDurationType.time
-                step_msg.duration_value = step.duration_seconds
+                step_msg.duration_type = WorkoutStepDuration.TIME
+                step_msg.duration_time = float(step.duration_seconds)
             elif step.distance_meters is not None:
                 # Distance-based (should not reach here due to validation, but handle gracefully)
-                step_msg.duration_type = Profile.WorkoutStepDurationType.distance
-                step_msg.duration_value = int(step.distance_meters)
+                step_msg.duration_type = WorkoutStepDuration.DISTANCE
+                step_msg.duration_distance = float(step.distance_meters)
             else:
                 raise ValueError(f"Step {step.id} must have either duration_seconds or distance_meters")
 
             # Set intensity from step type
             step_type_lower = step.type.lower() if step.type else "steady"
-            step_msg.intensity = self.INTENSITY_MAP.get(step_type_lower, Profile.Intensity.active)
+            step_msg.intensity = self.INTENSITY_MAP.get(step_type_lower, Intensity.ACTIVE)
 
             # Set target
             if step.target_metric:
                 target_metric_lower = step.target_metric.lower()
-                step_msg.target_type = self.TARGET_METRIC_MAP.get(
-                    target_metric_lower, Profile.WorkoutStepTargetType.open
-                )
+                step_msg.target_type = self.TARGET_METRIC_MAP.get(target_metric_lower, WorkoutStepTarget.OPEN)
 
-                # Set target values
-                if step.target_min is not None:
-                    step_msg.custom_target_value_low = int(step.target_min)
-                if step.target_max is not None:
-                    step_msg.custom_target_value_high = int(step.target_max)
-                elif step.target_value is not None:
-                    # Use target_value as both low and high if no range specified
-                    step_msg.custom_target_value_low = int(step.target_value)
-                    step_msg.custom_target_value_high = int(step.target_value)
+                # Set target values based on metric type
+                if target_metric_lower == "hr":
+                    # Heart rate targets
+                    if step.target_min is not None:
+                        step_msg.target_hr_zone = None  # Use custom value
+                        step_msg.custom_target_value_low = int(step.target_min)
+                    if step.target_max is not None:
+                        step_msg.custom_target_value_high = int(step.target_max)
+                    elif step.target_value is not None:
+                        step_msg.custom_target_value_low = int(step.target_value)
+                        step_msg.custom_target_value_high = int(step.target_value)
+                elif target_metric_lower == "power":
+                    # Power targets
+                    if step.target_min is not None:
+                        step_msg.target_power_zone = None  # Use custom value
+                        step_msg.custom_target_value_low = int(step.target_min)
+                    if step.target_max is not None:
+                        step_msg.custom_target_value_high = int(step.target_max)
+                    elif step.target_value is not None:
+                        step_msg.custom_target_value_low = int(step.target_value)
+                        step_msg.custom_target_value_high = int(step.target_value)
+                else:
+                    # Speed/pace or other targets
+                    if step.target_min is not None:
+                        step_msg.custom_target_value_low = int(step.target_min)
+                    if step.target_max is not None:
+                        step_msg.custom_target_value_high = int(step.target_max)
+                    elif step.target_value is not None:
+                        step_msg.custom_target_value_low = int(step.target_value)
+                        step_msg.custom_target_value_high = int(step.target_value)
             else:
                 # No target specified - open step
-                step_msg.target_type = Profile.WorkoutStepTargetType.open
+                step_msg.target_type = WorkoutStepTarget.OPEN
 
             # Set notes/instructions if available
             if step.instructions:
                 # FIT workout step notes are limited, truncate if needed
                 notes = step.instructions[:50]  # Reasonable limit
-                step_msg.message = notes
+                step_msg.workout_step_name = notes
 
-            encoder.write(step_msg)
+            builder.add(step_msg)
 
-        # Finalize FIT file
-        encoder.finish()
+        # Build FIT file
+        fit_file = builder.build()
 
         # Get bytes
-        fit_bytes = stream.getvalue()
+        fit_bytes = fit_file.to_bytes()
 
         # Validate the generated FIT file by attempting to decode it
         try:

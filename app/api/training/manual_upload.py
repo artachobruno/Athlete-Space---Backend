@@ -18,6 +18,8 @@ from app.db.models import PlannedSession, StravaAccount
 from app.db.session import get_session
 from app.upload.plan_handler import upload_plan_from_chat
 from app.upload.plan_parser import ParsedSessionUpload, parse_csv_plan, parse_text_plan
+from app.workouts.guards import assert_planned_session_has_workout
+from app.workouts.workout_factory import WorkoutFactory
 
 router = APIRouter(prefix="/training", tags=["training", "upload"])
 
@@ -275,24 +277,35 @@ async def upload_manual_session(
                     distance_km=request.distance_km,
                     intensity=request.intensity,
                     notes=request.notes,
-                    plan_type="manual_upload",
+                    plan_type="manual",
                     plan_id=None,
                     week_number=None,
                     status="planned",
                     completed=False,
+                    source="manual",
                 )
 
                 session.add(planned_session)
+                session.flush()  # Ensure ID is generated
+
+                # Create workout FIRST (mandatory invariant)
+                workout = WorkoutFactory.get_or_create_for_planned_session(session, planned_session)
+
+                # Defensive assertion
+                assert_planned_session_has_workout(planned_session)
+
                 session.commit()
                 session.refresh(planned_session)
 
                 session_id = planned_session.id
+                workout_id = workout.id
 
             logger.info(
-                "Manual session uploaded successfully",
+                "manual_planned_session_created",
                 user_id=user_id,
                 athlete_id=athlete_id,
                 session_id=session_id,
+                workout_id=workout_id,
             )
 
             return ManualSessionResponse(

@@ -805,6 +805,13 @@ def update_planned_session(
     Raises:
         HTTPException: 404 if planned_session_id is not a valid planned_sessions.id
     """
+    # 🚨 HARD ASSERT: Prevent silent failure if frontend sends None
+    if planned_session_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="planned_session_id must not be None",
+        )
+
     logger.info(
         f"[PLANNED-SESSIONS] PATCH /planned-sessions/{planned_session_id} called for user_id={user_id}"
     )

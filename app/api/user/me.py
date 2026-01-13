@@ -19,7 +19,7 @@ from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError
 
-from app.api.dependencies.auth import get_current_user_id
+from app.api.dependencies.auth import get_current_user_id, get_optional_user_id
 from app.api.schemas.schemas import (
     AthleteProfileResponse,
     AthleteProfileUpdateRequest,
@@ -267,16 +267,20 @@ def _infer_onboarding_complete_from_data(profile: AthleteProfile | None, setting
 
 
 @router.get("")
-def get_me(user_id: str = Depends(get_current_user_id)):
+def get_me(user_id: str | None = Depends(get_optional_user_id)):
     """Get current authenticated user info with aggregated data.
 
     Returns user information including email, onboarding status, profile,
     training preferences, notifications, and privacy settings.
-    This is the contract endpoint - it must always return 200 OK if token is valid.
+
+    CONTRACT: This endpoint MUST NEVER return 404.
+    - If authenticated: returns 200 with user data
+    - If not authenticated: returns 401 (never 404)
+
     This endpoint NEVER mutates state - it only reads and aggregates.
 
     Args:
-        user_id: Current authenticated user ID (from auth dependency)
+        user_id: Current authenticated user ID (from auth dependency, None if not authenticated)
 
     Returns:
         {
@@ -289,7 +293,19 @@ def get_me(user_id: str = Depends(get_current_user_id)):
             "notifications": {...},
             "privacy": {...}
         }
+
+    Raises:
+        HTTPException: 401 if not authenticated (never 404)
     """
+    # 🚨 INVARIANT: /me must never return 404
+    if user_id is None:
+        logger.info("[API] /me endpoint called without authentication")
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     logger.info(f"[API] /me endpoint called for user_id={user_id}")
 
     # Store user info for exception handler (defaults for fallback response)

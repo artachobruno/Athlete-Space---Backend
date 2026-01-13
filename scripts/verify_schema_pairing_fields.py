@@ -1,8 +1,10 @@
-"""Verification script to check schema pairing fields.
+"""Verification script to check schema pairing fields and invariants.
 
-This script verifies that required pairing columns exist:
-- activities.planned_session_id
-- planned_sessions.completed_activity_id
+This script verifies:
+- workouts.planned_session_id NOT NULL
+- planned_sessions.workout_id NOT NULL
+- No orphan workouts (workouts without planned_session_id)
+- No broken foreign keys
 
 Usage:
     From project root:
@@ -31,105 +33,122 @@ def _is_postgresql() -> bool:
 
 
 def verify_schema_pairing_fields() -> bool:
-    """Verify that required pairing fields exist in schema.
+    """Verify schema pairing fields and invariants.
+
+    Checks:
+    - workouts.planned_session_id NOT NULL
+    - planned_sessions.workout_id NOT NULL
+    - No orphan workouts
+    - No broken foreign keys
 
     Returns:
-        True if all required fields exist, False otherwise
+        True if all checks pass, False otherwise
     """
-    logger.info("Verifying schema pairing fields")
+    logger.info("Verifying schema pairing fields and invariants")
 
     db = SessionLocal()
     all_ok = True
     try:
         if _is_postgresql():
-            # Check activities.planned_session_id
+            # Check workouts.planned_session_id NOT NULL
             result = db.execute(
                 text(
                     """
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_name = 'activities'
-                    AND column_name = 'planned_session_id'
+                    SELECT COUNT(*)
+                    FROM workouts
+                    WHERE planned_session_id IS NULL
                     """,
                 ),
-            ).fetchone()
+            ).scalar()
 
-            if result:
-                logger.info("✅ activities.planned_session_id exists")
+            if result == 0:
+                logger.info("✅ workouts.planned_session_id NOT NULL (all workouts have planned_session_id)")
             else:
-                logger.error("❌ activities.planned_session_id MISSING")
+                logger.error(f"❌ workouts.planned_session_id has {result} NULL values")
                 all_ok = False
 
-            # Check planned_sessions.completed_activity_id
+            # Check planned_sessions.workout_id NOT NULL
             result = db.execute(
                 text(
                     """
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_name = 'planned_sessions'
-                    AND column_name = 'completed_activity_id'
+                    SELECT COUNT(*)
+                    FROM planned_sessions
+                    WHERE workout_id IS NULL
                     """,
                 ),
-            ).fetchone()
+            ).scalar()
 
-            if result:
-                logger.info("✅ planned_sessions.completed_activity_id exists")
+            if result == 0:
+                logger.info("✅ planned_sessions.workout_id NOT NULL (all planned sessions have workout_id)")
             else:
-                logger.error("❌ planned_sessions.completed_activity_id MISSING")
+                logger.error(f"❌ planned_sessions.workout_id has {result} NULL values")
                 all_ok = False
 
-            # List all activities columns for sanity check
-            logger.info("\nAll activities columns:")
+            # Check for orphan workouts (workouts without matching planned_session)
             result = db.execute(
                 text(
                     """
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_name = 'activities'
-                    ORDER BY column_name
+                    SELECT COUNT(*)
+                    FROM workouts w
+                    LEFT JOIN planned_sessions ps ON w.planned_session_id = ps.id
+                    WHERE w.planned_session_id IS NOT NULL
+                    AND ps.id IS NULL
                     """,
                 ),
-            ).fetchall()
-            for row in result:
-                logger.info(f"  - {row[0]}")
+            ).scalar()
 
-            # Check for required columns
-            column_names = [row[0] for row in result]
-            required_columns = ["planned_session_id", "workout_id", "tss", "tss_version"]
-            logger.info("\nRequired columns check:")
-            for col in required_columns:
-                if col in column_names:
-                    logger.info(f"  ✅ {col}")
-                else:
-                    logger.error(f"  ❌ {col} MISSING")
-                    all_ok = False
+            if result == 0:
+                logger.info("✅ No orphan workouts (all workouts.planned_session_id reference valid planned_sessions)")
+            else:
+                logger.error(f"❌ Found {result} orphan workouts (workouts with invalid planned_session_id)")
+                all_ok = False
+
+            # Check for broken foreign keys (planned_sessions.workout_id references)
+            result = db.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM planned_sessions ps
+                    LEFT JOIN workouts w ON ps.workout_id = w.id
+                    WHERE ps.workout_id IS NOT NULL
+                    AND w.id IS NULL
+                    """,
+                ),
+            ).scalar()
+
+            if result == 0:
+                logger.info("✅ No broken foreign keys (all planned_sessions.workout_id reference valid workouts)")
+            else:
+                logger.error(f"❌ Found {result} broken foreign keys (planned_sessions with invalid workout_id)")
+                all_ok = False
 
         else:
-            logger.warning("SQLite detected - using PRAGMA table_info")
+            logger.warning("SQLite detected - using PRAGMA table_info and direct queries")
             # SQLite check
-            result = db.execute(text("PRAGMA table_info(activities)")).fetchall()
-            activity_columns = [col[1] for col in result]
+            result = db.execute(
+                text("SELECT COUNT(*) FROM workouts WHERE planned_session_id IS NULL")
+            ).scalar()
 
-            if "planned_session_id" in activity_columns:
-                logger.info("✅ activities.planned_session_id exists")
+            if result == 0:
+                logger.info("✅ workouts.planned_session_id NOT NULL")
             else:
-                logger.error("❌ activities.planned_session_id MISSING")
+                logger.error(f"❌ workouts.planned_session_id has {result} NULL values")
                 all_ok = False
 
-            result = db.execute(text("PRAGMA table_info(planned_sessions)")).fetchall()
-            planned_columns = [col[1] for col in result]
+            result = db.execute(
+                text("SELECT COUNT(*) FROM planned_sessions WHERE workout_id IS NULL")
+            ).scalar()
 
-            if "completed_activity_id" in planned_columns:
-                logger.info("✅ planned_sessions.completed_activity_id exists")
+            if result == 0:
+                logger.info("✅ planned_sessions.workout_id NOT NULL")
             else:
-                logger.error("❌ planned_sessions.completed_activity_id MISSING")
+                logger.error(f"❌ planned_sessions.workout_id has {result} NULL values")
                 all_ok = False
 
         if all_ok:
-            logger.info("\n✅ All required pairing fields exist in schema")
+            logger.info("\n✅ All schema invariants verified successfully")
         else:
-            logger.error("\n❌ Some required pairing fields are missing")
-            logger.error("Run: python scripts/migrate_fix_schema_pairing_fields.py")
+            logger.error("\n❌ Some schema invariants are violated")
     except Exception as e:
         logger.error(f"Error during verification: {e}")
         return False

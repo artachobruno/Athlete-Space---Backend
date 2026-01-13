@@ -1034,14 +1034,13 @@ async def ensure_cors_headers(request: Request, call_next):
         )
 
     # Ensure CORS headers are present if origin is provided and allowed
-    if origin and origin in cors_origins:
-        if "Access-Control-Allow-Origin" not in response.headers:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
-            response.headers["Access-Control-Allow-Headers"] = (
-                "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
-            )
+    if origin and origin in cors_origins and "Access-Control-Allow-Origin" not in response.headers:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
+        )
 
     logger.debug(f"Response: {response.status_code} for {request.method} {request.url.path}")
     return response

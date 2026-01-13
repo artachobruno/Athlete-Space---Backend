@@ -50,9 +50,9 @@ class Workout(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="matched")
     activity_id: Mapped[str | None] = mapped_column(String, ForeignKey("activities.id"), nullable=True, index=True)
     planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)
-    raw_notes: Mapped[str | None] = mapped_column(Text, nullable=True, description="Original notes from user input")
-    llm_output_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, description="LLM-generated structured workout JSON")
-    parse_status: Mapped[str | None] = mapped_column(String, nullable=True, description="Parse status: success, parse_failed")
+    raw_notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Original notes from user input")
+    llm_output_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="LLM-generated structured workout JSON")
+    parse_status: Mapped[str | None] = mapped_column(String, nullable=True, comment="Parse status: success, parse_failed")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     steps: Mapped[list[WorkoutStep]] = relationship("WorkoutStep", back_populates="workout")

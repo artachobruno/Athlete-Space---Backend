@@ -251,6 +251,10 @@ async def upload_manual_session(
                 detail="Type is a required field",
             )
 
+        def _raise_missing_workout_id() -> None:
+            """Raise ValueError if workout_id is None."""
+            raise ValueError("planned_session.workout_id must not be None")
+
         # Title is auto-generated from type if not provided (handled by model validator)
         # Save session and get ID
         try:
@@ -364,7 +368,7 @@ async def upload_manual_session(
 
                 # Defensive check: fail fast if workout_id is None
                 if planned_session.workout_id is None:
-                    raise ValueError("planned_session.workout_id must not be None")
+                    _raise_missing_workout_id()
                 assert_planned_session_has_workout(planned_session)
 
                 session.commit()

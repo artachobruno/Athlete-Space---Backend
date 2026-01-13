@@ -303,7 +303,7 @@ def get_me(user_id: str = Depends(get_current_user_id)):
             # This can raise 500 if user not found (should not happen after auth validation)
             try:
                 user_email, user_auth_provider, user_timezone = _get_user_info(session, user_id)
-            except HTTPException as e:
+            except HTTPException:
                 # Re-raise HTTPExceptions from _get_user_info (will be 500, not 404)
                 raise
             except Exception as e:
@@ -2179,6 +2179,17 @@ def update_timezone(request: TimezoneUpdateRequest, user_id: str = Depends(get_c
     """
     logger.info(f"[API] PATCH /users/me (timezone) called for user_id={user_id}")
 
+    def _raise_user_not_found_error() -> None:
+        """Raise HTTPException for user not found after auth validation."""
+        logger.error(
+            f"[API] PATCH /me: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
+            "This indicates an internal server error."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: User data inconsistency. Please try again or contact support.",
+        )
+
     try:
         # Validate timezone
         try:
@@ -2191,14 +2202,7 @@ def update_timezone(request: TimezoneUpdateRequest, user_id: str = Depends(get_c
             user_result = session.execute(select(User).where(User.id == user_id)).first()
             if not user_result:
                 # User was validated by auth dependency, so not found = internal server error
-                logger.error(
-                    f"[API] PATCH /me: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
-                    "This indicates an internal server error."
-                )
-                raise HTTPException(
-                    status_code=500,
-                    detail="Internal server error: User data inconsistency. Please try again or contact support.",
-                )
+                _raise_user_not_found_error()
 
             user = user_result[0]
             user.timezone = request.timezone
@@ -2307,20 +2311,24 @@ def export_data(
     if format not in {"json", "csv"}:
         raise HTTPException(status_code=400, detail="Format must be 'json' or 'csv'")
 
+    def _raise_user_not_found_error() -> None:
+        """Raise HTTPException for user not found after auth validation."""
+        logger.error(
+            f"[API] /me/export: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
+            "This indicates an internal server error."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: User data inconsistency. Please try again or contact support.",
+        )
+
     try:
         with get_session() as session:
             # Get user data
             user = session.query(User).filter_by(id=user_id).first()
             if not user:
                 # User was validated by auth dependency, so not found = internal server error
-                logger.error(
-                    f"[API] /me/export: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
-                    "This indicates an internal server error."
-                )
-                raise HTTPException(
-                    status_code=500,
-                    detail="Internal server error: User data inconsistency. Please try again or contact support.",
-                )
+                _raise_user_not_found_error()
 
             profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
@@ -2514,6 +2522,17 @@ def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_c
         logger.warning(f"[API] Password change failed: incorrect current password for user_id={user_id}")
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
+    def _raise_user_not_found_error() -> None:
+        """Raise HTTPException for user not found after auth validation."""
+        logger.error(
+            f"[API] /me/change-password: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
+            "This indicates an internal server error."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: User data inconsistency. Please try again or contact support.",
+        )
+
     try:
         # Validate passwords match
         _validate_password_match(request.new_password, request.confirm_password)
@@ -2522,15 +2541,7 @@ def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_c
             user_result = session.execute(select(User).where(User.id == user_id)).first()
             if not user_result:
                 # User was validated by auth dependency, so not found = internal server error
-                logger.error(
-                    f"[API] /me/change-password: CRITICAL - User validated by auth but not found in DB: user_id={user_id}. "
-                    "This indicates an internal server error."
-                )
-                raise HTTPException(
-                    status_code=500,
-                    detail="Internal server error: User data inconsistency. Please try again or contact support.",
-                )
-                _raise_user_not_found()
+                _raise_user_not_found_error()
 
             user = user_result[0]
 

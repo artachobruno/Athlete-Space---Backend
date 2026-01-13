@@ -78,7 +78,46 @@ def migrate_create_workouts_tables() -> None:
         try:
             # Check if tables already exist
             if _table_exists(conn, "workouts"):
-                logger.info("workouts table already exists, skipping migration")
+                logger.info("workouts table already exists, checking for missing columns...")
+                # Check if status column exists, if not add it
+                if _is_postgresql():
+                    result = conn.execute(
+                        text(
+                            """
+                            SELECT column_name 
+                            FROM information_schema.columns 
+                            WHERE table_name = 'workouts' AND column_name = 'status'
+                            """
+                        )
+                    )
+                    if result.fetchone() is None:
+                        logger.info("Adding missing status column to workouts table...")
+                        conn.execute(text("ALTER TABLE workouts ADD COLUMN status VARCHAR NOT NULL DEFAULT 'matched'"))
+                        logger.info("✓ Added status column")
+                    
+                    # Check for activity_id and planned_session_id columns
+                    for col_name in ['activity_id', 'planned_session_id']:
+                        result = conn.execute(
+                            text(
+                                f"""
+                                SELECT column_name 
+                                FROM information_schema.columns 
+                                WHERE table_name = 'workouts' AND column_name = '{col_name}'
+                                """
+                            )
+                        )
+                        if result.fetchone() is None:
+                            logger.info(f"Adding missing {col_name} column to workouts table...")
+                            conn.execute(text(f"ALTER TABLE workouts ADD COLUMN {col_name} VARCHAR"))
+                            logger.info(f"✓ Added {col_name} column")
+                    
+                    # Create indexes if they don't exist
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_workouts_activity_id ON workouts(activity_id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_workouts_planned_session_id ON workouts(planned_session_id)"))
+                    logger.info("✓ Ensured indexes exist")
+                else:
+                    logger.warning("SQLite detected - column addition requires table recreation. Skipping.")
+                logger.info("workouts table schema updated")
                 return
 
             logger.info("Creating workouts table...")
@@ -96,6 +135,9 @@ def migrate_create_workouts_tables() -> None:
                             source_ref VARCHAR,
                             total_duration_seconds INTEGER,
                             total_distance_meters INTEGER,
+                            status VARCHAR NOT NULL DEFAULT 'matched',
+                            activity_id VARCHAR,
+                            planned_session_id VARCHAR,
                             created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
                         )
                         """
@@ -161,6 +203,9 @@ def migrate_create_workouts_tables() -> None:
                             source_ref TEXT,
                             total_duration_seconds INTEGER,
                             total_distance_meters INTEGER,
+                            status TEXT NOT NULL DEFAULT 'matched',
+                            activity_id TEXT,
+                            planned_session_id TEXT,
                             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                         )
                         """

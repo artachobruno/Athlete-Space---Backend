@@ -41,7 +41,7 @@ if project_root_str not in sys.path:
     sys.path.insert(0, project_root_str)
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 
 from app.db.models import Activity, PlannedSession
 from app.db.session import SessionLocal
@@ -49,6 +49,36 @@ from app.workouts.compliance_service import ComplianceService
 from app.workouts.execution_models import WorkoutComplianceSummary, WorkoutExecution
 from app.workouts.models import Workout
 from app.workouts.workout_factory import WorkoutFactory
+
+
+def _check_schema(db) -> tuple[bool, bool]:
+    """Check if required columns exist in the database.
+
+    Returns:
+        Tuple of (planned_sessions_has_workout_id, activities_has_workout_id)
+    """
+    try:
+        inspector = inspect(db.bind) if hasattr(db, 'bind') and db.bind else None
+        if not inspector:
+            logger.warning("Could not inspect database schema - assuming columns exist")
+            return True, True
+
+        planned_sessions_columns = [col['name'] for col in inspector.get_columns('planned_sessions')]
+        activities_columns = [col['name'] for col in inspector.get_columns('activities')]
+
+        planned_has_workout_id = 'workout_id' in planned_sessions_columns
+        activities_has_workout_id = 'workout_id' in activities_columns
+
+        logger.info(
+            "Schema check complete",
+            planned_sessions_has_workout_id=planned_has_workout_id,
+            activities_has_workout_id=activities_has_workout_id,
+        )
+
+        return planned_has_workout_id, activities_has_workout_id
+    except Exception as e:
+        logger.warning(f"Could not check schema: {e} - assuming columns exist")
+        return True, True
 
 
 def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
@@ -80,35 +110,128 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
     try:
         logger.info(f"Starting workout backfill (dry_run={dry_run})")
 
+        # Check schema first
+        planned_has_workout_id, activities_has_workout_id = _check_schema(db)
+        
+        if not planned_has_workout_id or not activities_has_workout_id:
+            logger.error(
+                "Required columns missing in database schema!",
+                planned_sessions_has_workout_id=planned_has_workout_id,
+                activities_has_workout_id=activities_has_workout_id,
+            )
+            logger.error(
+                "Please run migrations first: python scripts/run_migrations.py"
+            )
+            raise ValueError(
+                f"Missing workout_id columns. "
+                f"planned_sessions.workout_id exists: {planned_has_workout_id}, "
+                f"activities.workout_id exists: {activities_has_workout_id}. "
+                f"Run migrations first."
+            )
+
         # Step 1: Planned sessions without workout
         logger.info("Step 1: Processing planned sessions without workout...")
-        planned_sessions_without_workout = db.execute(
-            select(PlannedSession).where(PlannedSession.workout_id.is_(None))
-        ).scalars().all()
+        
+        # First, check if workout_id column exists
+        try:
+            result = db.execute(
+                select(PlannedSession).where(PlannedSession.workout_id.is_(None))
+            ).scalars().all()
+            planned_sessions_without_workout = list(result)
+        except Exception as column_error:
+            logger.error(
+                f"Error querying planned_sessions.workout_id - column may not exist: {column_error}",
+                error_type=type(column_error).__name__,
+                exc_info=True,
+            )
+            # Try to check if column exists
+            from sqlalchemy import inspect, text
+            inspector = inspect(db.bind) if hasattr(db, 'bind') else None
+            if inspector:
+                try:
+                    columns = [col['name'] for col in inspector.get_columns('planned_sessions')]
+                    logger.info(f"Columns in planned_sessions table: {columns}")
+                    has_workout_id = 'workout_id' in columns
+                    logger.info(f"workout_id column exists: {has_workout_id}")
+                except Exception as inspect_error:
+                    logger.warning(f"Could not inspect table schema: {inspect_error}")
+            
+            # If workout_id doesn't exist, skip this step
+            logger.warning("Skipping planned sessions step - workout_id column may not exist. Run migrations first.")
+            planned_sessions_without_workout = []
 
         logger.info(f"Found {len(planned_sessions_without_workout)} planned sessions without workout")
 
         for planned_session in planned_sessions_without_workout:
             stats["planned_sessions_processed"] += 1
             try:
+                # Debug: Log what type of object we got
+                logger.debug(
+                    f"Processing planned_session",
+                    object_type=type(planned_session).__name__,
+                    is_dict=isinstance(planned_session, dict),
+                    has_id_attr=hasattr(planned_session, "id"),
+                    dir_sample=list(dir(planned_session))[:10] if hasattr(planned_session, "__dict__") else None,
+                )
+                
+                # Ensure planned_session has an id
+                session_id = getattr(planned_session, "id", None)
+                if session_id is None:
+                    logger.error(
+                        "Planned session missing id attribute - skipping",
+                        planned_session_type=type(planned_session).__name__,
+                        planned_session_repr=repr(planned_session)[:200],
+                        is_dict=isinstance(planned_session, dict),
+                        keys=list(planned_session.keys()) if isinstance(planned_session, dict) else None,
+                    )
+                    stats["errors"] += 1
+                    continue
+
                 if dry_run:
                     logger.info(
                         f"[DRY RUN] Would create workout for planned session: "
-                        f"id={planned_session.id}, title={planned_session.title}, date={planned_session.date}"
+                        f"id={session_id}, title={getattr(planned_session, 'title', 'N/A')}, "
+                        f"date={getattr(planned_session, 'date', 'N/A')}"
                     )
                     stats["planned_sessions_created"] += 1
                 else:
                     WorkoutFactory.get_or_create_for_planned_session(db, planned_session)
                     stats["planned_sessions_created"] += 1
                     logger.debug(
-                        f"Created workout for planned session: id={planned_session.id}"
+                        f"Created workout for planned session: id={session_id}"
                     )
-            except Exception as e:
+            except KeyError as e:
                 stats["errors"] += 1
+                # Don't access planned_session.id here - session may be rolled back
+                try:
+                    session_id = str(getattr(planned_session, "id", "unknown"))
+                except Exception:
+                    session_id = "unknown (session rolled back)"
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")  # Escape for loguru
                 logger.error(
-                    f"Error creating workout for planned session {planned_session.id}: {e}",
+                    "KeyError creating workout for planned session",
+                    session_id=session_id,
+                    error_type=type(e).__name__,
+                    error_message=error_msg,
                     exc_info=True,
                 )
+                db.rollback()  # Ensure session is rolled back
+            except Exception as e:
+                stats["errors"] += 1
+                # Don't access planned_session.id here - session may be rolled back
+                try:
+                    session_id = str(getattr(planned_session, "id", "unknown"))
+                except Exception:
+                    session_id = "unknown (session rolled back)"
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")  # Escape for loguru
+                logger.error(
+                    "Error creating workout for planned session",
+                    session_id=session_id,
+                    error_type=type(e).__name__,
+                    error_message=error_msg,
+                    exc_info=True,
+                )
+                db.rollback()  # Ensure session is rolled back
 
         if not dry_run:
             db.commit()
@@ -250,8 +373,22 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
             **stats,
         )
 
+    except KeyError as e:
+        logger.error(
+            f"Fatal KeyError during backfill: {e}",
+            error_key=str(e),
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+        db.rollback()
+        raise
     except Exception as e:
-        logger.error(f"Fatal error during backfill: {e}", exc_info=True)
+        logger.error(
+            f"Fatal error during backfill: {e}",
+            error_type=type(e).__name__,
+            error_msg=str(e),
+            exc_info=True,
+        )
         db.rollback()
         raise
     finally:
@@ -298,8 +435,29 @@ def main() -> int:
 
         return 0 if stats["errors"] == 0 else 1
 
+    except KeyError as e:
+        import traceback
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error(
+            "Backfill failed with KeyError: {}",
+            error_msg,
+            error_key=str(e),
+            error_repr=repr(e),
+            traceback=traceback.format_exc(),
+        )
+        traceback.print_exc()
+        return 1
     except Exception as e:
-        logger.error(f"Backfill failed: {e}", exc_info=True)
+        import traceback
+        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+        logger.error(
+            "Backfill failed: {}",
+            error_msg,
+            error_type=type(e).__name__,
+            error_repr=repr(e),
+            traceback=traceback.format_exc(),
+        )
+        traceback.print_exc()
         return 1
 
 

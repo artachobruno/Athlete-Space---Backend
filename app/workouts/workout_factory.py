@@ -67,6 +67,10 @@ class WorkoutFactory:
         Note:
             Commits are handled by the caller. This method only flushes.
         """
+        # Validate planned_session is a proper ORM object, not a dict
+        if not hasattr(planned_session, "id"):
+            raise ValueError(f"planned_session must be a PlannedSession instance, got {type(planned_session).__name__}")
+
         # Check if workout_id already exists
         if planned_session.workout_id:
             existing_workout = session.execute(
@@ -81,23 +85,39 @@ class WorkoutFactory:
                 return existing_workout
 
         # Create workout
-        sport = _map_sport_type(planned_session.type)
+        # Safely access attributes using getattr to avoid KeyError
+        session_type = getattr(planned_session, "type", None)
+        if session_type is None:
+            raise ValueError("planned_session.type is required but is None")
+        
+        sport = _map_sport_type(session_type)
+        
+        duration_minutes = getattr(planned_session, "duration_minutes", None)
         total_duration_seconds = (
-            int(planned_session.duration_minutes * 60) if planned_session.duration_minutes else None
+            int(duration_minutes * 60) if duration_minutes else None
         )
+        
+        distance_km = getattr(planned_session, "distance_km", None)
         total_distance_meters = (
-            int(planned_session.distance_km * 1000) if planned_session.distance_km else None
+            int(distance_km * 1000) if distance_km else None
         )
 
+        session_id = getattr(planned_session, "id", None)
+        if session_id is None:
+            raise ValueError("planned_session.id is required but is None")
+        
+        user_id = getattr(planned_session, "user_id", None)
+        if user_id is None:
+            raise ValueError("planned_session.user_id is required but is None")
+
         workout = Workout(
-            user_id=planned_session.user_id,
+            user_id=user_id,
             sport=sport,
             source="planned",
             source_ref=None,
             total_duration_seconds=total_duration_seconds,
             total_distance_meters=total_distance_meters,
-            status="planned",
-            planned_session_id=planned_session.id,
+            planned_session_id=session_id,
             activity_id=None,
         )
         session.add(workout)
@@ -109,12 +129,23 @@ class WorkoutFactory:
         # Set workout_id on planned_session
         planned_session.workout_id = workout.id
 
-        logger.info(
-            "Created workout for planned session",
-            workout_id=workout.id,
-            planned_session_id=planned_session.id,
-            user_id=planned_session.user_id,
-        )
+        try:
+            workout_id = getattr(workout, "id", None)
+            planned_session_id = getattr(planned_session, "id", None)
+            user_id_val = getattr(planned_session, "user_id", None)
+            logger.info(
+                "Created workout for planned session",
+                workout_id=workout_id,
+                planned_session_id=planned_session_id,
+                user_id=user_id_val,
+            )
+        except Exception as log_error:
+            # Log error but don't fail the operation
+            logger.warning(
+                f"Failed to log workout creation: {log_error}",
+                error_type=type(log_error).__name__,
+                exc_info=True,
+            )
 
         return workout
 
@@ -161,7 +192,6 @@ class WorkoutFactory:
             source_ref=None,
             total_duration_seconds=total_duration_seconds,
             total_distance_meters=total_distance_meters,
-            status="inferred",
             activity_id=activity.id,
             planned_session_id=None,
         )

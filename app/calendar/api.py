@@ -21,6 +21,7 @@ from app.api.schemas.schemas import (
     CalendarTodayResponse,
     CalendarWeekResponse,
 )
+from app.calendar.auto_match_service import auto_match_sessions
 from app.calendar.reconciliation_service import reconcile_calendar
 from app.db.models import Activity, PlannedSession, StravaAccount, User
 from app.db.session import get_session
@@ -148,7 +149,12 @@ def _run_reconciliation_safe(
     start_date: date,
     end_date: date,
 ) -> tuple[dict[str, str], set[str]]:
-    """Run reconciliation with safe error handling.
+    """Run reconciliation with safe error handling and auto-matching.
+
+    This function:
+    1. Runs reconciliation to find matches
+    2. Automatically creates workouts for matches (idempotent)
+    3. Returns reconciliation status map
 
     Args:
         user_id: User ID
@@ -169,6 +175,14 @@ def _run_reconciliation_safe(
             start_date=start_date,
             end_date=end_date,
         )
+
+        # Auto-match: create workouts for matches
+        try:
+            auto_match_sessions(user_id=user_id, reconciliation_results=reconciliation_results)
+        except Exception as e:
+            logger.warning(f"[CALENDAR] Auto-match failed, continuing with reconciliation: {e!r}")
+
+        # Build reconciliation map
         for result in reconciliation_results:
             reconciliation_map[result.session_id] = result.status.value
             if result.matched_activity_id:

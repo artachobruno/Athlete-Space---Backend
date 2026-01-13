@@ -85,11 +85,7 @@ def sport_types_match(activity_type: str | None, planned_type: str | None) -> bo
     ]
 
     # Check if both types are in the same group
-    for group in type_groups:
-        if planned_lower in group and activity_lower in group:
-            return True
-
-    return False
+    return any(planned_lower in group and activity_lower in group for group in type_groups)
 
 
 def duration_close(activity_duration: int | None, planned_duration_minutes: int | None) -> bool:
@@ -205,7 +201,7 @@ def main() -> None:
                 break
 
         logger.info("=" * 60)
-        logger.info(f"Backfill complete:")
+        logger.info("Backfill complete:")
         logger.info(f"  Scanned: {len(unattached_activities)} activities")
         logger.info(f"  Matched: {matched}")
         logger.info(f"  Skipped: {skipped}")

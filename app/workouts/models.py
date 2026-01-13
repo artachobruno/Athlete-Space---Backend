@@ -29,6 +29,9 @@ class Workout(Base):
     - source_ref: Optional reference to source system (e.g., template ID, file name)
     - total_duration_seconds: Total workout duration (nullable)
     - total_distance_meters: Total workout distance (nullable)
+    - status: Workout status (matched, analyzed, failed)
+    - activity_id: Foreign key to activities.id (for matched workouts)
+    - planned_session_id: Foreign key to planned_sessions.id (for matched workouts)
     - created_at: Record creation timestamp
     """
 
@@ -41,6 +44,9 @@ class Workout(Base):
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     total_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_distance_meters: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="matched")
+    activity_id: Mapped[str | None] = mapped_column(String, ForeignKey("activities.id"), nullable=True, index=True)
+    planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     steps: Mapped[list[WorkoutStep]] = relationship("WorkoutStep", back_populates="workout")

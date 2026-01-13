@@ -105,10 +105,10 @@ def migrate_calendar_to_planned(user_id: str | None = None) -> dict[str, int]:
 
     with get_session() as session:
         # Check if calendar_sessions table exists
-        with session.connection() as conn:
-            if not _table_exists(conn, "calendar_sessions"):
-                logger.info("calendar_sessions table does not exist. Nothing to migrate.")
-                return stats
+        conn = session.connection()
+        if not _table_exists(conn, "calendar_sessions"):
+            logger.info("calendar_sessions table does not exist. Nothing to migrate.")
+            return stats
 
         # Query calendar_sessions
         query = text("SELECT * FROM calendar_sessions")

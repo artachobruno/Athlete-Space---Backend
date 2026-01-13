@@ -155,3 +155,48 @@ class WorkoutInterpretationResponse(BaseModel):
     verdict: str | None
     summary: str | None
     steps: list[StepInterpretationSchema]
+
+
+class ParsedStepSchema(BaseModel):
+    """Parsed step schema for notes parsing response.
+
+    Represents a single step extracted from workout notes.
+    """
+
+    order: int
+    type: str
+    duration_seconds: int | None = None
+    distance_meters: int | None = None
+
+
+class ParseNotesRequest(BaseModel):
+    """Request schema for parsing workout notes into structured steps.
+
+    This endpoint parses free-form workout notes into structured workout steps.
+    It does NOT persist any data - it only returns the parsed structure.
+    """
+
+    sport: str
+    session_type: str | None = None
+    notes: str
+    total_distance_meters: int | None = None
+    total_duration_seconds: int | None = None
+
+
+class ParseNotesResponse(BaseModel):
+    """Response schema for notes parsing.
+
+    Status values:
+    - "ok": Steps parsed confidently
+    - "unavailable": Feature disabled (safe, expected)
+    - "ambiguous": Partial parse; user should reword
+    - "failed": Internal error (still non-blocking)
+
+    IMPORTANT: This response does NOT imply any data was persisted.
+    Parsing is always non-blocking and non-mutating.
+    """
+
+    status: str
+    steps: list[ParsedStepSchema] | None = None
+    confidence: float = 0.0
+    warnings: list[str] = []

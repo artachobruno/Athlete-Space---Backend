@@ -10,10 +10,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
+from app.config.settings import settings
 from app.db.models import Activity
 from app.db.session import get_session
 from app.workouts.compliance_service import ComplianceService
@@ -21,9 +23,12 @@ from app.workouts.execution_models import StepCompliance, WorkoutComplianceSumma
 from app.workouts.export_service import WorkoutExportService
 from app.workouts.interpretation_service import InterpretationService
 from app.workouts.models import Workout, WorkoutExport, WorkoutStep
+from app.workouts.parsing import parse_notes_stub
 from app.workouts.schemas import (
     AttachActivityRequest,
     CreateExportRequest,
+    ParseNotesRequest,
+    ParseNotesResponse,
     StepComplianceSchema,
     StepInterpretationSchema,
     WorkoutComplianceResponse,
@@ -86,6 +91,45 @@ def get_workout_steps(session: Session, workout_id: UUID) -> list[WorkoutStep]:
     )
     result = session.execute(stmt)
     return list(result.scalars().all())
+
+
+@router.post("/parse-notes", response_model=ParseNotesResponse)
+def parse_notes(
+    request: ParseNotesRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> ParseNotesResponse:
+    """Parse workout notes into structured steps.
+
+    This endpoint parses free-form workout notes into structured workout steps.
+    It is completely non-blocking and non-mutating - it does NOT persist any data.
+
+    IMPORTANT: This endpoint never writes to the database, creates workouts,
+    or triggers reconciliation. It only returns parsed structure.
+
+    Args:
+        request: Parse notes request with sport, session_type, notes, etc.
+        user_id: Authenticated user ID (logged but not used in stub)
+
+    Returns:
+        ParseNotesResponse with parsed steps or unavailable status
+
+    Status codes:
+        - 200: Always returns 200 (never fails)
+    """
+    logger.info(
+        "Workout notes parse requested",
+        user_id=user_id,
+        sport=request.sport,
+        session_type=request.session_type,
+        has_distance=request.total_distance_meters is not None,
+        has_duration=request.total_duration_seconds is not None,
+        notes_length=len(request.notes),
+    )
+
+    if not settings.workout_notes_parsing_enabled:
+        return parse_notes_stub(request)
+
+    return parse_notes_stub(request)
 
 
 @router.get("/{workout_id}", response_model=WorkoutSchema)

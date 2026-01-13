@@ -105,6 +105,11 @@ class Settings(BaseSettings):
         validation_alias="ENABLE_PROGRESS_EVENTS",
         description="Enable progress event emission (default: false for production stability)",
     )
+    workout_notes_parsing_enabled: bool = Field(
+        default=False,
+        validation_alias="WORKOUT_NOTES_PARSING_ENABLED",
+        description="Enable LLM-based workout notes parsing (default: false)",
+    )
 
     @field_validator("log_level")
     @classmethod

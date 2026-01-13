@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
@@ -72,6 +72,9 @@ def _get_planned_sessions_safe(
                     PlannedSession.user_id == user_id,
                     PlannedSession.date >= start_date,
                     PlannedSession.date <= end_date,
+                    # NULL-safe status filter: exclude only explicitly excluded statuses
+                    # NULL statuses and "planned" statuses are included
+                    func.coalesce(PlannedSession.status, "planned").notin_(["completed", "cancelled", "skipped"]),
                 )
                 .order_by(PlannedSession.date)
             )

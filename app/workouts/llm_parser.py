@@ -63,7 +63,16 @@ def parse_workout_notes(
     distance_str = str(total_distance_meters) if total_distance_meters else "null"
     duration_str = str(total_duration_seconds) if total_duration_seconds else "null"
 
-    system_prompt = "You are a professional endurance coach."
+    system_prompt = """You are a professional endurance coach.
+
+You MUST follow these rules:
+
+- Output valid JSON only.
+- Do not include explanations or text outside JSON.
+- Steps MUST sum to the provided total distance OR total duration (±10%).
+- If exact breakdown is unclear, mark the output as ambiguous.
+- Never invent distances, durations, or repetitions.
+- Prefer distance-based steps over time-based steps when both are present."""
     user_prompt = f"""Parse the following workout notes into structured steps.
 
 Sport: {sport}
@@ -104,6 +113,7 @@ RULES:
 - Each step must have either distance_meters OR duration_seconds (not both)
 - Order steps sequentially (1, 2, 3, ...)
 - If target is specified, include type and low/high values
+- If you cannot determine exact breakdown, set confidence < 0.6 and mark as ambiguous
 """
 
     try:

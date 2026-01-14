@@ -109,7 +109,44 @@ def ensure_workout_steps(workout_id: str) -> None:
                 session.flush()
                 return
 
-            # Validate
+            # Strict schema validation
+            validation_warnings: list[str] = []
+
+            # Check for required fields and negative values
+            if not parsed.steps:
+                workout.parse_status = "failed"
+                workout.llm_output_json = {"error": "No steps parsed", "warnings": validation_warnings}
+                session.flush()
+                return
+
+            for step in parsed.steps:
+                # Check for negative values
+                if step.distance_meters is not None and step.distance_meters < 0:
+                    validation_warnings.append(f"Step {step.order} has negative distance_meters")
+                if step.duration_seconds is not None and step.duration_seconds < 0:
+                    validation_warnings.append(f"Step {step.order} has negative duration_seconds")
+
+                # Check that step has either distance or duration
+                if step.distance_meters is None and step.duration_seconds is None:
+                    workout.parse_status = "failed"
+                    workout.llm_output_json = {
+                        "error": f"Step {step.order} missing both distance_meters and duration_seconds",
+                        "warnings": validation_warnings,
+                    }
+                    session.flush()
+                    return
+
+            # Reject if validation warnings indicate invalid output
+            if validation_warnings:
+                workout.parse_status = "failed"
+                workout.llm_output_json = {
+                    "error": "Invalid structured output from LLM",
+                    "warnings": validation_warnings,
+                }
+                session.flush()
+                return
+
+            # Validate totals
             is_valid, error_msg = validate_parsed_workout(
                 parsed,
                 workout.total_distance_meters,
@@ -162,8 +199,16 @@ def ensure_workout_steps(workout_id: str) -> None:
                 )
                 session.add(workout_step)
 
-            # Update workout
-            workout.parse_status = "parsed"
+            # Check confidence after persisting steps
+            # If confidence is low, mark as ambiguous but keep steps
+            if parsed.confidence < 0.6:
+                logger.warning(
+                    f"Parsed workout {workout_id} has low confidence ({parsed.confidence}), marking as ambiguous"
+                )
+                workout.parse_status = "ambiguous"
+            else:
+                workout.parse_status = "parsed"
+
             workout.llm_output_json = parsed.model_dump()
 
             session.flush()

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Activity, PlannedSession
 from app.db.session import get_session
 from app.workouts.models import Workout, WorkoutStep
+from app.workouts.parsing_service import ensure_workout_steps
 from app.workouts.schemas import WorkoutInputSchema
 
 
@@ -173,6 +174,16 @@ def ensure_workout(
             activity_id=activity_id,
             sport=sport,
         )
+
+        # Trigger parsing immediately after workout creation (non-blocking)
+        try:
+            ensure_workout_steps(workout.id)
+        except Exception as e:
+            logger.warning(
+                "Workout parsing failed (non-blocking)",
+                workout_id=workout.id,
+                error=str(e),
+            )
 
         return workout
 

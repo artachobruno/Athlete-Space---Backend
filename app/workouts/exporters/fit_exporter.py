@@ -82,12 +82,30 @@ class FitWorkoutExporter(WorkoutExporter):
         # Sort steps by order to ensure correct sequence
         sorted_steps = sorted(steps, key=lambda s: s.order)
 
-        # Check for distance-based steps (not supported in MVP)
+        # Filter out invalid steps and warn
+        valid_steps: list[WorkoutStep] = []
         for step in sorted_steps:
-            if step.distance_meters is not None and step.duration_seconds is None:
-                raise ValueError(
-                    f"Distance-based steps are not supported. Step {step.id} has distance_meters but no duration_seconds"
+            # Skip steps with neither distance nor duration
+            if step.distance_meters is None and step.duration_seconds is None:
+                logger.warning(
+                    f"Skipping step {step.id} (order {step.order}): missing both distance_meters and duration_seconds"
                 )
+                continue
+
+            # Check for distance-based steps (not supported in MVP, but handle gracefully)
+            if step.distance_meters is not None and step.duration_seconds is None:
+                logger.warning(
+                    f"Step {step.id} (order {step.order}) is distance-based only, which may not be fully supported"
+                )
+                # Continue processing - will be handled in step creation
+
+            valid_steps.append(step)
+
+        if not valid_steps:
+            raise ValueError("Workout has no valid steps after filtering")
+
+        # Update sorted_steps to use filtered list
+        sorted_steps = valid_steps
 
         # Create FIT file builder
         builder = FitFileBuilder(auto_define=True, min_string_size=50)
@@ -113,7 +131,7 @@ class FitWorkoutExporter(WorkoutExporter):
         # Create workout message
         workout_msg = WorkoutMessage()
         workout_msg.sport = fit_sport
-        workout_msg.num_valid_steps = len(sorted_steps)
+        workout_msg.num_valid_steps = len(sorted_steps)  # Use filtered list length
         if workout.source_ref:
             workout_msg.workout_name = workout.source_ref[:15]  # FIT limit is 15 chars
         builder.add(workout_msg)
@@ -124,15 +142,18 @@ class FitWorkoutExporter(WorkoutExporter):
             step_msg.message_index = step_idx
 
             # Set duration
+            # Prefer duration_seconds if both are present
             if step.duration_seconds is not None:
                 step_msg.duration_type = WorkoutStepDuration.TIME
                 step_msg.duration_time = float(step.duration_seconds)
             elif step.distance_meters is not None:
-                # Distance-based (should not reach here due to validation, but handle gracefully)
+                # Distance-based (duration-only workouts are preferred, but support distance-based)
                 step_msg.duration_type = WorkoutStepDuration.DISTANCE
                 step_msg.duration_distance = float(step.distance_meters)
             else:
-                raise ValueError(f"Step {step.id} must have either duration_seconds or distance_meters")
+                # This should not happen due to filtering above, but handle gracefully
+                logger.warning(f"Skipping step {step.id} (order {step.order}): missing both distance and duration")
+                continue
 
             # Set intensity from step type
             step_type_lower = step.type.lower() if step.type else "steady"

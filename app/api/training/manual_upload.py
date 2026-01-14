@@ -391,7 +391,12 @@ async def upload_manual_session(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error uploading manual session: {e}", exc_info=True, user_id=user_id)
+            logger.error(
+                "Error uploading manual session",
+                exc_info=True,
+                user_id=user_id,
+                error=str(e),
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to upload session",

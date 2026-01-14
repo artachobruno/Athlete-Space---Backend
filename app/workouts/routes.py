@@ -132,6 +132,61 @@ def parse_notes(
     return parse_notes_stub(request)
 
 
+@router.get("/{workout_id}/structured")
+def get_structured_workout(
+    workout_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, str | int | None | list[dict[str, str | int | None]]]:
+    """Get structured workout data.
+
+    Returns workout structure with steps array populated from database.
+    Never returns 404 - returns status "not_found" if workout doesn't exist.
+
+    Args:
+        workout_id: Workout UUID
+        user_id: Authenticated user ID
+
+    Returns:
+        Dictionary with status, workout_id, sport, total_distance_meters,
+        total_duration_seconds, and steps (populated from database)
+    """
+    with get_session() as session:
+        stmt = (
+            select(Workout)
+            .where(Workout.id == str(workout_id))
+            .where(Workout.user_id == user_id)
+        )
+        result = session.execute(stmt)
+        workout = result.scalar_one_or_none()
+
+        if not workout:
+            return {
+                "status": "not_found",
+                "workout_id": str(workout_id),
+                "steps": [],
+            }
+
+        steps = get_workout_steps(session, workout_id)
+        step_dicts = [
+            {
+                "order": step.order,
+                "type": step.type,
+                "duration_seconds": step.duration_seconds,
+                "distance_meters": step.distance_meters,
+            }
+            for step in steps
+        ]
+
+        return {
+            "status": "ok",
+            "workout_id": workout.id,
+            "sport": workout.sport,
+            "total_distance_meters": workout.total_distance_meters,
+            "total_duration_seconds": workout.total_duration_seconds,
+            "steps": step_dicts,
+        }
+
+
 @router.get("/{workout_id}", response_model=WorkoutSchema)
 def get_workout(
     workout_id: UUID,

@@ -709,32 +709,36 @@ def complete_onboarding_flow(
     """
     logger.info(f"Starting onboarding flow for user_id={user_id}")
 
-    # Guard assertion: fail fast if user_id is missing
-    assert user_id is not None, "user_id must be provided"
+    # Guard check: fail fast if user_id is missing
+    if user_id is None:
+        raise ValueError("user_id must be provided")
 
     with get_session() as session:
         try:
-            # 1. Persist onboarding data to users, athlete_profiles, and user_settings
+            # 1. Persist onboarding data (ONLY canonical data)
             _user, profile, settings = persist_onboarding_complete(session, user_id, request)
 
-            # 2. Extract injury attributes from injury notes if provided
-            extracted_injury_attributes = None
-            if settings.injury_notes:
-                extracted_injury_attributes = extract_injury_attributes_from_settings(settings)
-                if extracted_injury_attributes:
-                    profile.extracted_injury_attributes = extracted_injury_attributes.model_dump()
-                    session.commit()
+            # 2. Runtime-only injury extraction (DO NOT persist)
+            extracted_injury_attributes = (
+                extract_injury_attributes_from_settings(settings)
+                if settings.injury_notes
+                else None
+            )
 
-            # 3. Extract race attributes - not available in new schema, skip for now
+            # 3. Extract race attributes (skipped for now)
             extracted_attributes_obj = None
 
-            # 4. Conditionally generate plans (if user opted in and has Strava data)
+            # 4. Conditionally generate plans
             weekly_intent = None
             season_plan = None
             provisional = False
             warning = None
 
-            should_generate, reason = should_generate_plan(session, user_id, request.generate_initial_plan)
+            should_generate, reason = should_generate_plan(
+                session,
+                user_id,
+                request.generate_initial_plan,
+            )
             if should_generate:
                 logger.info(f"Generating plans for user_id={user_id}")
 

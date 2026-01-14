@@ -52,7 +52,7 @@ traceloop-sdk>=0.1.0  # Observe SDK for LLM observability
 # -------------------------------------------------
 # Math / Analysis (Training State)
 # -------------------------------------------------
-numpy>=2.0.0
+numpy>=2.0.0,<3.0.0
 scipy>=1.9.3,<2.0.0
 pandas>=2.0.0
 

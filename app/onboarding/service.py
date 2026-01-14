@@ -709,6 +709,9 @@ def complete_onboarding_flow(
     """
     logger.info(f"Starting onboarding flow for user_id={user_id}")
 
+    # Guard assertion: fail fast if user_id is missing
+    assert user_id is not None, "user_id must be provided"
+
     with get_session() as session:
         try:
             # 1. Persist onboarding data to users, athlete_profiles, and user_settings

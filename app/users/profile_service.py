@@ -212,6 +212,10 @@ def upsert_athlete_profile(
     """
     logger.info(f"[PROFILE_SERVICE] Upserting athlete profile for user_id={user_id}")
 
+    # Guard assertion: fail fast if user_id is missing
+    if not user_id:
+        raise ValueError("user_id must be provided and cannot be empty")
+
     # 1. Update User table
     user_result = session.execute(select(User).where(User.id == user_id)).first()
     if not user_result:

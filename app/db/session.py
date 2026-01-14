@@ -143,12 +143,9 @@ def _log_keyerror_details(session: Session, error: KeyError) -> None:
     error_msg = str(error)
     error_args_str = str(error.args)
     logger.error(
-        "Database session KeyError during commit, rolling back: %s. Error args: %s, session state: dirty=%d, new=%d, deleted=%d",
-        error_msg,
-        error_args_str,
-        len(session.dirty),
-        len(session.new),
-        len(session.deleted),
+        f"Database session KeyError during commit, rolling back: {error_msg}. "
+        f"Error args: {error_args_str}, session state: "
+        f"dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}",
     )
     if session.new:
         for obj in list(session.new)[:3]:

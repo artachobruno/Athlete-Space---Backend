@@ -132,9 +132,13 @@ def complete_onboarding(
         logger.error(f"Validation error completing onboarding: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Invalid request: {e!s}") from e
     except KeyError as e:
-        # Missing required field
-        logger.error(f"KeyError completing onboarding: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal error: Missing required field {e!s}") from e
+        # Missing required field - convert to 400 Bad Request with clear error message
+        missing_field = str(e.args[0]) if e.args else "unknown"
+        logger.error(f"KeyError completing onboarding: missing field '{missing_field}'", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required field: {missing_field}. Please ensure all required fields are provided."
+        ) from e
     except Exception as e:
         logger.error(f"Error completing onboarding: {e}", exc_info=True)
         # Include error type and message for better debugging

@@ -741,7 +741,7 @@ class UserSettings(Base):
     threshold_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Privacy settings
-    profile_visibility: Mapped[str | None] = mapped_column(String, nullable=True)
+    profile_visibility: Mapped[str] = mapped_column(String, nullable=False, default="private")
     share_activity_data: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     share_training_metrics: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 

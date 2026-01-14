@@ -125,13 +125,13 @@ def persist_training_preferences(
     if not preferences_data:
         settings = session.query(UserSettings).filter_by(user_id=user_id).first()
         if not settings:
-            settings = UserSettings(user_id=user_id)
+            settings = UserSettings(user_id=user_id, profile_visibility="private")
             session.add(settings)
         return settings
 
     settings = session.query(UserSettings).filter_by(user_id=user_id).first()
     if not settings:
-        settings = UserSettings(user_id=user_id)
+        settings = UserSettings(user_id=user_id, profile_visibility="private")
         session.add(settings)
 
     # Update fields

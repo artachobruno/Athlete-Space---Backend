@@ -268,7 +268,7 @@ def upsert_athlete_profile(
     if settings_result:
         settings = settings_result[0]
     else:
-        settings = UserSettings(user_id=user_id)
+        settings = UserSettings(user_id=user_id, profile_visibility="private")
         session.add(settings)
 
     # Map primary_sport (single) to primary_sports (list)

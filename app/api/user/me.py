@@ -2003,7 +2003,7 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
             old_goal = old_settings.goal if old_settings else None
 
             if not old_settings:
-                settings = UserSettings(user_id=user_id)
+                settings = UserSettings(user_id=user_id, profile_visibility="private")
                 session.add(settings)
             else:
                 settings = old_settings
@@ -2135,13 +2135,13 @@ def update_privacy_settings(request: PrivacySettingsUpdateRequest, user_id: str 
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
 
             if not settings:
-                settings = UserSettings(user_id=user_id)
+                settings = UserSettings(user_id=user_id, profile_visibility="private")
                 session.add(settings)
 
             # Full object overwrite - set all fields from request
             if request.profile_visibility is not None:
                 _validate_profile_visibility(request.profile_visibility)
-            settings.profile_visibility = request.profile_visibility
+                settings.profile_visibility = request.profile_visibility
             settings.share_activity_data = request.share_activity_data
             settings.share_training_metrics = request.share_training_metrics
 
@@ -2245,7 +2245,7 @@ def update_notifications(request: NotificationsUpdateRequest, user_id: str = Dep
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
 
             if not settings:
-                settings = UserSettings(user_id=user_id)
+                settings = UserSettings(user_id=user_id, profile_visibility="private")
                 session.add(settings)
 
             # Full object overwrite - set all fields from request

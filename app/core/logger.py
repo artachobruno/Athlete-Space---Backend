@@ -89,6 +89,56 @@ def setup_logger(
         }
     )
 
+    # HARDEN: Override logger.bind() to ALWAYS include user_id
+    # This prevents logger.bind(foo=bar) from wiping out user_id
+    original_bind = logger.bind
+
+    def safe_bind(**kwargs: str | int | float | bool | None) -> type[logger]:
+        """Safe bind that always includes user_id.
+
+        This prevents logger.bind() from creating records without user_id,
+        which would cause KeyError when extra["user_id"] is accessed.
+
+        Args:
+            **kwargs: Additional fields to bind
+
+        Returns:
+            Bound logger instance with user_id guaranteed
+        """
+        # Always include user_id - merge with any provided kwargs
+        safe_extra = {"user_id": _get_user_id()}
+        safe_extra.update(kwargs)
+        return original_bind(**safe_extra)
+
+    # Override the global logger.bind method
+    logger.bind = safe_bind
+
+    # HARDEN: Wrap logger methods to ALWAYS merge user_id into extra={}
+    # When extra={} is passed, it REPLACES the configured extra, wiping out user_id
+    # This wrapper ensures user_id is always present, even if extra={} is passed
+    original_info = logger.info
+    original_warning = logger.warning
+    original_error = logger.error
+    original_debug = logger.debug
+    original_exception = logger.exception
+    original_critical = logger.critical
+
+    def _make_safe_logger(original_method):
+        """Create a safe logger wrapper that ensures user_id is always in extra."""
+        def safe_logger(*args, **kwargs):
+            if "extra" in kwargs and isinstance(kwargs["extra"], dict):
+                # Merge user_id into extra instead of replacing
+                kwargs["extra"].setdefault("user_id", _get_user_id())
+            return original_method(*args, **kwargs)
+        return safe_logger
+
+    logger.info = _make_safe_logger(original_info)
+    logger.warning = _make_safe_logger(original_warning)
+    logger.error = _make_safe_logger(original_error)
+    logger.debug = _make_safe_logger(original_debug)
+    logger.exception = _make_safe_logger(original_exception)
+    logger.critical = _make_safe_logger(original_critical)
+
     # Patch the logger to optionally include user_id and conversation_id from context
     # This is OPTIONAL - format strings don't require it, so logging never fails
     # Type annotation omitted - loguru's Record type from stubs doesn't expose extra dict properly
@@ -120,6 +170,22 @@ def setup_logger(
             except Exception:
                 # If even creating extra fails, give up - don't break logging
                 return
+
+        # HARD ASSERTION: Catch any record without user_id (dev/debug only)
+        # This will immediately reveal the exact caller that creates records without user_id
+        # Remove this in production if it causes issues, but it should help find the root cause
+        if "user_id" not in extra:
+            # In production, just set it silently. In dev, you can raise to see the stacktrace
+            # For now, we'll set it but log a warning
+            import os
+            if os.getenv("DEBUG_LOGGING", "false").lower() == "true":
+                import traceback
+                stack = "".join(traceback.format_stack())
+                logger.warning(
+                    "LOG RECORD CREATED WITHOUT USER_ID - this should never happen",
+                    extra={"stack": stack, "record_file": record.get("file", {}).get("name", "unknown")},
+                )
+            extra["user_id"] = "system"
 
         # B45: Always ensure user_id exists (format doesn't require it, but defensive)
         # This is set in logger.configure() above, but ensure it's always present

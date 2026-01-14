@@ -180,7 +180,7 @@ def get_session() -> Generator[Session, None, None]:
         if session.new:
             for obj in list(session.new)[:3]:
                 logger.error(f"New object in session: {type(obj).__name__}, id={getattr(obj, 'id', 'NO_ID')}")
-        logger.error("Full exception traceback:", exc_info=True)
+        logger.exception("Full exception traceback:")
         session.rollback()
         raise
     finally:

@@ -196,7 +196,7 @@ Example inputs (assuming today is {today_str}):
                     text=text[:50],
                 )
             except (ValueError, TypeError) as e:
-                logger.error(f"Failed to parse extracted date '{extraction.date}': {e}", exc_info=True)
+                logger.exception(f"Failed to parse extracted date '{extraction.date}': {e}")
                 return None
             else:
                 return parsed_date
@@ -204,7 +204,7 @@ Example inputs (assuming today is {today_str}):
             logger.debug(f"No date extracted from text: {text[:50]}...")
             return None
     except Exception as e:
-        logger.error(f"Failed to extract date: {e}", exc_info=True, text=text[:50])
+        logger.exception(f"Failed to extract date (text={text[:50]})")
         return None
 
 
@@ -304,7 +304,7 @@ Example inputs (assuming today is {today_str}):
                     continue
                 parsed_dates.append(parsed)
             except (ValueError, TypeError) as e:
-                logger.error(f"Failed to parse extracted date '{date_str}': {e}", exc_info=True)
+                logger.exception(f"Failed to parse extracted date '{date_str}': {e}")
                 continue
 
         # Sort dates chronologically
@@ -323,7 +323,7 @@ Example inputs (assuming today is {today_str}):
             text=text[:50],
         )
     except Exception as e:
-        logger.error(f"Failed to extract dates: {e}", exc_info=True, text=text[:50])
+        logger.exception(f"Failed to extract dates (text={text[:50]})")
         return [], None, None
     else:
         return parsed_dates, start_date_str, end_date_str
@@ -391,7 +391,7 @@ Example inputs:
         if session_count is None:
             logger.debug(f"No session count extracted from text: {text[:50]}...")
     except Exception as e:
-        logger.error(f"Failed to extract session count: {e}", exc_info=True, text=text[:50])
+        logger.exception(f"Failed to extract session count (text={text[:50]})")
         return None
     else:
         return session_count

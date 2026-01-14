@@ -205,5 +205,5 @@ def trigger_recompute_on_new_activities(user_id: str) -> None:
     try:
         result = recompute_metrics_for_user(user_id, since_date=since_date)
         logger.info(f"[METRICS] Recomputation triggered successfully: {result}")
-    except Exception as e:
-        logger.error(f"[METRICS] Failed to recompute metrics for user_id={user_id}: {e}", exc_info=True)
+    except Exception:
+        logger.exception(f"[METRICS] Failed to recompute metrics for user_id={user_id}")

@@ -182,7 +182,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
     except TokenRefreshError:
         raise
     except Exception as e:
-        logger.error(f"[SYNC] Failed to get access token for user_id={user_id}: {e!s}", exc_info=True)
+        logger.exception(f"[SYNC] Failed to get access token for user_id={user_id}: {e!s}")
         raise TokenRefreshError(f"Failed to get access token: {e!s}") from e
 
     # Calculate date range (use last_sync_at if available, otherwise last 90 days)
@@ -233,10 +233,10 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         if e.response is not None and e.response.status_code == 429:
             logger.warning(f"[SYNC] Rate limited while fetching activities for user_id={user_id}")
             raise RateLimitError("Rate limited while fetching activities") from e
-        logger.error(f"[SYNC] Failed to fetch activities for user_id={user_id}: {e!s}", exc_info=True)
+        logger.exception(f"[SYNC] Failed to fetch activities for user_id={user_id}: {e!s}")
         raise SyncError(f"Failed to fetch activities: {e!s}") from e
     except Exception as e:
-        logger.error(f"[SYNC] Unexpected error fetching activities for user_id={user_id}: {e!s}", exc_info=True)
+        logger.exception(f"[SYNC] Unexpected error fetching activities for user_id={user_id}: {e!s}")
         raise SyncError(f"Unexpected error fetching activities: {e!s}") from e
 
     # Store activities in database (idempotent upsert)
@@ -395,8 +395,8 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         logger.info(f"[SYNC] Triggering metrics recomputation for user_id={user_id} ({imported_count} new activities)")
         try:
             trigger_recompute_on_new_activities(user_id)
-        except Exception as e:
-            logger.error(f"[SYNC] Failed to trigger metrics recomputation: {e!s}", exc_info=True)
+        except Exception:
+            logger.exception(f"[SYNC] Failed to trigger metrics recomputation")
             # Don't fail the sync if metrics recomputation fails
 
     return {
@@ -484,7 +484,7 @@ def sync_user_activities(user_id: str, max_retries: int = 2) -> dict[str, int | 
                         error_account.sync_failure_count = (error_account.sync_failure_count or 0) + 1
                         error_account.last_sync_error = str(e)
                         error_session.commit()
-                logger.error(f"[SYNC] Unexpected error for user_id={user_id}: {e!s}", exc_info=True)
+                logger.exception(f"[SYNC] Unexpected error for user_id={user_id}: {e!s}")
                 return {"error": f"Unexpected error: {e!s}", "user_id": user_id}
             else:
                 # Success: return result
@@ -521,7 +521,7 @@ def sync_all_users() -> dict[str, int | list[dict[str, int | str]]]:
                 result = sync_user_activities(user_id)
                 results.append(result)
             except Exception as e:
-                logger.error(f"[SYNC] Failed to sync user_id={user_id}: {e!s}", exc_info=True)
+                logger.exception(f"[SYNC] Failed to sync user_id={user_id}: {e!s}")
                 results.append({"error": f"Failed to sync: {e!s}", "user_id": user_id})
 
         successful = sum(1 for r in results if "error" not in r)

@@ -134,11 +134,8 @@ def get_conversation_memory(conversation_id: str) -> dict[str, str | int | None]
             ttl_seconds=ttl_seconds,
         )
     except Exception as e:
-        logger.error(
-            "Failed to get conversation memory snapshot",
-            conversation_id=conversation_id,
-            error=str(e),
-            exc_info=True,
+        logger.exception(
+            f"Failed to get conversation memory snapshot (conversation_id={conversation_id})"
         )
         raise HTTPException(status_code=500, detail=f"Failed to get memory snapshot: {e!s}") from e
     else:

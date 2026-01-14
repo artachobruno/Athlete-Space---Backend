@@ -368,13 +368,8 @@ def save_sessions_to_database(
 
         except Exception as e:
             session.rollback()
-            logger.error(
-                "Failed to save planned sessions to database",
-                user_id=user_id,
-                athlete_id=athlete_id,
-                error_type=type(e).__name__,
-                error_message=str(e),
-                exc_info=True,
+            logger.exception(
+                f"Failed to save planned sessions to database (user_id={user_id}, athlete_id={athlete_id})"
             )
             raise
 
@@ -464,7 +459,7 @@ async def save_planned_sessions(
                     )
                 )
             except Exception:
-                logger.warning("Failed to enqueue persistence retry", exc_info=True)
+                logger.exception("Failed to enqueue persistence retry")
         return {"saved_count": 0, "persistence_status": "degraded"}
 
     try:
@@ -546,7 +541,7 @@ async def save_planned_sessions(
                         )
                     )
                 except Exception:
-                    logger.warning("Failed to enqueue persistence retry", exc_info=True)
+                    logger.exception("Failed to enqueue persistence retry")
             return {"saved_count": 0, "persistence_status": persistence_status}
 
         logger.debug(
@@ -593,20 +588,10 @@ async def save_planned_sessions(
                         )
                     )
                 except Exception:
-                    logger.warning("Failed to enqueue persistence retry", exc_info=True)
+                    logger.exception("Failed to enqueue persistence retry")
     except Exception as e:
-        logger.error(
-            "Failed to persist planned sessions via MCP — continuing",
-            extra={
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "plan_id": plan_id,
-                "user_id": user_id,
-                "athlete_id": athlete_id,
-                "session_count": len(sessions),
-                "plan_type": plan_type,
-            },
-            exc_info=True,
+        logger.exception(
+            f"Failed to persist planned sessions via MCP — continuing (plan_id={plan_id}, user_id={user_id}, athlete_id={athlete_id}, session_count={len(sessions)}, plan_type={plan_type})"
         )
         persistence_status = "degraded"
         # Enqueue retry job (best-effort, never blocks)
@@ -632,7 +617,7 @@ async def save_planned_sessions(
                     )
                 )
             except Exception:
-                logger.warning("Failed to enqueue persistence retry", exc_info=True)
+                logger.exception("Failed to enqueue persistence retry")
         return {"saved_count": 0, "persistence_status": persistence_status}
     else:
         return {"saved_count": saved_count, "persistence_status": persistence_status}

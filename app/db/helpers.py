@@ -102,28 +102,25 @@ def store_activity(
                 raise
             except KeyError as e:
                 # KeyError means missing required field in raw data
-                logger.error(
-                    f"[DATA] KeyError storing activity {activity_id} for athlete_id={user_id}: {e}. "
-                    f"Raw data keys: {list(raw.keys())[:20] if isinstance(raw, dict) else 'N/A'}",
-                    exc_info=True,
+                logger.exception(
+                    f"[DATA] KeyError storing activity {activity_id} for athlete_id={user_id}. "
+                    f"Raw data keys: {list(raw.keys())[:20] if isinstance(raw, dict) else 'N/A'}"
                 )
                 raise
             except Exception as e:
                 error_msg = str(e)
                 # Check if this is a database schema mismatch error for the id column
                 if "invalid input syntax for type integer" in error_msg and "id" in error_msg.lower():
-                    logger.error(
+                    logger.exception(
                         "[DATA] Database schema mismatch: activities.id column is integer but model expects UUID string. "
-                        "Please run migration script: scripts/migrate_activities_id_to_uuid.py",
-                        exc_info=True,
+                        "Please run migration script: scripts/migrate_activities_id_to_uuid.py"
                     )
                     raise ValueError(
                         "Database schema mismatch: activities.id column type does not match model. "
                         "Run migration script: scripts/migrate_activities_id_to_uuid.py"
                     ) from e
-                logger.error(
-                    f"[DATA] Error storing activity {activity_id} for athlete_id={user_id}: {error_msg}. Error type: {type(e).__name__}",
-                    exc_info=True,
+                logger.exception(
+                    f"[DATA] Error storing activity {activity_id} for athlete_id={user_id}. Error type: {type(e).__name__}"
                 )
                 raise
         else:

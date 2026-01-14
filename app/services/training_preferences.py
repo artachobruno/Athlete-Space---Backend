@@ -73,7 +73,7 @@ def extract_and_store_race_info(
     try:
         extracted = extraction_service.extract_race_attributes(combined_goal_text)
     except Exception as e:
-        logger.error(f"Failed to extract race attributes for user_id={user_id}: {e}", exc_info=True)
+        logger.exception(f"Failed to extract race attributes for user_id={user_id}: {e}")
         return None
 
     # Only store if we found meaningful race information

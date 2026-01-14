@@ -66,7 +66,7 @@ def get_settings_profile(user_id: str = Depends(get_current_user_id)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting settings profile: {e}", exc_info=True)
+        logger.exception(f"Error getting settings profile: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get settings profile: {e!s}") from e
 
 
@@ -105,7 +105,7 @@ def update_settings_profile(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating settings profile: {e}", exc_info=True)
+        logger.exception(f"Error updating settings profile: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update settings profile: {e!s}") from e
 
 
@@ -160,5 +160,5 @@ def update_settings_profile_legacy(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating settings profile: {e}", exc_info=True)
+        logger.exception(f"Error updating settings profile: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update settings profile: {e!s}") from e

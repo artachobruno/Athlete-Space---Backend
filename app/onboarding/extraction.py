@@ -106,7 +106,7 @@ class GoalExtractionService:
                 f"event_date={extracted.event_date}, goal_time={extracted.goal_time}",
             )
         except Exception as e:
-            logger.error(f"Failed to extract race attributes: {e}", exc_info=True)
+            logger.exception(f"Failed to extract race attributes: {e}")
             # Return empty attributes on failure (non-blocking)
             return ExtractedRaceAttributes()
         else:
@@ -143,7 +143,7 @@ def extract_injury_attributes(injury_notes: str) -> ExtractedInjuryAttributes:
             f"body_part={extracted.body_part}, recovery_status={extracted.recovery_status}",
         )
     except Exception as e:
-        logger.error(f"Failed to extract injury attributes: {e}", exc_info=True)
+        logger.exception(f"Failed to extract injury attributes: {e}")
         # Return empty attributes on failure (non-blocking)
         return ExtractedInjuryAttributes()
     else:

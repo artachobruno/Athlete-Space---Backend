@@ -102,8 +102,8 @@ def ensure_workout_steps(workout_id: str) -> None:
                     total_distance_meters=workout.total_distance_meters,
                     total_duration_seconds=workout.total_duration_seconds,
                 )
-            except Exception as e:
-                logger.error(f"LLM parsing failed for workout {workout_id}: {e}", exc_info=True)
+            except Exception:
+                logger.exception(f"LLM parsing failed for workout {workout_id}")
                 workout.parse_status = "failed"
                 workout.llm_output_json = {"error": str(e)}
                 session.flush()
@@ -220,6 +220,6 @@ def ensure_workout_steps(workout_id: str) -> None:
                 confidence=parsed.confidence,
             )
 
-    except Exception as e:
+    except Exception:
         # Never raise to caller - log and continue
-        logger.error(f"Error parsing workout {workout_id}: {e}", exc_info=True)
+        logger.exception(f"Error parsing workout {workout_id}")

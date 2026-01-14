@@ -167,7 +167,7 @@ Example inputs (assuming today is {today_str}):
             f"Extraction successful: distance={race_info.distance}, date={race_info.date}, target_time={race_info.target_time}",
         )
     except Exception as e:
-        logger.error(f"Failed to extract race information: {e}", exc_info=True)
+        logger.exception(f"Failed to extract race information: {e}")
         # Return empty information on failure (non-blocking)
         race_info = RaceInformation()
 
@@ -371,7 +371,7 @@ AWAITING SLOTS
             error_type=type(e).__name__,
             error_message=str(e),
         )
-        logger.error(f"Failed to extract training goal: {e}", exc_info=True)
+        logger.exception(f"Failed to extract training goal: {e}")
         # Return empty information on failure (non-blocking)
         goal_info = TrainingGoalInformation()
 
@@ -1055,13 +1055,7 @@ async def create_and_save_plan_new(
         logger.error(
             "Failed to generate race plan",
             error_type=type(e).__name__,
-            error_message=str(e),
-            distance=distance,
-            race_date=race_date.isoformat(),
-            target_time=target_time,
-            user_id=user_id,
-            athlete_id=athlete_id,
-            exc_info=True,
+            f"Failed to generate race plan (distance={distance}, race_date={race_date.isoformat()}, target_time={target_time}, user_id={user_id}, athlete_id={athlete_id})"
         )
         raise RuntimeError(
             f"The AI coach failed to generate a valid training plan. Please retry. (Error: {type(e).__name__}: {e!s})"

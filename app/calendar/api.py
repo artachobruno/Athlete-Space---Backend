@@ -463,9 +463,8 @@ def get_week(user_id: str = Depends(get_current_user_id)):
     except Exception as e:
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-            logger.error(
-                f"[CALENDAR] Database schema error in /calendar/week. Missing column. Returning empty week: {e!r}",
-                exc_info=True,
+            logger.exception(
+                f"[CALENDAR] Database schema error in /calendar/week. Missing column. Returning empty week: {e!r}"
             )
             # Return empty week instead of 500 - migrations will fix this
             return CalendarWeekResponse(
@@ -473,7 +472,7 @@ def get_week(user_id: str = Depends(get_current_user_id)):
                 week_end=sunday.strftime("%Y-%m-%d"),
                 sessions=[],
             )
-        logger.error(f"[CALENDAR] Error in /calendar/week: {e!r}", exc_info=True)
+        logger.exception(f"[CALENDAR] Error in /calendar/week: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to get calendar week: {e!s}") from e
 
 
@@ -564,16 +563,15 @@ def get_today(user_id: str = Depends(get_current_user_id)):
     except Exception as e:
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-            logger.error(
-                f"[CALENDAR] Database schema error in /calendar/today. Missing column. Returning empty day: {e!r}",
-                exc_info=True,
+            logger.exception(
+                f"[CALENDAR] Database schema error in /calendar/today. Missing column. Returning empty day: {e!r}"
             )
             # Return empty day instead of 500 - migrations will fix this
             return CalendarTodayResponse(
                 date=today_str,
                 sessions=[],
             )
-        logger.error(f"[CALENDAR] Error in /calendar/today: {e!r}", exc_info=True)
+        logger.exception(f"[CALENDAR] Error in /calendar/today: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to get calendar today: {e!s}") from e
 
 

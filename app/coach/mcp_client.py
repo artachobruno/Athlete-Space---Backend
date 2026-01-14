@@ -644,9 +644,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     wait_time = min(2**attempt, 10)
                     await asyncio.sleep(wait_time)
                     continue
-                logger.bind(tool=tool_name, error=str(e)).error(
-                    f"Unexpected RuntimeError calling MCP tool: {tool_name}", exc_info=True
-                )
+                logger.exception(f"Unexpected RuntimeError calling MCP tool: {tool_name}")
                 raise MCPError("INTERNAL_ERROR", f"Unexpected error calling {tool_name}: {e!s}") from e
             except Exception as e:
                 logger.bind(
@@ -656,9 +654,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     error=str(e),
                 ).debug("MCP: Unexpected exception")
                 # Don't retry on unknown exceptions
-                logger.bind(tool=tool_name, error=str(e)).error(
-                    f"Unexpected error calling MCP tool: {tool_name}", exc_info=True
-                )
+                logger.exception(f"Unexpected error calling MCP tool: {tool_name}")
                 raise MCPError("INTERNAL_ERROR", f"Unexpected error calling {tool_name}: {e!s}") from e
             else:
                 # Success path - return result

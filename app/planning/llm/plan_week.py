@@ -240,40 +240,22 @@ async def plan_week_llm(input: PlanWeekInput) -> list[SessionSpec]:
                 continue
 
             # Non-retryable validation error or final attempt
-            logger.error(
-                "plan_week_llm: Failed to generate week (validation error)",
-                error_type=type(e).__name__,
-                error_message=error_msg,
-                week_number=input.week_number,
-                phase=input.phase,
-                attempt=attempt + 1,
-                exc_info=True,
+            logger.exception(
+                f"plan_week_llm: Failed to generate week (validation error) (error_type={type(e).__name__}, week_number={input.week_number}, phase={input.phase}, attempt={attempt + 1})"
             )
             raise RuntimeError(f"Failed to generate week plan: {e}") from e
 
         except (WeekVolumeMismatchError, RepairImpossibleError) as e:
             # Volume repair errors - don't retry (these indicate fundamental issues)
-            logger.error(
-                "plan_week_llm: Failed to generate week (volume repair error)",
-                error_type=type(e).__name__,
-                error_message=str(e),
-                week_number=input.week_number,
-                phase=input.phase,
-                attempt=attempt + 1,
-                exc_info=True,
+            logger.exception(
+                f"plan_week_llm: Failed to generate week (volume repair error) (error_type={type(e).__name__}, week_number={input.week_number}, phase={input.phase}, attempt={attempt + 1})"
             )
             raise RuntimeError(f"Failed to generate week plan: {e}") from e
 
         except Exception as e:
             # API errors, network errors, etc. - don't retry
-            logger.error(
-                "plan_week_llm: Failed to generate week (non-retryable error)",
-                error_type=type(e).__name__,
-                error_message=str(e),
-                week_number=input.week_number,
-                phase=input.phase,
-                attempt=attempt + 1,
-                exc_info=True,
+            logger.exception(
+                f"plan_week_llm: Failed to generate week (non-retryable error) (error_type={type(e).__name__}, week_number={input.week_number}, phase={input.phase}, attempt={attempt + 1})"
             )
             raise RuntimeError(f"Failed to generate week plan: {e}") from e
         else:

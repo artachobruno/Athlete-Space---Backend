@@ -170,11 +170,11 @@ class WorkoutExportService:
             export.status = "ready"
             logger.info(f"Export {export_id} completed successfully: {file_path}")
 
-        except Exception as e:
+        except Exception:
             # Update export with error
             export.status = "failed"
-            export.error_message = str(e)
-            logger.error(f"Export {export_id} failed: {e}", exc_info=True)
+            export.error_message = "Export generation failed"
+            logger.exception(f"Export {export_id} failed")
 
         db.flush()
         return export

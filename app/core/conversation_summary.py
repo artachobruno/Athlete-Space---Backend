@@ -229,11 +229,8 @@ async def _extract_summary_via_llm(
             open_threads_count=len(summary.open_threads),
         )
     except Exception as e:
-        logger.error(
-            "Failed to extract conversation summary via LLM",
-            error=str(e),
-            message_count=len(recent_messages),
-            exc_info=True,
+        logger.exception(
+            f"Failed to extract conversation summary via LLM (message_count={len(recent_messages)})"
         )
         raise RuntimeError(f"Failed to extract conversation summary: {e!s}") from e
     else:
@@ -614,12 +611,9 @@ def get_latest_conversation_summary(
                 conversation_id=conversation_id,
                 error=str(e),
             )
-    except Exception as e:
-        logger.error(
-            "Failed to retrieve summary from Postgres",
-            conversation_id=conversation_id,
-            error=str(e),
-            exc_info=True,
+    except Exception:
+        logger.exception(
+            f"Failed to retrieve summary from Postgres (conversation_id={conversation_id})"
         )
         return None
     else:

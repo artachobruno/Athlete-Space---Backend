@@ -170,7 +170,7 @@ def persist_training_preferences(
             profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
             extract_and_store_race_info(session, user_id, settings, profile)
         except Exception as e:
-            logger.error(f"Failed to extract race info during onboarding: {e}", exc_info=True)
+            logger.exception(f"Failed to extract race info during onboarding: {e}")
             # Don't fail onboarding if extraction fails
 
     return settings
@@ -224,7 +224,7 @@ def persist_onboarding_complete(
             injury_notes=request.injury_notes,
         )
     except Exception as e:
-        logger.error(f"Failed to create AthleteProfileUpsert from request: {e}", exc_info=True)
+        logger.exception(f"Failed to create AthleteProfileUpsert from request: {e}")
         raise ValueError(f"Invalid request data: {e!s}") from e
 
     # Use shared service to upsert profile data

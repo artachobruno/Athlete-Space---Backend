@@ -206,11 +206,8 @@ def create_or_update_progress(
             db.expunge(progress)
         except SQLAlchemyError as e:
             db.rollback()
-            logger.error(
-                "Failed to save conversation progress",
-                conversation_id=conversation_id,
-                error=str(e),
-                exc_info=True,
+            logger.exception(
+                f"Failed to save conversation progress (conversation_id={conversation_id})"
             )
             raise
 
@@ -232,10 +229,7 @@ def clear_progress(conversation_id: str) -> None:
                 logger.info("Cleared conversation progress", conversation_id=conversation_id)
             except SQLAlchemyError as e:
                 db.rollback()
-                logger.error(
-                    "Failed to clear conversation progress",
-                    conversation_id=conversation_id,
-                    error=str(e),
-                    exc_info=True,
+                logger.exception(
+                    f"Failed to clear conversation progress (conversation_id={conversation_id})"
                 )
                 raise

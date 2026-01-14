@@ -133,10 +133,7 @@ async def generate_coach_text(
         logger.warning(
             "generate_coach_text: Failed to generate coach text",
             session_type=session.session_type,
-            template_id=template.id,
-            error_type=type(e).__name__,
-            error_message=str(e),
-            exc_info=True,
+            f"Failed to materialize coach text (template_id={template.id}, error_type={type(e).__name__})"
         )
         return None
     else:

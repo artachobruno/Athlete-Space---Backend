@@ -57,12 +57,8 @@ class IntelligenceFailureHandler:
         try:
             plan = SeasonPlan(**plan_model.plan_data)
         except Exception as e:
-            logger.error(
-                "Failed to parse season plan, returning unavailable",
-                plan_id=plan_model.id,
-                athlete_id=athlete_id,
-                error=str(e),
-                exc_info=True,
+            logger.exception(
+                f"Failed to parse season plan, returning unavailable (plan_id={plan_model.id}, athlete_id={athlete_id})"
             )
             return {
                 "unavailable": True,
@@ -110,12 +106,8 @@ class IntelligenceFailureHandler:
         try:
             intent = WeeklyIntent(**intent_model.intent_data)
         except Exception as e:
-            logger.error(
-                "Failed to parse weekly intent, returning unavailable",
-                intent_id=intent_model.id,
-                athlete_id=athlete_id,
-                error=str(e),
-                exc_info=True,
+            logger.exception(
+                f"Failed to parse weekly intent, returning unavailable (intent_id={intent_model.id}, athlete_id={athlete_id})"
             )
             return {
                 "unavailable": True,
@@ -167,12 +159,8 @@ class IntelligenceFailureHandler:
         try:
             decision = DailyDecision(**decision_model.decision_data)
         except Exception as e:
-            logger.error(
-                "Failed to parse daily decision, returning unavailable",
-                decision_id=decision_model.id,
-                athlete_id=athlete_id,
-                error=str(e),
-                exc_info=True,
+            logger.exception(
+                f"Failed to parse daily decision, returning unavailable (decision_id={decision_model.id}, athlete_id={athlete_id})"
             )
             return {
                 "unavailable": True,

@@ -113,11 +113,8 @@ async def _generate_daily_decision_on_demand(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            f"Failed to generate daily decision on-demand for "
-            f"user_id={user_id}, athlete_id={athlete_id}, "
-            f"decision_date={decision_date.isoformat()}: {e}",
-            exc_info=True,
+        logger.exception(
+            f"Failed to generate daily decision on-demand for user_id={user_id}, athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
         )
         # Diagnostic: Check if user has activities/data available
         with get_session() as session:
@@ -201,12 +198,8 @@ def get_season_plan(user_id: str = Depends(get_current_user_id)):
     try:
         plan = SeasonPlan(**plan_model.plan_data)
     except Exception as e:
-        logger.error(
-            "Failed to parse season plan",
-            plan_id=plan_model.id,
-            athlete_id=athlete_id,
-            error=str(e),
-            exc_info=True,
+        logger.exception(
+            f"Failed to parse season plan (plan_id={plan_model.id}, athlete_id={athlete_id})"
         )
         raise HTTPException(
             status_code=500,
@@ -266,12 +259,8 @@ def get_weekly_intent(
     try:
         intent = WeeklyIntent(**intent_model.intent_data)
     except Exception as e:
-        logger.error(
-            "Failed to parse weekly intent",
-            intent_id=intent_model.id,
-            athlete_id=athlete_id,
-            error=str(e),
-            exc_info=True,
+        logger.exception(
+            f"Failed to parse weekly intent (intent_id={intent_model.id}, athlete_id={athlete_id})"
         )
         raise HTTPException(
             status_code=500,
@@ -340,12 +329,8 @@ async def get_daily_decision(
     try:
         decision = DailyDecision(**decision_model.decision_data)
     except Exception as e:
-        logger.error(
-            "Failed to parse daily decision",
-            decision_id=decision_model.id,
-            athlete_id=athlete_id,
-            error=str(e),
-            exc_info=True,
+        logger.exception(
+            f"Failed to parse daily decision (decision_id={decision_model.id}, athlete_id={athlete_id})"
         )
         raise HTTPException(
             status_code=500,
@@ -407,12 +392,8 @@ def get_weekly_report(
     try:
         report = WeeklyReport(**report_model.report_data)
     except Exception as e:
-        logger.error(
-            "Failed to parse weekly report",
-            report_id=report_model.id,
-            athlete_id=athlete_id,
-            error=str(e),
-            exc_info=True,
+        logger.exception(
+            f"Failed to parse weekly report (report_id={report_model.id}, athlete_id={athlete_id})"
         )
         raise HTTPException(
             status_code=500,

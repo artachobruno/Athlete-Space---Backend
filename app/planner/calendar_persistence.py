@@ -297,13 +297,7 @@ def _persist_week_sessions(
 
             except Exception as e:
                 logger.error(
-                    "B7: Failed to persist session",
-                    week_index=week.week_index,
-                    day_index=day_idx,
-                    session_order=session_order,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                    exc_info=True,
+                    f"B7: Failed to persist session (week_index={week.week_index}, day_index={day_idx}, session_order={session_order}, error_type={type(e).__name__})"
                 )
                 week_warnings.append(f"Week {week.week_index}, day {day_idx}: Failed to persist: {e}")
                 week_skipped += 1
@@ -382,13 +376,7 @@ def _upsert_session(
             week_index=week.week_index,
             day_index=planned_session.day_index,
             session_order=session_order,
-            user_id=user_id,
-            athlete_id=athlete_id,
-            plan_id=plan_id,
-            date=session_datetime.isoformat() if session_datetime else None,
-            error=str(e),
-            error_type=type(e).__name__,
-            exc_info=True,
+            f"B7: Failed to persist session (user_id={user_id}, athlete_id={athlete_id}, plan_id={plan_id}, date={session_datetime.isoformat() if session_datetime else None}, error_type={type(e).__name__})"
         )
         raise
 
@@ -443,13 +431,7 @@ def _upsert_session(
         db_session.add(db_session_obj)
     except Exception as e:
         logger.error(
-            "B7: Failed to create new session object",
-            week_index=week.week_index,
-            day_index=planned_session.day_index,
-            session_order=session_order,
-            error=str(e),
-            error_type=type(e).__name__,
-            exc_info=True,
+            f"B7: Failed to create new session object (week_index={week.week_index}, day_index={planned_session.day_index}, session_order={session_order}, error_type={type(e).__name__})"
         )
         raise
 

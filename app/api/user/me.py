@@ -350,7 +350,7 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 raise
             except Exception as e:
                 # Catch any other unexpected errors in user lookup
-                logger.error(f"[API] /me: Unexpected error getting user info for user_id={user_id}: {e!r}", exc_info=True)
+                logger.exception(f"[API] /me: Unexpected error getting user info for user_id={user_id}: {e!r}")
                 raise HTTPException(
                     status_code=500,
                     detail="Internal server error: Failed to retrieve user information. Please try again.",
@@ -488,17 +488,14 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 "notifications": None,
                 "privacy": None,
             }
-        logger.error(f"[API] /me: Unhandled ProgrammingError for user_id={user_id}: {e!r}", exc_info=True)
+        logger.exception(f"[API] /me: Unhandled ProgrammingError for user_id={user_id}: {e!r}")
         raise HTTPException(
             status_code=500,
             detail="Internal server error: Database query failed. Please try again.",
         ) from e
-    except Exception as e:
+    except Exception:
         # Catch-all for any other unexpected errors
-        logger.error(
-            f"[API] /me: Unexpected error for user_id={user_id}: {e!r}",
-            exc_info=True,
-        )
+        logger.exception(f"[API] /me: Unexpected error for user_id={user_id}")
         raise HTTPException(
             status_code=500,
             detail="Internal server error: An unexpected error occurred. Please try again.",
@@ -889,11 +886,8 @@ def _maybe_trigger_aggregation(user_id: str, activity_count: int, daily_rows: li
             with get_session() as session:
                 daily_rows = get_daily_rows(session, user_id, days=days)
             logger.info(f"[API] /me/overview: Aggregation completed, now have {len(daily_rows)} daily rows (requested {days} days)")
-        except Exception as e:
-            logger.error(
-                f"[API] /me/overview: Failed to auto-aggregate for user_id={user_id}: {e}",
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception(f"[API] /me/overview: Failed to auto-aggregate for user_id={user_id}")
     return daily_rows
 
 
@@ -1062,7 +1056,7 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
                 try:
                     history_backfill_task(user_id)
                 except Exception as e:
-                    logger.error(f"[API] History backfill failed for user_id={user_id}: {e}", exc_info=True)
+                    logger.exception(f"[API] History backfill failed for user_id={user_id}: {e}")
 
             threading.Thread(target=trigger_backfill, daemon=True).start()
         except Exception as e:
@@ -1123,7 +1117,7 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
             f"(date range: {start_date.isoformat()} to {end_date.isoformat()})"
         )
     except Exception as e:
-        logger.error(f"[API] /me/overview: Error reading from DailyTrainingLoad: {e}", exc_info=True)
+        logger.exception(f"[API] /me/overview: Error reading from DailyTrainingLoad: {e}")
         metrics_result = {"ctl": [], "atl": [], "tsb": []}
 
     today_metrics = _extract_today_metrics(metrics_result)
@@ -1331,7 +1325,7 @@ def get_debug_data(user_id: str = Depends(get_current_user_id)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting debug data: {e}", exc_info=True)
+        logger.exception(f"Error getting debug data: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get debug data: {e!s}") from e
 
 
@@ -1369,7 +1363,7 @@ def check_recent_activities(
                         f"imported={result.get('imported', 0)}, skipped={result.get('skipped', 0)}"
                     )
             except Exception as e:
-                logger.error(f"[API] Error in sync check task for user_id={user_id}: {e}", exc_info=True)
+                logger.exception(f"[API] Error in sync check task for user_id={user_id}: {e}")
 
         background_tasks.add_task(sync_task)
 
@@ -1383,7 +1377,7 @@ def check_recent_activities(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error checking recent activities: {e}", exc_info=True)
+        logger.exception(f"Error checking recent activities: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to check recent activities: {e!s}") from e
 
 
@@ -1422,7 +1416,7 @@ def trigger_sync_now(
                         f"total_fetched={result.get('total_fetched', 0)}"
                     )
             except Exception as e:
-                logger.error(f"[API] Error in manual sync task for user_id={user_id}: {e}", exc_info=True)
+                logger.exception(f"[API] Error in manual sync task for user_id={user_id}: {e}")
 
         background_tasks.add_task(sync_task)
 
@@ -1436,7 +1430,7 @@ def trigger_sync_now(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error triggering manual sync: {e}", exc_info=True)
+        logger.exception(f"Error triggering manual sync: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to trigger sync: {e!s}") from e
 
 
@@ -1475,7 +1469,7 @@ def trigger_history_sync(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error triggering history sync: {e}", exc_info=True)
+        logger.exception(f"Error triggering history sync: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to trigger history sync: {e!s}") from e
 
 
@@ -1558,9 +1552,8 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
             )
     except ProgrammingError as e:
         # Database schema error (missing column, table, etc.)
-        logger.error(
-            f"Database schema mismatch detected for profile endpoint. Missing column/table in database. Run migrations: {e!r}",
-            exc_info=True,
+        logger.exception(
+            f"Database schema mismatch detected for profile endpoint. Missing column/table in database. Run migrations: {e!r}"
         )
         raise HTTPException(
             status_code=500,
@@ -1569,7 +1562,7 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting profile: {e!r}", exc_info=True)
+        logger.exception(f"Error getting profile: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to get profile: {e!s}") from e
 
 
@@ -1923,12 +1916,12 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
     except Exception as e:
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-            logger.error(f"Database schema mismatch detected for profile update. Missing column. Run migrations: {e!r}", exc_info=True)
+            logger.exception(f"Database schema mismatch detected for profile update. Missing column. Run migrations: {e!r}")
             with get_session() as session:
                 user_result = session.execute(select(User).where(User.id == user_id)).first()
                 user_email = user_result[0].email if user_result else None
             return _build_response_from_request(request, None, user_email)
-        logger.error(f"Error updating profile: {e!r}", exc_info=True)
+        logger.exception(f"Error updating profile: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to update profile: {e!s}") from e
 
 
@@ -1980,13 +1973,12 @@ def get_training_preferences(user_id: str = Depends(get_current_user_id)):
         # Check if this is a database schema error (missing column)
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-            logger.error(
-                f"Database schema mismatch detected for training preferences. Missing column in database. Run migrations: {e!r}",
-                exc_info=True,
+            logger.exception(
+                f"Database schema mismatch detected for training preferences. Missing column in database. Run migrations: {e!r}"
             )
             # Return defaults instead of 500 - migrations will fix this
             return TrainingPreferencesResponse()
-        logger.error(f"Error getting training preferences: {e!r}", exc_info=True)
+        logger.exception(f"Error getting training preferences: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to get training preferences: {e!s}") from e
 
 
@@ -2051,7 +2043,7 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
                     profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
                     extract_and_store_race_info(session, user_id, settings, profile)
                 except Exception as e:
-                    logger.error(f"Failed to extract race info during preference update: {e}", exc_info=True)
+                    logger.exception(f"Failed to extract race info during preference update: {e}")
                     # Don't fail the request if extraction fails
 
             session.refresh(settings)
@@ -2073,7 +2065,7 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating training preferences: {e}", exc_info=True)
+        logger.exception(f"Error updating training preferences: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update training preferences: {e!s}") from e
 
 
@@ -2113,9 +2105,8 @@ def get_privacy_settings(user_id: str = Depends(get_current_user_id)):
         # Check if this is a database schema error (missing column)
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-            logger.error(
-                f"Database schema mismatch detected for privacy settings. Missing column in database. Run migrations: {e!r}",
-                exc_info=True,
+            logger.exception(
+                f"Database schema mismatch detected for privacy settings. Missing column in database. Run migrations: {e!r}"
             )
             # Return defaults instead of 500 - migrations will fix this
             return PrivacySettingsResponse(
@@ -2123,7 +2114,7 @@ def get_privacy_settings(user_id: str = Depends(get_current_user_id)):
                 share_activity_data=False,
                 share_training_metrics=False,
             )
-        logger.error(f"Error getting privacy settings: {e!r}", exc_info=True)
+        logger.exception(f"Error getting privacy settings: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to get privacy settings: {e!s}") from e
 
 
@@ -2169,7 +2160,7 @@ def update_privacy_settings(request: PrivacySettingsUpdateRequest, user_id: str 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating privacy settings: {e}", exc_info=True)
+        logger.exception(f"Error updating privacy settings: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update privacy settings: {e!s}") from e
 
 
@@ -2219,9 +2210,8 @@ def get_notifications(user_id: str = Depends(get_current_user_id)):
         # Check if this is a database schema error (missing column)
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-            logger.error(
-                f"Database schema mismatch detected for notifications. Missing column in database. Run migrations: {e!r}",
-                exc_info=True,
+            logger.exception(
+                f"Database schema mismatch detected for notifications. Missing column in database. Run migrations: {e!r}"
             )
             # Return defaults instead of 500 - migrations will fix this
             return NotificationsResponse(
@@ -2234,7 +2224,7 @@ def get_notifications(user_id: str = Depends(get_current_user_id)):
                 goal_achievements=True,
                 coach_messages=True,
             )
-        logger.error(f"Error getting notifications: {e!r}", exc_info=True)
+        logger.exception(f"Error getting notifications: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to get notifications: {e!s}") from e
 
 
@@ -2286,7 +2276,7 @@ def update_notifications(request: NotificationsUpdateRequest, user_id: str = Dep
                 coach_messages=settings.coach_messages,
             )
     except Exception as e:
-        logger.error(f"Error updating notifications: {e}", exc_info=True)
+        logger.exception(f"Error updating notifications: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update notifications: {e!s}") from e
 
 
@@ -2341,7 +2331,7 @@ def update_timezone(request: TimezoneUpdateRequest, user_id: str = Depends(get_c
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating timezone: {e}", exc_info=True)
+        logger.exception(f"Error updating timezone: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update timezone: {e!s}") from e
 
 
@@ -2409,7 +2399,7 @@ def delete_account(user_id: str = Depends(get_current_user_id)):
                 "message": "Account and all associated data have been deleted",
             }
     except Exception as e:
-        logger.error(f"Error deleting account: {e}", exc_info=True)
+        logger.exception(f"Error deleting account: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete account: {e!s}") from e
 
 
@@ -2562,7 +2552,7 @@ def export_data(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error exporting data: {e}", exc_info=True)
+        logger.exception(f"Error exporting data: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export data: {e!s}") from e
 
 
@@ -2616,7 +2606,7 @@ def delete_local_data(user_id: str = Depends(get_current_user_id)):
                 "message": "All training data has been deleted. Your account and preferences remain intact.",
             }
     except Exception as e:
-        logger.error(f"Error deleting training data: {e}", exc_info=True)
+        logger.exception(f"Error deleting training data: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete training data: {e!s}") from e
 
 
@@ -2702,5 +2692,5 @@ def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_c
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error changing password: {e}", exc_info=True)
+        logger.exception(f"Error changing password: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to change password: {e!s}") from e

@@ -286,7 +286,7 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
 
             return generate_season_plan_response(season_start, season_end, saved_count, total_weeks)
         except Exception as e:
-            logger.error(f"Error generating season plan: {e}", exc_info=True)
+            logger.exception(f"Error generating season plan: {e}")
             raise RuntimeError(
                 "The AI coach failed to generate a valid training plan. Please retry."
             ) from e

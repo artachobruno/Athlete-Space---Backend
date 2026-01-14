@@ -102,14 +102,10 @@ def get_prompt_history(conversation_id: str, limit: int | None = None) -> list[M
     # Read messages from Redis (read-only, no mutation)
     try:
         raw_messages = get_recent_messages(conversation_id, effective_limit)
-    except Exception as e:
+    except Exception:
         # Redis read failure - log error and return empty history
-        logger.error(
-            "Failed to retrieve messages from Redis",
-            conversation_id=conversation_id,
-            error=str(e),
-            exc_info=True,
-            event="prompt_history_retrieval_failed",
+        logger.exception(
+            f"Failed to retrieve messages from Redis (conversation_id={conversation_id})"
         )
         return []
 

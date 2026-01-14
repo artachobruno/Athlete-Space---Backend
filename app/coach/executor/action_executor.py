@@ -312,12 +312,8 @@ class CoachActionExecutor:
                 error_message=str(e),
                 error_class=type(e).__module__ + "." + type(e).__name__,
             )
-            logger.warning(
-                "Failed to summarize conversation after tool execution",
-                conversation_id=conversation_id,
-                error=str(e),
-                error_type=type(e).__name__,
-                exc_info=True,
+            logger.exception(
+                f"Failed to summarize conversation after tool execution (conversation_id={conversation_id}, error_type={type(e).__name__})"
             )
 
     @staticmethod
@@ -1066,13 +1062,7 @@ class CoachActionExecutor:
                 "Slot validation failed despite should_execute=True - this should not happen",
                 tool=tool_name,
                 missing_slots=missing_slots,
-                filled_slots=slots,
-                filled_slots_keys=list(slots.keys()) if slots else [],
-                filled_slots_values={k: str(v) if v is not None else "None" for k, v in (slots.items() if slots else [])},
-                should_execute=decision.should_execute,
-                target_action=decision.target_action,
-                conversation_id=conversation_id,
-                exc_info=True,
+                f"ActionExecutor: Validation error (conversation_id={conversation_id}, should_execute={decision.should_execute}, target_action={decision.target_action})"
             )
             # Return clarification without side effects
             return generate_clarification_for_missing_slots(tool_name, missing_slots)

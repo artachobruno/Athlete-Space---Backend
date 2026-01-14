@@ -283,10 +283,7 @@ def execute_week_plan(
         logger.error(
             "[EXECUTION] Week plan execution failed",
             user_id=user_id,
-            plan_id=plan_id,
-            week_index=week_plan.week_index,
-            error=str(e),
-            exc_info=True,
+            f"Failed to execute plan (plan_id={plan_id}, week_index={week_plan.week_index})"
         )
         return ExecutionResult(
             status="ERROR",

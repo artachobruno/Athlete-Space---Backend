@@ -174,7 +174,7 @@ def get_coach_context(user_id: str = Depends(get_current_user_id)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting overview for coach context: {e}", exc_info=True)
+        logger.exception(f"Error getting overview for coach context: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get overview: {e!s}") from e
     else:
         return build_coach_context(overview)
@@ -274,7 +274,7 @@ def get_coach_observations(user_id: str = Depends(get_current_user_id)):
             total=len(observations),
         )
     except Exception as e:
-        logger.error(f"Error getting coach observations: {e}", exc_info=True)
+        logger.exception(f"Error getting coach observations: {e}")
         return CoachObservationsResponse(
             observations=[],
             total=0,
@@ -343,7 +343,7 @@ def get_coach_recommendations(user_id: str = Depends(get_current_user_id)):
             total=len(recommendations),
         )
     except Exception as e:
-        logger.error(f"Error getting coach recommendations: {e}", exc_info=True)
+        logger.exception(f"Error getting coach recommendations: {e}")
         return CoachRecommendationsResponse(
             recommendations=[],
             total=0,
@@ -414,7 +414,7 @@ def get_coach_confidence(user_id: str = Depends(get_current_user_id)):
             last_updated=now.isoformat(),
         )
     except Exception as e:
-        logger.error(f"Error getting coach confidence: {e}", exc_info=True)
+        logger.exception(f"Error getting coach confidence: {e}")
         return CoachConfidenceResponse(
             overall=0.30,
             data_quality=0.30,
@@ -480,7 +480,7 @@ def ask_coach_endpoint(request: CoachAskRequest, user_id: str = Depends(get_curr
             timestamp=now.isoformat(),
         )
     except Exception as e:
-        logger.error(f"Error in coach ask endpoint: {e}", exc_info=True)
+        logger.exception(f"Error in coach ask endpoint: {e}")
         return CoachAskResponse(
             reply=(
                 "I encountered an error processing your question. "

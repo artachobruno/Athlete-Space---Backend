@@ -97,9 +97,8 @@ async def _generate_daily_decisions_async() -> None:
             elif skipped:
                 skipped_count += 1
         except Exception as e:
-            logger.error(
-                f"Failed to generate daily decision for user_id={user_id}, athlete_id={athlete_id}: {e}",
-                exc_info=True,
+            logger.exception(
+                f"Failed to generate daily decision for user_id={user_id}, athlete_id={athlete_id}"
             )
             error_count += 1
 

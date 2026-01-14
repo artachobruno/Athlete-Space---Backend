@@ -330,7 +330,7 @@ def fetch_activity_streams(
         try:
             success = fetch_and_save_streams(session, client, activity)
         except Exception as e:
-            logger.error(f"[ACTIVITIES] Error fetching streams for activity {activity_id}: {e}", exc_info=True)
+            logger.exception(f"[ACTIVITIES] Error fetching streams for activity {activity_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to fetch streams data: {e!s}",
@@ -561,7 +561,7 @@ def upload_activity_file(
             detail=f"Failed to parse activity file: {e!s}",
         ) from e
     except Exception as e:
-        logger.error(f"[UPLOAD] Unexpected parse error: {e}", exc_info=True)
+        logger.exception(f"[UPLOAD] Unexpected parse error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to parse activity file",
@@ -663,7 +663,7 @@ def upload_activity_file(
                 trigger_recompute_on_new_activities(user_id)
                 logger.info(f"[UPLOAD] Metrics recomputation triggered for user_id={user_id}")
             except Exception as e:
-                logger.error(f"[UPLOAD] Failed to trigger metrics recomputation: {e}", exc_info=True)
+                logger.exception(f"[UPLOAD] Failed to trigger metrics recomputation: {e}")
                 # Don't fail the upload if metrics recomputation fails
 
         except IntegrityError as e:
@@ -690,7 +690,7 @@ def upload_activity_file(
             ) from e
         except Exception as e:
             session.rollback()
-            logger.error(f"[UPLOAD] Failed to save activity: {e}", exc_info=True)
+            logger.exception(f"[UPLOAD] Failed to save activity: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to save activity",
@@ -777,7 +777,7 @@ def unpair_activity(
             )
         except Exception as e:
             session.rollback()
-            logger.error(f"[UNPAIR] Failed to unpair activity {activity_id}: {e}", exc_info=True)
+            logger.exception(f"[UNPAIR] Failed to unpair activity {activity_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to unpair activity",

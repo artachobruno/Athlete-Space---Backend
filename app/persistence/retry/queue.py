@@ -52,8 +52,8 @@ def enqueue_retry(job: PlannedSessionRetryJob) -> None:
         }
         redis_client.rpush(QUEUE_KEY, json.dumps(job_dict))
         logger.bind(plan_id=job.plan_id, attempts=job.attempts).debug("Enqueued persistence retry job")
-    except Exception as e:
-        logger.bind(plan_id=job.plan_id, error=str(e)).warning("Failed to enqueue persistence retry", exc_info=True)
+    except Exception:
+        logger.exception(f"Failed to enqueue persistence retry (plan_id={job.plan_id})")
 
 
 def dequeue_retry() -> PlannedSessionRetryJob | None:
@@ -85,6 +85,6 @@ def dequeue_retry() -> PlannedSessionRetryJob | None:
             created_at=data["created_at"],
             attempts=data["attempts"],
         )
-    except Exception as e:
-        logger.bind(error=str(e)).warning("Failed to dequeue persistence retry job", exc_info=True)
+    except Exception:
+        logger.exception("Failed to dequeue persistence retry job")
         return None

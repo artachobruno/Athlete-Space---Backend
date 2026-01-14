@@ -151,7 +151,7 @@ def initialize_database() -> None:
         Base.metadata.create_all(bind=db_engine)
         logger.info("Database tables verified")
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}", exc_info=True)
+        logger.exception(f"Database initialization failed: {e}")
         raise
 
     # Run migrations for derived tables
@@ -162,7 +162,7 @@ def initialize_database() -> None:
         migrate_strava_accounts()
     except Exception as e:
         migration_errors.append(f"migrate_strava_accounts: {e}")
-        logger.error(f"Migration failed: migrate_strava_accounts - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_strava_accounts - {e}")
 
     try:
         logger.info("Running migration: user authentication fields")
@@ -170,7 +170,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: user authentication fields")
     except Exception as e:
         migration_errors.append(f"migrate_user_auth_fields: {e}")
-        logger.error(f"✗ Migration failed: migrate_user_auth_fields - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_user_auth_fields - {e}")
 
     try:
         logger.info("Running migration: Google OAuth fields")
@@ -178,7 +178,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: Google OAuth fields")
     except Exception as e:
         migration_errors.append(f"migrate_add_google_oauth_fields: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_google_oauth_fields - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_google_oauth_fields - {e}")
 
     try:
         logger.info("Running migration: add is_active to users table")
@@ -186,7 +186,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: add is_active to users table")
     except Exception as e:
         migration_errors.append(f"migrate_add_user_is_active: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_user_is_active - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_user_is_active - {e}")
 
     try:
         logger.info("Running migration: add role to users table")
@@ -194,7 +194,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: add role to users table")
     except Exception as e:
         migration_errors.append(f"migrate_add_user_role: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_user_role - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_user_role - {e}")
 
     try:
         logger.info("Running migration: add first_name and last_name to users table")
@@ -202,7 +202,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: add first_name and last_name to users table")
     except Exception as e:
         migration_errors.append(f"migrate_add_user_name_fields: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_user_name_fields - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_user_name_fields - {e}")
 
     try:
         logger.info("Running migration: athlete_profiles athlete_id column")
@@ -210,7 +210,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: athlete_profiles athlete_id column")
     except Exception as e:
         migration_errors.append(f"migrate_add_athlete_id_to_profiles: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_athlete_id_to_profiles - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_athlete_id_to_profiles - {e}")
 
     try:
         logger.info("Running migration: athlete_profiles target_races column")
@@ -218,7 +218,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: athlete_profiles target_races column")
     except Exception as e:
         migration_errors.append(f"migrate_add_target_races: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_target_races - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_target_races - {e}")
 
     try:
         logger.info("Running migration: athlete_profiles extracted_race_attributes column")
@@ -226,7 +226,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: athlete_profiles extracted_race_attributes column")
     except Exception as e:
         migration_errors.append(f"migrate_add_extracted_race_attributes: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_extracted_race_attributes - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_extracted_race_attributes - {e}")
 
     try:
         logger.info("Running migration: athlete_profiles extracted_injury_attributes column")
@@ -234,7 +234,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: athlete_profiles extracted_injury_attributes column")
     except Exception as e:
         migration_errors.append(f"migrate_add_extracted_injury_attributes: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_extracted_injury_attributes - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_extracted_injury_attributes - {e}")
 
     try:
         logger.info("Running migration: athlete_profiles health and constraint fields")
@@ -242,7 +242,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: athlete_profiles health and constraint fields")
     except Exception as e:
         migration_errors.append(f"migrate_add_profile_health_fields: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_profile_health_fields - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_profile_health_fields - {e}")
 
     try:
         logger.info("Running migration: athlete_profiles imperial fields (height_in, weight_lbs)")
@@ -250,7 +250,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: athlete_profiles imperial fields")
     except Exception as e:
         migration_errors.append(f"migrate_add_imperial_profile_fields: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_imperial_profile_fields - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_imperial_profile_fields - {e}")
 
     try:
         logger.info("Running migration: planned_sessions athlete_id column")
@@ -258,7 +258,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: planned_sessions athlete_id column")
     except Exception as e:
         migration_errors.append(f"migrate_add_athlete_id_to_planned_sessions: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_athlete_id_to_planned_sessions - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_athlete_id_to_planned_sessions - {e}")
 
     try:
         logger.info("Running migration: planned_sessions completion tracking columns")
@@ -266,7 +266,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: planned_sessions completion tracking columns")
     except Exception as e:
         migration_errors.append(f"migrate_add_planned_session_completion_fields: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_planned_session_completion_fields - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_planned_session_completion_fields - {e}")
 
     try:
         logger.info("Running migration: planned_sessions session_order column")
@@ -274,7 +274,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: planned_sessions session_order column")
     except Exception as e:
         migration_errors.append(f"migrate_add_session_order_to_planned_sessions: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_session_order_to_planned_sessions - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_session_order_to_planned_sessions - {e}")
 
     try:
         logger.info("Running migration: planned_sessions phase column")
@@ -282,7 +282,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: planned_sessions phase column")
     except Exception as e:
         migration_errors.append(f"migrate_add_phase_to_planned_sessions: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_phase_to_planned_sessions - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_phase_to_planned_sessions - {e}")
 
     try:
         logger.info("Running migration: planned_sessions source column")
@@ -290,7 +290,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: planned_sessions source column")
     except Exception as e:
         migration_errors.append(f"migrate_add_source_to_planned_sessions: {e}")
-        logger.error(f"✗ Migration failed: migrate_add_source_to_planned_sessions - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_add_source_to_planned_sessions - {e}")
 
     try:
         logger.info("Running migration: activities id column (integer to UUID)")
@@ -298,19 +298,19 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: activities id column")
     except Exception as e:
         migration_errors.append(f"migrate_activities_id_to_uuid: {e}")
-        logger.error(f"✗ Migration failed: migrate_activities_id_to_uuid - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_activities_id_to_uuid - {e}")
 
     try:
         migrate_activities_schema()
     except Exception as e:
         migration_errors.append(f"migrate_activities_schema: {e}")
-        logger.error(f"Migration failed: migrate_activities_schema - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_activities_schema - {e}")
 
     try:
         migrate_activities_user_id()
     except Exception as e:
         migration_errors.append(f"migrate_activities_user_id: {e}")
-        logger.error(f"Migration failed: migrate_activities_user_id - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_activities_user_id - {e}")
 
     try:
         logger.info("Running migration: drop obsolete activity_id column")
@@ -318,7 +318,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: drop activity_id column")
     except Exception as e:
         migration_errors.append(f"migrate_drop_activity_id: {e}")
-        logger.error(f"✗ Migration failed: migrate_drop_activity_id - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_drop_activity_id - {e}")
 
     try:
         logger.info("Running migration: drop obsolete activity columns")
@@ -326,7 +326,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: drop obsolete activity columns")
     except Exception as e:
         migration_errors.append(f"migrate_drop_obsolete_activity_columns: {e}")
-        logger.error(f"✗ Migration failed: migrate_drop_obsolete_activity_columns - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_drop_obsolete_activity_columns - {e}")
 
     try:
         logger.info("Running migration: convert athlete_id to string")
@@ -334,7 +334,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: convert athlete_id to string")
     except Exception as e:
         migration_errors.append(f"migrate_athlete_id_to_string: {e}")
-        logger.error(f"✗ Migration failed: migrate_athlete_id_to_string - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_athlete_id_to_string - {e}")
 
     try:
         logger.info("Running migration: set source column default")
@@ -342,25 +342,25 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: set source column default")
     except Exception as e:
         migration_errors.append(f"migrate_activities_source_default: {e}")
-        logger.error(f"✗ Migration failed: migrate_activities_source_default - {e}", exc_info=True)
+        logger.exception(f"✗ Migration failed: migrate_activities_source_default - {e}")
 
     try:
         migrate_daily_summary()
     except Exception as e:
         migration_errors.append(f"migrate_daily_summary: {e}")
-        logger.error(f"Migration failed: migrate_daily_summary - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_daily_summary - {e}")
 
     try:
         migrate_daily_summary_user_id()
     except Exception as e:
         migration_errors.append(f"migrate_daily_summary_user_id: {e}")
-        logger.error(f"Migration failed: migrate_daily_summary_user_id - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_daily_summary_user_id - {e}")
 
     try:
         migrate_history_cursor()
     except Exception as e:
         migration_errors.append(f"migrate_history_cursor: {e}")
-        logger.error(f"Migration failed: migrate_history_cursor - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_history_cursor - {e}")
 
     try:
         logger.info("Running migration: strava_accounts sync tracking columns")
@@ -368,7 +368,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: strava_accounts sync tracking columns")
     except Exception as e:
         migration_errors.append(f"migrate_strava_accounts_sync_tracking: {e}")
-        logger.error(f"Migration failed: migrate_strava_accounts_sync_tracking - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_strava_accounts_sync_tracking - {e}")
 
     try:
         logger.info("Running migration: coach_messages schema update")
@@ -376,7 +376,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: coach_messages schema update")
     except Exception as e:
         migration_errors.append(f"migrate_coach_messages_schema: {e}")
-        logger.error(f"Migration failed: migrate_coach_messages_schema - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_coach_messages_schema - {e}")
 
     try:
         logger.info("Running migration: onboarding data fields")
@@ -384,7 +384,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: onboarding data fields")
     except Exception as e:
         migration_errors.append(f"migrate_onboarding_data_fields: {e}")
-        logger.error(f"Migration failed: migrate_onboarding_data_fields - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_onboarding_data_fields - {e}")
 
     try:
         logger.info("Running migration: user_settings fields")
@@ -392,7 +392,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: user_settings fields")
     except Exception as e:
         migration_errors.append(f"migrate_user_settings_fields: {e}")
-        logger.error(f"Migration failed: migrate_user_settings_fields - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_user_settings_fields - {e}")
 
     # ⚠️ ONE-TIME MIGRATION: Add threshold fields (ftp_watts, threshold_pace_ms, threshold_hr)
     # This migration is idempotent (checks column existence before adding).
@@ -407,10 +407,9 @@ def initialize_database() -> None:
         # Non-blocking: app continues even if migration fails
         # Migration will be retried on next startup, or can be run manually
         migration_errors.append(f"migrate_add_user_threshold_fields: {e}")
-        logger.error(
+        logger.exception(
             f"Migration failed: migrate_add_user_threshold_fields - {e} "
-            "(App will continue, but schema may be incomplete. Run manually: python scripts/migrate_add_user_threshold_fields.py)",
-            exc_info=True,
+            "(App will continue, but schema may be incomplete. Run manually: python scripts/migrate_add_user_threshold_fields.py)"
         )
 
     try:
@@ -419,7 +418,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: LLM metadata fields and composite indexes")
     except Exception as e:
         migration_errors.append(f"migrate_llm_metadata_fields: {e}")
-        logger.error(f"Migration failed: migrate_llm_metadata_fields - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_llm_metadata_fields - {e}")
 
     try:
         logger.info("Running migration: add streams_data column to activities")
@@ -427,7 +426,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: add streams_data column to activities")
     except Exception as e:
         migration_errors.append(f"migrate_add_streams_data: {e}")
-        logger.error(f"Migration failed: migrate_add_streams_data - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_add_streams_data - {e}")
 
     try:
         logger.info("Running migration: add tss and tss_version columns to activities")
@@ -435,7 +434,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: add tss and tss_version columns to activities")
     except Exception as e:
         migration_errors.append(f"migrate_add_activity_tss: {e}")
-        logger.error(f"Migration failed: migrate_add_activity_tss - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_add_activity_tss - {e}")
 
     try:
         logger.info("Running migration: conversation summary columns (B34)")
@@ -443,7 +442,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: conversation summary columns (B34)")
     except Exception as e:
         migration_errors.append(f"migrate_add_conversation_summary: {e}")
-        logger.error(f"Migration failed: migrate_add_conversation_summary - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_add_conversation_summary - {e}")
 
     try:
         logger.info("Running migration: create workouts tables")
@@ -451,7 +450,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: create workouts tables")
     except Exception as e:
         migration_errors.append(f"migrate_create_workouts_tables: {e}")
-        logger.error(f"Migration failed: migrate_create_workouts_tables - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_create_workouts_tables - {e}")
 
     try:
         logger.info("Running migration: create workout_exports table")
@@ -459,7 +458,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: create workout_exports table")
     except Exception as e:
         migration_errors.append(f"migrate_create_workout_exports_table: {e}")
-        logger.error(f"Migration failed: migrate_create_workout_exports_table - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_create_workout_exports_table - {e}")
 
     try:
         logger.info("Running migration: create workout execution and compliance tables")
@@ -467,7 +466,7 @@ def initialize_database() -> None:
         logger.info("✓ Migration completed: create workout execution and compliance tables")
     except Exception as e:
         migration_errors.append(f"migrate_create_workout_execution_tables: {e}")
-        logger.error(f"Migration failed: migrate_create_workout_execution_tables - {e}", exc_info=True)
+        logger.exception(f"Migration failed: migrate_create_workout_execution_tables - {e}")
 
     if migration_errors:
         logger.error(
@@ -890,7 +889,7 @@ def database_schema_error_handler(request: Request, exc: ProgrammingError):
     """
     error_msg = str(exc)
     # Use logger with explicit message formatting to avoid KeyError from SQL parameters in error message
-    logger.error("Database schema error: %s", error_msg, exc_info=True)
+    logger.exception("Database schema error: %s", error_msg)
 
     # Check if this is a missing column error
     if "does not exist" in error_msg.lower() or "undefinedcolumn" in error_msg.lower():

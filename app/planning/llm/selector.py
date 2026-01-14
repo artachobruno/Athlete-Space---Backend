@@ -84,10 +84,7 @@ async def select_templates(
     except Exception as e:
         logger.error(
             "select_templates: LLM selection failed",
-            week_index=selection_input.week_index,
-            error_type=type(e).__name__,
-            error_message=str(e),
-            exc_info=True,
+            f"LLM selection failed (week_index={selection_input.week_index}, error_type={type(e).__name__})"
         )
         raise PlanningInvariantError(
             "TEMPLATE_SELECTION_FAILED",

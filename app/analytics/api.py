@@ -78,7 +78,7 @@ def metrics(days: int = 60, user_id: str = Depends(get_current_user_id)):
 
         logger.info(f"Analytics metrics calculated: {len(chart_data)} days")
     except Exception as e:
-        logger.error(f"Error calculating analytics metrics: {e}", exc_info=True)
+        logger.exception(f"Error calculating analytics metrics: {e}")
         raise
     else:
         return {"chart": chart_data}

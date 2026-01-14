@@ -183,15 +183,10 @@ def write_message(message: Message) -> None:
             error=str(e),
             event="redis_write_failed",
         )
-    except Exception as e:
+    except Exception:
         # Catch-all for unexpected errors
-        logger.error(
-            "Unexpected error writing to Redis",
-            conversation_id=message.conversation_id,
-            user_id=message.user_id,
-            error=str(e),
-            exc_info=True,
-            event="redis_write_error",
+        logger.exception(
+            f"Unexpected error writing to Redis (conversation_id={message.conversation_id}, user_id={message.user_id})"
         )
 
 
@@ -232,14 +227,10 @@ def get_recent_messages(conversation_id: str, limit: int = 50) -> list[Message]:
             event="redis_read_failed",
         )
         return []
-    except Exception as e:
+    except Exception:
         # Catch-all for unexpected errors
-        logger.error(
-            "Unexpected error reading from Redis",
-            conversation_id=conversation_id,
-            error=str(e),
-            exc_info=True,
-            event="redis_read_error",
+        logger.exception(
+            f"Unexpected error reading from Redis (conversation_id={conversation_id})"
         )
         return []
     else:

@@ -198,7 +198,7 @@ def ingest_activities(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"[INGESTION] Failed to get access token: {e}", exc_info=True)
+            logger.exception(f"[INGESTION] Failed to get access token: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to get Strava access token: {e!s}",
@@ -212,7 +212,7 @@ def ingest_activities(
             strava_activities = client.get_activities(after_ts=after_ts)
             logger.info(f"[INGESTION] Fetched {len(strava_activities)} activities from Strava")
         except Exception as e:
-            logger.error(f"[INGESTION] Failed to fetch activities from Strava: {e}", exc_info=True)
+            logger.exception(f"[INGESTION] Failed to fetch activities from Strava: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to fetch activities from Strava: {e!s}",
@@ -451,7 +451,7 @@ def strava_ingest(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[INGESTION] Unexpected error during ingestion: {e}", exc_info=True)
+        logger.exception(f"[INGESTION] Unexpected error during ingestion: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ingestion failed: {e!s}",

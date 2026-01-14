@@ -188,7 +188,7 @@ async def _generate_daily_decision_recommendation(state: AthleteState, context_s
 
         return "\n".join(recommendation_parts) if recommendation_parts else decision.explanation or "No recommendation available"
     except Exception as e:
-        logger.error(f"Error generating daily decision: {e}", exc_info=True)
+        logger.exception(f"Error generating daily decision: {e}")
         return "[CLARIFICATION] daily_decision_generation_failed"
 
 
@@ -225,7 +225,7 @@ async def recommend_next_session(state: AthleteState, user_id: str | None = None
         recommendation = await _generate_daily_decision_recommendation(state, context_string)
         logger.info("Generated session recommendation using daily_decision")
     except Exception as e:
-        logger.error(f"Error generating session recommendation: {e}", exc_info=True)
+        logger.exception(f"Error generating session recommendation: {e}")
         return "[CLARIFICATION] daily_decision_generation_failed"
     else:
         return recommendation

@@ -294,9 +294,8 @@ def upsert_athlete_profile(
     try:
         session.commit()
     except Exception as e:
-        logger.error(
-            f"[PROFILE_SERVICE] Failed to commit profile upsert for user_id={user_id}: {e}",
-            exc_info=True
+        logger.exception(
+            f"[PROFILE_SERVICE] Failed to commit profile upsert for user_id={user_id}: {e}"
         )
         # Re-raise with more context if it's a KeyError
         if isinstance(e, KeyError):

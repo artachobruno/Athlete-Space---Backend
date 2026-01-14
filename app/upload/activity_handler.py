@@ -154,7 +154,7 @@ def upload_activity_from_chat(
             trigger_recompute_on_new_activities(user_id)
             logger.info(f"[UPLOAD_CHAT] Metrics recomputation triggered for user_id={user_id}")
         except Exception as e:
-            logger.error(f"[UPLOAD_CHAT] Failed to trigger metrics recomputation: {e}", exc_info=True)
+            logger.exception(f"[UPLOAD_CHAT] Failed to trigger metrics recomputation: {e}")
 
     logger.info(f"[UPLOAD_CHAT] Upload complete: {created_count} new activities created")
     return created_activity_ids, created_count

@@ -240,5 +240,5 @@ def compute_workout_comparison(workout_id: str) -> None:
                 step_count=len(step_comparisons),
             )
 
-    except Exception as e:
-        logger.error(f"Error computing workout comparison for {workout_id}: {e}", exc_info=True)
+    except Exception:
+        logger.exception(f"Error computing workout comparison for {workout_id}")

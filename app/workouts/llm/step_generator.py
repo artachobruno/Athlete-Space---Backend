@@ -103,8 +103,8 @@ async def generate_steps_from_notes(activity: ActivityInput) -> StructuredWorkou
     except ValidationError as e:
         logger.error(f"LLM output validation failed: {e}")
         raise ValueError(f"LLM generated invalid workout structure: {e}") from e
-    except Exception as e:
-        logger.error(f"LLM call failed: {type(e).__name__}: {e}", exc_info=True)
+    except Exception:
+        logger.exception("LLM call failed")
         raise RuntimeError(f"Failed to generate workout steps: {type(e).__name__}: {e}") from e
     else:
         return result.output

@@ -108,10 +108,9 @@ def fetch_and_save_streams(
             f"[FETCH_STREAMS] Successfully saved streams for activity {strava_activity_id}: "
             f"{len(streams)} stream types, {data_points} data points"
         )
-    except Exception as e:
-        logger.error(
-            f"[FETCH_STREAMS] Error fetching streams for activity {strava_activity_id}: {e}",
-            exc_info=True,
+    except Exception:
+        logger.exception(
+            f"[FETCH_STREAMS] Error fetching streams for activity {strava_activity_id}"
         )
         session.rollback()
         # Re-raise the exception so the API endpoint can handle it properly

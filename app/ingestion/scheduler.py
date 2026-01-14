@@ -26,10 +26,9 @@ def _run_incremental_tasks(user_data: list[UserData]) -> None:
             logger.info(f"[SCHEDULER] Running incremental task for athlete_id={athlete_id}")
             incremental_task(athlete_id)
             logger.info(f"[SCHEDULER] Incremental task completed for athlete_id={athlete_id}")
-        except Exception as e:
-            logger.error(
-                f"[SCHEDULER] Incremental task failed for athlete_id={athlete_id}: {e}",
-                exc_info=True,
+        except Exception:
+            logger.exception(
+                f"[SCHEDULER] Incremental task failed for athlete_id={athlete_id}"
             )
 
 
@@ -51,10 +50,9 @@ def _run_backfill_tasks(user_data: list[UserData], now: int) -> None:
                 logger.info(f"[SCHEDULER] Running backfill task for athlete_id={athlete_id}")
                 backfill_task(athlete_id)
                 logger.info(f"[SCHEDULER] Backfill task completed for athlete_id={athlete_id}")
-            except Exception as e:
-                logger.error(
-                    f"[SCHEDULER] Backfill task failed for athlete_id={athlete_id}: {e}",
-                    exc_info=True,
+            except Exception:
+                logger.exception(
+                    f"[SCHEDULER] Backfill task failed for athlete_id={athlete_id}"
                 )
         else:
             logger.debug(f"[SCHEDULER] Skipping backfill for athlete_id={athlete_id} (already done)")
@@ -146,10 +144,9 @@ def _run_history_backfill_tasks() -> None:
                     else:
                         logger.info(f"[SCHEDULER] History backfill progress for user_id={user_id} (not yet complete)")
 
-                except Exception as e:
-                    logger.error(
-                        f"[SCHEDULER] History backfill failed for user_id={user_id}: {e}",
-                        exc_info=True,
+                except Exception:
+                    logger.exception(
+                        f"[SCHEDULER] History backfill failed for user_id={user_id}"
                     )
                     # Don't remove on error - user still needs backfill
                     processed_count += 1

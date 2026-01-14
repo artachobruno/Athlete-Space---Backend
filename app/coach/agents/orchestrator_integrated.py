@@ -98,7 +98,7 @@ async def run_orchestrated_conversation(
                 logger.error(f"Unknown tool requested: {tool_name}")
                 response_message = "I'm not able to execute that action right now. Could you rephrase your request?"
         except Exception as e:
-            logger.error(f"Error executing tool {tool_name}: {e}", exc_info=True)
+            logger.exception(f"Error executing tool {tool_name}: {e}")
             response_message = "I encountered an error while processing your request. Could you try again?"
     else:
         # NO_TOOL - generate conversational response

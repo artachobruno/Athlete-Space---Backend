@@ -139,13 +139,9 @@ class WorkoutFactory:
                 planned_session_id=planned_session_id,
                 user_id=user_id_val,
             )
-        except Exception as log_error:
+        except Exception:
             # Log error but don't fail the operation
-            logger.warning(
-                f"Failed to log workout creation: {log_error}",
-                error_type=type(log_error).__name__,
-                exc_info=True,
-            )
+            logger.exception("Failed to log workout creation")
 
         return workout
 

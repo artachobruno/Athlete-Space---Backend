@@ -295,12 +295,8 @@ async def planner_v2_tool(input_data: PlannerInput) -> PlannerResult:
                 status="failed",
                 error=str(e),
             )
-            logger.error(
-                "Unexpected error in planner v2",
-                plan_id=plan_id,
-                step=step,
-                error=str(e),
-                exc_info=True,
+            logger.exception(
+                f"Unexpected error in planner v2 (plan_id={plan_id}, step={step})"
             )
             raise StepExecutionError(step, e) from e
 

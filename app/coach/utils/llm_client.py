@@ -125,8 +125,8 @@ class CoachLLMClient:
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Season plan parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
-            except Exception as e:
-                logger.error(f"Error generating season plan: {type(e).__name__}: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error generating season plan")
                 if attempt < MAX_RETRIES:
                     continue
                 raise RuntimeError(f"Failed to generate season plan: {type(e).__name__}: {e}") from e
@@ -191,8 +191,8 @@ class CoachLLMClient:
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Weekly intent parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
-            except Exception as e:
-                logger.error(f"Error generating weekly intent: {type(e).__name__}: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error generating weekly intent")
                 if attempt < MAX_RETRIES:
                     continue
                 raise RuntimeError(f"Failed to generate weekly intent: {type(e).__name__}: {e}") from e
@@ -253,8 +253,8 @@ class CoachLLMClient:
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Daily decision parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
-            except Exception as e:
-                logger.error(f"Error generating daily decision: {type(e).__name__}: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error generating daily decision")
                 if attempt < MAX_RETRIES:
                     continue
                 raise RuntimeError(f"Failed to generate daily decision: {type(e).__name__}: {e}") from e
@@ -313,8 +313,8 @@ class CoachLLMClient:
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Weekly report parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
-            except Exception as e:
-                logger.error(f"Error generating weekly report: {type(e).__name__}: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error generating weekly report")
                 if attempt < MAX_RETRIES:
                     continue
                 raise RuntimeError(f"Failed to generate weekly report: {type(e).__name__}: {e}") from e
@@ -771,7 +771,7 @@ class CoachLLMClient:
                     max_retries=MAX_RETRIES,
                     will_retry=attempt < MAX_RETRIES,
                 )
-                logger.error(f"Error generating training plan: {type(e).__name__}: {e}", exc_info=True)
+                logger.exception("Error generating training plan")
                 if attempt < MAX_RETRIES:
                     logger.debug(
                         "llm_client: Retrying after exception",

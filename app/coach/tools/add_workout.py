@@ -244,7 +244,7 @@ async def add_workout(
                 recommendation += "\n\nNote: Session may already exist in your calendar or calendar is temporarily unavailable."
 
         except Exception as e:
-            logger.error(f"Error saving workout to calendar: {e}", exc_info=True)
+            logger.exception(f"Error saving workout to calendar: {e}")
             recommendation += "\n\n⚠️ Note: Could not save to calendar, but the workout plan is ready!"
 
     return recommendation

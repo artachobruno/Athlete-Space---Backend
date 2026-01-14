@@ -203,9 +203,8 @@ def update_all_recent_weekly_reports(athlete_id: int, weeks: int = 4) -> None:
         try:
             update_weekly_report_metrics(athlete_id, week_start)
         except Exception as e:
-            logger.error(
-                f"Failed to update weekly report metrics for athlete_id={athlete_id}, week_start={week_start.date()}: {e}",
-                exc_info=True,
+            logger.exception(
+                f"Failed to update weekly report metrics for athlete_id={athlete_id}, week_start={week_start.date()}"
             )
 
 
@@ -229,9 +228,8 @@ def update_all_recent_weekly_reports_for_all_users() -> None:
                 update_all_recent_weekly_reports(athlete_id, weeks=4)
                 updated_count += 1
             except Exception as e:
-                logger.error(
-                    f"Failed to update weekly report metrics for athlete_id={account.athlete_id}: {e}",
-                    exc_info=True,
+                logger.exception(
+                    f"Failed to update weekly report metrics for athlete_id={account.athlete_id}"
                 )
                 error_count += 1
 

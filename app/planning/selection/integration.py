@@ -142,10 +142,7 @@ def materialize_sessions_with_templates(
             # RuntimeError: Event loop already running
             # Other exceptions: LLM call failed
             logger.warning(
-                "LLM selection failed, using fallback",
-                week_index=week_index,
-                error=str(e),
-                exc_info=True,
+                f"LLM selection failed, using fallback (week_index={week_index})"
             )
             selection = fallback_select(week_index, day_candidates_list)
     else:

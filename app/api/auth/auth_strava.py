@@ -406,9 +406,8 @@ def strava_callback(
             logger.info(f"[STRAVA_OAUTH] Profile merged successfully for user_id={user_id}")
         except Exception as e:
             # Use !r to avoid KeyError when exception message contains curly braces
-            logger.error(
-                f"[STRAVA_OAUTH] Failed to fetch/merge athlete profile for user_id={user_id}: {e!r}",
-                exc_info=True,
+            logger.exception(
+                f"[STRAVA_OAUTH] Failed to fetch/merge athlete profile for user_id={user_id}"
             )
             # Don't fail OAuth if profile fetch fails - user can still use the app
 
@@ -508,12 +507,12 @@ def _trigger_initial_sync(user_id: str, background_tasks: BackgroundTasks) -> No
             aggregate_daily_training(user_id)
             logger.info(f"[STRAVA_OAUTH] Daily aggregation completed for user_id={user_id}")
         except Exception as e:
-            logger.error(f"[STRAVA_OAUTH] Daily aggregation failed for user_id={user_id}: {e}", exc_info=True)
+            logger.exception(f"[STRAVA_OAUTH] Daily aggregation failed for user_id={user_id}: {e}")
             # Don't fail if aggregation fails
 
         # Also trigger history backfill to ensure we get all historical data beyond 90 days
         background_tasks.add_task(history_backfill_task, user_id)
         logger.info(f"[STRAVA_OAUTH] History backfill scheduled via background_tasks for user_id={user_id}")
     except Exception as e:
-        logger.error(f"[STRAVA_OAUTH] Failed to trigger initial sync for user_id={user_id}: {e}", exc_info=True)
+        logger.exception(f"[STRAVA_OAUTH] Failed to trigger initial sync for user_id={user_id}: {e}")
         # Don't fail OAuth if sync fails - user can manually trigger sync later

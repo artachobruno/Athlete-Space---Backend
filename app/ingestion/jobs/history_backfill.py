@@ -390,5 +390,5 @@ def backfill_user_history(user_id: str) -> None:
                 aggregate_daily_training(user_id)
                 logger.info(f"[HISTORY_BACKFILL] Daily aggregation completed for user_id={user_id}")
             except Exception as e:
-                logger.error(f"[HISTORY_BACKFILL] Daily aggregation failed for user_id={user_id}: {e}", exc_info=True)
+                logger.exception(f"[HISTORY_BACKFILL] Daily aggregation failed for user_id={user_id}: {e}")
                 # Don't fail backfill if aggregation fails

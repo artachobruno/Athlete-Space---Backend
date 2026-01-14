@@ -89,8 +89,8 @@ class _ObserveSDK:
                 "Tracing will be disabled."
             )
             self._enabled = False
-        except Exception as e:
-            logger.error(f"Failed to initialize Observe SDK: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Failed to initialize Observe SDK")
             self._enabled = False
 
     def trace(self, name: str, metadata: dict[str, Any] | None = None) -> Any:

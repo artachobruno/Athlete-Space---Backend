@@ -89,7 +89,7 @@ def run_retry_worker() -> None:
                 enqueue_retry(updated_job)
 
         except Exception as e:
-            logger.error("Unexpected error in retry worker loop", extra={"error": str(e)}, exc_info=True)
+            logger.exception(f"Unexpected error in retry worker loop (error={str(e)})")
             time.sleep(POLL_INTERVAL_SECONDS)
 
 

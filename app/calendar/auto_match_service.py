@@ -188,13 +188,9 @@ def auto_match_sessions(
                     confidence=result.confidence,
                 )
 
-            except Exception as e:
-                logger.error(
-                    "Failed to auto-match session",
-                    session_id=result.session_id,
-                    activity_id=result.matched_activity_id,
-                    error=str(e),
-                    exc_info=True,
+            except Exception:
+                logger.exception(
+                    f"Failed to auto-match session (session_id={result.session_id}, activity_id={result.matched_activity_id})"
                 )
                 # Continue processing other matches
                 continue

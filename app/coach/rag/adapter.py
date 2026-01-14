@@ -128,12 +128,8 @@ class OrchestratorRagAdapter:
             )
 
         except Exception as e:
-            logger.warning(
-                "RAG retrieval failed, returning empty context",
-                query=query[:100] if query else "",
-                race_type=race_type,
-                error=str(e),
-                exc_info=True,
+            logger.exception(
+                f"RAG retrieval failed, returning empty context (query={query[:100] if query else ''}, race_type={race_type})"
             )
             # Return empty context with low confidence on failure
             return RagContext(

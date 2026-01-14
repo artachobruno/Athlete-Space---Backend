@@ -261,12 +261,9 @@ async def _compute_missing_slots_for_decision(
                     merged_slots=merged_slots,
                     awaiting_slots=missing_slots,
                 )
-        except Exception as e:
-            logger.warning(
-                "Failed to persist slot state",
-                conversation_id=conversation_id,
-                error=str(e),
-                exc_info=True,
+        except Exception:
+            logger.exception(
+                f"Failed to persist slot state (conversation_id={conversation_id})"
             )
 
     if can_execute:
@@ -413,12 +410,8 @@ def _get_rag_adapter() -> OrchestratorRagAdapter | None:
 
         _RAG_ADAPTER = OrchestratorRagAdapter(artifacts_dir=artifacts_dir)
 
-    except Exception as e:
-        logger.warning(
-            "Failed to initialize RAG adapter, RAG features disabled",
-            error=str(e),
-            exc_info=True,
-        )
+    except Exception:
+        logger.exception("Failed to initialize RAG adapter, RAG features disabled")
         return None
     else:
         return _RAG_ADAPTER
@@ -949,11 +942,8 @@ async def run_conversation(
 
                 except Exception as e:
                     # If RAG retrieval fails, log and continue without RAG
-                    logger.warning(
-                        "RAG retrieval failed, continuing without RAG bias",
-                        intent=result.output.intent,
-                        error=str(e),
-                        exc_info=True,
+                    logger.exception(
+                        f"RAG retrieval failed, continuing without RAG bias (intent={result.output.intent})"
                     )
                     # Continue with decision unchanged
                     # Log that RAG was not used
@@ -1056,14 +1046,8 @@ async def run_conversation(
         )
 
     except ValidationError as e:
-        logger.error(
-            "Orchestrator agent validation error - LLM response could not be parsed",
-            athlete_id=deps.athlete_id,
-            error_type=type(e).__name__,
-            error=str(e),
-            validation_errors=str(e.errors()) if hasattr(e, "errors") else None,
-            user_input_preview=user_input[:100],
-            exc_info=True,
+        logger.exception(
+            f"Orchestrator agent validation error - LLM response could not be parsed (athlete_id={deps.athlete_id}, error_type={type(e).__name__}, validation_errors={str(e.errors()) if hasattr(e, 'errors') else None})"
         )
         return OrchestratorAgentResponse(
             intent="general",
@@ -1102,12 +1086,8 @@ async def run_conversation(
             follow_up=None,
         )
     except Exception as e:
-        logger.error(
-            "Unexpected error during orchestrator agent execution",
-            athlete_id=deps.athlete_id,
-            error_type=type(e).__name__,
-            error=str(e),
-            exc_info=True,
+        logger.exception(
+            f"Unexpected error during orchestrator agent execution (athlete_id={deps.athlete_id}, error_type={type(e).__name__})"
         )
         return OrchestratorAgentResponse(
             intent="general",
@@ -1186,10 +1166,8 @@ async def run_conversation(
                 athlete_id=deps.athlete_id,
             )
     except Exception as e:
-        logger.warning(
-            f"Unexpected error saving context: {type(e).__name__}: {e!s}",
-            athlete_id=deps.athlete_id,
-            exc_info=True,
+        logger.exception(
+            f"Unexpected error saving context: {type(e).__name__}: {e!s} (athlete_id={deps.athlete_id})"
         )
 
     t_total = time.monotonic()

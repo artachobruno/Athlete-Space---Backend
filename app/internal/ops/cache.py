@@ -42,7 +42,7 @@ def get_cached_ops_summary() -> OpsSummary:
             cached_summary = summary
             cache_timestamp = now
         except Exception as e:
-            logger.error(f"Failed to build ops summary: {e}", exc_info=True)
+            logger.exception(f"Failed to build ops summary: {e}")
             # Return stale cache if available, otherwise raise
             if cached_summary is not None:
                 logger.warning("Returning stale cache due to build failure")

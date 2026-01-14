@@ -100,7 +100,7 @@ async def classify_intent(
             reason="Usage limit exceeded, defaulting to safe response",
         )
     except Exception as e:
-        logger.error(f"Error in classifier: {e}", exc_info=True)
+        logger.exception(f"Error in classifier: {e}")
         # Fallback to safe default
         return OrchestrationDecision(
             user_intent="question",

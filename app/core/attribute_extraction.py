@@ -223,8 +223,8 @@ CRITICAL: If you didn't extract it, it does not exist.
             ambiguous_count=len(extracted.ambiguous_fields),
             confidence=extracted.confidence,
         )
-    except Exception as e:
-        logger.error(f"Failed to extract attributes: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to extract attributes")
         # Return empty extraction on failure (non-blocking)
         return ExtractedAttributes(
             values={},

@@ -286,12 +286,8 @@ def compact_conversation_memory(
             error=str(e),
             event="memory_compaction_failed",
         )
-    except Exception as e:
+    except Exception:
         # Catch-all for unexpected errors
-        logger.error(
-            "Unexpected error during memory compaction",
-            conversation_id=conversation_id,
-            error=str(e),
-            exc_info=True,
-            event="memory_compaction_failed",
+        logger.exception(
+            f"Unexpected error during memory compaction (conversation_id={conversation_id})"
         )

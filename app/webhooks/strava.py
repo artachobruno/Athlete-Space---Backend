@@ -208,7 +208,7 @@ async def webhook_event(
             return {"status": "sync_failed", "error": result.get("error")}
         logger.info(f"[WEBHOOK] Sync successful for user_id={user_id}: {result}")
     except Exception as e:
-        logger.error(f"[WEBHOOK] Unexpected error during sync for user_id={user_id}: {e}", exc_info=True)
+        logger.exception(f"[WEBHOOK] Unexpected error during sync for user_id={user_id}: {e}")
         return {"status": "error", "error": str(e)}
     else:
         return {"status": "success", "user_id": user_id, "result": result}

@@ -321,7 +321,7 @@ def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(ge
             result = _get_debug_result(db, days)
             logger.debug(f"Debug result: {result}")
         except Exception as e:
-            logger.error(f"Error in debug mode: {e}", exc_info=True)
+            logger.exception(f"Error in debug mode: {e}")
             return {"debug": {"error": str(e), "message": "Failed to fetch debug data"}}
         else:
             return result
@@ -402,7 +402,7 @@ def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(ge
             f"(all metrics on -100 to 100 scale)"
         )
     except Exception as e:
-        logger.error(f"Error reading training load from DailyTrainingLoad: {e}", exc_info=True)
+        logger.exception(f"Error reading training load from DailyTrainingLoad: {e}")
         # Return empty response instead of raising 500
         # Frontend can handle empty data gracefully
         return empty_response
@@ -446,7 +446,7 @@ async def get_coach_insights(user_id: str = Depends(get_current_user_id)):
     try:
         coach_response = get_coach_advice(overview)
     except Exception as e:
-        logger.error(f"Error getting coach advice: {type(e).__name__}: {e}", exc_info=True)
+        logger.exception(f"Error getting coach advice (error_type={type(e).__name__})")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate coaching insights: {type(e).__name__}: {e!s}",
@@ -559,7 +559,7 @@ def get_initial_coach_message(user_id: str = Depends(get_current_user_id)):
         return _build_limited_data_message(data_quality, activity_count)
 
     except Exception as e:
-        logger.error(f"Error getting initial coach message: {e}", exc_info=True)
+        logger.exception(f"Error getting initial coach message: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get initial coach message: {e!s}",

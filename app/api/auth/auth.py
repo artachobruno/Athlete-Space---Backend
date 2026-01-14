@@ -175,7 +175,7 @@ def signup(request: SignupRequest, http_request: Request):
             token = create_access_token(user_id)
             logger.info(f"[AUTH] JWT token created successfully for user_id={user_id}, token_length={len(token)}")
         except Exception as e:
-            logger.error(f"[AUTH] Failed to create JWT token for user_id={user_id}: {e}", exc_info=True)
+            logger.exception(f"[AUTH] Failed to create JWT token for user_id={user_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create authentication token. Please try again.",

@@ -89,10 +89,7 @@ async def plan_session_llm(spec: SessionSpec) -> SessionPlan:
         logger.error(
             "plan_session: Failed to generate session",
             error_type=type(e).__name__,
-            error_message=str(e),
-            sport=spec.sport.value,
-            session_type=spec.session_type.value,
-            exc_info=True,
+            f"LLM session planning failed (sport={spec.sport.value}, session_type={spec.session_type.value})"
         )
         raise RuntimeError(f"Failed to generate session plan: {e}") from e
     else:

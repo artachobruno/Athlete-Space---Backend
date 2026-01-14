@@ -142,7 +142,7 @@ async def plan_week(
             sessions_completed=training_summary.execution.get("completed_sessions", 0),
         )
     except Exception as e:
-        logger.error(f"B8: Failed to build TrainingSummary: {e}", exc_info=True)
+        logger.exception(f"B8: Failed to build TrainingSummary: {e}")
         return f"[CLARIFICATION] Failed to build training summary: {e}"
 
     # B17 + B18: Build constraints and load adjustment if feedback provided

@@ -187,8 +187,12 @@ def get_session() -> Generator[Session, None, None]:
         logger.debug("HTTPException in session, rolling back")
         session.rollback()
         raise
-    except KeyError:
-        raise
+    except KeyError as e:
+        _log_keyerror_details(session, e)
+        session.rollback()
+        raise RuntimeError(
+            f"Database internal error during commit: missing key {e!s}"
+        ) from e
     except Exception as e:
         # Check if this is a business logic error (not a database error)
         # Import here to avoid circular imports

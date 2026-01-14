@@ -610,6 +610,14 @@ class PlannedSession(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    @property
+    def is_locked(self) -> bool:
+        """Check if session is locked (has completed_activity_id).
+
+        Locked sessions cannot be dragged, moved, or deleted.
+        """
+        return self.completed_activity_id is not None
+
     __table_args__ = (
         UniqueConstraint(
             "user_id",

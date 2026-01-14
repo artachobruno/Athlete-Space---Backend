@@ -333,24 +333,12 @@ def get_season(user_id: str = Depends(get_current_user_id)):
         planned_list = [p[0] for p in planned_sessions]
 
         # Run reconciliation if we have athlete_id and planned sessions
-        reconciliation_map: dict[str, str] = {}
-        matched_activity_ids: set[str] = set()
-
-        if athlete_id and planned_list:
-            try:
-                reconciliation_results = reconcile_calendar(
-                    user_id=user_id,
-                    athlete_id=athlete_id,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-                # Create mapping from session_id to status
-                for result in reconciliation_results:
-                    reconciliation_map[result.session_id] = result.status.value
-                    if result.matched_activity_id:
-                        matched_activity_ids.add(result.matched_activity_id)
-            except Exception as e:
-                logger.warning(f"[CALENDAR] Reconciliation failed, using planned status: {e!r}")
+        # Use _run_reconciliation_safe to ensure auto-match is called
+        reconciliation_map, matched_activity_ids = (
+            _run_reconciliation_safe(user_id, athlete_id, start_date, end_date)
+            if athlete_id and planned_list
+            else ({}, set())
+        )
 
         # Get completed activities
         activities = session.execute(
@@ -945,6 +933,16 @@ def delete_planned_session(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Planned session not found",
+            )
+
+        # Block deletion if session is locked (has completed_activity_id)
+        if planned_session.is_locked:
+            logger.warning(
+                f"[PLANNED-SESSIONS] Attempted to delete locked session: id={planned_session_id}, user_id={user_id}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete a session that has been completed and merged with an activity. Unpair the activity first.",
             )
 
         session.delete(planned_session)

@@ -4,7 +4,8 @@ Phase 2 & 3: Fallback endpoints for manual uploads (non-chat).
 """
 
 import os
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
@@ -18,7 +19,7 @@ from app.db.models import PlannedSession, StravaAccount
 from app.db.session import get_session
 from app.upload.plan_handler import upload_plan_from_chat
 from app.upload.plan_parser import ParsedSessionUpload, parse_csv_plan, parse_text_plan
-from app.workouts.guards import assert_planned_session_has_workout
+from app.workouts.models import Workout
 from app.workouts.orchestration.manual_planned_session_flow import (
     create_structured_workout_from_manual_session,
 )
@@ -257,7 +258,7 @@ async def upload_manual_session(
             raise ValueError("planned_session.workout_id must not be None")
 
         # Title is auto-generated from type if not provided (handled by model validator)
-        # Save session and get ID
+        # CRITICAL INVARIANT: Create Workout FIRST, then PlannedSession with workout_id
         try:
             with get_session() as session:
                 # Check for duplicate
@@ -271,7 +272,68 @@ async def upload_manual_session(
                 if existing:
                     _raise_duplicate_session_error()
 
-                # Step 1: Create PlannedSession with notes_raw (raw, uninterpreted)
+                # Step 1-3: Create Workout FIRST (extract → LLM → create structured workout)
+                # Only create structured workout if notes_raw exists
+                if request.notes and request.notes.strip():
+                    try:
+                        workout = await create_structured_workout_from_manual_session(
+                            session=session,
+                            user_id=user_id,
+                            athlete_id=athlete_id,
+                            notes_raw=request.notes,
+                            session_type=request.type,
+                            distance_km=request.distance_km,
+                            duration_minutes=request.duration_minutes,
+                        )
+                    except Exception as orchestration_error:
+                        logger.exception(
+                            "Manual session orchestration failed",
+                            user_id=user_id,
+                            error_type=type(orchestration_error).__name__,
+                            error_message=str(orchestration_error),
+                        )
+                        session.rollback()
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Manual session orchestration failed: {type(orchestration_error).__name__}: {orchestration_error}",
+                        ) from orchestration_error
+                else:
+                    # If no notes, create simple workout (fallback)
+                    # Create a minimal workout without structured steps
+                    workout_id = str(uuid.uuid4())
+                    sport_map: dict[str, str] = {
+                        "run": "run",
+                        "running": "run",
+                        "ride": "bike",
+                        "bike": "bike",
+                        "cycling": "bike",
+                        "swim": "swim",
+                        "swimming": "swim",
+                    }
+                    sport = sport_map.get(request.type.lower(), "run")
+
+                    workout = Workout(
+                        id=workout_id,
+                        user_id=user_id,
+                        sport=sport,
+                        source="manual",
+                        source_ref=None,
+                        total_duration_seconds=int(request.duration_minutes * 60) if request.duration_minutes else None,
+                        total_distance_meters=int(request.distance_km * 1000) if request.distance_km else None,
+                        status="matched",
+                        activity_id=None,
+                        planned_session_id=None,  # Will be set after PlannedSession is created
+                        raw_notes=request.notes,
+                        llm_output_json=None,
+                        parse_status=None,
+                    )
+                    session.add(workout)
+                    session.flush()
+
+                # HARD GUARD: Ensure workout.id exists before creating PlannedSession
+                assert workout.id is not None, "Workout must exist before PlannedSession creation"
+
+                # Step 4: Create PlannedSession WITH workout_id (correct order)
                 planned_session = PlannedSession(
                     user_id=user_id,
                     athlete_id=athlete_id,
@@ -290,46 +352,16 @@ async def upload_manual_session(
                     status="planned",  # Required NOT NULL
                     completed=False,
                     source="manual",
-                    workout_id=None,  # Will be set by orchestration service
+                    workout_id=workout.id,  # ✅ Set at creation time (NOT NULL constraint satisfied)
                 )
 
                 session.add(planned_session)
-                session.flush()  # Ensure planned_session.id is generated
-
-                # Step 2-4: Orchestration service (extract → LLM → create structured workout)
-                # Only create structured workout if notes_raw exists
-                if request.notes and request.notes.strip():
-                    try:
-                        workout = await create_structured_workout_from_manual_session(
-                            session=session,
-                            planned_session=planned_session,
-                        )
-                    except Exception as orchestration_error:
-                        logger.exception(
-                            "Manual session orchestration failed",
-                            user_id=user_id,
-                            planned_session_id=planned_session.id,
-                            error_type=type(orchestration_error).__name__,
-                            error_message=str(orchestration_error),
-                        )
-                        session.rollback()
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Manual session orchestration failed: {type(orchestration_error).__name__}: {orchestration_error}",
-                        ) from orchestration_error
-                else:
-                    # If no notes, create simple workout (fallback)
-                    from app.workouts.workout_factory import WorkoutFactory
-
-                    workout = WorkoutFactory.get_or_create_for_planned_session(session, planned_session)
-
-                # Defensive check: fail fast if workout_id is None
-                if planned_session.workout_id is None:
-                    _raise_missing_workout_id()
-                assert_planned_session_has_workout(planned_session)
-
                 session.commit()
                 session.refresh(planned_session)
+
+                # Update workout.planned_session_id now that PlannedSession exists
+                workout.planned_session_id = planned_session.id
+                session.commit()
 
                 session_id = planned_session.id
                 workout_id = workout.id

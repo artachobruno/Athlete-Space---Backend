@@ -1,12 +1,13 @@
 """Orchestration service for manual planned session → structured workout flow.
 
-This is the CORE orchestration layer that follows the spec flow:
-1. PlannedSession already exists (with notes_raw)
-2. Extract attributes (deterministic signal detection)
-3. LLM → Structured Workout
-4. WorkoutFactory.create_from_structured_workout()
-5. Attach workout_id to planned_session
-6. Persist
+This is the CORE orchestration layer that follows the CORRECT invariant:
+1. Extract attributes (deterministic signal detection)
+2. LLM → Structured Workout
+3. Create Workout + WorkoutSteps (DB)
+4. Return Workout (caller creates PlannedSession with workout_id)
+
+CRITICAL INVARIANT: PlannedSession MUST be created AFTER Workout exists.
+This ensures workout_id is NOT NULL at creation time.
 
 This is the ONLY place where LLM is called for manual planned sessions.
 """
@@ -16,7 +17,6 @@ from __future__ import annotations
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from app.db.models import PlannedSession
 from app.workouts.attribute_extraction import extract_workout_signals
 from app.workouts.input import ActivityInput
 from app.workouts.llm.step_generator import generate_steps_from_notes
@@ -52,22 +52,30 @@ def _map_sport_type(session_type: str) -> str:
 
 async def create_structured_workout_from_manual_session(
     session: Session,
-    planned_session: PlannedSession,
+    user_id: str,
+    athlete_id: int,
+    notes_raw: str,
+    session_type: str,
+    distance_km: float | None = None,
+    duration_minutes: int | None = None,
 ) -> Workout:
-    """Create structured workout from manual planned session (orchestration flow).
+    """Create structured workout from manual session request (orchestration flow).
 
     This is the ONLY entrypoint for creating structured workouts from manual sessions.
-    Follows the spec flow:
-    1. Read planned_session.notes_raw
-    2. Extract attributes (deterministic signals)
-    3. LLM → Structured Workout
-    4. WorkoutFactory.create_from_structured_workout()
-    5. Attach workout_id to planned_session
-    6. Persist (caller commits)
+    Follows the CORRECT invariant:
+    1. Extract attributes (deterministic signals)
+    2. LLM → Structured Workout
+    3. WorkoutFactory.create_from_structured_workout()
+    4. Return Workout (caller creates PlannedSession with workout_id)
 
     Args:
         session: Database session (must be in transaction)
-        planned_session: PlannedSession instance (must have notes_raw)
+        user_id: User ID
+        athlete_id: Athlete ID
+        notes_raw: Raw notes from user input (required)
+        session_type: Session type (Run, Ride, Bike, Swim, etc.)
+        distance_km: Optional distance in kilometers
+        duration_minutes: Optional duration in minutes
 
     Returns:
         Workout instance with structured steps
@@ -78,9 +86,9 @@ async def create_structured_workout_from_manual_session(
 
     Note:
         Commits are handled by the caller. This method only flushes.
+        PlannedSession must be created AFTER this returns (with workout_id set).
     """
-    # Step 1: Read planned_session.notes_raw
-    notes_raw = planned_session.notes_raw
+    # Step 1: Validate notes_raw
     if not notes_raw or not notes_raw.strip():
         raise ValueError("Cannot create structured workout without notes_raw")
 
@@ -88,21 +96,21 @@ async def create_structured_workout_from_manual_session(
     signals = extract_workout_signals(notes_raw)
 
     # Map session type to sport
-    sport = _map_sport_type(planned_session.type)
+    sport = _map_sport_type(session_type)
 
     # Prepare ActivityInput for LLM
-    # Use extracted signals if available, otherwise use planned_session fields
+    # Use extracted signals if available, otherwise use provided fields
     total_distance_meters = None
     if signals.distance_m:
         total_distance_meters = int(signals.distance_m)
-    elif planned_session.distance_km:
-        total_distance_meters = int(planned_session.distance_km * 1000)
+    elif distance_km:
+        total_distance_meters = int(distance_km * 1000)
 
     total_duration_seconds = None
     if signals.duration_s:
         total_duration_seconds = signals.duration_s
-    elif planned_session.duration_minutes:
-        total_duration_seconds = int(planned_session.duration_minutes * 60)
+    elif duration_minutes:
+        total_duration_seconds = int(duration_minutes * 60)
 
     activity_input = ActivityInput(
         sport=sport,
@@ -114,29 +122,30 @@ async def create_structured_workout_from_manual_session(
     # Step 3: LLM → Structured Workout
     logger.info(
         "Generating structured workout from notes",
-        planned_session_id=planned_session.id,
+        user_id=user_id,
         sport=sport,
     )
     structured_workout = await generate_steps_from_notes(activity_input)
 
     # Step 4: WorkoutFactory.create_from_structured_workout()
+    # NOTE: planned_session_id is None here - it will be set when PlannedSession is created
     workout = WorkoutFactory.create_from_structured_workout(
         session=session,
         structured=structured_workout,
-        user_id=planned_session.user_id,
+        user_id=user_id,
         source="manual",
         raw_notes=notes_raw,
-        planned_session_id=planned_session.id,
+        planned_session_id=None,  # Will be set when PlannedSession is created
         activity_id=None,
     )
 
-    # Step 5: Attach workout_id to planned_session
-    planned_session.workout_id = workout.id
+    # HARD GUARD: Ensure workout.id exists before returning
+    assert workout.id is not None, "Workout must exist before PlannedSession creation"
 
     logger.info(
-        "Created structured workout for manual planned session",
+        "Created structured workout for manual session",
         workout_id=workout.id,
-        planned_session_id=planned_session.id,
+        user_id=user_id,
         step_count=len(structured_workout.steps),
     )
 

@@ -742,16 +742,16 @@ class UserSettings(Base):
 
     # Privacy settings
     profile_visibility: Mapped[str] = mapped_column(String, nullable=False, default="private")
-    share_activity_data: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    share_training_metrics: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    share_activity_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    share_training_metrics: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Notification preferences
-    push_notifications: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    workout_reminders: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    training_load_alerts: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    race_reminders: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    goal_achievements: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    coach_messages: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    push_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    workout_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    training_load_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    race_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    goal_achievements: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    coach_messages: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(

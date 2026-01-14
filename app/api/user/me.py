@@ -56,6 +56,7 @@ from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_ro
 from app.metrics.data_quality import assess_data_quality
 from app.metrics.training_load import compute_training_load
 from app.services.training_preferences import extract_and_store_race_info
+from app.users.profile_service import create_user_settings, validate_user_settings_not_null
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -2003,7 +2004,7 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
             old_goal = old_settings.goal if old_settings else None
 
             if not old_settings:
-                settings = UserSettings(user_id=user_id, profile_visibility="private")
+                settings = create_user_settings(user_id=user_id)
                 session.add(settings)
             else:
                 settings = old_settings
@@ -2029,6 +2030,9 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
             if request.goal is not None:
                 _validate_goal_text(request.goal)
             settings.goal = request.goal
+
+            # Validate all NOT NULL constraints before commit (hard guardrail)
+            validate_user_settings_not_null(settings)
 
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -2135,15 +2139,20 @@ def update_privacy_settings(request: PrivacySettingsUpdateRequest, user_id: str 
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
 
             if not settings:
-                settings = UserSettings(user_id=user_id, profile_visibility="private")
+                settings = create_user_settings(user_id=user_id)
                 session.add(settings)
 
             # Full object overwrite - set all fields from request
             if request.profile_visibility is not None:
                 _validate_profile_visibility(request.profile_visibility)
                 settings.profile_visibility = request.profile_visibility
-            settings.share_activity_data = request.share_activity_data
-            settings.share_training_metrics = request.share_training_metrics
+            if request.share_activity_data is not None:
+                settings.share_activity_data = request.share_activity_data
+            if request.share_training_metrics is not None:
+                settings.share_training_metrics = request.share_training_metrics
+
+            # Validate all NOT NULL constraints before commit (hard guardrail)
+            validate_user_settings_not_null(settings)
 
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -2245,18 +2254,29 @@ def update_notifications(request: NotificationsUpdateRequest, user_id: str = Dep
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
 
             if not settings:
-                settings = UserSettings(user_id=user_id, profile_visibility="private")
+                settings = create_user_settings(user_id=user_id)
                 session.add(settings)
 
-            # Full object overwrite - set all fields from request
-            settings.email_notifications = request.email_notifications
-            settings.push_notifications = request.push_notifications
-            settings.workout_reminders = request.workout_reminders
-            settings.training_load_alerts = request.training_load_alerts
-            settings.race_reminders = request.race_reminders
-            settings.weekly_summary = request.weekly_summary
-            settings.goal_achievements = request.goal_achievements
-            settings.coach_messages = request.coach_messages
+            # Update fields from request (only if not None to preserve NOT NULL constraints)
+            if request.email_notifications is not None:
+                settings.email_notifications = request.email_notifications
+            if request.push_notifications is not None:
+                settings.push_notifications = request.push_notifications
+            if request.workout_reminders is not None:
+                settings.workout_reminders = request.workout_reminders
+            if request.training_load_alerts is not None:
+                settings.training_load_alerts = request.training_load_alerts
+            if request.race_reminders is not None:
+                settings.race_reminders = request.race_reminders
+            if request.weekly_summary is not None:
+                settings.weekly_summary = request.weekly_summary
+            if request.goal_achievements is not None:
+                settings.goal_achievements = request.goal_achievements
+            if request.coach_messages is not None:
+                settings.coach_messages = request.coach_messages
+
+            # Validate all NOT NULL constraints before commit (hard guardrail)
+            validate_user_settings_not_null(settings)
 
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()

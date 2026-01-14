@@ -13,6 +13,69 @@ from app.api.schemas.athlete_profile import AthleteProfileUpsert
 from app.db.models import AthleteProfile, StravaAccount, User, UserSettings
 
 
+def create_user_settings(user_id: str) -> UserSettings:
+    """Create a new UserSettings instance with all required NOT NULL fields explicitly set.
+
+    This ensures all database constraints are satisfied and prevents None values
+    from leaking into NOT NULL columns.
+
+    Args:
+        user_id: User ID (primary key)
+
+    Returns:
+        UserSettings instance with all required fields set
+    """
+    return UserSettings(
+        user_id=user_id,
+        units="metric",
+        timezone="UTC",
+        notifications_enabled=True,
+        email_notifications=False,
+        weekly_summary=True,
+        profile_visibility="private",
+        share_activity_data=False,
+        share_training_metrics=False,
+        push_notifications=True,
+        workout_reminders=True,
+        training_load_alerts=True,
+        race_reminders=True,
+        goal_achievements=True,
+        coach_messages=True,
+    )
+
+
+def validate_user_settings_not_null(settings: UserSettings) -> None:
+    """Validate that all NOT NULL UserSettings fields are not None.
+
+    This is a hard guardrail to catch regressions before they hit the database.
+    Raises ValueError if any NOT NULL field is None.
+
+    Args:
+        settings: UserSettings instance to validate
+
+    Raises:
+        ValueError: If any NOT NULL field is None
+    """
+    if settings.profile_visibility is None:
+        raise ValueError("profile_visibility must not be None")
+    if settings.share_activity_data is None:
+        raise ValueError("share_activity_data must not be None")
+    if settings.share_training_metrics is None:
+        raise ValueError("share_training_metrics must not be None")
+    if settings.push_notifications is None:
+        raise ValueError("push_notifications must not be None")
+    if settings.workout_reminders is None:
+        raise ValueError("workout_reminders must not be None")
+    if settings.training_load_alerts is None:
+        raise ValueError("training_load_alerts must not be None")
+    if settings.race_reminders is None:
+        raise ValueError("race_reminders must not be None")
+    if settings.goal_achievements is None:
+        raise ValueError("goal_achievements must not be None")
+    if settings.coach_messages is None:
+        raise ValueError("coach_messages must not be None")
+
+
 def map_gender(strava_sex: str | None) -> str | None:
     """Map Strava sex field to internal gender field.
 
@@ -268,7 +331,7 @@ def upsert_athlete_profile(
     if settings_result:
         settings = settings_result[0]
     else:
-        settings = UserSettings(user_id=user_id, profile_visibility="private")
+        settings = create_user_settings(user_id=user_id)
         session.add(settings)
 
     # Map primary_sport (single) to primary_sports (list)
@@ -297,6 +360,9 @@ def upsert_athlete_profile(
         settings.injury_notes = payload.injury_notes
     elif payload.injury_status == "none":
         settings.injury_notes = None
+
+    # Validate all NOT NULL constraints before commit (hard guardrail)
+    validate_user_settings_not_null(settings)
 
     # Commit all changes atomically
     try:

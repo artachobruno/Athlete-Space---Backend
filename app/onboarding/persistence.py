@@ -13,7 +13,7 @@ from app.api.schemas.schemas import AthleteProfileUpdateRequest, TrainingPrefere
 from app.db.models import AthleteProfile, StravaAccount, User, UserRole, UserSettings
 from app.onboarding.schemas import OnboardingCompleteRequest
 from app.services.training_preferences import extract_and_store_race_info
-from app.users.profile_service import upsert_athlete_profile
+from app.users.profile_service import create_user_settings, upsert_athlete_profile
 
 
 def persist_profile_data(
@@ -125,13 +125,13 @@ def persist_training_preferences(
     if not preferences_data:
         settings = session.query(UserSettings).filter_by(user_id=user_id).first()
         if not settings:
-            settings = UserSettings(user_id=user_id, profile_visibility="private")
+            settings = create_user_settings(user_id=user_id)
             session.add(settings)
         return settings
 
     settings = session.query(UserSettings).filter_by(user_id=user_id).first()
     if not settings:
-        settings = UserSettings(user_id=user_id, profile_visibility="private")
+        settings = create_user_settings(user_id=user_id)
         session.add(settings)
 
     # Update fields

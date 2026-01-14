@@ -894,6 +894,7 @@ def delete_planned_session(
     - ONLY accepts planned_sessions.id
     - NEVER accepts workout_id, calendar_session_id, or activity_id
     - Returns 404 if the ID is not a valid planned_sessions.id
+    - Properly handles cascading deletes for workout and workout_steps
 
     Args:
         planned_session_id: MUST be a planned_sessions.id (not activity_id, workout_id, etc.)
@@ -945,6 +946,51 @@ def delete_planned_session(
                 detail="Cannot delete a session that has been completed and merged with an activity. Unpair the activity first.",
             )
 
+        # Handle cascading deletes for workout and workout_steps
+        # Only delete workout if it's not referenced by any activities
+        workout_id = planned_session.workout_id
+        if workout_id:
+            from app.db.models import Activity
+            from app.workouts.models import Workout, WorkoutStep
+
+            # Check if workout is referenced by any activities
+            activity_count = session.execute(
+                select(func.count(Activity.id)).where(Activity.workout_id == workout_id)
+            ).scalar() or 0
+
+            # Check if workout is referenced by any other planned sessions
+            other_planned_count = session.execute(
+                select(func.count(PlannedSession.id)).where(
+                    PlannedSession.workout_id == workout_id,
+                    PlannedSession.id != planned_session_id,
+                )
+            ).scalar() or 0
+
+            # Only delete workout if it's not referenced elsewhere
+            if activity_count == 0 and other_planned_count == 0:
+                # Delete workout_steps first (cascade order)
+                workout_steps = session.execute(
+                    select(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
+                ).scalars().all()
+                for step in workout_steps:
+                    session.delete(step)
+
+                # Delete workout
+                workout = session.execute(
+                    select(Workout).where(Workout.id == workout_id)
+                ).scalar_one_or_none()
+                if workout:
+                    session.delete(workout)
+                    logger.info(
+                        f"[PLANNED-SESSIONS] Deleted orphaned workout: workout_id={workout_id}, user_id={user_id}"
+                    )
+            else:
+                logger.info(
+                    f"[PLANNED-SESSIONS] Keeping workout (referenced elsewhere): workout_id={workout_id}, "
+                    f"activity_count={activity_count}, other_planned_count={other_planned_count}"
+                )
+
+        # Delete planned session
         session.delete(planned_session)
         session.commit()
         logger.info(

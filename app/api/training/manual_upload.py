@@ -299,10 +299,24 @@ async def upload_manual_session(
                 # Step 2-4: Orchestration service (extract → LLM → create structured workout)
                 # Only create structured workout if notes_raw exists
                 if request.notes and request.notes.strip():
-                    workout = await create_structured_workout_from_manual_session(
-                        session=session,
-                        planned_session=planned_session,
-                    )
+                    try:
+                        workout = await create_structured_workout_from_manual_session(
+                            session=session,
+                            planned_session=planned_session,
+                        )
+                    except Exception as orchestration_error:
+                        logger.exception(
+                            "Manual session orchestration failed",
+                            user_id=user_id,
+                            planned_session_id=planned_session.id,
+                            error_type=type(orchestration_error).__name__,
+                            error_message=str(orchestration_error),
+                        )
+                        session.rollback()
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Manual session orchestration failed: {type(orchestration_error).__name__}: {orchestration_error}",
+                        ) from orchestration_error
                 else:
                     # If no notes, create simple workout (fallback)
                     from app.workouts.workout_factory import WorkoutFactory
@@ -334,10 +348,15 @@ async def upload_manual_session(
         except HTTPException:
             raise
         except Exception as e:
-            logger.exception(f"Error uploading manual session (user_id={user_id})")
+            logger.exception(
+                "Error uploading manual session",
+                user_id=user_id,
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to upload session",
+                detail=f"Failed to upload session: {type(e).__name__}: {e}",
             ) from e
 
 

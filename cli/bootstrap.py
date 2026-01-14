@@ -15,3 +15,15 @@ os.environ.setdefault("APP_ENV", "local")
 _project_root = Path(__file__).parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
+
+# Load .env file if it exists (for CLI commands)
+# This ensures DATABASE_URL and other env vars are available before settings are loaded
+_env_file = _project_root / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file)
+    except ImportError:
+        # python-dotenv not installed, skip .env loading
+        # pydantic-settings will handle it via Settings class
+        pass

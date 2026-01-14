@@ -97,13 +97,26 @@ def setup_logger(
             record: Loguru record object (dict-like) that will be modified in place.
                    The record supports dict-like access with record["extra"] returning a dict.
         """
-        # Access extra dict directly - loguru Record supports this at runtime
+        # Access extra dict defensively - ensure it exists and is a dict
+        # This prevents KeyError during error logging when extra might not be initialized
+        try:
+            # Try to access extra - loguru Record supports dict-like access
+            extra = record["extra"]
+            if not isinstance(extra, dict):
+                # If extra exists but isn't a dict, create a new dict
+                record["extra"] = {}
+                extra = record["extra"]
+        except (KeyError, TypeError, AttributeError):
+            # If record doesn't support dict access or extra doesn't exist, create it
+            record["extra"] = {}
+            extra = record["extra"]
+
         # B45: Default to "system" if user_id is not set in context
-        record["extra"]["user_id"] = _get_user_id()
+        extra["user_id"] = _get_user_id()
         # B46: Get conversation_id from context (defaults to None from configure)
         conversation_id = _get_conversation_id()
         if conversation_id:
-            record["extra"]["conversation_id"] = conversation_id
+            extra["conversation_id"] = conversation_id
 
     # Apply patcher to the global logger instance
     # Note: logger.patch() returns a bound logger, but the patch is applied to the global logger

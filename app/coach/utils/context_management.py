@@ -30,7 +30,7 @@ def load_context(athlete_id: int, limit: int = 20) -> list[dict[str, str]]:
     # Convert athlete_id to user_id
     user_id = get_user_id_from_athlete_id(athlete_id)
     if user_id is None:
-        logger.warning("No user_id found for athlete_id, returning empty history", athlete_id=athlete_id)
+        logger.warning("No user_id found for athlete_id, returning empty history", extra={"athlete_id": athlete_id})
         return []
 
     with get_session() as db:
@@ -82,7 +82,7 @@ def save_context(
     # Convert athlete_id to user_id
     user_id = get_user_id_from_athlete_id(athlete_id)
     if user_id is None:
-        logger.error("Cannot save context: no user_id found for athlete_id", athlete_id=athlete_id)
+        logger.error("Cannot save context: no user_id found for athlete_id", extra={"athlete_id": athlete_id})
         return
 
     # Normalize messages before storage

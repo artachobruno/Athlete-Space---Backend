@@ -123,9 +123,9 @@ def setup_logger(
 
         # B45: Always ensure user_id exists (format doesn't require it, but defensive)
         # This is set in logger.configure() above, but ensure it's always present
+        # Use setdefault as hard guard - even if kwargs overwrite extra, user_id will exist
         with suppress(Exception):
-            if "user_id" not in extra:
-                extra["user_id"] = "system"
+            extra.setdefault("user_id", "system")
             # Update from context if available
             with suppress(Exception):
                 user_id = _get_user_id()

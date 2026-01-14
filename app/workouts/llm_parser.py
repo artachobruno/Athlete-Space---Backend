@@ -124,15 +124,17 @@ RULES:
             output_type=ParsedWorkout,
         )
 
-        logger.info("Calling LLM to parse workout notes", sport=sport, notes_length=len(notes))
+        logger.info("Calling LLM to parse workout notes", extra={"sport": sport, "notes_length": len(notes)})
         result = agent.run_sync(user_prompt)
         parsed_workout = result.output
 
         logger.info(
             "Workout notes parsed successfully",
-            sport=sport,
-            step_count=len(parsed_workout.steps),
-            confidence=parsed_workout.confidence,
+            extra={
+                "sport": sport,
+                "step_count": len(parsed_workout.steps),
+                "confidence": parsed_workout.confidence,
+            },
         )
     except ValidationError as e:
         logger.error(f"LLM output validation failed: {e}")

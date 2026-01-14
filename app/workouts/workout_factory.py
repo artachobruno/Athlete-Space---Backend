@@ -268,7 +268,7 @@ class WorkoutFactory:
         # Trigger compliance generation
         try:
             ComplianceService.compute_and_persist(session, workout.id)
-            logger.debug("Generated compliance for workout", workout_id=workout.id)
+            logger.debug("Generated compliance for workout", extra={"workout_id": workout.id})
         except Exception as e:
             logger.warning(
                 "Failed to generate compliance (non-fatal)",

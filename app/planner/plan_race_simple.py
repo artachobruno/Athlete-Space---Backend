@@ -437,11 +437,13 @@ async def plan_race_simple(
 
     logger.info(
         "planner_v2_entry: Starting race plan generation",
-        distance=distance,
-        race_date=race_date.isoformat(),
-        user_id=user_id,
-        athlete_id=athlete_id,
-        plan_id=plan_id,
+        extra={
+            "distance": distance,
+            "race_date": race_date.isoformat(),
+            "user_id": user_id,
+            "athlete_id": athlete_id,
+            "plan_id": plan_id,
+        },
     )
 
     # Compute start date and total weeks

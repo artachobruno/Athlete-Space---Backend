@@ -466,7 +466,7 @@ async def upload_manual_week(
         # Validate date coverage and overlaps
         dates = [s["date"] for s in session_dicts]
         if len(set(dates)) < len(dates):
-            logger.warning("Duplicate dates detected in week upload", user_id=user_id)
+            logger.warning("Duplicate dates detected in week upload", extra={"user_id": user_id})
 
         # Save sessions atomically using existing function
         try:
@@ -514,7 +514,7 @@ async def upload_manual_week(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error uploading manual week: {e}", exc_info=True, user_id=user_id)
+            logger.error(f"Error uploading manual week: {e}", extra={"user_id": user_id}, exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to upload week",
@@ -642,7 +642,7 @@ async def upload_manual_season(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error uploading manual season: {e}", exc_info=True, user_id=user_id)
+            logger.error(f"Error uploading manual season: {e}", extra={"user_id": user_id}, exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to upload season",

@@ -110,7 +110,7 @@ async def generate_macro_plan_llm(
     try:
         prompt_text = _load_prompt()
     except FileNotFoundError as e:
-        logger.error("Macro plan prompt not found", error=str(e))
+        logger.error("Macro plan prompt not found", extra={"error": str(e)})
         raise
 
     # Format prompt with weeks count
@@ -141,10 +141,10 @@ async def generate_macro_plan_llm(
             week_count=len(parsed.weeks),
         )
     except ValidationError as e:
-        logger.error("Macro plan schema validation failed", error=str(e))
+        logger.error("Macro plan schema validation failed", extra={"error": str(e)})
         raise ValidationError(f"Schema validation failed: {e}") from e
     except Exception as e:
-        logger.error("LLM call failed", error=str(e), error_type=type(e).__name__)
+        logger.error("LLM call failed", extra={"error": str(e), "error_type": type(e).__name__})
         raise RuntimeError(f"LLM call failed: {type(e).__name__}: {e}") from e
     else:
         return parsed

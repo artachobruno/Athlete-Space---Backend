@@ -305,9 +305,9 @@ async def generate_session_text_llm(
 
         except ValidationError as e:
             if attempt < max_attempts_constraint - 1:
-                logger.warning("Schema validation failed, retrying", attempt=attempt + 1, error=str(e))
+                logger.warning("Schema validation failed, retrying", extra={"attempt": attempt + 1, "error": str(e)})
                 continue
-            logger.error("Schema validation failed after all attempts", error=str(e))
+            logger.error("Schema validation failed after all attempts", extra={"error": str(e)})
             raise ValidationError(f"Schema validation failed after {max_attempts_constraint} attempts: {e}") from e
 
         except Exception as e:

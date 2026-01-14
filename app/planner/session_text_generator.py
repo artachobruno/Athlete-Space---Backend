@@ -113,9 +113,9 @@ def _get_cached_output(cache_key: str) -> dict | None:
         if cached and isinstance(cached, str):
             return json.loads(cached)
     except redis.RedisError as e:
-        logger.debug("Redis cache read failed (non-fatal)", error=str(e))
+        logger.debug("Redis cache read failed (non-fatal)", extra={"error": str(e)})
     except Exception as e:
-        logger.debug("Unexpected error reading cache", error=str(e))
+        logger.debug("Unexpected error reading cache", extra={"error": str(e)})
 
     return None
 
@@ -137,9 +137,9 @@ def _set_cached_output(cache_key: str, output: SessionTextOutput) -> None:
         }
         redis_client.set(cache_key, json.dumps(output_dict), ex=CACHE_TTL_SECONDS)
     except redis.RedisError as e:
-        logger.debug("Redis cache write failed (non-fatal)", error=str(e))
+        logger.debug("Redis cache write failed (non-fatal)", extra={"error": str(e)})
     except Exception as e:
-        logger.debug("Unexpected error writing cache", error=str(e))
+        logger.debug("Unexpected error writing cache", extra={"error": str(e)})
 
 
 def _convert_domain_to_planner_output(domain_output: DomainSessionTextOutput) -> SessionTextOutput:

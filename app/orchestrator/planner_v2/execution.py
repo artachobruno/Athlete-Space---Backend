@@ -592,7 +592,7 @@ def run_b7_persist(
     except Exception as e:
         emit_step_failed(state.plan_id, "persist", start_time, str(e))
         # Persistence failures are non-fatal (partial success allowed)
-        logger.warning("B7 persistence failed but continuing", error=str(e))
+        logger.warning("B7 persistence failed but continuing", extra={"error": str(e)})
         raise StepExecutionError("persist", e) from e
 
 

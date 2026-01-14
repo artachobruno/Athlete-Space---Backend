@@ -1140,9 +1140,9 @@ async def run_conversation(
     try:
         user_message_text = str(user_input).strip() if user_input else ""
         if not user_message_text:
-            logger.warning("Skipping context save: empty user message", athlete_id=deps.athlete_id)
+            logger.warning("Skipping context save: empty user message", extra={"athlete_id": deps.athlete_id})
         elif not result.output.message:
-            logger.warning("Skipping context save: empty assistant message", athlete_id=deps.athlete_id)
+            logger.warning("Skipping context save: empty assistant message", extra={"athlete_id": deps.athlete_id})
         elif not isinstance(deps.athlete_id, int):
             logger.warning(
                 f"Skipping context save: invalid athlete_id type {type(deps.athlete_id)}",

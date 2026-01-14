@@ -51,7 +51,7 @@ def _is_history_empty(athlete_id: int | None = None) -> bool:
     # Convert athlete_id to user_id
     user_id = get_user_id_from_athlete_id(athlete_id)
     if user_id is None:
-        logger.debug("No user_id found for athlete_id, treating as cold start", athlete_id=athlete_id)
+        logger.debug("No user_id found for athlete_id, treating as cold start", extra={"athlete_id": athlete_id})
         return True
 
     with get_session() as db:
@@ -145,7 +145,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
             )
             reply = welcome_new_user(athlete_state)
         except RuntimeError as e:
-            logger.warning("Cold start with no training data available", error=str(e))
+            logger.warning("Cold start with no training data available", extra={"error": str(e)})
             reply = welcome_new_user(None)
 
         # Normalize messages before saving (legacy endpoint - no conversation_id available)

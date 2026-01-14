@@ -610,7 +610,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     )
                     await asyncio.sleep(wait_time)
                     continue
-                logger.error(f"MCP tool request error after {max_retries} attempts: {tool_name}", tool=tool_name, error=str(e))
+                logger.error(f"MCP tool request error after {max_retries} attempts: {tool_name}", extra={"tool": tool_name, "error": str(e)})
                 raise MCPError("NETWORK_ERROR", f"Network error calling {tool_name}: {e!s}") from e
             except MCPError:
                 # Re-raise MCPError without wrapping (e.g., from _raise_mcp_error for permanent errors)
@@ -642,18 +642,20 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
                     wait_time = min(2**attempt, 10)
                     await asyncio.sleep(wait_time)
                     continue
-                logger.error(f"Unexpected RuntimeError calling MCP tool: {tool_name}", tool=tool_name, error=str(e), exc_info=True)
+                logger.error(f"Unexpected RuntimeError calling MCP tool: {tool_name}", extra={"tool": tool_name, "error": str(e)}, exc_info=True)
                 raise MCPError("INTERNAL_ERROR", f"Unexpected error calling {tool_name}: {e!s}") from e
             except Exception as e:
                 logger.debug(
                     "MCP: Unexpected exception",
-                    tool=tool_name,
-                    attempt=attempt + 1,
-                    error_type=type(e).__name__,
-                    error=str(e),
+                    extra={
+                        "tool": tool_name,
+                        "attempt": attempt + 1,
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                    },
                 )
                 # Don't retry on unknown exceptions
-                logger.error(f"Unexpected error calling MCP tool: {tool_name}", tool=tool_name, error=str(e), exc_info=True)
+                logger.error(f"Unexpected error calling MCP tool: {tool_name}", extra={"tool": tool_name, "error": str(e)}, exc_info=True)
                 raise MCPError("INTERNAL_ERROR", f"Unexpected error calling {tool_name}: {e!s}") from e
             else:
                 # Success path - return result

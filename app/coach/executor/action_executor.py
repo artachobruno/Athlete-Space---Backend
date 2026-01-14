@@ -976,12 +976,14 @@ class CoachActionExecutor:
         """Execute plan_race_build tool."""
         logger.debug(
             "ActionExecutor: Starting plan_race_build execution",
-            user_id=deps.user_id,
-            athlete_id=deps.athlete_id,
-            conversation_id=conversation_id,
-            intent=decision.intent,
-            horizon=decision.horizon,
-            should_execute=decision.should_execute,
+            extra={
+                "user_id": deps.user_id,
+                "athlete_id": deps.athlete_id,
+                "conversation_id": conversation_id,
+                "intent": decision.intent,
+                "horizon": decision.horizon,
+                "should_execute": decision.should_execute,
+            },
         )
 
         # FIX 4: Hard guard - crash loudly if execution is attempted with missing slots
@@ -995,12 +997,14 @@ class CoachActionExecutor:
             error_msg = f"plan_race_build called with missing slots: {missing}"
             logger.error(
                 "ActionExecutor: Hard guard fired - missing required slots",
-                tool="plan_race_build",
-                required_attributes=required,
-                filled_slots_keys=list(slots.keys()),
-                missing_slots=missing,
-                should_execute=decision.should_execute,
-                conversation_id=conversation_id,
+                extra={
+                    "tool": "plan_race_build",
+                    "required_attributes": required,
+                    "filled_slots_keys": list(slots.keys()),
+                    "missing_slots": missing,
+                    "should_execute": decision.should_execute,
+                    "conversation_id": conversation_id,
+                },
             )
             raise RuntimeError(error_msg)
 

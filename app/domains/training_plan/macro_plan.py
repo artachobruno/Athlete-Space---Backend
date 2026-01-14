@@ -101,10 +101,10 @@ async def generate_macro_plan(
     try:
         parsed = await generate_macro_plan_llm(ctx, athlete_state)
     except ValidationError as e:
-        logger.error("Macro plan schema validation failed", error=str(e))
+        logger.error("Macro plan schema validation failed", extra={"error": str(e)})
         raise InvalidMacroPlanError(f"Schema validation failed: {e}") from e
     except Exception as e:
-        logger.error("LLM call failed", error=str(e), error_type=type(e).__name__)
+        logger.error("LLM call failed", extra={"error": str(e), "error_type": type(e).__name__})
         raise InvalidMacroPlanError(f"LLM call failed: {type(e).__name__}: {e}") from e
 
     # Convert schema to domain models

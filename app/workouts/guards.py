@@ -47,7 +47,7 @@ def assert_activity_has_workout(activity: Activity) -> None:
     """
     if activity.workout_id is None:
         error_msg = f"INVARIANT VIOLATION: Activity {activity.id} has no workout_id"
-        logger.error(error_msg, activity_id=activity.id, user_id=activity.user_id)
+        logger.error(error_msg, extra={"activity_id": activity.id, "user_id": activity.user_id})
         raise AssertionError(error_msg)
 
 

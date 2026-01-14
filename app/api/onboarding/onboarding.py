@@ -122,17 +122,17 @@ def complete_onboarding(
     with get_session() as session:
         user_result = session.execute(select(User).where(User.id == user_id)).first()
         if not user_result:
-            logger.error(f"Onboarding failed: user not found user_id={user_id}")
+            logger.exception(f"Onboarding failed: user not found user_id={user_id}")
             raise HTTPException(status_code=404, detail="User not found")
 
     try:
         return complete_onboarding_flow(user_id=user_id, request=request)
     except ValueError as e:
         # User not found or validation error
-        logger.error(f"Validation error completing onboarding: {e}", exc_info=True)
+        logger.exception(f"Validation error completing onboarding: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid request: {e!s}") from e
     except Exception as e:
-        logger.error(f"Error completing onboarding: {e}", exc_info=True)
+        logger.exception(f"Error completing onboarding: {e}")
         # Include error type and message for better debugging
         error_detail = f"{type(e).__name__}: {e!s}" if str(e) else f"{type(e).__name__}"
         raise HTTPException(status_code=500, detail=f"Failed to complete onboarding: {error_detail}") from e

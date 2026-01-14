@@ -135,7 +135,7 @@ def extract_race_attributes(
     try:
         return extraction_service.extract_race_attributes(combined_goal_text)
     except Exception as e:
-        logger.error(f"Failed to extract race attributes: {e}", exc_info=True)
+        logger.exception(f"Failed to extract race attributes: {e}")
         return None
 
 
@@ -157,7 +157,7 @@ def extract_injury_attributes_from_settings(
     try:
         return extract_injury_attributes(settings.injury_notes)
     except Exception as e:
-        logger.error(f"Failed to extract injury attributes: {e}", exc_info=True)
+        logger.exception(f"Failed to extract injury attributes: {e}")
         return None
 
 
@@ -200,7 +200,7 @@ def generate_weekly_intent_for_onboarding(
             logger.info("Generated provisional weekly intent (insufficient data)")
 
     except Exception as e:
-        logger.error(f"Failed to generate weekly intent: {e}", exc_info=True)
+        logger.exception(f"Failed to generate weekly intent: {e}")
         return None
     else:
         return intent
@@ -256,7 +256,7 @@ def generate_season_plan_for_onboarding(
         )
 
     except Exception as e:
-        logger.error(f"Failed to generate season plan: {e}", exc_info=True)
+        logger.exception(f"Failed to generate season plan: {e}")
         return None
     else:
         return plan
@@ -663,7 +663,7 @@ def _generate_plans_for_onboarding(
             provisional = is_provisional
             save_weekly_intent(session, config.user_id, config.athlete_id, weekly_intent_obj)
     except Exception as e:
-        logger.error(f"Failed to generate weekly intent: {e}", exc_info=True)
+        logger.exception(f"Failed to generate weekly intent: {e}")
         warning = "plan_generation_failed"
 
     # Generate season plan (only if race exists)
@@ -681,7 +681,7 @@ def _generate_plans_for_onboarding(
                 season_plan = season_plan_obj.model_dump()
                 save_season_plan(session, config.user_id, config.athlete_id, season_plan_obj)
         except Exception as e:
-            logger.error(f"Failed to generate season plan: {e}", exc_info=True)
+            logger.exception(f"Failed to generate season plan: {e}")
             if not warning:
                 warning = "plan_generation_failed"
 
@@ -775,6 +775,6 @@ def complete_onboarding_flow(
             )
 
         except Exception as e:
-            logger.error(f"Error completing onboarding: {e}", exc_info=True)
+            logger.exception(f"Error completing onboarding: {e}")
             session.rollback()
             raise

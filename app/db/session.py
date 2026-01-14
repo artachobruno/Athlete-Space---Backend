@@ -187,12 +187,8 @@ def get_session() -> Generator[Session, None, None]:
         logger.debug("HTTPException in session, rolling back")
         session.rollback()
         raise
-    except KeyError as e:
-        _log_keyerror_details(session, e)
-        logger.error("Full KeyError traceback:", exc_info=True)
-        session.rollback()
-        # Force a clean traceback to identify the exact location
-        raise RuntimeError(f"FORCED TRACE: KeyError for key {e.args[0] if e.args else 'unknown'}") from e
+    except KeyError:
+        raise
     except Exception as e:
         # Check if this is a business logic error (not a database error)
         # Import here to avoid circular imports

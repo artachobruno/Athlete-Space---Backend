@@ -223,7 +223,8 @@ def persist_onboarding_complete(
         user.role = UserRole.coach
     else:
         raise ValueError(f"Invalid role: {request.role}. Must be 'athlete' or 'coach'")
-    session.commit()
+    # Note: No need to commit here - upsert_athlete_profile already committed.
+    # The role change will be committed by the session context manager.
 
     logger.info(
         f"Persisted onboarding data for user_id={user_id}: "

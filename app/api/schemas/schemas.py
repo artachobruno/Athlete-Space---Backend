@@ -441,3 +441,20 @@ class TimezoneUpdateRequest(BaseModel):
     """Request for PATCH /users/me."""
 
     timezone: str = Field(description="IANA timezone string (e.g., 'America/Chicago', 'Europe/London')")
+
+
+class SettingsProfileResponse(BaseModel):
+    """Response for GET /settings/profile."""
+
+    email: str = Field(description="User email address")
+    first_name: str | None = Field(description="User's first name", default=None)
+    last_name: str | None = Field(description="User's last name", default=None)
+    role: str = Field(description="User role: 'athlete' or 'coach'")
+
+
+class SettingsProfileUpdateRequest(BaseModel):
+    """Request for PATCH /settings/profile."""
+
+    first_name: str | None = Field(description="User's first name", default=None)
+    last_name: str | None = Field(description="User's last name", default=None)
+    role: str | None = Field(description="User role: 'athlete' or 'coach'", default=None)

@@ -28,7 +28,7 @@ from app.onboarding.extraction import (
     GoalExtractionService,
     extract_injury_attributes,
 )
-from app.onboarding.persistence import persist_profile_data, persist_training_preferences
+from app.onboarding.persistence import persist_onboarding_complete, persist_profile_data, persist_training_preferences
 from app.onboarding.schemas import OnboardingCompleteRequest, OnboardingCompleteResponse
 from app.services.intelligence.runtime import CoachRuntime
 from app.services.training_preferences import extract_and_store_race_info
@@ -711,40 +711,21 @@ def complete_onboarding_flow(
 
     with get_session() as session:
         try:
-            # 1. Persist onboarding data
-            profile = persist_profile_data(session, user_id, request.profile)
-            settings = persist_training_preferences(session, user_id, request.training_preferences)
+            # 1. Persist onboarding data to users, athlete_profiles, and user_settings
+            _user, profile, settings = persist_onboarding_complete(session, user_id, request)
 
-            # 2. Extract race attributes from goals using the same service as preference updates
-            extract_and_store_race_info(session, user_id, settings, profile)
+            # 2. Extract injury attributes from injury notes if provided
+            extracted_injury_attributes = None
+            if settings.injury_notes:
+                extracted_injury_attributes = extract_injury_attributes_from_settings(settings)
+                if extracted_injury_attributes:
+                    profile.extracted_injury_attributes = extracted_injury_attributes.model_dump()
+                    session.commit()
 
-            # Get extracted race attributes from profile (stored by extract_and_store_race_info)
-            # Refresh profile to get latest extracted_race_attributes
-            session.refresh(profile)
-            extracted_attributes_dict = profile.extracted_race_attributes if profile else None
-
-            # Convert dict to ExtractedRaceAttributes object if available
+            # 3. Extract race attributes - not available in new schema, skip for now
             extracted_attributes_obj = None
-            if extracted_attributes_dict and isinstance(extracted_attributes_dict, dict):
-                with contextlib.suppress(Exception):
-                    extracted_attributes_obj = ExtractedRaceAttributes(
-                        event_type=extracted_attributes_dict.get("event_type"),
-                        event_date=extracted_attributes_dict.get("event_date"),
-                        goal_time=extracted_attributes_dict.get("target_time"),
-                        distance=extracted_attributes_dict.get("distance"),
-                        location=extracted_attributes_dict.get("location"),
-                    )
-                    # If conversion fails, leave as None (suppressed by contextlib)
 
-            # 3. Extract injury attributes from injury notes
-            extracted_injury_attributes = extract_injury_attributes_from_settings(settings)
-
-            # 4. Store extracted injury attributes on profile
-            if extracted_injury_attributes:
-                profile.extracted_injury_attributes = extracted_injury_attributes.model_dump()
-                session.commit()
-
-            # 4. Conditionally generate plans
+            # 4. Conditionally generate plans (if user opted in and has Strava data)
             weekly_intent = None
             season_plan = None
             provisional = False
@@ -773,9 +754,7 @@ def complete_onboarding_flow(
             else:
                 logger.info(f"Skipping plan generation: {reason}")
 
-            # 5. Mark onboarding as complete
-            profile.onboarding_completed = True
-            session.commit()
+            # 5. Onboarding is already marked as complete in persist_onboarding_complete
             session.refresh(profile)  # Refresh to ensure we have the latest state
 
             logger.info(f"Onboarding completed successfully for user_id={user_id}, onboarding_completed={profile.onboarding_completed}")

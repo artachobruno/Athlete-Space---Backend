@@ -76,7 +76,7 @@ def fetch_and_save_streams(
         # Compute effort metrics and TSS after streams are saved
         try:
             user_settings = session.query(UserSettings).filter_by(user_id=activity.user_id).first()
-            
+
             # Compute effort metrics
             normalized_effort, effort_source, intensity_factor = compute_activity_effort(activity, user_settings)
             activity.normalized_power = normalized_effort

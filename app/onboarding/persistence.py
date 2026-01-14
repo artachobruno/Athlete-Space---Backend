@@ -5,11 +5,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.schemas.athlete_profile import AthleteProfileUpsert
 from app.api.schemas.schemas import AthleteProfileUpdateRequest, TrainingPreferencesUpdateRequest
-from app.db.models import AthleteProfile, StravaAccount, UserSettings
+from app.db.models import AthleteProfile, StravaAccount, User, UserSettings
+from app.onboarding.schemas import OnboardingCompleteRequest
 from app.services.training_preferences import extract_and_store_race_info
+from app.users.profile_service import upsert_athlete_profile
 
 
 def persist_profile_data(
@@ -170,3 +174,55 @@ def persist_training_preferences(
             # Don't fail onboarding if extraction fails
 
     return settings
+
+
+def persist_onboarding_complete(
+    session: Session,
+    user_id: str,
+    request: OnboardingCompleteRequest,
+) -> tuple[User, AthleteProfile, UserSettings]:
+    """Persist complete onboarding data to users, athlete_profiles, and user_settings.
+
+    This function uses the shared upsert_athlete_profile service to ensure
+    consistency between onboarding and settings updates.
+
+    Args:
+        session: Database session
+        user_id: User ID
+        request: Onboarding completion request with all required fields
+
+    Returns:
+        Tuple of (User, AthleteProfile, UserSettings) instances
+    """
+    # Convert OnboardingCompleteRequest to AthleteProfileUpsert
+    payload = AthleteProfileUpsert(
+        first_name=request.first_name,
+        last_name=request.last_name,
+        timezone=request.timezone,
+        primary_sport=request.primary_sport,
+        goal_type=request.goal_type,
+        experience_level=request.experience_level,
+        availability_days_per_week=request.availability_days_per_week,
+        availability_hours_per_week=request.availability_hours_per_week,
+        injury_status=request.injury_status,
+        injury_notes=request.injury_notes,
+    )
+
+    # Use shared service to upsert profile data
+    user, profile, settings = upsert_athlete_profile(
+        user_id=user_id,
+        payload=payload,
+        session=session,
+    )
+
+    # Handle role separately (only set during onboarding, not in settings)
+    user.role = request.role
+    session.commit()
+
+    logger.info(
+        f"Persisted onboarding data for user_id={user_id}: "
+        f"first_name={request.first_name}, primary_sport={request.primary_sport}, "
+        f"experience_level={request.experience_level}, role={request.role}"
+    )
+
+    return (user, profile, settings)

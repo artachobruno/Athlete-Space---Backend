@@ -38,6 +38,7 @@ from app.api.integrations.integrations_strava import router as integrations_stra
 from app.api.intelligence.intelligence import router as intelligence_router
 from app.api.intelligence.risks import router as risks_router
 from app.api.onboarding.onboarding import router as onboarding_router
+from app.api.settings.settings import router as settings_router
 from app.api.strava.strava import router as strava_router
 from app.api.training.manual_upload import router as manual_upload_router
 from app.api.training.state import router as state_router
@@ -87,6 +88,7 @@ from scripts.migrate_add_source_to_planned_sessions import migrate_add_source_to
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
+from scripts.migrate_add_user_role import migrate_add_user_role
 from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
@@ -184,6 +186,14 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_add_user_is_active: {e}")
         logger.error(f"✗ Migration failed: migrate_add_user_is_active - {e}", exc_info=True)
+
+    try:
+        logger.info("Running migration: add role to users table")
+        migrate_add_user_role()
+        logger.info("✓ Migration completed: add role to users table")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_user_role: {e}")
+        logger.error(f"✗ Migration failed: migrate_add_user_role - {e}", exc_info=True)
 
     try:
         logger.info("Running migration: athlete_profiles athlete_id column")
@@ -846,6 +856,7 @@ app.include_router(intelligence_router)
 app.include_router(risks_router)
 app.include_router(me_router)
 app.include_router(onboarding_router)
+app.include_router(settings_router)
 app.include_router(strava_router)
 app.include_router(manual_upload_router)
 app.include_router(ops_router)

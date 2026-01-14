@@ -6,9 +6,11 @@ Handles non-destructive merging of Strava profile data into athlete profiles.
 from __future__ import annotations
 
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AthleteProfile
+from app.api.schemas.athlete_profile import AthleteProfileUpsert
+from app.db.models import AthleteProfile, StravaAccount, User, UserSettings
 
 
 def map_gender(strava_sex: str | None) -> str | None:
@@ -178,3 +180,111 @@ def merge_strava_profile(
     logger.info(f"[PROFILE_SERVICE] Profile merged successfully for user_id={user_id}")
 
     return profile
+
+
+def upsert_athlete_profile(
+    *,
+    user_id: str,
+    payload: AthleteProfileUpsert,
+    session: Session,
+) -> tuple[User, AthleteProfile, UserSettings]:
+    """Upsert athlete profile data to users, athlete_profiles, and user_settings.
+
+    This is the single source of truth for profile updates.
+    Used by both onboarding completion and settings update endpoints.
+
+    This function:
+    1. Updates users table (first_name, last_name, timezone)
+    2. Upserts athlete_profiles row (primary_sport, onboarding_completed)
+    3. Upserts user_settings row (training preferences, availability, injury info)
+    4. Marks onboarding_completed = True (only if not already)
+
+    Args:
+        user_id: User ID
+        payload: Profile data to upsert
+        session: Database session
+
+    Returns:
+        Tuple of (User, AthleteProfile, UserSettings) instances
+
+    Raises:
+        ValueError: If user not found
+    """
+    logger.info(f"[PROFILE_SERVICE] Upserting athlete profile for user_id={user_id}")
+
+    # 1. Update User table
+    user_result = session.execute(select(User).where(User.id == user_id)).first()
+    if not user_result:
+        raise ValueError(f"User not found: {user_id}")
+    user = user_result[0]
+
+    user.first_name = payload.first_name
+    user.last_name = payload.last_name
+    user.timezone = payload.timezone
+
+    # 2. Get or create AthleteProfile
+    profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
+    if profile_result:
+        profile = profile_result[0]
+    else:
+        strava_account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+        athlete_id = int(strava_account_result[0].athlete_id) if strava_account_result and strava_account_result[0] else 0
+        profile = AthleteProfile(user_id=user_id, athlete_id=athlete_id, sources={})
+        session.add(profile)
+
+    # Update profile fields
+    profile.primary_sport = payload.primary_sport
+    # Mark onboarding as complete (idempotent - safe to call multiple times)
+    if not profile.onboarding_completed:
+        profile.onboarding_completed = True
+
+    if profile.sources is None:
+        profile.sources = {}
+    profile.sources["primary_sport"] = "user"
+    profile.sources["onboarding"] = "user"
+
+    # 3. Get or create UserSettings
+    settings_result = session.execute(select(UserSettings).where(UserSettings.user_id == user_id)).first()
+    if settings_result:
+        settings = settings_result[0]
+    else:
+        settings = UserSettings(user_id=user_id)
+        session.add(settings)
+
+    # Map primary_sport (single) to primary_sports (list)
+    settings.primary_sports = [payload.primary_sport]
+
+    # Map goal_type to training_focus
+    goal_type_to_focus = {
+        "performance": "race_focused",
+        "completion": "race_focused",
+        "general": "general_fitness",
+    }
+    settings.training_focus = goal_type_to_focus.get(payload.goal_type, "general_fitness")
+
+    # Store experience_level in consistency field
+    settings.consistency = payload.experience_level
+
+    # Convert availability_days_per_week (int) to available_days (list of day names)
+    week_days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    settings.available_days = week_days[: payload.availability_days_per_week]
+
+    settings.weekly_hours = payload.availability_hours_per_week
+
+    # Map injury_status to injury_history (boolean) and injury_notes
+    settings.injury_history = payload.injury_status != "none"
+    if payload.injury_notes:
+        settings.injury_notes = payload.injury_notes
+    elif payload.injury_status == "none":
+        settings.injury_notes = None
+
+    # Commit all changes atomically
+    session.commit()
+
+    logger.info(
+        f"[PROFILE_SERVICE] Profile upserted successfully for user_id={user_id}: "
+        f"first_name={payload.first_name}, primary_sport={payload.primary_sport}, "
+        f"experience_level={payload.experience_level}"
+    )
+
+    return (user, profile, settings)

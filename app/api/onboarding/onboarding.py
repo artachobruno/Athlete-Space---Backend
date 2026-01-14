@@ -101,42 +101,29 @@ def complete_onboarding(
 ):
     """Complete onboarding process.
 
-    Requires user to have email and password credentials before onboarding can proceed.
-
     This endpoint:
-    1. Verifies user has credentials
-    2. Persists onboarding data (profile and training preferences)
-    3. Normalizes structured fields
-    4. Runs LLM-based attribute extraction from goals
-    5. Conditionally generates plans (if user opted in)
-    6. Returns response to frontend
+    1. Persists onboarding data to users, athlete_profiles, and user_settings
+    2. Sets onboarding_complete flag
+    3. Conditionally generates plans (if user opted in and has data)
 
     Args:
-        request: Onboarding completion request
+        request: Onboarding completion request with all required fields
         user_id: Current authenticated user ID
 
     Returns:
         OnboardingCompleteResponse with generated plans (if any)
 
     Raises:
-        HTTPException: 400 if user lacks credentials, 500 on other errors
+        HTTPException: 404 if user not found, 422 if validation fails, 500 on other errors
     """
     logger.info(f"Onboarding completion requested for user_id={user_id}")
 
-    # Verify user has credentials before allowing onboarding
+    # Verify user exists
     with get_session() as session:
         user_result = session.execute(select(User).where(User.id == user_id)).first()
         if not user_result:
             logger.error(f"Onboarding failed: user not found user_id={user_id}")
             raise HTTPException(status_code=404, detail="User not found")
-
-        user = user_result[0]
-        if not user.email or not user.password_hash:
-            logger.warning(f"Onboarding blocked: user missing credentials user_id={user_id}")
-            raise HTTPException(
-                status_code=400,
-                detail="User must have email and password credentials before completing onboarding",
-            )
 
     try:
         return complete_onboarding_flow(user_id=user_id, request=request)

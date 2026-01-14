@@ -29,6 +29,8 @@ from app.api.schemas.schemas import (
     NotificationsUpdateRequest,
     PrivacySettingsResponse,
     PrivacySettingsUpdateRequest,
+    SettingsProfileResponse,
+    SettingsProfileUpdateRequest,
     TargetEvent,
     TimezoneUpdateRequest,
     TrainingPreferencesResponse,
@@ -308,6 +310,13 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
 
     logger.info(f"[API] /me endpoint called for user_id={user_id}")
 
+    def _raise_user_data_inconsistency() -> None:
+        """Raise HTTPException for user data inconsistency."""
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: User data inconsistency. Please try again or contact support.",
+        )
+
     # Store user info for exception handler (defaults for fallback response)
     user_email = ""
     user_auth_provider = "password"
@@ -319,6 +328,15 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
             # This can raise 500 if user not found (should not happen after auth validation)
             try:
                 user_email, user_auth_provider, user_timezone = _get_user_info(session, user_id)
+                # Get first_name and last_name from user
+                user_result = session.execute(select(User).where(User.id == user_id)).first()
+                if not user_result:
+                    _raise_user_data_inconsistency()
+                user = user_result[0]
+                user_first_name = user.first_name
+                user_last_name = user.last_name
+                # Default to 'athlete' if role is not set (for existing users before migration)
+                user_role = getattr(user, "role", "athlete") or "athlete"
             except HTTPException:
                 # Re-raise HTTPExceptions from _get_user_info (will be 500, not 404)
                 raise
@@ -344,13 +362,21 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 else:
                     logger.info(f"[API] /me: user_id={user_id}, could not infer completion, returning False")
 
-            # Aggregate profile data
+            # Build unified profile response (combines User, AthleteProfile, UserSettings)
             profile_response = None
             try:
                 profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
-                if profile:
-                    session.expunge(profile)
-                    profile_response = _build_response_from_profile(profile, user_email).model_dump()
+                settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+
+                if profile or settings or user_first_name:
+                    # Build profile from unified data model
+                    profile_response = _build_unified_profile_response(
+                        user_first_name=user_first_name,
+                        user_last_name=user_last_name,
+                        user_timezone=user_timezone,
+                        profile=profile,
+                        settings=settings,
+                    )
             except Exception as e:
                 logger.warning(f"[API] /me: Failed to load profile: {e}")
 
@@ -410,7 +436,10 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 "authenticated": True,
                 "email": user_email,
                 "auth_provider": user_auth_provider,
+                "first_name": user_first_name,
+                "last_name": user_last_name,
                 "timezone": user_timezone,
+                "role": user_role,
                 "onboarding_complete": onboarding_complete,
                 "profile": profile_response,
                 "training_preferences": training_prefs_response,
@@ -444,6 +473,7 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 "email": user_email if user_email else "",
                 "auth_provider": user_auth_provider,
                 "timezone": user_timezone,
+                "role": "athlete",  # Default fallback
                 "onboarding_complete": False,
                 "profile": None,
                 "training_preferences": None,
@@ -1689,6 +1719,79 @@ def _parse_target_event_from_profile(profile: AthleteProfile, request: AthletePr
             return profile.target_event
 
     return None
+
+
+def _build_unified_profile_response(
+    user_first_name: str | None,
+    user_last_name: str | None,
+    user_timezone: str,
+    profile: AthleteProfile | None,
+    settings: UserSettings | None,
+) -> dict[str, str | int | float | None]:
+    """Build unified profile response from User, AthleteProfile, and UserSettings.
+
+    This returns the profile in the format expected by the frontend:
+    {
+        "first_name": str,
+        "last_name": str | None,
+        "timezone": str,
+        "primary_sport": str | None,
+        "goal_type": str | None,  # Derived from training_focus
+        "experience_level": str | None,  # From consistency
+        "availability_days_per_week": int | None,  # Derived from available_days
+        "availability_hours_per_week": float | None,  # From weekly_hours
+        "injury_status": str | None,  # Derived from injury_history
+        "injury_notes": str | None,
+    }
+
+    Args:
+        user_first_name: First name from User table
+        user_last_name: Last name from User table
+        user_timezone: Timezone from User table
+        profile: AthleteProfile instance (optional)
+        settings: UserSettings instance (optional)
+
+    Returns:
+        Dictionary with unified profile data
+    """
+    # Map goal_type from training_focus
+    goal_type = None
+    if settings and settings.training_focus:
+        if settings.training_focus == "race_focused":
+            # Can't distinguish between performance and completion from training_focus alone
+            # Default to "performance" for now
+            goal_type = "performance"
+        elif settings.training_focus == "general_fitness":
+            goal_type = "general"
+
+    # Convert available_days (list) to availability_days_per_week (int)
+    availability_days_per_week = None
+    if settings and settings.available_days:
+        availability_days_per_week = len(settings.available_days)
+
+    # Map injury_status from injury_history and injury_notes
+    injury_status = None
+    if settings:
+        if settings.injury_history is True:
+            if settings.injury_notes:
+                injury_status = "managing"
+            else:
+                injury_status = "injured"
+        elif settings.injury_history is False:
+            injury_status = "none"
+
+    return {
+        "first_name": user_first_name,
+        "last_name": user_last_name,
+        "timezone": user_timezone,
+        "primary_sport": profile.primary_sport if profile else None,
+        "goal_type": goal_type,
+        "experience_level": settings.consistency if settings else None,
+        "availability_days_per_week": availability_days_per_week,
+        "availability_hours_per_week": settings.weekly_hours if settings else None,
+        "injury_status": injury_status,
+        "injury_notes": settings.injury_notes if settings else None,
+    }
 
 
 def _build_response_from_profile(profile: AthleteProfile, user_email: str | None = None) -> AthleteProfileResponse:

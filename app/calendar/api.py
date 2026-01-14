@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -890,3 +890,65 @@ def update_planned_session(
         session.refresh(planned_session)
 
         return _planned_session_to_calendar(planned_session)
+
+
+@planned_sessions_router.delete("/{planned_session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_planned_session(
+    planned_session_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> None:
+    """Delete a planned session.
+
+    CANONICAL RULE: Only planned_sessions.id may be deleted.
+    Calendar sessions, workouts, and activities are READ-ONLY views.
+
+    This endpoint:
+    - ONLY accepts planned_sessions.id
+    - NEVER accepts workout_id, calendar_session_id, or activity_id
+    - Returns 404 if the ID is not a valid planned_sessions.id
+
+    Args:
+        planned_session_id: MUST be a planned_sessions.id (not activity_id, workout_id, etc.)
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        None (204 No Content on success)
+
+    Raises:
+        HTTPException: 404 if planned_session_id is not a valid planned_sessions.id
+    """
+    logger.info(
+        f"[PLANNED-SESSIONS] DELETE /planned-sessions/{planned_session_id} called for user_id={user_id}"
+    )
+
+    with get_session() as session:
+        # STRICT VALIDATION: Only query PlannedSession table
+        # This ensures we ONLY accept planned_sessions.id
+        # If the ID is an activity_id, workout_id, or calendar_session_id, this query will return None
+        planned_session = session.execute(
+            select(PlannedSession).where(
+                PlannedSession.id == planned_session_id,
+                PlannedSession.user_id == user_id,
+            )
+        ).scalar_one_or_none()
+
+        if not planned_session:
+            # This correctly rejects:
+            # - activity_id (not in planned_sessions table)
+            # - workout_id (not in planned_sessions table)
+            # - calendar_session_id (not in planned_sessions table)
+            # - any other non-planned_sessions.id
+            logger.warning(
+                f"[PLANNED-SESSIONS] Planned session not found for deletion: id={planned_session_id}, user_id={user_id}. "
+                "This ID is likely an activity_id, workout_id, or calendar_session_id (all are REJECTED)."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Planned session not found",
+            )
+
+        session.delete(planned_session)
+        session.commit()
+        logger.info(
+            f"[PLANNED-SESSIONS] Deleted planned session: id={planned_session_id}, user_id={user_id}"
+        )

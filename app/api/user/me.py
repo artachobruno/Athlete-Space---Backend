@@ -790,6 +790,7 @@ def _extract_today_metrics(metrics_result: dict[str, list[tuple[str, float]]]) -
 
 
 def _build_overview_response(
+    connected: bool,
     last_sync: str | None,
     data_quality_status: str,
     metrics_result: dict[str, list[tuple[str, float]]],
@@ -798,6 +799,7 @@ def _build_overview_response(
     """Build overview response dictionary.
 
     Args:
+        connected: Whether Strava account is connected
         last_sync: Last sync timestamp or None
         data_quality_status: Data quality status string
         metrics_result: Training load metrics
@@ -840,7 +842,7 @@ def _build_overview_response(
     }
 
     return {
-        "connected": True,
+        "connected": connected,
         "last_sync": last_sync,
         "data_quality": data_quality_status,
         "metrics": metrics_data,
@@ -1011,9 +1013,20 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
         f"[API] /me/overview called at {datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]} for user_id={user_id}, days={days}"
     )
 
-    # Get StravaAccount for user
-    account = get_strava_account(user_id)
-    last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None
+    # Get StravaAccount for user - handle missing account gracefully
+    try:
+        account = get_strava_account(user_id)
+        last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None
+        strava_connected = True
+    except HTTPException as e:
+        # Strava account not connected - return graceful response, not an error
+        if e.status_code == 404:
+            logger.info(f"[API] /me/overview: No Strava account connected for user_id={user_id}, returning connected=false")
+            strava_connected = False
+            last_sync = None
+        else:
+            # Re-raise other HTTPExceptions
+            raise
 
     # Check if we have activities but no daily rows - trigger aggregation if needed
     with get_session() as session:
@@ -1126,7 +1139,7 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
     elapsed = time.time() - request_time
     logger.info(f"[API] /me/overview response: data_quality={data_quality_status}, elapsed={elapsed:.3f}s")
 
-    return _build_overview_response(last_sync, data_quality_status, metrics_result, today_metrics)
+    return _build_overview_response(strava_connected, last_sync, data_quality_status, metrics_result, today_metrics)
 
 
 @router.get("/overview/debug")

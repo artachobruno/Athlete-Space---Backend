@@ -939,11 +939,14 @@ def http_exception_handler(request: Request, exc: HTTPException):
     - 500: Server error
     - NEVER 404: This is a contract violation
 
-    If a 404 is raised for any /me route, convert it to 401 to maintain the contract.
+    IMPORTANT: Only the base /me endpoint (not /me/* sub-routes) should trigger
+    auth logout. Sub-routes like /me/overview can return 404 for business reasons
+    (e.g., Strava not connected) without affecting auth state.
     """
     # CRITICAL: /me endpoint contract - never return 404
-    # Convert any 404 for /me routes to 401 (not authenticated)
-    if exc.status_code == status.HTTP_404_NOT_FOUND and request.url.path.startswith("/me"):
+    # Convert 404 for EXACT /me endpoint to 401 (not authenticated)
+    # Do NOT convert 404 for /me/* sub-routes - they can return 404 for business reasons
+    if exc.status_code == status.HTTP_404_NOT_FOUND and request.url.path == "/me":
         logger.error(
             f"[AUTH CONTRACT] /me endpoint returned 404 - CONTRACT VIOLATION. "
             f"Path: {request.url.path}, Method: {request.method}. "

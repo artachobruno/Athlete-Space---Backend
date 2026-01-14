@@ -45,6 +45,7 @@ from app.db.models import (
     DailyTrainingLoad,
     StravaAccount,
     User,
+    UserRole,
     UserSettings,
 )
 from app.db.session import get_session
@@ -335,8 +336,15 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 user = user_result[0]
                 user_first_name = user.first_name
                 user_last_name = user.last_name
-                # Default to 'athlete' if role is not set (for existing users before migration)
-                user_role = getattr(user, "role", "athlete") or "athlete"
+                # Get role, default to 'athlete' if not set (for existing users before migration)
+                user_role_obj = getattr(user, "role", None)
+                if user_role_obj is None:
+                    user_role = "athlete"
+                elif isinstance(user_role_obj, str):
+                    user_role = user_role_obj
+                else:
+                    # It's a UserRole enum
+                    user_role = user_role_obj.value
             except HTTPException:
                 # Re-raise HTTPExceptions from _get_user_info (will be 500, not 404)
                 raise
@@ -439,7 +447,7 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 "first_name": user_first_name,
                 "last_name": user_last_name,
                 "timezone": user_timezone,
-                "role": user_role,
+                "role": user_role if isinstance(user_role, str) else user_role.value if hasattr(user_role, "value") else str(user_role),
                 "onboarding_complete": onboarding_complete,
                 "profile": profile_response,
                 "training_preferences": training_prefs_response,
@@ -473,7 +481,7 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 "email": user_email if user_email else "",
                 "auth_provider": user_auth_provider,
                 "timezone": user_timezone,
-                "role": "athlete",  # Default fallback
+                "role": "athlete",  # Default fallback (string for API response)
                 "onboarding_complete": False,
                 "profile": None,
                 "training_preferences": None,

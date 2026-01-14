@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas.athlete_profile import AthleteProfileUpsert
 from app.api.schemas.schemas import AthleteProfileUpdateRequest, TrainingPreferencesUpdateRequest
-from app.db.models import AthleteProfile, StravaAccount, User, UserSettings
+from app.db.models import AthleteProfile, StravaAccount, User, UserRole, UserSettings
 from app.onboarding.schemas import OnboardingCompleteRequest
 from app.services.training_preferences import extract_and_store_race_info
 from app.users.profile_service import upsert_athlete_profile
@@ -216,7 +216,13 @@ def persist_onboarding_complete(
     )
 
     # Handle role separately (only set during onboarding, not in settings)
-    user.role = request.role
+    # Convert string to UserRole enum
+    if request.role == "athlete":
+        user.role = UserRole.athlete
+    elif request.role == "coach":
+        user.role = UserRole.coach
+    else:
+        raise ValueError(f"Invalid role: {request.role}. Must be 'athlete' or 'coach'")
     session.commit()
 
     logger.info(

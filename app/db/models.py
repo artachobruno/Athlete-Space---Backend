@@ -34,6 +34,13 @@ class AuthProvider(enum.Enum):
     google = "google"
 
 
+class UserRole(enum.Enum):
+    """User role enum."""
+
+    athlete = "athlete"
+    coach = "coach"
+
+
 class User(Base):
     """User table for authentication and user context.
 
@@ -58,7 +65,7 @@ class User(Base):
     google_sub: Mapped[str | None] = mapped_column(String, nullable=True, unique=True, index=True)
     strava_athlete_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    role: Mapped[str] = mapped_column(String, nullable=False, default="athlete")
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="userrole", create_constraint=False), nullable=False, default=UserRole.athlete)
     first_name: Mapped[str | None] = mapped_column(String, nullable=True)
     last_name: Mapped[str | None] = mapped_column(String, nullable=True)
     timezone: Mapped[str] = mapped_column(String, nullable=False, default="UTC")

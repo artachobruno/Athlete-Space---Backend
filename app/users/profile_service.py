@@ -228,7 +228,11 @@ def upsert_athlete_profile(
         profile = profile_result[0]
     else:
         strava_account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
-        athlete_id = int(strava_account_result[0].athlete_id) if strava_account_result and strava_account_result[0] else 0
+        if strava_account_result:
+            strava_account = strava_account_result[0]
+            athlete_id = int(strava_account.athlete_id) if strava_account.athlete_id else 0
+        else:
+            athlete_id = 0
         profile = AthleteProfile(user_id=user_id, athlete_id=athlete_id, sources={})
         session.add(profile)
 

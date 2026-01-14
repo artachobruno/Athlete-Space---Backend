@@ -47,6 +47,23 @@ def _column_exists(conn, table_name: str, column_name: str) -> bool:
     return result.fetchone() is not None
 
 
+def _enum_type_exists(conn, enum_name: str) -> bool:
+    """Check if an enum type exists in PostgreSQL."""
+    if not _is_postgresql():
+        return False
+    result = conn.execute(
+        text(
+            """
+            SELECT typname
+            FROM pg_type
+            WHERE typname = :enum_name
+            """
+        ),
+        {"enum_name": enum_name},
+    )
+    return result.fetchone() is not None
+
+
 def migrate_add_user_role() -> None:
     """Add role field to users table."""
     print("Starting migration: add role to users table")
@@ -67,8 +84,15 @@ def migrate_add_user_role() -> None:
         if not _column_exists(conn, "users", "role"):
             print("Adding role column to users table...")
             if _is_postgresql():
-                # PostgreSQL: Add column with default 'athlete'
-                conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'athlete'"))
+                # Create enum type if it doesn't exist
+                if not _enum_type_exists(conn, "userrole"):
+                    print("Creating userrole enum type...")
+                    conn.execute(text("CREATE TYPE userrole AS ENUM ('athlete', 'coach')"))
+                    print("✓ Created userrole enum type")
+                else:
+                    print("userrole enum type already exists, skipping")
+                # PostgreSQL: Add column with enum type and default 'athlete'
+                conn.execute(text("ALTER TABLE users ADD COLUMN role userrole NOT NULL DEFAULT 'athlete'"))
             else:
                 # SQLite: Add column (SQLite 3.37.0+ supports NOT NULL DEFAULT, older versions may need workaround)
                 try:

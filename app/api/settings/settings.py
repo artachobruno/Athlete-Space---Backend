@@ -12,7 +12,7 @@ from sqlalchemy import select
 from app.api.dependencies.auth import get_current_user_id
 from app.api.schemas.athlete_profile import AthleteProfileUpsert
 from app.api.schemas.schemas import SettingsProfileResponse, SettingsProfileUpdateRequest
-from app.db.models import User
+from app.db.models import User, UserRole
 from app.db.session import get_session
 from app.users.profile_service import upsert_athlete_profile
 
@@ -55,11 +55,13 @@ def get_settings_profile(user_id: str = Depends(get_current_user_id)):
             user = user_result[0]
             session.expunge(user)
 
+            # Convert UserRole enum to string for response
+            role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
             return SettingsProfileResponse(
                 email=user.email,
                 first_name=user.first_name,
                 last_name=user.last_name,
-                role=user.role,
+                role=role_str,
             )
     except HTTPException:
         raise
@@ -139,10 +141,10 @@ def update_settings_profile_legacy(
             if request.last_name is not None:
                 user.last_name = request.last_name
             if request.role is not None:
-                # Validate role value
+                # Validate role value and convert to enum
                 if request.role not in {"athlete", "coach"}:
                     _raise_invalid_role(request.role)
-                user.role = request.role
+                user.role = UserRole.athlete if request.role == "athlete" else UserRole.coach
 
             session.commit()
             session.refresh(user)

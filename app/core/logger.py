@@ -80,7 +80,8 @@ def setup_logger(
     logger.remove()
 
     # B45: Configure default extra fields globally
-    # This ensures user_id and conversation_id are always present, even outside request scope
+    # CRITICAL: This MUST be set before any format evaluation to prevent KeyError
+    # The format strings don't require it, but this ensures it exists if anything tries to access it
     logger.configure(
         extra={
             "user_id": "system",
@@ -102,6 +103,7 @@ def setup_logger(
                    The record supports dict-like access with record["extra"] returning a dict.
         """
         # Access extra dict defensively - ensure it exists and is a dict
+        # CRITICAL: This must never raise an exception, or logging will fail
         try:
             # Try to access extra - loguru Record supports dict-like access
             extra = record["extra"]
@@ -109,14 +111,26 @@ def setup_logger(
                 # If extra exists but isn't a dict, create a new dict
                 record["extra"] = {}
                 extra = record["extra"]
-        except (KeyError, TypeError, AttributeError):
+        except (KeyError, TypeError, AttributeError, Exception):
             # If record doesn't support dict access or extra doesn't exist, create it
-            record["extra"] = {}
-            extra = record["extra"]
+            # Catch ALL exceptions to prevent logging failures
+            try:
+                record["extra"] = {}
+                extra = record["extra"]
+            except Exception:
+                # If even creating extra fails, give up - don't break logging
+                return
 
-        # B45: Add user_id when available (optional - format doesn't require it)
+        # B45: Always ensure user_id exists (format doesn't require it, but defensive)
+        # This is set in logger.configure() above, but ensure it's always present
         with suppress(Exception):
-            extra["user_id"] = _get_user_id()
+            if "user_id" not in extra:
+                extra["user_id"] = "system"
+            # Update from context if available
+            with suppress(Exception):
+                user_id = _get_user_id()
+                if user_id:
+                    extra["user_id"] = user_id
         # B46: Get conversation_id from context (optional)
         with suppress(Exception):
             conversation_id = _get_conversation_id()

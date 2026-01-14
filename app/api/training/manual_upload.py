@@ -19,8 +19,9 @@ from app.db.session import get_session
 from app.upload.plan_handler import upload_plan_from_chat
 from app.upload.plan_parser import ParsedSessionUpload, parse_csv_plan, parse_text_plan
 from app.workouts.guards import assert_planned_session_has_workout
-from app.workouts.models import Workout, WorkoutStep
-from app.workouts.workout_factory import WorkoutFactory
+from app.workouts.orchestration.manual_planned_session_flow import (
+    create_structured_workout_from_manual_session,
+)
 
 router = APIRouter(prefix="/training", tags=["training", "upload"])
 
@@ -270,76 +271,7 @@ async def upload_manual_session(
                 if existing:
                     _raise_duplicate_session_error()
 
-                # Step 1: Create workout FIRST (mandatory invariant)
-                # Map activity type to sport
-                if not request.type:
-                    sport = "run"
-                else:
-                    activity_lower = request.type.lower()
-                    sport_map: dict[str, str] = {
-                        "run": "run",
-                        "running": "run",
-                        "ride": "bike",
-                        "bike": "bike",
-                        "cycling": "bike",
-                        "virtualride": "bike",
-                        "swim": "swim",
-                        "swimming": "swim",
-                    }
-                    sport = sport_map.get(activity_lower, "run")
-                total_duration_seconds = (
-                    int(request.duration_minutes * 60) if request.duration_minutes else None
-                )
-                total_distance_meters = (
-                    int(request.distance_km * 1000) if request.distance_km else None
-                )
-
-                workout = Workout(
-                    user_id=user_id,
-                    sport=sport,
-                    source="planned",
-                    source_ref=None,
-                    total_duration_seconds=total_duration_seconds,
-                    total_distance_meters=total_distance_meters,
-                    planned_session_id=None,  # Will be set after planned session is created
-                    activity_id=None,
-                )
-                session.add(workout)
-                session.flush()  # Ensure workout.id is generated
-
-                # Step 2: Create workout step from session data
-                step_duration_seconds = (
-                    int(request.duration_minutes * 60) if request.duration_minutes else None
-                )
-                step_distance_meters = (
-                    int(request.distance_km * 1000) if request.distance_km else None
-                )
-
-                # Determine step type based on intensity
-                step_type = "steady"
-                if request.intensity:
-                    intensity_lower = request.intensity.lower()
-                    if intensity_lower in {"hard", "race", "interval"}:
-                        step_type = "interval"
-
-                workout_step = WorkoutStep(
-                    workout_id=workout.id,
-                    order=0,
-                    type=step_type,
-                    duration_seconds=step_duration_seconds,
-                    distance_meters=step_distance_meters,
-                    target_metric=None,
-                    target_min=None,
-                    target_max=None,
-                    target_value=None,
-                    intensity_zone=request.intensity,
-                    instructions=request.notes,
-                    purpose=request.title,
-                    inferred=False,
-                )
-                session.add(workout_step)
-
-                # Step 3: Create planned session WITH workout_id already set (required NOT NULL)
+                # Step 1: Create PlannedSession with notes_raw (raw, uninterpreted)
                 planned_session = PlannedSession(
                     user_id=user_id,
                     athlete_id=athlete_id,
@@ -350,21 +282,32 @@ async def upload_manual_session(
                     duration_minutes=request.duration_minutes,
                     distance_km=request.distance_km,
                     intensity=request.intensity,
-                    notes=request.notes,
+                    notes_raw=request.notes,  # Raw user input (immutable)
+                    notes=request.notes,  # Keep for backward compatibility
                     plan_type="manual",  # Required NOT NULL
                     plan_id=None,
                     week_number=None,
                     status="planned",  # Required NOT NULL
                     completed=False,
                     source="manual",
-                    workout_id=workout.id,  # Required NOT NULL - set immediately
+                    workout_id=None,  # Will be set by orchestration service
                 )
 
                 session.add(planned_session)
                 session.flush()  # Ensure planned_session.id is generated
 
-                # Update workout with planned_session_id (bidirectional link)
-                workout.planned_session_id = planned_session.id
+                # Step 2-4: Orchestration service (extract → LLM → create structured workout)
+                # Only create structured workout if notes_raw exists
+                if request.notes and request.notes.strip():
+                    workout = await create_structured_workout_from_manual_session(
+                        session=session,
+                        planned_session=planned_session,
+                    )
+                else:
+                    # If no notes, create simple workout (fallback)
+                    from app.workouts.workout_factory import WorkoutFactory
+
+                    workout = WorkoutFactory.get_or_create_for_planned_session(session, planned_session)
 
                 # Defensive check: fail fast if workout_id is None
                 if planned_session.workout_id is None:

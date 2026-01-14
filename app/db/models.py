@@ -575,7 +575,8 @@ class PlannedSession(Base):
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
     intensity: Mapped[str | None] = mapped_column(String, nullable=True)  # easy, moderate, hard, race
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes_raw: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Original raw user input (immutable)")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)  # Optional derived notes
 
     # Planning context
     plan_type: Mapped[str] = mapped_column(String, nullable=False)  # "race" or "season"

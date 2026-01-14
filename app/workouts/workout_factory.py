@@ -8,6 +8,7 @@ where workouts should be created to enforce the mandatory workout invariant:
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
 from loguru import logger
@@ -15,7 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PlannedSession
+from app.workouts.canonical import StructuredWorkout
 from app.workouts.compliance_service import ComplianceService
+from app.workouts.conversion import canonical_step_to_db_step
 from app.workouts.execution_models import WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
 
@@ -274,6 +277,76 @@ class WorkoutFactory:
             # Don't fail if compliance generation fails
 
         return execution
+
+    @staticmethod
+    def create_from_structured_workout(
+        session: Session,
+        structured: StructuredWorkout,
+        user_id: str,
+        source: str,
+        raw_notes: str | None = None,
+        planned_session_id: str | None = None,
+        activity_id: str | None = None,
+    ) -> Workout:
+        """Create workout from structured workout (LLM output).
+
+        This is the ONLY place where structured workouts (from LLM) are converted
+        to database models. Creates Workout + multiple WorkoutSteps.
+
+        Args:
+            session: Database session (must be in transaction)
+            structured: Structured workout from LLM
+            user_id: User ID
+            source: Workout source (e.g., "manual", "planned")
+            raw_notes: Original raw notes from user input
+            planned_session_id: Optional planned session ID to link
+            activity_id: Optional activity ID to link
+
+        Returns:
+            Workout instance with steps created
+
+        Note:
+            Commits are handled by the caller. This method only flushes.
+        """
+        workout_id = str(uuid.uuid4())
+
+        # Create workout
+        workout = Workout(
+            id=workout_id,
+            user_id=user_id,
+            sport=structured.sport,
+            source=source,
+            source_ref=None,
+            total_duration_seconds=structured.total_duration_seconds,
+            total_distance_meters=structured.total_distance_meters,
+            planned_session_id=planned_session_id,
+            activity_id=activity_id,
+            raw_notes=raw_notes,
+            llm_output_json=structured.model_dump(),
+            parse_status="success",
+        )
+        session.add(workout)
+        session.flush()
+
+        # Create steps (expand repeats)
+        current_order = 0
+        for canonical_step in structured.steps:
+            # Expand repeats: create multiple DB steps for repeated steps
+            for _ in range(canonical_step.repeat):
+                step_id = str(uuid.uuid4())
+                db_step = canonical_step_to_db_step(canonical_step, workout_id, step_id)
+                db_step.order = current_order
+                current_order += 1
+                session.add(db_step)
+
+        logger.info(
+            "Created workout from structured workout",
+            workout_id=workout_id,
+            user_id=user_id,
+            step_count=sum(step.repeat for step in structured.steps),
+        )
+
+        return workout
 
 
 def _create_steps_from_planned_session(

@@ -225,6 +225,7 @@ def _planned_session_to_calendar(
         intensity=planned.intensity,
         status=status,
         notes=planned.notes,
+        workout_id=planned.workout_id,
     )
 
 
@@ -274,6 +275,7 @@ def _activity_to_session(activity: Activity) -> CalendarSession:
         intensity=intensity,
         status="completed",  # All activities from Strava are completed
         notes=None,
+        workout_id=activity.workout_id,
     )
 
 

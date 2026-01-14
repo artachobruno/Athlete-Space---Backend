@@ -306,6 +306,8 @@ def google_callback(
     logger.info(f"[GOOGLE_OAUTH] Callback received with state: {state[:16]}...")
 
     # Determine frontend URL for redirect
+    # CRITICAL: Always redirect to app root ("/") not "/login"
+    # AuthLanding will handle routing based on auth state
     redirect_url = settings.frontend_url
     if redirect_url == "http://localhost:8501":
         host = request.headers.get("host", "")
@@ -313,6 +315,11 @@ def google_callback(
             redirect_url = "https://pace-ai.onrender.com"
         elif host and not host.startswith("localhost"):
             redirect_url = f"https://{host}"
+
+    # Ensure redirect goes to app root, not /login
+    # AuthLanding will check /me and route appropriately
+    if not redirect_url.endswith("/"):
+        redirect_url = f"{redirect_url}/"
 
     is_valid, user_id, platform = _validate_and_extract_state(state)
     if not is_valid:
@@ -436,32 +443,39 @@ def google_callback(
         jwt_token = create_access_token(resolved_user_id)
         logger.info(f"[GOOGLE_OAUTH] JWT token issued for user_id={resolved_user_id}")
 
-        # Branch by platform: web sets cookie, mobile deep links with token
-        if platform == "mobile":
-            # Mobile: Redirect to Capacitor deep link with token in URL
-            mobile_redirect = f"capacitor://localhost/auth/callback?token={jwt_token}"
-            logger.info(f"[GOOGLE_OAUTH] Redirecting to mobile deep link for user_id={resolved_user_id}")
-            return RedirectResponse(url=mobile_redirect)
-        # Web: Set HTTP-only cookie and redirect to frontend (no token in URL)
-        response = RedirectResponse(url=redirect_url)
-
         # Determine cookie domain
         host = request.headers.get("host", "")
         cookie_domain: str | None = None
         if "onrender.com" in host:
             cookie_domain = ".virtus-ai.onrender.com"
 
+        # CRITICAL: Always set HTTP-only cookie for both web and mobile
+        # Mobile WebView can persist cookies if they're set correctly with secure=True and samesite="none"
+        response = RedirectResponse(url=redirect_url)
+
         response.set_cookie(
             key="session",
             value=jwt_token,
             httponly=True,
-            secure=True,  # HTTPS only in production
-            samesite="none",  # Required for cross-origin cookie
+            secure=True,  # HTTPS only - REQUIRED for mobile cookie persistence
+            samesite="none",  # REQUIRED for cross-origin cookie (mobile WebView)
             path="/",  # Available for all paths
             max_age=30 * 24 * 60 * 60,  # 30 days
             domain=cookie_domain,
         )
-        logger.info(f"[GOOGLE_OAUTH] Redirecting to web frontend with HTTP-only cookie (no token in URL) for user_id={resolved_user_id}")
+        logger.info(f"[GOOGLE_OAUTH] Set HTTP-only cookie for user_id={resolved_user_id}, platform={platform}")
+
+        # Branch by platform: web redirects to frontend, mobile also redirects to frontend (cookie is set)
+        # Mobile app will intercept the redirect and navigate appropriately
+        # The cookie will be available for subsequent API calls
+        if platform == "mobile":
+            # For mobile, we still redirect to web URL first to ensure cookie is set
+            # The mobile app can intercept this URL and handle navigation
+            # If deep link is needed, frontend can handle it after cookie is confirmed
+            logger.info(f"[GOOGLE_OAUTH] Redirecting mobile user to frontend URL (cookie set) for user_id={resolved_user_id}")
+        else:
+            logger.info(f"[GOOGLE_OAUTH] Redirecting web user to frontend URL (cookie set) for user_id={resolved_user_id}")
+
         return response
 
     except HTTPException:

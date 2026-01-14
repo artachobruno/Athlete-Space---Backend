@@ -223,7 +223,11 @@ def login(request: LoginRequest, http_request: Request):
             logger.warning(f"[AUTH] Login failed: user not found for email={normalized_email}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": "user_not_found", "message": "No account found with this email"},
+                detail={
+                    "error": "user_not_found",
+                    "reason": "user_not_found",
+                    "message": "No account found with this email",
+                },
             )
 
         user = user_result[0]
@@ -246,6 +250,7 @@ def login(request: LoginRequest, http_request: Request):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={
                     "error": "invalid_auth_method",
+                    "reason": "provider_mismatch",
                     "message": "This account uses Google sign-in. Please sign in with Google instead.",
                 },
             )
@@ -255,7 +260,11 @@ def login(request: LoginRequest, http_request: Request):
             logger.warning(f"[AUTH] Login failed: user has no password for email={normalized_email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": "invalid_credentials", "message": "Invalid email or password"},
+                detail={
+                    "error": "invalid_credentials",
+                    "reason": "password_missing",
+                    "message": "Invalid email or password",
+                },
             )
 
         # Verify password
@@ -263,7 +272,11 @@ def login(request: LoginRequest, http_request: Request):
             logger.warning(f"[AUTH] Login failed: invalid password for email={normalized_email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": "invalid_credentials", "message": "Invalid email or password"},
+                detail={
+                    "error": "invalid_credentials",
+                    "reason": "invalid_password",
+                    "message": "Invalid email or password",
+                },
             )
 
         # Update last_login_at

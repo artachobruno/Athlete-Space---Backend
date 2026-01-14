@@ -124,18 +124,24 @@ def __getattr__(name: str):
 
 def _handle_session_commit(session: Session) -> None:
     """Handle session commit with logging."""
-    logger.debug(f"Before commit: dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}")
+    with suppress(Exception):
+        logger.debug(f"Before commit: dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}")
     if session.dirty:
-        logger.debug(f"Session has {len(session.dirty)} dirty objects: {[str(obj) for obj in list(session.dirty)[:3]]}")
+        with suppress(Exception):
+            logger.debug(f"Session has {len(session.dirty)} dirty objects: {[str(obj) for obj in list(session.dirty)[:3]]}")
     if session.new:
-        logger.debug(f"Session has {len(session.new)} new objects: {[str(obj) for obj in list(session.new)[:3]]}")
+        with suppress(Exception):
+            logger.debug(f"Session has {len(session.new)} new objects: {[str(obj) for obj in list(session.new)[:3]]}")
     # Only commit if there are changes to avoid unnecessary commits
     if session.dirty or session.new or session.deleted:
-        logger.debug("Calling session.commit()")
+        with suppress(Exception):
+            logger.debug("Calling session.commit()")
         session.commit()
-        logger.debug("Database session committed successfully")
+        with suppress(Exception):
+            logger.debug("Database session committed successfully")
     else:
-        logger.debug("No changes to commit, skipping commit")
+        with suppress(Exception):
+            logger.debug("No changes to commit, skipping commit")
 
 
 def _log_keyerror_details(session: Session, error: KeyError) -> None:

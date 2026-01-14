@@ -144,30 +144,6 @@ def _handle_session_commit(session: Session) -> None:
             logger.debug("No changes to commit, skipping commit")
 
 
-def _log_keyerror_details(session: Session, error: KeyError) -> None:
-    """Log detailed information about KeyError during commit."""
-    error_msg = str(error)
-    error_args_str = str(error.args)
-    logger.error(
-        f"Database session KeyError during commit, rolling back: {error_msg}. "
-        f"Error args: {error_args_str}, session state: "
-        f"dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}",
-    )
-    if session.new:
-        for obj in list(session.new)[:3]:
-            obj_id = getattr(obj, "id", "NO_ID")
-            raw_json_type = type(getattr(obj, "raw_json", None))
-            logger.error(
-                "New object in session: %s, id=%s, raw_json_type=%s",
-                type(obj).__name__,
-                obj_id,
-                raw_json_type,
-            )
-            if hasattr(obj, "raw_json") and isinstance(obj.raw_json, dict):
-                raw_keys = list(obj.raw_json.keys())[:20]
-                logger.error("raw_json keys: %s", raw_keys)
-
-
 @contextmanager
 def get_session() -> Generator[Session, None, None]:
     """Get database session context manager.
@@ -187,12 +163,6 @@ def get_session() -> Generator[Session, None, None]:
         logger.debug("HTTPException in session, rolling back")
         session.rollback()
         raise
-    except KeyError as e:
-        _log_keyerror_details(session, e)
-        session.rollback()
-        raise RuntimeError(
-            f"Database internal error during commit: missing key {e!s}"
-        ) from e
     except Exception as e:
         # Check if this is a business logic error (not a database error)
         # Import here to avoid circular imports

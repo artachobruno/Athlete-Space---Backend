@@ -8,10 +8,173 @@ from __future__ import annotations
 
 import uuid
 
+from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.models import Activity, PlannedSession
+from app.db.session import get_session
 from app.workouts.models import Workout, WorkoutStep
 from app.workouts.schemas import WorkoutInputSchema
+
+
+def ensure_workout(
+    *,
+    user_id: str,
+    planned_session_id: str | None = None,
+    activity_id: str | None = None,
+) -> Workout:
+    """Create or fetch workout by planned_session_id or activity_id.
+
+    This is the SINGLE workout creation path. All workout creation
+    must go through this function.
+
+    Rules:
+    - If workout exists (by planned_session_id or activity_id) → return it
+    - Else → create it with required fields
+    - Populate raw_notes from planned session notes (preferred) or activity description (fallback)
+    - Set parse_status = "pending"
+
+    Args:
+        user_id: User ID
+        planned_session_id: Optional planned session ID
+        activity_id: Optional activity ID
+
+    Returns:
+        Workout model instance
+
+    Raises:
+        ValueError: If neither planned_session_id nor activity_id is provided
+        ValueError: If planned_session_id or activity_id doesn't exist or doesn't belong to user
+    """
+    if not planned_session_id and not activity_id:
+        raise ValueError("Either planned_session_id or activity_id must be provided")
+
+    with get_session() as session:
+        # Check if workout already exists
+        existing_workout: Workout | None = None
+        if planned_session_id:
+            stmt = select(Workout).where(Workout.planned_session_id == planned_session_id)
+            existing_workout = session.execute(stmt).scalar_one_or_none()
+        elif activity_id:
+            stmt = select(Workout).where(Workout.activity_id == activity_id)
+            existing_workout = session.execute(stmt).scalar_one_or_none()
+
+        if existing_workout:
+            logger.debug(
+                "Workout already exists",
+                workout_id=existing_workout.id,
+                planned_session_id=planned_session_id,
+                activity_id=activity_id,
+            )
+            return existing_workout
+
+        # Create new workout
+        # Fetch source data to populate fields
+        sport = "run"
+        total_distance_meters: int | None = None
+        total_duration_seconds: int | None = None
+        raw_notes: str | None = None
+        source = "planned"
+
+        if planned_session_id:
+            # Fetch planned session
+            planned_stmt = select(PlannedSession).where(
+                PlannedSession.id == planned_session_id,
+                PlannedSession.user_id == user_id,
+            )
+            planned_session = session.execute(planned_stmt).scalar_one_or_none()
+            if not planned_session:
+                raise ValueError(f"Planned session {planned_session_id} not found or doesn't belong to user")
+
+            # Map activity type to sport
+            activity_type_lower = (planned_session.type or "").lower()
+            sport_map: dict[str, str] = {
+                "run": "run",
+                "running": "run",
+                "ride": "bike",
+                "bike": "bike",
+                "cycling": "bike",
+                "virtualride": "bike",
+                "swim": "swim",
+                "swimming": "swim",
+            }
+            sport = sport_map.get(activity_type_lower, "run")
+
+            # Get distance and duration
+            if planned_session.distance_km:
+                total_distance_meters = int(planned_session.distance_km * 1000)
+            if planned_session.duration_minutes:
+                total_duration_seconds = int(planned_session.duration_minutes * 60)
+
+            # Get raw_notes from planned session (preferred)
+            raw_notes = planned_session.notes
+
+            source = "planned"
+
+        elif activity_id:
+            # Fetch activity
+            activity_stmt = select(Activity).where(
+                Activity.id == activity_id,
+                Activity.user_id == user_id,
+            )
+            activity = session.execute(activity_stmt).scalar_one_or_none()
+            if not activity:
+                raise ValueError(f"Activity {activity_id} not found or doesn't belong to user")
+
+            # Map activity type to sport
+            activity_type_lower = (activity.type or "").lower()
+            sport_map: dict[str, str] = {
+                "run": "run",
+                "running": "run",
+                "ride": "bike",
+                "bike": "bike",
+                "cycling": "bike",
+                "virtualride": "bike",
+                "swim": "swim",
+                "swimming": "swim",
+            }
+            sport = sport_map.get(activity_type_lower, "run")
+
+            # Get distance and duration
+            if activity.distance_meters:
+                total_distance_meters = int(activity.distance_meters)
+            if activity.duration_seconds:
+                total_duration_seconds = activity.duration_seconds
+
+            # Get raw_notes from activity description (fallback)
+            if activity.raw_json and isinstance(activity.raw_json, dict):
+                raw_notes = activity.raw_json.get("description") or activity.raw_json.get("name")
+
+            source = "strava"
+
+        # Create workout
+        workout = Workout(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            sport=sport,
+            source=source,
+            source_ref=None,
+            planned_session_id=planned_session_id,
+            activity_id=activity_id,
+            total_distance_meters=total_distance_meters,
+            total_duration_seconds=total_duration_seconds,
+            raw_notes=raw_notes,
+            parse_status="pending",
+        )
+        session.add(workout)
+        session.flush()
+
+        logger.info(
+            "Workout created",
+            workout_id=workout.id,
+            user_id=user_id,
+            planned_session_id=planned_session_id,
+            activity_id=activity_id,
+            sport=sport,
+        )
+
+        return workout
 
 
 class WorkoutService:

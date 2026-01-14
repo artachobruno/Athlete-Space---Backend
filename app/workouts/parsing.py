@@ -15,10 +15,10 @@ workout creation, database writes, or reconciliation triggers.
 
 from __future__ import annotations
 
-from app.workouts.schemas import ParseNotesRequest, ParseNotesResponse, ParsedStepSchema
+from app.workouts.schemas import ParsedStepSchema, ParseNotesRequest, ParseNotesResponse
 
 
-def parse_notes_stub(request: ParseNotesRequest) -> ParseNotesResponse:
+def parse_notes_stub(_request: ParseNotesRequest) -> ParseNotesResponse:
     """Stub implementation of notes parsing.
 
     Returns an "unavailable" response indicating the feature is disabled.

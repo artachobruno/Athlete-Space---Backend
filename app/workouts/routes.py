@@ -42,6 +42,17 @@ from app.workouts.timeline import build_workout_timeline
 
 router = APIRouter(prefix="/workouts", tags=["workouts"])
 
+# Type alias for structured workout response
+StructuredWorkoutResponse = dict[
+    str,
+    str
+    | int
+    | list[dict[str, str | int | float | None]]
+    | dict[str, float | bool | dict[str, float | int | bool] | None]
+    | dict[str, str | int | None]
+    | None,
+]
+
 
 def get_workout_or_404(session: Session, workout_id: UUID, user_id: str) -> Workout:
     """Get workout by ID or raise 404.
@@ -136,10 +147,10 @@ def parse_notes(
 def get_structured_workout(
     workout_id: UUID,
     user_id: str = Depends(get_current_user_id),
-) -> dict[str, str | int | None | list[dict[str, str | int | None]]]:
+) -> StructuredWorkoutResponse:
     """Get structured workout data.
 
-    Returns workout structure with steps array populated from database.
+    Returns workout structure with steps array and comparison data.
     Never returns 404 - returns status "not_found" if workout doesn't exist.
 
     Args:
@@ -147,8 +158,7 @@ def get_structured_workout(
         user_id: Authenticated user ID
 
     Returns:
-        Dictionary with status, workout_id, sport, total_distance_meters,
-        total_duration_seconds, and steps (populated from database)
+        Dictionary with status, workout, steps, and comparison data
     """
     with get_session() as session:
         stmt = (
@@ -163,7 +173,9 @@ def get_structured_workout(
             return {
                 "status": "not_found",
                 "workout_id": str(workout_id),
+                "workout": None,
                 "steps": [],
+                "comparison": None,
             }
 
         steps = get_workout_steps(session, workout_id)
@@ -173,17 +185,42 @@ def get_structured_workout(
                 "type": step.type,
                 "duration_seconds": step.duration_seconds,
                 "distance_meters": step.distance_meters,
+                "target_metric": step.target_metric,
+                "target_min": step.target_min,
+                "target_max": step.target_max,
             }
             for step in steps
         ]
 
+        # Get comparison data
+        comparison_stmt = select(WorkoutComplianceSummary).where(WorkoutComplianceSummary.workout_id == str(workout_id))
+        comparison_result = session.execute(comparison_stmt)
+        comparison = comparison_result.scalar_one_or_none()
+
+        comparison_dict: dict[str, float | bool | dict[str, float | int | bool] | None] | None = None
+        if comparison:
+            comparison_dict = {
+                "score": comparison.overall_compliance_pct,
+                "completed": comparison.completed,
+                "summary_json": {
+                    "overall_compliance_pct": comparison.overall_compliance_pct,
+                    "total_pause_seconds": comparison.total_pause_seconds,
+                    "completed": comparison.completed,
+                },
+            }
+
         return {
             "status": "ok",
-            "workout_id": workout.id,
-            "sport": workout.sport,
-            "total_distance_meters": workout.total_distance_meters,
-            "total_duration_seconds": workout.total_duration_seconds,
+            "workout": {
+                "id": workout.id,
+                "sport": workout.sport,
+                "source": workout.source,
+                "total_distance_meters": workout.total_distance_meters,
+                "total_duration_seconds": workout.total_duration_seconds,
+                "parse_status": workout.parse_status,
+            },
             "steps": step_dicts,
+            "comparison": comparison_dict,
         }
 
 

@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.calendar.reconciliation_service import reconcile_calendar
-from app.db.models import Activity, PlannedSession
+from app.db.models import Activity, PlannedSession, StravaAccount
 from app.db.session import SessionLocal
 from app.workouts.models import Workout
 
@@ -76,7 +76,6 @@ def backfill_workout_activity_links(*, dry_run: bool = False) -> dict[str, int]:
             logger.info(f"Processing {len(workouts)} workouts for user {user_id}")
 
             # Get athlete_id for reconciliation
-            from app.db.models import StravaAccount
             account = db.execute(
                 select(StravaAccount).where(StravaAccount.user_id == user_id)
             ).scalar_one_or_none()

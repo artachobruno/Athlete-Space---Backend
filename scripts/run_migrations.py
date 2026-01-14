@@ -53,6 +53,7 @@ from scripts.migrate_add_source_to_planned_sessions import migrate_add_source_to
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
+from scripts.migrate_add_user_name_fields import migrate_add_user_name_fields
 from scripts.migrate_add_user_role import migrate_add_user_role
 from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
 from scripts.migrate_add_workout_id_to_activities import migrate_add_workout_id_to_activities
@@ -81,6 +82,7 @@ def run_all_migrations() -> None:
         ("Google OAuth fields", migrate_add_google_oauth_fields),
         ("user is_active field", migrate_add_user_is_active),
         ("user role field", migrate_add_user_role),
+        ("user first_name and last_name fields", migrate_add_user_name_fields),
         ("athlete_profiles athlete_id column", migrate_add_athlete_id_to_profiles),
         ("athlete_profiles target_races column", migrate_add_target_races),
         ("athlete_profiles extracted_race_attributes column", migrate_add_extracted_race_attributes),

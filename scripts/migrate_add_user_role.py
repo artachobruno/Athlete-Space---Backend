@@ -67,11 +67,17 @@ def migrate_add_user_role() -> None:
         if not _column_exists(conn, "users", "role"):
             print("Adding role column to users table...")
             if _is_postgresql():
-                # PostgreSQL: Add column with default 'athlete', then update existing rows
+                # PostgreSQL: Add column with default 'athlete'
                 conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'athlete'"))
             else:
-                # SQLite: Add column with default 'athlete', then update existing rows
-                conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'athlete'"))
+                # SQLite: Add column (SQLite 3.37.0+ supports NOT NULL DEFAULT, older versions may need workaround)
+                try:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'athlete'"))
+                except Exception as e:
+                    # Fallback for older SQLite: add nullable, update, then we rely on application default
+                    print(f"Warning: Direct NOT NULL DEFAULT failed, using fallback: {e}")
+                    conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR"))
+                    conn.execute(text("UPDATE users SET role = 'athlete' WHERE role IS NULL"))
             print("✓ Added role column")
 
             # Update all existing users to be athletes (default is already 'athlete', but explicit update for clarity)

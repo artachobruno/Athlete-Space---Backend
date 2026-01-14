@@ -88,6 +88,7 @@ from scripts.migrate_add_source_to_planned_sessions import migrate_add_source_to
 from scripts.migrate_add_streams_data import migrate_add_streams_data
 from scripts.migrate_add_target_races import migrate_add_target_races
 from scripts.migrate_add_user_is_active import migrate_add_user_is_active
+from scripts.migrate_add_user_name_fields import migrate_add_user_name_fields
 from scripts.migrate_add_user_role import migrate_add_user_role
 from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold_fields
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
@@ -194,6 +195,14 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_add_user_role: {e}")
         logger.error(f"✗ Migration failed: migrate_add_user_role - {e}", exc_info=True)
+
+    try:
+        logger.info("Running migration: add first_name and last_name to users table")
+        migrate_add_user_name_fields()
+        logger.info("✓ Migration completed: add first_name and last_name to users table")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_user_name_fields: {e}")
+        logger.error(f"✗ Migration failed: migrate_add_user_name_fields - {e}", exc_info=True)
 
     try:
         logger.info("Running migration: athlete_profiles athlete_id column")

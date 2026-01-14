@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Activity, UserSettings
 from app.integrations.strava.client import StravaClient
 from app.metrics.effort_service import compute_activity_effort
+from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 
 
 def fetch_and_save_streams(
@@ -71,9 +72,12 @@ def fetch_and_save_streams(
         activity.streams_data = streams
         session.add(activity)
 
-        # Compute effort metrics after streams are saved
+        # TSS MUST be computed after streams_data is present.
+        # Compute effort metrics and TSS after streams are saved
         try:
             user_settings = session.query(UserSettings).filter_by(user_id=activity.user_id).first()
+            
+            # Compute effort metrics
             normalized_effort, effort_source, intensity_factor = compute_activity_effort(activity, user_settings)
             activity.normalized_power = normalized_effort
             activity.effort_source = effort_source
@@ -83,8 +87,19 @@ def fetch_and_save_streams(
                     f"[FETCH_STREAMS] Computed effort for activity {strava_activity_id}: "
                     f"normalized_effort={normalized_effort}, source={effort_source}, IF={intensity_factor}"
                 )
+
+            # Compute and persist TSS
+            athlete_thresholds = _build_athlete_thresholds(user_settings)
+            tss = compute_activity_tss(activity, athlete_thresholds)
+            activity.tss = tss
+            activity.tss_version = "v2"
+
+            logger.debug(
+                f"[FETCH_STREAMS] Computed TSS for activity {strava_activity_id}: "
+                f"tss={tss}, version=v2"
+            )
         except Exception as e:
-            logger.warning(f"[FETCH_STREAMS] Failed to compute effort for activity {strava_activity_id}: {e}")
+            logger.warning(f"[FETCH_STREAMS] Failed to compute effort/TSS for activity {strava_activity_id}: {e}")
 
         session.commit()
 
@@ -155,3 +170,21 @@ def fetch_streams_for_recent_activities(
 
     logger.info(f"[FETCH_STREAMS] Successfully fetched streams for {success_count}/{len(activities)} activities")
     return success_count
+
+
+def _build_athlete_thresholds(user_settings: UserSettings | None) -> AthleteThresholds | None:
+    """Build AthleteThresholds from UserSettings.
+
+    Args:
+        user_settings: User settings with threshold configuration
+
+    Returns:
+        AthleteThresholds instance or None if no user settings
+    """
+    if not user_settings:
+        return None
+
+    return AthleteThresholds(
+        ftp_watts=user_settings.ftp_watts,
+        threshold_pace_ms=user_settings.threshold_pace_ms,
+    )

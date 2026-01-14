@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity, StravaAccount, UserSettings
 from app.metrics.effort_service import compute_activity_effort
+from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 from app.pairing.auto_pairing_service import try_auto_pair
 from app.state.models import ActivityRecord
 
@@ -235,12 +236,19 @@ def _create_new_activity(
 
 
 def _compute_and_persist_effort(session: Session, activity: Activity) -> None:
-    """Compute and persist effort metrics for an activity.
+    """Compute and persist effort metrics and TSS for an activity.
+
+    TSS MUST be computed after streams_data is present.
 
     Args:
         session: Database session
         activity: Activity record
     """
+    # Guard: Skip if streams are not available yet
+    if activity.streams_data is None:
+        logger.info(f"[SAVE_ACTIVITIES] Skipping TSS computation for activity {activity.id}: streams not available yet")
+        return
+
     try:
         # Get user settings for threshold configuration
         user_settings = session.query(UserSettings).filter_by(user_id=activity.user_id).first()
@@ -248,7 +256,7 @@ def _compute_and_persist_effort(session: Session, activity: Activity) -> None:
         # Compute effort metrics
         normalized_effort, effort_source, intensity_factor = compute_activity_effort(activity, user_settings)
 
-        # Persist to activity
+        # Persist effort metrics to activity
         activity.normalized_power = normalized_effort
         activity.effort_source = effort_source
         activity.intensity_factor = intensity_factor
@@ -258,8 +266,37 @@ def _compute_and_persist_effort(session: Session, activity: Activity) -> None:
                 f"[SAVE_ACTIVITIES] Computed effort for activity {activity.id}: "
                 f"normalized_effort={normalized_effort}, source={effort_source}, IF={intensity_factor}"
             )
+
+        # Compute and persist TSS
+        athlete_thresholds = _build_athlete_thresholds(user_settings)
+        tss = compute_activity_tss(activity, athlete_thresholds)
+        activity.tss = tss
+        activity.tss_version = "v2"
+
+        logger.debug(
+            f"[SAVE_ACTIVITIES] Computed TSS for activity {activity.id}: "
+            f"tss={tss}, version=v2"
+        )
     except Exception as e:
-        logger.warning(f"[SAVE_ACTIVITIES] Failed to compute effort for activity {activity.id}: {e}")
+        logger.warning(f"[SAVE_ACTIVITIES] Failed to compute effort/TSS for activity {activity.id}: {e}")
+
+
+def _build_athlete_thresholds(user_settings: UserSettings | None) -> AthleteThresholds | None:
+    """Build AthleteThresholds from UserSettings.
+
+    Args:
+        user_settings: User settings with threshold configuration
+
+    Returns:
+        AthleteThresholds instance or None if no user settings
+    """
+    if not user_settings:
+        return None
+
+    return AthleteThresholds(
+        ftp_watts=user_settings.ftp_watts,
+        threshold_pace_ms=user_settings.threshold_pace_ms,
+    )
 
 
 def save_activity_records(session: Session, records: list[ActivityRecord]) -> int:

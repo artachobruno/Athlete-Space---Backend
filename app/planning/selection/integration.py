@@ -138,7 +138,7 @@ def materialize_sessions_with_templates(
                 week_index=week_index,
                 selections_count=len(selection.selections),
             )
-        except (RuntimeError, Exception) as e:
+        except (RuntimeError, Exception):
             # RuntimeError: Event loop already running
             # Other exceptions: LLM call failed
             logger.warning(

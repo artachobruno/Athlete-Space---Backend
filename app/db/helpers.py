@@ -100,7 +100,7 @@ def store_activity(
                 # ValueError from save_activity_record means StravaAccount lookup failed
                 logger.error(f"[DATA] Cannot store activity {activity_id} for athlete_id={user_id}: StravaAccount not found. Error: {e}")
                 raise
-            except KeyError as e:
+            except KeyError:
                 # KeyError means missing required field in raw data
                 logger.exception(
                     f"[DATA] KeyError storing activity {activity_id} for athlete_id={user_id}. "

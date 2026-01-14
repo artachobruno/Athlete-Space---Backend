@@ -47,6 +47,9 @@ async def classify_intent(
             name="Orchestrator Classifier",
         )
 
+    if CLASSIFIER_AGENT is None:
+        raise RuntimeError("CLASSIFIER_AGENT failed to initialize")
+
     # Build context string for classifier
     context_parts = []
     if minimal_context:

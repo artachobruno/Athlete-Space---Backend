@@ -97,7 +97,7 @@ Please fix these errors and output valid JSON only."""
             logger.error(f"JSON parsing failed after retry: {e}")
             raise ParseFailedError(f"Workout parsing failed after retry: {e}") from e
 
-        except Exception:
+        except Exception as e:
             logger.exception("LLM call failed")
             if attempt == 0:
                 logger.warning(f"LLM call failed on attempt {attempt + 1}. Retrying...")

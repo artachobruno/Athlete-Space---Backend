@@ -27,7 +27,7 @@ def metrics(days: int = 60, user_id: str = Depends(get_current_user_id)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     since_str = since.isoformat()
 
-    db = SessionLocal()
+    db = SessionLocal()  # pyright: ignore[reportGeneralTypeIssues]
     try:
         # Query daily aggregations
         rows = db.execute(

@@ -29,8 +29,8 @@ def verify_schema() -> None:
     inspector = inspect(engine)
 
     # Check User model
-    if inspector.has_table("users"):
-        db_cols = {col["name"] for col in inspector.get_columns("users")}
+    if inspector.has_table("users"):  # pyright: ignore[reportOptionalMemberAccess]
+        db_cols = {col["name"] for col in inspector.get_columns("users")}  # pyright: ignore[reportOptionalMemberAccess]
         model_cols = set(User.__table__.columns.keys())
         missing = model_cols - db_cols
         if missing:
@@ -40,8 +40,8 @@ def verify_schema() -> None:
         logger.debug(f"✓ users table verified ({len(model_cols)} columns match)")
 
     # Check AthleteProfile model
-    if inspector.has_table("athlete_profiles"):
-        db_cols = {col["name"] for col in inspector.get_columns("athlete_profiles")}
+    if inspector.has_table("athlete_profiles"):  # pyright: ignore[reportOptionalMemberAccess]
+        db_cols = {col["name"] for col in inspector.get_columns("athlete_profiles")}  # pyright: ignore[reportOptionalMemberAccess]
         model_cols = set(AthleteProfile.__table__.columns.keys())
         missing = model_cols - db_cols
         if missing:
@@ -53,8 +53,8 @@ def verify_schema() -> None:
         logger.debug(f"✓ athlete_profiles table verified ({len(model_cols)} columns match)")
 
     # Check UserSettings model (critical for coach chat and training features)
-    if inspector.has_table("user_settings"):
-        db_cols = {col["name"] for col in inspector.get_columns("user_settings")}
+    if inspector.has_table("user_settings"):  # pyright: ignore[reportOptionalMemberAccess]
+        db_cols = {col["name"] for col in inspector.get_columns("user_settings")}  # pyright: ignore[reportOptionalMemberAccess]
         model_cols = set(UserSettings.__table__.columns.keys())
         missing = model_cols - db_cols
         if missing:
@@ -66,8 +66,8 @@ def verify_schema() -> None:
         logger.debug(f"✓ user_settings table verified ({len(model_cols)} columns match)")
 
     # Check PlannedSession model (critical for calendar persistence and B7)
-    if inspector.has_table("planned_sessions"):
-        db_cols = {col["name"] for col in inspector.get_columns("planned_sessions")}
+    if inspector.has_table("planned_sessions"):  # pyright: ignore[reportOptionalMemberAccess]
+        db_cols = {col["name"] for col in inspector.get_columns("planned_sessions")}  # pyright: ignore[reportOptionalMemberAccess]
         model_cols = set(PlannedSession.__table__.columns.keys())
         missing = model_cols - db_cols
         if missing:

@@ -404,7 +404,7 @@ def strava_callback(
             with get_session() as session:
                 merge_strava_profile(session, user_id, strava_athlete)
             logger.info(f"[STRAVA_OAUTH] Profile merged successfully for user_id={user_id}")
-        except Exception as e:
+        except Exception:
             # Use !r to avoid KeyError when exception message contains curly braces
             logger.exception(
                 f"[STRAVA_OAUTH] Failed to fetch/merge athlete profile for user_id={user_id}"

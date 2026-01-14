@@ -54,6 +54,8 @@ def format_location(city: str | None, state: str | None, country: str | None) ->
 
 def _merge_name_field(profile: AthleteProfile, firstname: str | None, lastname: str | None) -> None:
     """Merge name field from Strava data."""
+    if profile.sources is None:
+        profile.sources = {}
     if not profile.name and firstname and lastname:
         profile.name = f"{firstname} {lastname}"
         profile.sources["name"] = "strava"
@@ -65,6 +67,8 @@ def _merge_name_field(profile: AthleteProfile, firstname: str | None, lastname: 
 
 def _merge_gender_field(profile: AthleteProfile, sex: str | None) -> None:
     """Merge gender field from Strava data."""
+    if profile.sources is None:
+        profile.sources = {}
     if profile.gender is None:
         gender = map_gender(sex)
         if gender:
@@ -80,6 +84,8 @@ def _merge_gender_field(profile: AthleteProfile, sex: str | None) -> None:
 
 def _merge_weight_field(profile: AthleteProfile, weight: float | None) -> None:
     """Merge weight field from Strava data."""
+    if profile.sources is None:
+        profile.sources = {}
     if profile.weight_kg is None and weight is not None:
         profile.weight_kg = float(weight)
         profile.sources["weight_kg"] = "strava"
@@ -96,6 +102,8 @@ def _merge_location_field(
     country: str | None,
 ) -> None:
     """Merge location field from Strava data."""
+    if profile.sources is None:
+        profile.sources = {}
     if not profile.location:
         location = format_location(city, state, country)
         if location:

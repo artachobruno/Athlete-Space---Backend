@@ -396,7 +396,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         try:
             trigger_recompute_on_new_activities(user_id)
         except Exception:
-            logger.exception(f"[SYNC] Failed to trigger metrics recomputation")
+            logger.exception("[SYNC] Failed to trigger metrics recomputation")
             # Don't fail the sync if metrics recomputation fails
 
     return {

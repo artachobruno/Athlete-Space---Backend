@@ -51,7 +51,7 @@ def persist_message(message: Message) -> None:
 
         # Create database session for this write
         # Using SessionLocal directly since we're in a background task
-        session = SessionLocal()
+        session = SessionLocal()  # pyright: ignore[reportGeneralTypeIssues]
         try:
             # Create ConversationMessage record
             db_message = ConversationMessage(

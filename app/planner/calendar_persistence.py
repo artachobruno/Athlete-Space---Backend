@@ -296,9 +296,13 @@ def _persist_week_sessions(
                     raise
 
             except Exception as e:
-                logger.error(
-                    f"B7: Failed to persist session (week_index={week.week_index}, day_index={day_idx}, session_order={session_order}, error_type={type(e).__name__})"
+                error_msg = (
+                    f"B7: Failed to persist session "
+                    f"(week_index={week.week_index}, day_index={day_idx}, "
+                    f"session_order={session_order}, "
+                    f"error_type={type(e).__name__})"
                 )
+                logger.error(error_msg)
                 week_warnings.append(f"Week {week.week_index}, day {day_idx}: Failed to persist: {e}")
                 week_skipped += 1
 
@@ -371,12 +375,18 @@ def _upsert_session(
         query = select(DBPlannedSession).where(and_(*conditions))
         existing = db_session.execute(query).scalar_one_or_none()
     except Exception as e:
+        date_str = session_datetime.isoformat() if session_datetime else None
+        error_msg = (
+            f"B7: Failed to persist session "
+            f"(user_id={user_id}, athlete_id={athlete_id}, "
+            f"plan_id={plan_id}, date={date_str}, "
+            f"error_type={type(e).__name__})"
+        )
         logger.error(
-            "B7: Failed to query existing session",
+            error_msg,
             week_index=week.week_index,
             day_index=planned_session.day_index,
             session_order=session_order,
-            f"B7: Failed to persist session (user_id={user_id}, athlete_id={athlete_id}, plan_id={plan_id}, date={session_datetime.isoformat() if session_datetime else None}, error_type={type(e).__name__})"
         )
         raise
 
@@ -430,9 +440,14 @@ def _upsert_session(
 
         db_session.add(db_session_obj)
     except Exception as e:
-        logger.error(
-            f"B7: Failed to create new session object (week_index={week.week_index}, day_index={planned_session.day_index}, session_order={session_order}, error_type={type(e).__name__})"
+        error_msg = (
+            f"B7: Failed to create new session object "
+            f"(week_index={week.week_index}, "
+            f"day_index={planned_session.day_index}, "
+            f"session_order={session_order}, "
+            f"error_type={type(e).__name__})"
         )
+        logger.error(error_msg)
         raise
 
     return "created"

@@ -202,7 +202,7 @@ def update_all_recent_weekly_reports(athlete_id: int, weeks: int = 4) -> None:
         week_start = current_week_start - timedelta(weeks=i)
         try:
             update_weekly_report_metrics(athlete_id, week_start)
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to update weekly report metrics for athlete_id={athlete_id}, week_start={week_start.date()}"
             )
@@ -227,7 +227,7 @@ def update_all_recent_weekly_reports_for_all_users() -> None:
                 athlete_id = int(account.athlete_id)
                 update_all_recent_weekly_reports(athlete_id, weeks=4)
                 updated_count += 1
-            except Exception as e:
+            except Exception:
                 logger.exception(
                     f"Failed to update weekly report metrics for athlete_id={account.athlete_id}"
                 )

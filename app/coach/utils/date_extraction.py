@@ -203,7 +203,7 @@ Example inputs (assuming today is {today_str}):
         else:
             logger.debug(f"No date extracted from text: {text[:50]}...")
             return None
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to extract date (text={text[:50]})")
         return None
 
@@ -322,7 +322,7 @@ Example inputs (assuming today is {today_str}):
             confidence=extraction.confidence,
             text=text[:50],
         )
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to extract dates (text={text[:50]})")
         return [], None, None
     else:
@@ -390,7 +390,7 @@ Example inputs:
 
         if session_count is None:
             logger.debug(f"No session count extracted from text: {text[:50]}...")
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to extract session count (text={text[:50]})")
         return None
     else:

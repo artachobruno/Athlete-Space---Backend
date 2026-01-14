@@ -75,7 +75,7 @@ class WorkoutLLMEvaluator:
             )
 
             result = await agent.run(prompt)
-            interpretation = result.data
+            interpretation = result.output
 
             logger.info(
                 "Step LLM interpretation generated",
@@ -133,7 +133,7 @@ class WorkoutLLMEvaluator:
             )
 
             result = await agent.run(prompt)
-            interpretation = result.data
+            interpretation = result.output
 
             logger.info(
                 "Workout LLM interpretation generated",

@@ -280,10 +280,13 @@ def execute_week_plan(
         )
 
     except Exception as e:
+        error_msg = (
+            f"Failed to execute plan "
+            f"(plan_id={plan_id}, week_index={week_plan.week_index})"
+        )
         logger.error(
-            "[EXECUTION] Week plan execution failed",
+            error_msg,
             user_id=user_id,
-            f"Failed to execute plan (plan_id={plan_id}, week_index={week_plan.week_index})"
         )
         return ExecutionResult(
             status="ERROR",

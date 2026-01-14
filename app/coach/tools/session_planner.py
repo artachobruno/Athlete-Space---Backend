@@ -366,7 +366,7 @@ def save_sessions_to_database(
                 # Log but don't fail the request - invariant violation is logged
                 pass
 
-        except Exception as e:
+        except Exception:
             session.rollback()
             logger.exception(
                 f"Failed to save planned sessions to database (user_id={user_id}, athlete_id={athlete_id})"
@@ -589,9 +589,12 @@ async def save_planned_sessions(
                     )
                 except Exception:
                     logger.exception("Failed to enqueue persistence retry")
-    except Exception as e:
+    except Exception:
         logger.exception(
-            f"Failed to persist planned sessions via MCP — continuing (plan_id={plan_id}, user_id={user_id}, athlete_id={athlete_id}, session_count={len(sessions)}, plan_type={plan_type})"
+            f"Failed to persist planned sessions via MCP — continuing "
+            f"(plan_id={plan_id}, user_id={user_id}, "
+            f"athlete_id={athlete_id}, session_count={len(sessions)}, "
+            f"plan_type={plan_type})"
         )
         persistence_status = "degraded"
         # Enqueue retry job (best-effort, never blocks)

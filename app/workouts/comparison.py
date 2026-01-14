@@ -121,6 +121,10 @@ def compute_workout_comparison(workout_id: str) -> None:
                 step_planned_distance = step.distance_meters or 0
                 step_planned_duration = step.duration_seconds or 0
 
+                # Initialize executed values
+                step_executed_distance = 0
+                step_executed_duration = 0
+
                 # Approximate executed values (simplified)
                 if step_planned_distance > 0:
                     # Distance-based: distribute activity distance proportionally

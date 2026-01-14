@@ -141,7 +141,7 @@ RULES:
         raise ValueError(f"LLM generated invalid workout structure: {e}") from e
     except ValueError:
         raise
-    except Exception:
+    except Exception as e:
         logger.exception("LLM parsing failed")
         raise RuntimeError(f"Failed to parse workout notes: {type(e).__name__}: {e}") from e
     else:

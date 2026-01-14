@@ -969,6 +969,7 @@ async def create_and_save_plan_new(
             start_date_dt = first_date
         else:
             _raise_invalid_date_type_error(first_date)
+            start_date_dt = datetime.now(timezone.utc)  # Unreachable, but helps Pyright
 
         start_date = start_date_dt.strftime("%B %d, %Y")
         race_date_str = race_date.strftime("%B %d, %Y")
@@ -1052,10 +1053,15 @@ async def create_and_save_plan_new(
             f"**The plan is complete and ready to use. No further action needed.**"
         )
     except Exception as e:
+        error_msg = (
+            f"Failed to generate race plan "
+            f"(distance={distance}, race_date={race_date.isoformat()}, "
+            f"target_time={target_time}, user_id={user_id}, "
+            f"athlete_id={athlete_id})"
+        )
         logger.error(
-            "Failed to generate race plan",
+            error_msg,
             error_type=type(e).__name__,
-            f"Failed to generate race plan (distance={distance}, race_date={race_date.isoformat()}, target_time={target_time}, user_id={user_id}, athlete_id={athlete_id})"
         )
         raise RuntimeError(
             f"The AI coach failed to generate a valid training plan. Please retry. (Error: {type(e).__name__}: {e!s})"

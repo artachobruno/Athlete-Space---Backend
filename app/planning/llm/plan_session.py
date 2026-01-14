@@ -86,10 +86,14 @@ async def plan_session_llm(spec: SessionSpec) -> SessionPlan:
         )
         set_cached_session(spec, session_plan)
     except Exception as e:
+        error_msg = (
+            f"LLM session planning failed "
+            f"(sport={spec.sport.value}, "
+            f"session_type={spec.session_type.value})"
+        )
         logger.error(
-            "plan_session: Failed to generate session",
+            error_msg,
             error_type=type(e).__name__,
-            f"LLM session planning failed (sport={spec.sport.value}, session_type={spec.session_type.value})"
         )
         raise RuntimeError(f"Failed to generate session plan: {e}") from e
     else:

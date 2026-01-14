@@ -467,9 +467,14 @@ def get_week(user_id: str = Depends(get_current_user_id)):
                 f"[CALENDAR] Database schema error in /calendar/week. Missing column. Returning empty week: {e!r}"
             )
             # Return empty week instead of 500 - migrations will fix this
+            # Calculate fallback dates using UTC (can't access user timezone in error handler)
+            today_utc = datetime.now(timezone.utc).date()
+            days_since_monday = today_utc.weekday()
+            monday_fallback = today_utc - timedelta(days=days_since_monday)
+            sunday_fallback = monday_fallback + timedelta(days=6)
             return CalendarWeekResponse(
-                week_start=monday.strftime("%Y-%m-%d"),
-                week_end=sunday.strftime("%Y-%m-%d"),
+                week_start=monday_fallback.strftime("%Y-%m-%d"),
+                week_end=sunday_fallback.strftime("%Y-%m-%d"),
                 sessions=[],
             )
         logger.exception(f"[CALENDAR] Error in /calendar/week: {e!r}")
@@ -567,8 +572,11 @@ def get_today(user_id: str = Depends(get_current_user_id)):
                 f"[CALENDAR] Database schema error in /calendar/today. Missing column. Returning empty day: {e!r}"
             )
             # Return empty day instead of 500 - migrations will fix this
+            # Calculate fallback date using UTC (can't access user timezone in error handler)
+            today_fallback = datetime.now(timezone.utc).date()
+            today_str_fallback = today_fallback.strftime("%Y-%m-%d")
             return CalendarTodayResponse(
-                date=today_str,
+                date=today_str_fallback,
                 sessions=[],
             )
         logger.exception(f"[CALENDAR] Error in /calendar/today: {e!r}")

@@ -493,7 +493,7 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
             status_code=500,
             detail="Internal server error: Database query failed. Please try again.",
         ) from e
-    except Exception:
+    except Exception as e:
         # Catch-all for any other unexpected errors
         logger.exception(f"[API] /me: Unexpected error for user_id={user_id}")
         raise HTTPException(
@@ -2362,11 +2362,11 @@ def delete_account(user_id: str = Depends(get_current_user_id)):
         with get_session() as session:
             # Delete activities
             activity_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
-            session.execute(select(Activity).where(Activity.user_id == user_id)).scalars().delete(synchronize_session=False)
+            session.execute(select(Activity).where(Activity.user_id == user_id)).scalars().delete(synchronize_session=False)  # pyright: ignore[reportUnknownMemberType]
             logger.info(f"[API] Deleted {activity_count} activities for user_id={user_id}")
 
             # Delete daily training load
-            session.execute(select(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id)).scalars().delete(
+            session.execute(select(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id)).scalars().delete(  # pyright: ignore[reportUnknownMemberType]
                 synchronize_session=False
             )
 
@@ -2463,19 +2463,21 @@ def export_data(
                     },
                     "profile": _build_response_from_profile(profile, user.email).model_dump() if profile else None,
                     "settings": {
-                        "training_preferences": TrainingPreferencesResponse(
-                            years_of_training=settings.years_of_training or 0,
-                            primary_sports=settings.primary_sports or [],
-                            available_days=settings.available_days or [],
-                            weekly_hours=settings.weekly_hours or 10.0,
-                            training_focus=settings.training_focus or "general_fitness",
-                            injury_history=settings.injury_history or False,
-                            injury_notes=settings.injury_notes,
-                            consistency=settings.consistency,
-                            goal=settings.goal,
-                        ).model_dump()
-                        if settings
-                        else None,
+                        "training_preferences": (
+                            TrainingPreferencesResponse(
+                                years_of_training=settings.years_of_training or 0,
+                                primary_sports=settings.primary_sports or [],
+                                available_days=settings.available_days or [],
+                                weekly_hours=settings.weekly_hours or 10.0,
+                                training_focus=settings.training_focus or "general_fitness",
+                                injury_history=settings.injury_history or False,
+                                injury_notes=settings.injury_notes,
+                                consistency=settings.consistency,
+                                goal=settings.goal,
+                            ).model_dump()
+                            if settings
+                            else None
+                        ),
                         "notifications": (
                             NotificationsResponse(
                                 email_notifications=(
@@ -2584,11 +2586,11 @@ def delete_local_data(user_id: str = Depends(get_current_user_id)):
         with get_session() as session:
             # Delete activities
             activity_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
-            session.execute(select(Activity).where(Activity.user_id == user_id)).scalars().delete(synchronize_session=False)
+            session.execute(select(Activity).where(Activity.user_id == user_id)).scalars().delete(synchronize_session=False)  # pyright: ignore[reportUnknownMemberType]
             logger.info(f"[API] Deleted {activity_count} activities for user_id={user_id}")
 
             # Delete daily training load
-            session.execute(select(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id)).scalars().delete(
+            session.execute(select(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id)).scalars().delete(  # pyright: ignore[reportUnknownMemberType]
                 synchronize_session=False
             )
 

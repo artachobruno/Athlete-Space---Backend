@@ -165,7 +165,7 @@ class RegenerationTriggers:
                 season_plan_id=season_plan_id,
                 context_hash=context_hash,
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to regenerate weekly intent (user_id={user_id}, athlete_id={athlete_id})"
             )
@@ -221,7 +221,7 @@ class RegenerationTriggers:
                 weekly_intent_id=weekly_intent_id,
                 context_hash=context_hash,
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to regenerate daily decision (user_id={user_id}, athlete_id={athlete_id})"
             )

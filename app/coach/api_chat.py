@@ -335,7 +335,7 @@ async def coach_chat(
         except ValueError as e:
             logger.warning(f"Activity upload failed: {e}", conversation_id=conversation_id)
             reply = f"I had trouble parsing that activity. Could you try again? Error: {e!s}"
-        except Exception as e:
+        except Exception:
             logger.exception(f"Activity upload error (conversation_id={conversation_id})")
             reply = "I encountered an error processing your activity upload. Please try again."
 
@@ -378,7 +378,7 @@ async def coach_chat(
         except ValueError as e:
             logger.warning(f"Plan upload failed: {e}", conversation_id=conversation_id)
             reply = f"I had trouble parsing that training plan. Could you try again? Error: {e!s}"
-        except Exception as e:
+        except Exception:
             logger.exception(f"Plan upload error (conversation_id={conversation_id})")
             reply = "I encountered an error processing your training plan upload. Please try again."
 

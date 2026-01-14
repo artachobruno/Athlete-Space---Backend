@@ -1058,11 +1058,16 @@ class CoachActionExecutor:
         if not can_execute:
             # This should not happen if orchestrator logic is correct, but fail-safe check
             # Log detailed diagnostic information
+            error_msg = (
+                f"ActionExecutor: Validation error "
+                f"(conversation_id={conversation_id}, "
+                f"should_execute={decision.should_execute}, "
+                f"target_action={decision.target_action})"
+            )
             logger.error(
-                "Slot validation failed despite should_execute=True - this should not happen",
+                error_msg,
                 tool=tool_name,
                 missing_slots=missing_slots,
-                f"ActionExecutor: Validation error (conversation_id={conversation_id}, should_execute={decision.should_execute}, target_action={decision.target_action})"
             )
             # Return clarification without side effects
             return generate_clarification_for_missing_slots(tool_name, missing_slots)

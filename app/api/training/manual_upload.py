@@ -390,7 +390,7 @@ async def upload_manual_session(
             )
         except HTTPException:
             raise
-        except Exception:
+        except Exception as e:
             logger.exception(f"Error uploading manual session (user_id={user_id})")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -508,7 +508,7 @@ async def upload_manual_week(
             )
         except HTTPException:
             raise
-        except Exception:
+        except Exception as e:
             logger.exception(f"Error uploading manual week (user_id={user_id})")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -636,7 +636,7 @@ async def upload_manual_season(
             )
         except HTTPException:
             raise
-        except Exception:
+        except Exception as e:
             logger.exception(f"Error uploading manual season (user_id={user_id})")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

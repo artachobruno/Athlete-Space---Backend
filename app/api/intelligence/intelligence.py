@@ -114,7 +114,9 @@ async def _generate_daily_decision_on_demand(
         raise
     except Exception as e:
         logger.exception(
-            f"Failed to generate daily decision on-demand for user_id={user_id}, athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
+            f"Failed to generate daily decision on-demand "
+            f"for user_id={user_id}, athlete_id={athlete_id}, "
+            f"decision_date={decision_date.isoformat()}"
         )
         # Diagnostic: Check if user has activities/data available
         with get_session() as session:

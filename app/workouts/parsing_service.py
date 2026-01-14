@@ -102,7 +102,7 @@ def ensure_workout_steps(workout_id: str) -> None:
                     total_distance_meters=workout.total_distance_meters,
                     total_duration_seconds=workout.total_duration_seconds,
                 )
-            except Exception:
+            except Exception as e:
                 logger.exception(f"LLM parsing failed for workout {workout_id}")
                 workout.parse_status = "failed"
                 workout.llm_output_json = {"error": str(e)}

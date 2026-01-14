@@ -940,7 +940,7 @@ async def run_conversation(
                         athlete_id=deps.athlete_id,
                     )
 
-                except Exception as e:
+                except Exception:
                     # If RAG retrieval fails, log and continue without RAG
                     logger.exception(
                         f"RAG retrieval failed, continuing without RAG bias (intent={result.output.intent})"
@@ -1046,9 +1046,15 @@ async def run_conversation(
         )
 
     except ValidationError as e:
-        logger.exception(
-            f"Orchestrator agent validation error - LLM response could not be parsed (athlete_id={deps.athlete_id}, error_type={type(e).__name__}, validation_errors={str(e.errors()) if hasattr(e, 'errors') else None})"
+        validation_errors = str(e.errors()) if hasattr(e, "errors") else None
+        error_msg = (
+            f"Orchestrator agent validation error - "
+            f"LLM response could not be parsed "
+            f"(athlete_id={deps.athlete_id}, "
+            f"error_type={type(e).__name__}, "
+            f"validation_errors={validation_errors})"
         )
+        logger.exception(error_msg)
         return OrchestratorAgentResponse(
             intent="general",
             horizon=None,

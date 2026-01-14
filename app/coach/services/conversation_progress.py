@@ -204,7 +204,7 @@ def create_or_update_progress(
             # Expunge to detach from session before returning
             # This allows the object to be used after the session closes
             db.expunge(progress)
-        except SQLAlchemyError as e:
+        except SQLAlchemyError:
             db.rollback()
             logger.exception(
                 f"Failed to save conversation progress (conversation_id={conversation_id})"
@@ -227,7 +227,7 @@ def clear_progress(conversation_id: str) -> None:
             try:
                 db.commit()
                 logger.info("Cleared conversation progress", conversation_id=conversation_id)
-            except SQLAlchemyError as e:
+            except SQLAlchemyError:
                 db.rollback()
                 logger.exception(
                     f"Failed to clear conversation progress (conversation_id={conversation_id})"

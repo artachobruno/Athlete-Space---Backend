@@ -70,22 +70,22 @@ def _process_activity(act, user, page: int) -> tuple[bool, bool]:
             f"This usually means StravaAccount is missing. Check that StravaAccount exists with athlete_id={user.athlete_id}."
         )
         return False, True
-        except KeyError as e:
-            logger.exception(
-                f"[BACKFILL] KeyError saving activity {act.id} for athlete_id={user.athlete_id}: {e}. "
-                f"Raw data type: {type(act.raw)}, has 'id': {'id' in act.raw if isinstance(act.raw, dict) else 'N/A'}"
-            )
+    except KeyError as e:
+        logger.exception(
+            f"[BACKFILL] KeyError saving activity {act.id} for athlete_id={user.athlete_id}: {e}. "
+            f"Raw data type: {type(act.raw)}, has 'id': {'id' in act.raw if isinstance(act.raw, dict) else 'N/A'}"
+        )
         return False, False
-        except Exception as e:
-            activity_id = getattr(act, "id", "unknown")
-            error_msg = str(e)
-            logger.exception(
-                "[BACKFILL] Failed to save activity %s for athlete_id=%s: %s. Error type: %s",
-                activity_id,
-                user.athlete_id,
-                error_msg,
-                type(e).__name__,
-            )
+    except Exception as e:
+        activity_id = getattr(act, "id", "unknown")
+        error_msg = str(e)
+        logger.exception(
+            "[BACKFILL] Failed to save activity %s for athlete_id=%s: %s. Error type: %s",
+            activity_id,
+            user.athlete_id,
+            error_msg,
+            type(e).__name__,
+        )
         return False, False
     else:
         logger.debug(f"[BACKFILL] Successfully saved activity {act.id} from page {page}")

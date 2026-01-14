@@ -125,7 +125,7 @@ class CoachLLMClient:
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Season plan parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
-            except Exception:
+            except Exception as e:
                 logger.exception("Error generating season plan")
                 if attempt < MAX_RETRIES:
                     continue
@@ -191,7 +191,7 @@ class CoachLLMClient:
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Weekly intent parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
-            except Exception:
+            except Exception as e:
                 logger.exception("Error generating weekly intent")
                 if attempt < MAX_RETRIES:
                     continue
@@ -253,7 +253,7 @@ class CoachLLMClient:
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Daily decision parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
-            except Exception:
+            except Exception as e:
                 logger.exception("Error generating daily decision")
                 if attempt < MAX_RETRIES:
                     continue
@@ -313,7 +313,7 @@ class CoachLLMClient:
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Weekly report parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
-            except Exception:
+            except Exception as e:
                 logger.exception("Error generating weekly report")
                 if attempt < MAX_RETRIES:
                     continue

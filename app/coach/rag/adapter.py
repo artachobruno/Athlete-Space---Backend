@@ -127,7 +127,7 @@ class OrchestratorRagAdapter:
                 chunks=orchestrator_chunks,
             )
 
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"RAG retrieval failed, returning empty context (query={query[:100] if query else ''}, race_type={race_type})"
             )

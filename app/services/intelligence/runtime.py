@@ -63,7 +63,7 @@ class CoachRuntime:
 
         try:
             plan = await self.llm_client.generate_season_plan(context)
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to generate season plan (user_id={user_id}, athlete_id={athlete_id})"
             )
@@ -114,7 +114,7 @@ class CoachRuntime:
 
         try:
             intent = await self.llm_client.generate_weekly_intent(context, previous_volume)
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to generate weekly intent (user_id={user_id}, athlete_id={athlete_id})"
             )
@@ -164,7 +164,7 @@ class CoachRuntime:
 
         try:
             decision = await self.llm_client.generate_daily_decision(context)
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to generate daily decision (user_id={user_id}, athlete_id={athlete_id})"
             )
@@ -213,7 +213,7 @@ class CoachRuntime:
 
         try:
             report = await self.llm_client.generate_weekly_report(context)
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to generate weekly report (user_id={user_id}, athlete_id={athlete_id})"
             )

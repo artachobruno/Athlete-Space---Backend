@@ -229,7 +229,7 @@ def _calculate_weekly_volume(dates: list[str], daily_load: list[float]) -> dict[
 def debug_info():
     """Debug endpoint to verify database connection and configuration."""
     logger.info("Debug endpoint called")
-    db = SessionLocal()
+    db = SessionLocal()  # pyright: ignore[reportGeneralTypeIssues]
     try:
         # Check table exists
         logger.debug("Checking database tables")
@@ -313,7 +313,7 @@ def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(ge
         All metrics are aligned by index with the dates array.
     """
     logger.info(f"Training load requested: days={days}, debug={debug}, user_id={user_id}")
-    db = SessionLocal()
+    db = SessionLocal()  # pyright: ignore[reportGeneralTypeIssues]
 
     if debug:
         logger.debug("Debug mode: fetching raw activity data")

@@ -63,6 +63,11 @@ class EmbeddingService:
         if not text.strip():
             raise ValueError("Cannot embed empty text")
 
+        if EmbeddingService._client is None:
+            EmbeddingService()  # Initialize singleton to ensure _client is set
+        if EmbeddingService._client is None:
+            raise RuntimeError("EmbeddingService client failed to initialize")
+
         try:
             response = EmbeddingService._client.embeddings.create(
                 model=EMBEDDING_MODEL,
@@ -96,6 +101,11 @@ class EmbeddingService:
         non_empty_texts = [t for t in texts if t.strip()]
         if not non_empty_texts:
             raise ValueError("Cannot embed empty text list")
+
+        if EmbeddingService._client is None:
+            EmbeddingService()  # Initialize singleton to ensure _client is set
+        if EmbeddingService._client is None:
+            raise RuntimeError("EmbeddingService client failed to initialize")
 
         try:
             response = EmbeddingService._client.embeddings.create(

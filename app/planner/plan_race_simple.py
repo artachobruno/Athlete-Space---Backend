@@ -225,6 +225,7 @@ async def execute_canonical_pipeline(
                 distributed_days: list,
             ) -> PlannedWeek:
                 """Process a single week: template selection + text generation."""
+                phase = "unknown"  # Initialize for exception handler
                 try:
                     # Emit WEEK_DETAIL progress
                     if conversation_id:

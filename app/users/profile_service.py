@@ -213,10 +213,12 @@ def upsert_athlete_profile(
     logger.info(f"[PROFILE_SERVICE] Upserting athlete profile for user_id={user_id}")
 
     # Guard assertion: fail fast if user_id is missing or invalid
-    if not user_id:
-        raise ValueError("user_id must be provided and cannot be empty")
+    if user_id is None:
+        raise ValueError("user_id must be provided and cannot be None")
     if not isinstance(user_id, str):
         raise TypeError(f"user_id must be a string, got {type(user_id).__name__}")
+    if not user_id.strip():
+        raise ValueError("user_id must be provided and cannot be empty")
 
     # 1. Update User table
     user_result = session.execute(select(User).where(User.id == user_id)).first()
@@ -289,7 +291,21 @@ def upsert_athlete_profile(
         settings.injury_notes = None
 
     # Commit all changes atomically
-    session.commit()
+    try:
+        session.commit()
+    except Exception as e:
+        logger.error(
+            f"[PROFILE_SERVICE] Failed to commit profile upsert for user_id={user_id}: {e}",
+            exc_info=True
+        )
+        # Re-raise with more context if it's a KeyError
+        if isinstance(e, KeyError):
+            missing_key = str(e.args[0]) if e.args else "unknown"
+            # Strip quotes if present (handles both "'user_id'" and "user_id")
+            if (missing_key.startswith("'") and missing_key.endswith("'")) or (missing_key.startswith('"') and missing_key.endswith('"')):
+                missing_key = missing_key[1:-1]
+            raise KeyError(missing_key) from e
+        raise
 
     logger.info(
         f"[PROFILE_SERVICE] Profile upserted successfully for user_id={user_id}: "

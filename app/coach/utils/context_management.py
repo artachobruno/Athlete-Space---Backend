@@ -30,7 +30,7 @@ def load_context(athlete_id: int, limit: int = 20) -> list[dict[str, str]]:
     # Convert athlete_id to user_id
     user_id = get_user_id_from_athlete_id(athlete_id)
     if user_id is None:
-        logger.warning("No user_id found for athlete_id, returning empty history", extra={"athlete_id": athlete_id})
+        logger.bind(athlete_id=athlete_id).warning("No user_id found for athlete_id, returning empty history")
         return []
 
     with get_session() as db:
@@ -43,21 +43,19 @@ def load_context(athlete_id: int, limit: int = 20) -> list[dict[str, str]]:
         for msg in reversed(messages):
             # Validate role is one of the allowed values
             if msg.role not in {"user", "assistant", "system"}:
-                logger.warning(
-                    "Invalid role in stored message, skipping",
+                logger.bind(
                     athlete_id=athlete_id,
                     user_id=user_id,
                     message_id=msg.id,
                     role=msg.role,
-                )
+                ).warning("Invalid role in stored message, skipping")
                 continue
             history.append({"role": msg.role, "content": msg.content})
-        logger.info(
-            "Loaded conversation history",
+        logger.bind(
             athlete_id=athlete_id,
             user_id=user_id,
             message_count=len(history),
-        )
+        ).info("Loaded conversation history")
         return history
 
 
@@ -82,16 +80,14 @@ def save_context(
     # Convert athlete_id to user_id
     user_id = get_user_id_from_athlete_id(athlete_id)
     if user_id is None:
-        logger.error("Cannot save context: no user_id found for athlete_id", extra={"athlete_id": athlete_id})
+        logger.bind(athlete_id=athlete_id).error("Cannot save context: no user_id found for athlete_id")
         return
 
     # Normalize messages before storage
     # If conversation_id is not provided, we still normalize but log a warning
     if conversation_id is None:
-        logger.warning(
-            "save_context called without conversation_id, using placeholder",
-            athlete_id=athlete_id,
-            user_id=user_id,
+        logger.bind(athlete_id=athlete_id, user_id=user_id).warning(
+            "save_context called without conversation_id, using placeholder"
         )
         conversation_id = "c_00000000-0000-0000-0000-000000000000"  # Placeholder
 
@@ -125,12 +121,11 @@ def save_context(
             # This happens asynchronously and never blocks the request
             threading.Thread(target=persist_message, args=(normalized_assistant,), daemon=True).start()
     except ValueError as e:
-        logger.error(
-            "Failed to normalize messages before saving",
+        logger.bind(
             athlete_id=athlete_id,
             user_id=user_id,
             error=str(e),
-        )
+        ).error("Failed to normalize messages before saving")
         # Fallback: save unnormalized messages but log error
         # This should not happen in production, but we don't want to lose messages
         normalized_user = None
@@ -164,12 +159,11 @@ def save_context(
         db.add(assistant_msg)
 
         db.commit()
-        logger.info(
-            "Saved conversation context",
+        logger.bind(
             athlete_id=athlete_id,
             user_id=user_id,
             model_name=model_name,
             user_message_length=len(user_content),
             assistant_message_length=len(assistant_content),
             normalized=normalized_user is not None and normalized_assistant is not None,
-        )
+        ).info("Saved conversation context")

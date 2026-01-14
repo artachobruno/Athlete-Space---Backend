@@ -195,18 +195,37 @@ def persist_onboarding_complete(
         Tuple of (User, AthleteProfile, UserSettings) instances
     """
     # Convert OnboardingCompleteRequest to AthleteProfileUpsert
-    payload = AthleteProfileUpsert(
-        first_name=request.first_name,
-        last_name=request.last_name,
-        timezone=request.timezone,
-        primary_sport=request.primary_sport,
-        goal_type=request.goal_type,
-        experience_level=request.experience_level,
-        availability_days_per_week=request.availability_days_per_week,
-        availability_hours_per_week=request.availability_hours_per_week,
-        injury_status=request.injury_status,
-        injury_notes=request.injury_notes,
-    )
+    # Validate required fields before creating payload
+    required_fields = {
+        "first_name": request.first_name,
+        "timezone": request.timezone,
+        "primary_sport": request.primary_sport,
+        "goal_type": request.goal_type,
+        "experience_level": request.experience_level,
+        "availability_days_per_week": request.availability_days_per_week,
+        "availability_hours_per_week": request.availability_hours_per_week,
+        "injury_status": request.injury_status,
+    }
+    missing_fields = [field for field, value in required_fields.items() if value is None]
+    if missing_fields:
+        raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+
+    try:
+        payload = AthleteProfileUpsert(
+            first_name=request.first_name,
+            last_name=request.last_name,
+            timezone=request.timezone,
+            primary_sport=request.primary_sport,
+            goal_type=request.goal_type,
+            experience_level=request.experience_level,
+            availability_days_per_week=request.availability_days_per_week,
+            availability_hours_per_week=request.availability_hours_per_week,
+            injury_status=request.injury_status,
+            injury_notes=request.injury_notes,
+        )
+    except Exception as e:
+        logger.error(f"Failed to create AthleteProfileUpsert from request: {e}", exc_info=True)
+        raise ValueError(f"Invalid request data: {e!s}") from e
 
     # Use shared service to upsert profile data
     user, profile, settings = upsert_athlete_profile(

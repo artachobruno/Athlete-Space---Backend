@@ -22,7 +22,7 @@ def _get_redis_client() -> redis.Redis | None:
     try:
         return redis.from_url(settings.redis_url, decode_responses=True)
     except Exception as e:
-        logger.warning("Failed to connect to Redis for retry queue", extra={"error": str(e)})
+        logger.bind(error=str(e)).warning("Failed to connect to Redis for retry queue")
         return None
 
 
@@ -37,7 +37,7 @@ def enqueue_retry(job: PlannedSessionRetryJob) -> None:
     """
     redis_client = _get_redis_client()
     if not redis_client:
-        logger.warning("Redis unavailable, skipping retry enqueue", extra={"plan_id": job.plan_id})
+        logger.bind(plan_id=job.plan_id).warning("Redis unavailable, skipping retry enqueue")
         return
 
     try:
@@ -51,22 +51,9 @@ def enqueue_retry(job: PlannedSessionRetryJob) -> None:
             "attempts": job.attempts,
         }
         redis_client.rpush(QUEUE_KEY, json.dumps(job_dict))
-        logger.debug(
-            "Enqueued persistence retry job",
-            extra={
-                "plan_id": job.plan_id,
-                "attempts": job.attempts,
-            },
-        )
+        logger.bind(plan_id=job.plan_id, attempts=job.attempts).debug("Enqueued persistence retry job")
     except Exception as e:
-        logger.warning(
-            "Failed to enqueue persistence retry",
-            extra={
-                "plan_id": job.plan_id,
-                "error": str(e),
-            },
-            exc_info=True,
-        )
+        logger.bind(plan_id=job.plan_id, error=str(e)).warning("Failed to enqueue persistence retry", exc_info=True)
 
 
 def dequeue_retry() -> PlannedSessionRetryJob | None:
@@ -85,7 +72,7 @@ def dequeue_retry() -> PlannedSessionRetryJob | None:
             return None
 
         if not isinstance(raw, str):
-            logger.warning("Unexpected type from Redis lpop", extra={"raw_type": type(raw).__name__})
+            logger.bind(raw_type=type(raw).__name__).warning("Unexpected type from Redis lpop")
             return None
 
         data = json.loads(raw)
@@ -99,9 +86,5 @@ def dequeue_retry() -> PlannedSessionRetryJob | None:
             attempts=data["attempts"],
         )
     except Exception as e:
-        logger.warning(
-            "Failed to dequeue persistence retry job",
-            extra={"error": str(e)},
-            exc_info=True,
-        )
+        logger.bind(error=str(e)).warning("Failed to dequeue persistence retry job", exc_info=True)
         return None

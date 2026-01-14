@@ -155,7 +155,7 @@ def update_settings_profile_legacy(
                 email=user.email,
                 first_name=user.first_name,
                 last_name=user.last_name,
-                role=user.role,
+                role=user.role.value,
             )
     except HTTPException:
         raise

@@ -1,11 +1,24 @@
-"""Logger configuration and setup."""
+"""Logger configuration and setup.
+
+🚫 DO NOT USE logger.info("msg", foo=bar)
+🚫 DO NOT USE logger.info("msg", extra={})
+
+✅ USE logger.bind(foo=bar).info("msg")
+
+Why: Loguru kwargs and extra={} REPLACE the configured extra dict,
+wiping out user_id and causing KeyError when code accesses extra["user_id"].
+The guardrail prevents crashes, but .bind() is the correct pattern.
+"""
 
 from __future__ import annotations
 
 import contextlib
 import contextvars
+import os
 import sys
+import traceback
 from contextlib import suppress
+from typing import Any
 
 from loguru import logger
 
@@ -93,20 +106,20 @@ def setup_logger(
     # This prevents logger.bind(foo=bar) from wiping out user_id
     original_bind = logger.bind
 
-    def safe_bind(**kwargs: str | int | float | bool | None) -> type[logger]:
+    def safe_bind(**kwargs: Any) -> Any:
         """Safe bind that always includes user_id.
 
         This prevents logger.bind() from creating records without user_id,
         which would cause KeyError when extra["user_id"] is accessed.
 
         Args:
-            **kwargs: Additional fields to bind
+            **kwargs: Additional fields to bind (str, int, float, bool, None, etc.)
 
         Returns:
             Bound logger instance with user_id guaranteed
         """
         # Always include user_id - merge with any provided kwargs
-        safe_extra = {"user_id": _get_user_id()}
+        safe_extra: dict[str, Any] = {"user_id": _get_user_id()}
         safe_extra.update(kwargs)
         return original_bind(**safe_extra)
 
@@ -177,14 +190,12 @@ def setup_logger(
         if "user_id" not in extra:
             # In production, just set it silently. In dev, you can raise to see the stacktrace
             # For now, we'll set it but log a warning
-            import os
             if os.getenv("DEBUG_LOGGING", "false").lower() == "true":
-                import traceback
                 stack = "".join(traceback.format_stack())
-                logger.warning(
-                    "LOG RECORD CREATED WITHOUT USER_ID - this should never happen",
-                    extra={"stack": stack, "record_file": record.get("file", {}).get("name", "unknown")},
-                )
+                logger.bind(
+                    stack=stack,
+                    record_file=record.get("file", {}).get("name", "unknown"),
+                ).warning("LOG RECORD CREATED WITHOUT USER_ID - this should never happen")
             extra["user_id"] = "system"
 
         # B45: Always ensure user_id exists (format doesn't require it, but defensive)
@@ -203,9 +214,42 @@ def setup_logger(
             if conversation_id:
                 extra["conversation_id"] = conversation_id
 
-    # Apply patcher to the global logger instance
-    # Note: logger.patch() returns a bound logger, but the patch is applied to the global logger
+    # CRITICAL GUARDRAIL: Prevent empty extra dicts BEFORE patcher runs
+    # This ensures extra["user_id"] is NEVER accessed when extra is empty
+    def _forbid_empty_extra(record) -> None:
+        """Hard guardrail: ensure extra dict is never empty.
+
+        This runs BEFORE patcher to prevent KeyError when code accesses
+        record["extra"]["user_id"] before patcher can populate it.
+        """
+        try:
+            # Use dict-like access (Loguru records support this)
+            extra = record["extra"]
+            if not isinstance(extra, dict):
+                record["extra"] = {"user_id": "system"}
+            elif len(extra) == 0:
+                # Empty dict - populate with user_id to prevent KeyError
+                record["extra"] = {"user_id": "system"}
+        except (KeyError, TypeError, AttributeError):
+            # extra doesn't exist or record doesn't support dict access
+            with suppress(Exception):
+                record["extra"] = {"user_id": "system"}
+        except Exception:
+            # Any other error - ensure extra exists
+            with suppress(Exception):
+                record["extra"] = {"user_id": "system"}
+
+    # Apply guardrail FIRST, then patcher
+    # Order matters: guardrail ensures extra exists, patcher enriches it
+    _ = logger.patch(_forbid_empty_extra)
     _ = logger.patch(patcher)
+
+    # Self-test: verify logger is configured correctly
+    # If logging fails at startup, the app won't boot (fail fast)
+    try:
+        logger.info("Logger self-test: configuration verified")
+    except Exception as e:
+        raise RuntimeError("Logger misconfigured - logging failed at startup") from e
 
     # Add console handler with safe format (no required extra keys)
     # user_id is added via patcher when available, but format doesn't require it

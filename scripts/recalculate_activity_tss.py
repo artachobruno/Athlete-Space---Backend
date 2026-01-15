@@ -43,6 +43,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
 
     total_processed = 0
     total_updated = 0
+    total_would_update = 0  # For dry-run reporting
     total_skipped = 0
     total_unchanged = 0
 
@@ -78,6 +79,8 @@ def run(dry_run: bool = True) -> dict[str, int]:
                     activity.tss = new_tss
                     activity.tss_version = "v2"
                     total_updated += 1
+                else:
+                    total_would_update += 1
 
             except Exception as e:
                 logger.error(f"Error processing activity {activity.id}: {e}", exc_info=True)
@@ -90,6 +93,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
     summary = {
         "total_processed": total_processed,
         "total_updated": total_updated,
+        "total_would_update": total_would_update,
         "total_unchanged": total_unchanged,
         "total_skipped": total_skipped,
     }
@@ -98,7 +102,10 @@ def run(dry_run: bool = True) -> dict[str, int]:
     logger.info("TSS RECALCULATION SUMMARY")
     logger.info("=" * 80)
     logger.info(f"Total processed: {total_processed}")
-    logger.info(f"Total updated: {total_updated}")
+    if dry_run:
+        logger.info(f"Would update: {total_would_update}")
+    else:
+        logger.info(f"Total updated: {total_updated}")
     logger.info(f"Total unchanged: {total_unchanged}")
     logger.info(f"Total skipped: {total_skipped}")
 

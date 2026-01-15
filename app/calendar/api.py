@@ -215,6 +215,9 @@ def _planned_session_to_calendar(
     # Capitalize first letter of session type
     session_type: str = planned.type.capitalize()
 
+    # Convert completed_at to ISO 8601 string (handles timezone-aware datetimes properly)
+    completed_at_str = planned.completed_at.isoformat() if planned.completed_at else None
+
     return CalendarSession(
         id=planned.id,
         date=planned.date.strftime("%Y-%m-%d"),
@@ -227,6 +230,9 @@ def _planned_session_to_calendar(
         status=status,
         notes=planned.notes,
         workout_id=planned.workout_id,
+        completed_activity_id=planned.completed_activity_id,
+        completed=planned.completed,
+        completed_at=completed_at_str,
     )
 
 

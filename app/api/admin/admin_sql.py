@@ -37,6 +37,31 @@ class SQLQueryResponse(BaseModel):
     row_count: int
 
 
+class TableInfo(BaseModel):
+    """Table information model."""
+
+    schema: str
+    name: str
+
+
+class ColumnInfo(BaseModel):
+    """Column information model."""
+
+    name: str
+    type: str
+
+
+class TablePreviewRequest(BaseModel):
+    """Request model for table preview."""
+
+    schema: str
+    table: str
+    limit: int = 50
+    offset: int = 0
+    order_by: str | None = None
+    order_dir: str = "desc"  # "asc"|"desc"
+
+
 def _validate_readonly(sql: str) -> str:
     """Validate that SQL query is read-only (SELECT or WITH/CTE only).
 
@@ -169,6 +194,217 @@ def run_sql(
         # Log the full exception for debugging
         logger.exception("admin_sql endpoint crashed with unexpected error")
         # Return 500 for unexpected errors (not user-facing SQL errors)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from e
+
+
+@router.get("/tables", response_model=list[TableInfo])
+def list_tables(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+) -> list[TableInfo]:
+    """List all database tables (admin only).
+
+    Returns a list of all base tables in the database, excluding system schemas.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+        db: Database session (from FastAPI dependency)
+
+    Returns:
+        List of table information with schema and name
+
+    Raises:
+        HTTPException: 401 if authentication is missing or invalid
+        HTTPException: 403 if user is not admin
+    """
+    try:
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
+
+        require_admin(user_id, db)
+
+        query = text("""
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE'
+              AND table_schema NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY table_schema, table_name
+        """)
+        rows = db.execute(query).all()
+        return [TableInfo(schema=r[0], name=r[1]) for r in rows]
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to list tables")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from e
+
+
+@router.get("/tables/{schema}/{table}/columns", response_model=list[ColumnInfo])
+def list_columns(
+    schema: str,
+    table: str,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+) -> list[ColumnInfo]:
+    """List columns for a specific table (admin only).
+
+    Args:
+        schema: Table schema name
+        table: Table name
+        user_id: Current authenticated user ID (from auth dependency)
+        db: Database session (from FastAPI dependency)
+
+    Returns:
+        List of column information with name and type
+
+    Raises:
+        HTTPException: 401 if authentication is missing or invalid
+        HTTPException: 403 if user is not admin
+        HTTPException: 404 if table not found
+    """
+    try:
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
+
+        require_admin(user_id, db)
+
+        query = text("""
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = :schema AND table_name = :table
+            ORDER BY ordinal_position
+        """)
+        rows = db.execute(query, {"schema": schema, "table": table}).all()
+
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Table {schema}.{table} not found",
+            )
+
+        return [ColumnInfo(name=r[0], type=r[1]) for r in rows]
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to list columns for {schema}.{table}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from e
+
+
+@router.post("/table-preview", response_model=SQLQueryResponse)
+def table_preview(
+    req: TablePreviewRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+) -> SQLQueryResponse:
+    """Preview table data safely (admin only).
+
+    Safely previews table data by validating table existence and using quoted identifiers
+    to prevent SQL injection. Supports pagination and optional ordering.
+
+    Args:
+        req: Table preview request with schema, table, limit, offset, and ordering
+        user_id: Current authenticated user ID (from auth dependency)
+        db: Database session (from FastAPI dependency)
+
+    Returns:
+        SQLQueryResponse with columns, rows, and row count
+
+    Raises:
+        HTTPException: 401 if authentication is missing or invalid
+        HTTPException: 403 if user is not admin
+        HTTPException: 404 if table not found
+        HTTPException: 400 if invalid parameters
+    """
+    try:
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
+
+        require_admin(user_id, db)
+
+        # Validate and clamp limits
+        limit = max(1, min(req.limit, 200))
+        offset = max(0, req.offset)
+
+        # Validate table exists by checking information_schema (prevents injection)
+        exists = db.execute(
+            text("""
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = :schema AND table_name = :table
+            """),
+            {"schema": req.schema, "table": req.table},
+        ).first()
+
+        if not exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Table {req.schema}.{req.table} not found",
+            )
+
+        # Build SELECT safely using quoted identifiers (Postgres)
+        # Escape double quotes in identifiers
+        schema_quoted = req.schema.replace('"', '""')
+        table_quoted = req.table.replace('"', '""')
+
+        order_sql = ""
+        if req.order_by:
+            # Validate column exists
+            col_exists = db.execute(
+                text("""
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = :schema
+                      AND table_name = :table
+                      AND column_name = :col
+                """),
+                {"schema": req.schema, "table": req.table, "col": req.order_by},
+            ).first()
+
+            if col_exists:
+                col_quoted = req.order_by.replace('"', '""')
+                direction = "ASC" if req.order_dir.lower() == "asc" else "DESC"
+                order_sql = f' ORDER BY "{col_quoted}" {direction}'
+
+        # Build safe SQL with quoted identifiers
+        sql = text(f'SELECT * FROM "{schema_quoted}"."{table_quoted}"{order_sql} LIMIT :limit OFFSET :offset')
+
+        result = db.execute(sql, {"limit": limit, "offset": offset})
+        rows = result.fetchall()
+        columns = list(result.keys())
+
+        # Convert rows to JSON-safe values
+        safe_rows = [[jsonable_encoder(v) for v in row] for row in rows]
+
+        return SQLQueryResponse(
+            columns=columns,
+            rows=safe_rows,
+            row_count=len(safe_rows),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to preview table {req.schema}.{req.table}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",

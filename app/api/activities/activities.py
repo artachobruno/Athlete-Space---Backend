@@ -136,8 +136,10 @@ def _format_streams_for_frontend(streams_data: dict | None) -> dict | None:
 
 @router.get("")
 def get_activities(
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    start: str | None = Query(default=None, description="Start date in YYYY-MM-DD format (inclusive)"),
+    end: str | None = Query(default=None, description="End date in YYYY-MM-DD format (inclusive)"),
     user_id: str = Depends(get_current_user_id),
 ):
     """Get list of activities for current user (read-only, debug-only).
@@ -146,22 +148,60 @@ def get_activities(
     Activities are synced incrementally in the background and stored in the database.
 
     Args:
-        limit: Maximum number of activities to return (1-100, default: 50)
+        limit: Maximum number of activities to return (1-1000, default: 50)
         offset: Number of activities to skip (default: 0)
+        start: Optional start date filter (YYYY-MM-DD, inclusive)
+        end: Optional end date filter (YYYY-MM-DD, inclusive)
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
         List of activities with pagination metadata
     """
-    logger.info(f"[ACTIVITIES] GET /activities called for user_id={user_id}, limit={limit}, offset={offset}")
+    logger.info(f"[ACTIVITIES] GET /activities called for user_id={user_id}, limit={limit}, offset={offset}, start={start}, end={end}")
 
     with get_session() as session:
-        # Get total count (optimized: use COUNT instead of loading all records)
-        total = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
+        # Build base query
+        query = select(Activity).where(Activity.user_id == user_id)
 
-        # Get paginated activities
+        # Add date range filtering if provided
+        if start:
+            try:
+                start_date = date.fromisoformat(start)
+                start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                query = query.where(Activity.start_time >= start_datetime)
+            except ValueError:
+                logger.warning(f"[ACTIVITIES] Invalid start date format: {start}, ignoring filter")
+
+        if end:
+            try:
+                end_date = date.fromisoformat(end)
+                end_datetime = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+                query = query.where(Activity.start_time <= end_datetime)
+            except ValueError:
+                logger.warning(f"[ACTIVITIES] Invalid end date format: {end}, ignoring filter")
+
+        # Get total count with filters applied (reuse same query conditions)
+        count_query = select(func.count(Activity.id)).where(Activity.user_id == user_id)
+        if start:
+            try:
+                start_date = date.fromisoformat(start)
+                start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                count_query = count_query.where(Activity.start_time >= start_datetime)
+            except ValueError:
+                pass
+        if end:
+            try:
+                end_date = date.fromisoformat(end)
+                end_datetime = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+                count_query = count_query.where(Activity.start_time <= end_datetime)
+            except ValueError:
+                pass
+
+        total = session.execute(count_query).scalar() or 0
+
+        # Get paginated activities with filters applied
         activities_result = session.execute(
-            select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time.desc()).limit(limit).offset(offset)
+            query.order_by(Activity.start_time.desc()).limit(limit).offset(offset)
         )
 
         activities = []

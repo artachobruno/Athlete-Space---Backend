@@ -5,11 +5,11 @@ Phase 2 & 3: Fallback endpoints for manual uploads (non-chat).
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as date_type
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
@@ -173,6 +173,40 @@ class ManualSessionRequest(BaseModel):
     intensity: str | None = Field(default=None, description="Intensity (easy, moderate, hard, race)")
     notes: str | None = Field(default=None, description="Optional notes")
 
+    @field_validator("date", mode="before")
+    @classmethod
+    def parse_date(cls, value: str | datetime | date_type) -> datetime:
+        """Parse date string (YYYY-MM-DD) or datetime string to timezone-aware datetime."""
+        if isinstance(value, datetime):
+            # If already timezone-aware, return as-is
+            if value.tzinfo is not None:
+                return value
+            # If naive, assume UTC
+            return value.replace(tzinfo=timezone.utc)
+        
+        if isinstance(value, date_type):
+            # Convert date to datetime at midnight UTC
+            return datetime.combine(value, datetime.min.time()).replace(tzinfo=timezone.utc)
+        
+        if isinstance(value, str):
+            # Try parsing as datetime first (ISO format with time)
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed
+            except ValueError:
+                pass
+            
+            # Try parsing as date (YYYY-MM-DD)
+            try:
+                date_obj = datetime.strptime(value, "%Y-%m-%d").date()
+                return datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
+            except ValueError:
+                raise ValueError(f"Invalid date format: {value}. Expected YYYY-MM-DD or ISO datetime string")
+        
+        raise ValueError(f"Invalid date type: {type(value)}")
+
     @model_validator(mode="after")
     def generate_title_if_missing(self) -> "ManualSessionRequest":
         """Generate title from type if title is not provided."""
@@ -193,6 +227,38 @@ class ManualWeekRequest(BaseModel):
 
     sessions: list[ManualSessionRequest] = Field(..., description="List of sessions for the week", max_length=MAX_SESSIONS_PER_REQUEST)
     week_start: datetime | None = Field(default=None, description="Week start date (for validation)")
+
+    @field_validator("week_start", mode="before")
+    @classmethod
+    def parse_week_start(cls, value: str | datetime | date_type | None) -> datetime | None:
+        """Parse week_start date string to timezone-aware datetime."""
+        if value is None:
+            return None
+        
+        if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                return value
+            return value.replace(tzinfo=timezone.utc)
+        
+        if isinstance(value, date_type):
+            return datetime.combine(value, datetime.min.time()).replace(tzinfo=timezone.utc)
+        
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed
+            except ValueError:
+                pass
+            
+            try:
+                date_obj = datetime.strptime(value, "%Y-%m-%d").date()
+                return datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
+            except ValueError:
+                raise ValueError(f"Invalid week_start format: {value}. Expected YYYY-MM-DD or ISO datetime string")
+        
+        raise ValueError(f"Invalid week_start type: {type(value)}")
 
 
 class ManualWeekResponse(BaseModel):

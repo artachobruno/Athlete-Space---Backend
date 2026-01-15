@@ -291,6 +291,18 @@ def save_sessions_to_database(
                 session.add(planned_session)
                 session.flush()  # Ensure ID is generated
 
+                # Log planned session creation for debugging
+                logger.info(
+                    "[PLANNED_SESSION_CREATED]",
+                    session_id=planned_session.id,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    scheduled_date=parsed_date.isoformat() if parsed_date else None,
+                    status="planned",
+                    title=planned_session.title,
+                    workout_id=planned_session.workout_id,
+                )
+
                 # PHASE 2: Enforce workout creation (mandatory invariant)
                 WorkoutFactory.get_or_create_for_planned_session(session, planned_session)
 

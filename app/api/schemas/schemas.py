@@ -55,7 +55,7 @@ class CalendarSession(BaseModel):
     duration_minutes: int | None = Field(description="Planned duration in minutes", default=None)
     distance_km: float | None = Field(description="Planned distance in km", default=None)
     intensity: str | None = Field(description="Intensity level: easy | moderate | hard | race", default=None)
-    status: str = Field(description="Session status: planned | completed | skipped | cancelled")
+    status: str = Field(description="Session status: planned | completed | skipped | cancelled | missed")
     notes: str | None = Field(description="Optional session notes", default=None)
     workout_id: str | None = Field(description="Workout ID if this session has a structured workout", default=None)
     completed_activity_id: str | None = Field(description="External activity ID (e.g., Strava activity ID) if session is completed", default=None)
@@ -78,8 +78,13 @@ class CalendarSeasonResponse(BaseModel):
     season_end: str = Field(description="ISO 8601 date of season end")
     sessions: list[CalendarSession] = Field(description="All sessions in the season")
     total_sessions: int = Field(description="Total number of sessions")
-    completed_sessions: int = Field(description="Number of completed sessions")
-    planned_sessions: int = Field(description="Number of planned sessions")
+    completed_sessions: int = Field(description="Number of completed sessions (final status after reconciliation)")
+    planned_sessions: int = Field(description="Number of planned sessions (final status after reconciliation)")
+    # Expose DB vs final status for debugging reconciliation behavior
+    completed_sessions_db: int = Field(description="Number of completed sessions (raw DB status)", default=0)
+    planned_sessions_db: int = Field(description="Number of planned sessions (raw DB status)", default=0)
+    completed_sessions_final: int = Field(description="Number of completed sessions (after reconciliation)", default=0)
+    planned_sessions_final: int = Field(description="Number of planned sessions (after reconciliation)", default=0)
 
 
 class CalendarTodayResponse(BaseModel):

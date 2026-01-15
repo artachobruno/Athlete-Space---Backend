@@ -184,8 +184,20 @@ def _run_reconciliation_safe(
             logger.warning(f"[CALENDAR] Auto-match failed, continuing with reconciliation: {e!r}")
 
         # Build reconciliation map
+        # CRITICAL: Only override DB status if there's a REAL matched activity
+        # MISSED status should NOT flip planned → completed (keep it as planned)
+        # BUT we DO include MISSED in reconciliation_map so frontend can display MISSED label
         for result in reconciliation_results:
-            reconciliation_map[result.session_id] = result.status.value
+            # Only set reconciliation status if:
+            # 1. There's a matched activity (COMPLETED, PARTIAL, SUBSTITUTED have matched_activity_id)
+            # 2. OR session is explicitly SKIPPED (user marked it)
+            # 3. OR session is MISSED (for frontend label display, but doesn't change DB status)
+            if result.matched_activity_id or result.status.value in {"skipped", "missed"}:
+                reconciliation_map[result.session_id] = result.status.value
+            else:
+                # Other statuses (shouldn't happen, but be safe)
+                reconciliation_map[result.session_id] = result.status.value
+
             if result.matched_activity_id:
                 matched_activity_ids.add(result.matched_activity_id)
     except Exception as e:
@@ -210,7 +222,14 @@ def _planned_session_to_calendar(
     time_str = planned.time if planned.time else None
 
     # Use reconciliation status if provided, otherwise use planned status
+    # Map PARTIAL and SUBSTITUTED to "completed" for UI display (they have matched activities)
+    # Preserve "missed" in status field for frontend to detect and display MISSED label
     status = reconciliation_status if reconciliation_status else planned.status
+    if status in {"partial", "substituted"}:
+        # These statuses indicate a matched activity, so treat as completed for UI
+        status = "completed"
+    # Note: "missed" status is preserved here to allow frontend to display MISSED label
+    # even though the card kind will remain "planned"
 
     # Capitalize first letter of session type
     session_type: str = planned.type.capitalize()
@@ -368,19 +387,39 @@ def get_season(user_id: str = Depends(get_current_user_id)):
         all_sessions = activity_sessions + planned_calendar_sessions
         all_sessions.sort(key=lambda s: s.date)
 
-        # Count completed sessions using reconciliation status
-        completed = sum(1 for s in planned_calendar_sessions if (reconciliation_map.get(s.id) or s.status) == "completed") + len(
-            activity_sessions
-        )
-        planned = len([s for s in planned_calendar_sessions if (reconciliation_map.get(s.id) or s.status) == "planned"])
+        # Count sessions using DB status (raw from database)
+        db_planned = sum(1 for p in planned_list if p.status == "planned")
+        db_completed = sum(1 for p in planned_list if p.status == "completed")
+
+        # Count sessions using final status (after reconciliation)
+        # Reconciliation only overrides if there's a real matched activity
+        def get_final_status(session: CalendarSession) -> str:
+            """Get final status after reconciliation."""
+            return reconciliation_map.get(session.id) or session.status
+
+        # Map reconciliation statuses to final status for counting
+        def normalize_final_status(s: CalendarSession) -> str:
+            """Normalize final status for counting (partial/substituted -> completed)."""
+            final = get_final_status(s)
+            if final in {"partial", "substituted"}:
+                return "completed"
+            return final
+
+        final_planned = sum(1 for s in planned_calendar_sessions if normalize_final_status(s) == "planned")
+        final_completed = sum(1 for s in planned_calendar_sessions if normalize_final_status(s) == "completed") + len(activity_sessions)
 
     return CalendarSeasonResponse(
         season_start=season_start_local.strftime("%Y-%m-%d"),
         season_end=season_end_local.strftime("%Y-%m-%d"),
         sessions=all_sessions,
         total_sessions=len(all_sessions),
-        completed_sessions=completed,
-        planned_sessions=planned,
+        completed_sessions=final_completed,
+        planned_sessions=final_planned,
+        # Expose DB vs final status for debugging
+        completed_sessions_db=db_completed,
+        planned_sessions_db=db_planned,
+        completed_sessions_final=final_completed,
+        planned_sessions_final=final_planned,
     )
 
 

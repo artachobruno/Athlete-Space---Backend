@@ -151,7 +151,6 @@ def reconcile_activity_if_paired(
         result = reconcile_workout(
             planned_session=planned_session,
             executed=executed,
-            _athlete=athlete,
             athlete_pace_profile=athlete_pace_profile,
         )
     except Exception as e:

@@ -19,7 +19,7 @@ def map_hr_to_zone(hr: int, hr_profile: dict[str, dict[str, int]]) -> str:
         min_hr = bounds.get("min")
         max_hr = bounds.get("max")
 
-        if min_hr is not None and max_hr is not None and min_hr <= hr <= max_hr:
+        if min_hr is not None and max_hr is not None and min_hr <= hr < max_hr:
             return zone
 
     return "unknown"

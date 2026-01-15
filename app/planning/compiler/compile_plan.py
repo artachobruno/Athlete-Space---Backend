@@ -21,7 +21,7 @@ STRUCTURE RULE:
 
 from datetime import datetime, timezone
 
-from app.planning.materialization.metrics import log_materialization_metrics
+from app.planning.metrics.materialization import log_materialization_metrics
 
 from app.planning.compiler.assemble_week import assemble_week_plan
 from app.planning.compiler.skeleton_generator import generate_week_skeletons

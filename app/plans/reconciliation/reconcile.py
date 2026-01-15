@@ -9,7 +9,7 @@ This is observation + interpretation only - no plan mutations.
 from typing import Literal
 
 from app.athletes.models import AthletePaceProfile
-from app.db.models import Athlete, PlannedSession
+from app.db.models import PlannedSession
 from app.plans.reconciliation.hr import map_hr_to_zone
 from app.plans.reconciliation.types import ExecutedWorkout, ReconciliationResult
 from app.plans.types import WorkoutIntent
@@ -18,8 +18,7 @@ from app.plans.types import WorkoutIntent
 def reconcile_workout(
     planned_session: PlannedSession,
     executed: ExecutedWorkout,
-    _athlete: Athlete,
-    athlete_pace_profile: AthletePaceProfile | None = None,
+    athlete_pace_profile: AthletePaceProfile | None,
 ) -> ReconciliationResult:
     """Reconcile planned workout vs executed workout using HR data.
 
@@ -33,7 +32,6 @@ def reconcile_workout(
     Args:
         planned_session: The planned session that was executed
         executed: Executed workout data with HR metrics
-        _athlete: Athlete entity (for future use if needed)
         athlete_pace_profile: Athlete pace profile with hr_zones (optional)
 
     Returns:

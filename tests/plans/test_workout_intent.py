@@ -46,7 +46,7 @@ def test_intent_is_valid():
         validate_workout_intent(intent)
 
     # Invalid intent should raise
-    with pytest.raises(AssertionError, match="Invalid intent"):
+    with pytest.raises(ValueError, match="Invalid intent"):
         validate_workout_intent("invalid")
 
 

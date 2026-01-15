@@ -3,6 +3,7 @@
 Handles fetching and persisting modified sessions.
 """
 
+import uuid
 from datetime import date, datetime, timezone
 
 from loguru import logger
@@ -88,8 +89,15 @@ def save_modified_session(
         # Mark original as superseded (if we add that field)
         # For now, we just create a new session
 
-        # Set modification metadata
-        modified_session.id = None  # New ID will be generated
+        # Detach the modified session from any session state
+        # This ensures it's treated as a completely new object
+        from sqlalchemy.orm import make_transient
+
+        make_transient(modified_session)
+
+        # Set modification metadata - generate new ID for new session
+        new_id = str(uuid.uuid4())
+        modified_session.id = new_id
         modified_session.created_at = datetime.now(timezone.utc)
         modified_session.updated_at = datetime.now(timezone.utc)
 
@@ -102,9 +110,10 @@ def save_modified_session(
                 else f"[Modified from {original_session.id}: {modification_reason}]"
             )
 
+        # Add as new object
         db.add(modified_session)
+        db.flush()  # Flush to get the ID assigned
         db.commit()
-        db.refresh(modified_session)
 
         logger.info(
             "Modified session saved",

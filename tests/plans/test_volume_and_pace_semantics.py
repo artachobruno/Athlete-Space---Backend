@@ -25,8 +25,8 @@ def test_distance_is_miles_only():
 
 def test_pace_requires_numeric_value():
     """Test that pace must have numeric value if present."""
-    # This should raise an assertion error
-    with pytest.raises(AssertionError, match="pace_min_per_mile required"):
+    # This should raise a ValueError
+    with pytest.raises(ValueError, match="pace_min_per_mile"):
         metrics = WorkoutMetrics(
             primary="distance",
             distance_miles=6.0,
@@ -53,14 +53,14 @@ def test_pace_with_numeric_value_passes():
 
 def test_primary_distance_requires_distance_miles():
     """Test that primary='distance' requires distance_miles."""
-    with pytest.raises(AssertionError, match="distance_miles required"):
+    with pytest.raises(ValueError, match="distance_miles"):
         metrics = WorkoutMetrics(primary="distance")
         validate_workout_metrics(metrics)
 
 
 def test_primary_duration_requires_duration_min():
     """Test that primary='duration' requires duration_min."""
-    with pytest.raises(AssertionError, match="duration_min required"):
+    with pytest.raises(ValueError, match="duration_min"):
         metrics = WorkoutMetrics(primary="duration")
         validate_workout_metrics(metrics)
 

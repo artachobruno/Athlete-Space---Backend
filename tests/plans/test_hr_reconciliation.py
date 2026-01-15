@@ -126,7 +126,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=sample_planned_session_easy,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 
@@ -154,7 +153,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=sample_planned_session_easy,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 
@@ -180,7 +178,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=sample_planned_session_quality,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 
@@ -206,7 +203,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=sample_planned_session_quality,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 
@@ -245,7 +241,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=planned_session,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 
@@ -284,7 +279,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=planned_session,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 
@@ -323,7 +317,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=planned_session,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 
@@ -350,7 +343,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=sample_planned_session_easy,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 
@@ -375,7 +367,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=sample_planned_session_easy,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=None,
         )
 
@@ -401,7 +392,7 @@ class TestReconcileWorkout:
         )
 
         executed = ExecutedWorkout(
-            planned_session_id=sample_planned_session_easy.id,
+            planned_session_id=planned_session.id,
             actual_distance_miles=3.0,
             actual_duration_min=25,
             avg_hr=150,  # lt1 zone
@@ -412,7 +403,6 @@ class TestReconcileWorkout:
         result = reconcile_workout(
             planned_session=planned_session,
             executed=executed,
-            athlete=sample_athlete,
             athlete_pace_profile=sample_athlete_pace_profile,
         )
 

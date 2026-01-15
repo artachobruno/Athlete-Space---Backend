@@ -98,6 +98,9 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
 
     try:
         user_id = decode_access_token(auth_token)
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except ValueError as e:
         logger.warning(
             f"Auth failed: {e}, Path: {request.url.path}, Method: {request.method}, Token preview: {auth_token[:20]}..."
@@ -109,25 +112,45 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         ) from e
+    except Exception as e:
+        # Catch any unexpected exceptions from token decoding
+        logger.error(f"Unexpected error decoding token: {e}, Path: {request.url.path}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
 
     # Check if user is active
-    with get_session() as session:
-        user_result = session.execute(select(User).where(User.id == user_id)).first()
-        if not user_result:
-            logger.warning(f"Auth failed: User not found user_id={user_id}, Path: {request.url.path}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+    try:
+        with get_session() as session:
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if not user_result:
+                logger.warning(f"Auth failed: User not found user_id={user_id}, Path: {request.url.path}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
 
-        user = user_result[0]
-        if not user.is_active:
-            logger.warning(f"Auth failed: Inactive user user_id={user_id}, Path: {request.url.path}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account inactive. Please sign up again.",
-            )
+            user = user_result[0]
+            if not user.is_active:
+                logger.warning(f"Auth failed: Inactive user user_id={user_id}, Path: {request.url.path}")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account inactive. Please sign up again.",
+                )
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        # Catch any database or other unexpected errors
+        logger.error(f"Unexpected error checking user: {e}, Path: {request.url.path}, user_id={user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
 
     # B46: Bind user_id and conversation_id to logger once per request after auth
     set_user_id(user_id)

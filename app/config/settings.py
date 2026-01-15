@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     auth_token_expire_days: int = Field(default=30, validation_alias="AUTH_TOKEN_EXPIRE_DAYS")
     strava_webhook_verify_token: str = Field(default="", validation_alias="STRAVA_WEBHOOK_VERIFY_TOKEN")
     admin_user_ids: str = Field(default="", validation_alias="ADMIN_USER_IDS")  # Comma-separated list
+    admin_emails: str = Field(default="", validation_alias="ADMIN_EMAILS")  # Comma-separated list of admin emails
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     mcp_db_server_url: str = Field(
         default="https://athlete-space-mcp-db.onrender.com",

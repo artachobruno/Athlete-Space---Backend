@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
-from app.db.session import get_session
+from app.db.session import get_db
 from app.pairing.manual_pairing_service import manual_pair, manual_unpair
 
 router = APIRouter(prefix="/admin/pairing", tags=["admin"])
@@ -31,7 +31,7 @@ class UnmergeRequest(BaseModel):
 @router.post("/merge")
 def merge_pairing(
     payload: MergeRequest,
-    session: Session = Depends(get_session),
+    session: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, str]:
     """Manually merge an activity with a planned session.
@@ -87,7 +87,7 @@ def merge_pairing(
 @router.post("/unmerge")
 def unmerge_pairing(
     payload: UnmergeRequest,
-    session: Session = Depends(get_session),
+    session: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, str]:
     """Manually unmerge an activity from its planned session.

@@ -144,6 +144,33 @@ def _handle_session_commit(session: Session) -> None:
             logger.debug("No changes to commit, skipping commit")
 
 
+def get_db() -> Generator[Session, None, None]:
+    """Get database session for FastAPI dependencies.
+
+    This is a plain generator function (NOT a context manager) that FastAPI
+    can use directly with Depends(). FastAPI will handle cleanup automatically.
+
+    For non-FastAPI code that needs a context manager, use get_session() instead.
+
+    Yields:
+        Session: SQLAlchemy database session
+
+    Example:
+        @router.get("/items")
+        def get_items(db: Session = Depends(get_db)):
+            return db.query(Item).all()
+    """
+    logger.debug("Creating new database session (FastAPI dependency)")
+    session = _get_session_local()()
+    try:
+        logger.debug(f"Yielding session: dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}")
+        yield session
+    finally:
+        logger.debug("Closing database session (FastAPI dependency)")
+        session.close()
+        logger.debug("Database session closed")
+
+
 @contextmanager
 def get_session() -> Generator[Session, None, None]:
     """Get database session context manager.
@@ -152,6 +179,8 @@ def get_session() -> Generator[Session, None, None]:
     - HTTPException: Re-raised without logging (expected API responses)
     - NoTrainingDataError: Re-raised without logging (business logic error, not DB error)
     - Other exceptions: Logged as database errors and rolled back
+
+    For FastAPI route dependencies, use get_db() instead.
     """
     logger.debug("Creating new database session")
     session = _get_session_local()()

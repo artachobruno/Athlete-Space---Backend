@@ -38,6 +38,7 @@ from app.workouts.schemas import (
     WorkoutStepSchema,
     WorkoutTimelineResponse,
 )
+from app.workouts.step_utils import infer_step_name
 from app.workouts.timeline import build_workout_timeline
 
 router = APIRouter(prefix="/workouts", tags=["workouts"])
@@ -175,13 +176,24 @@ def get_structured_workout(
                 "workout_id": str(workout_id),
                 "workout": None,
                 "steps": [],
+                "structured_available": False,
                 "comparison": None,
             }
 
         steps = get_workout_steps(session, workout_id)
+
+        # Normalize step names - ensure every step has a name
+        for step in steps:
+            if not step.purpose and not step.instructions:
+                # Infer name if missing
+                inferred_name = infer_step_name(step)
+                step.purpose = inferred_name
+
         step_dicts = [
             {
+                "id": step.id,
                 "order": step.order,
+                "name": step.purpose or infer_step_name(step),
                 "type": step.type,
                 "duration_seconds": step.duration_seconds,
                 "distance_meters": step.distance_meters,
@@ -209,6 +221,9 @@ def get_structured_workout(
                 },
             }
 
+        # Determine structured availability
+        structured_available = bool(steps and len(steps) > 0)
+
         return {
             "status": "ok",
             "workout": {
@@ -220,6 +235,7 @@ def get_structured_workout(
                 "parse_status": workout.parse_status,
             },
             "steps": step_dicts,
+            "structured_available": structured_available,
             "comparison": comparison_dict,
         }
 

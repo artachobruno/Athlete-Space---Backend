@@ -198,11 +198,11 @@ class FitWorkoutExporter(WorkoutExporter):
                 # No target specified - open step
                 step_msg.target_type = WorkoutStepTarget.OPEN
 
-            # Set notes/instructions if available
-            if step.instructions:
-                # FIT workout step notes are limited, truncate if needed
-                notes = step.instructions[:50]  # Reasonable limit
-                step_msg.workout_step_name = notes
+            # Set step name/description - prefer purpose, then instructions
+            step_name = step.purpose or step.instructions
+            if step_name:
+                # FIT workout step names are limited, truncate if needed
+                step_msg.workout_step_name = step_name[:50]  # Reasonable limit
 
             builder.add(step_msg)
 

@@ -11,6 +11,7 @@ import uuid
 from app.workouts.canonical import StepIntensity, StepTargetType, StructuredWorkout, WorkoutStep
 from app.workouts.models import Workout as DBWorkout
 from app.workouts.models import WorkoutStep as DBWorkoutStep
+from app.workouts.step_utils import infer_step_name
 
 
 def intensity_to_step_type(intensity: StepIntensity) -> str:
@@ -58,6 +59,23 @@ def canonical_step_to_db_step(
     if canonical_step.target_type != StepTargetType.NONE:
         target_metric = canonical_step.target_type.value
 
+    # Ensure step has a name - use canonical name or infer from attributes
+    step_name = canonical_step.name if canonical_step.name else "Steady"
+    # If name is generic, try to infer a better one
+    if step_name.lower() in {"step", "steady", ""}:
+        # Create a temporary step-like object for inference
+        # We'll use the canonical step's intensity to help infer
+        temp_step = DBWorkoutStep(
+            id="",
+            workout_id="",
+            order=0,
+            type=step_type,
+            intensity_zone=canonical_step.intensity.value,
+            purpose=None,
+            instructions=None,
+        )
+        step_name = infer_step_name(temp_step)
+
     return DBWorkoutStep(
         id=step_id,
         workout_id=workout_id,
@@ -70,8 +88,8 @@ def canonical_step_to_db_step(
         target_max=None,  # Not in canonical schema yet
         target_value=None,  # Not in canonical schema yet
         intensity_zone=canonical_step.intensity.value,
-        instructions=canonical_step.name,
-        purpose=canonical_step.name,
+        instructions=step_name,
+        purpose=step_name,
         inferred=False,
     )
 

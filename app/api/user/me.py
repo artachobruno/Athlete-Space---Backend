@@ -90,29 +90,9 @@ def _get_allowed_origins() -> list[str]:
     return list(set(filter(None, cors_origins)))
 
 
-@router.options("")
-async def options_me(request: Request):
-    """Handle CORS preflight requests for /me endpoint.
-
-    This ensures OPTIONS requests are handled before auth dependencies run.
-    Explicitly adds CORS headers to ensure preflight requests succeed.
-    """
-    origin = request.headers.get("origin")
-    allowed_origins = _get_allowed_origins()
-    
-    headers: dict[str, str] = {}
-    
-    # Add CORS headers if origin is in allowed list
-    if origin and origin in allowed_origins:
-        headers["Access-Control-Allow-Origin"] = origin
-        headers["Access-Control-Allow-Credentials"] = "true"
-        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
-        headers["Access-Control-Allow-Headers"] = (
-            "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
-        )
-        headers["Access-Control-Max-Age"] = "3600"  # Cache preflight for 1 hour
-    
-    return Response(status_code=200, headers=headers)
+# NOTE: No explicit OPTIONS handler needed - FastAPI's CORSMiddleware handles OPTIONS automatically
+# The middleware is configured in main.py and runs before routes, so OPTIONS requests will be
+# handled correctly with proper CORS headers.
 
 
 def _get_user_info(session, user_id: str) -> tuple[str, str, str]:

@@ -673,36 +673,6 @@ async def deferred_heavy_init():
         # Don't fail if deferred init fails
 
 
-# Register conversation ID middleware FIRST (before CORS, auth, rate limiting, logging)
-# This ensures conversation_id is available to all downstream middleware and handlers
-@app.middleware("http")
-async def conversation_id_middleware_wrapper(request: Request, call_next):
-    """Wrapper to register conversation_id_middleware."""
-    return await conversation_id_middleware(request, call_next)
-
-
-# Request latency tracking middleware (after conversation_id, before CORS)
-@app.middleware("http")
-async def latency_tracking_middleware(request: Request, call_next):
-    """Track request latency and traffic metrics."""
-    start_time = time.time()
-
-    try:
-        response = await call_next(request)
-    except Exception:
-        # Record latency even on errors
-        elapsed_ms = (time.time() - start_time) * 1000
-        record_latency_ms(elapsed_ms)
-        record_request()
-        raise
-    else:
-        # Record latency and traffic on success
-        elapsed_ms = (time.time() - start_time) * 1000
-        record_latency_ms(elapsed_ms)
-        record_request()
-        return response
-
-
 # Configure CORS
 # Get allowed origins from environment variable or use defaults
 cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
@@ -728,7 +698,9 @@ else:
 cors_origins = list(set(filter(None, cors_origins)))
 logger.info(f"[CORS] Configured allowed origins: {cors_origins}")
 
-# CORS middleware must be added before routers to ensure it handles all requests
+# CRITICAL: CORS middleware MUST be added FIRST (before all other middleware)
+# This ensures OPTIONS preflight requests are handled correctly
+# FastAPI middleware decorators run in REVERSE order, so add_middleware() runs FIRST
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -748,6 +720,35 @@ app.add_middleware(
     expose_headers=["*"],  # Expose all headers to frontend
     max_age=3600,  # Cache preflight requests for 1 hour
 )
+
+# Register conversation ID middleware (after CORS)
+# This ensures conversation_id is available to all downstream middleware and handlers
+@app.middleware("http")
+async def conversation_id_middleware_wrapper(request: Request, call_next):
+    """Wrapper to register conversation_id_middleware."""
+    return await conversation_id_middleware(request, call_next)
+
+
+# Request latency tracking middleware (after conversation_id)
+@app.middleware("http")
+async def latency_tracking_middleware(request: Request, call_next):
+    """Track request latency and traffic metrics."""
+    start_time = time.time()
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Record latency even on errors
+        elapsed_ms = (time.time() - start_time) * 1000
+        record_latency_ms(elapsed_ms)
+        record_request()
+        raise
+    else:
+        # Record latency and traffic on success
+        elapsed_ms = (time.time() - start_time) * 1000
+        record_latency_ms(elapsed_ms)
+        record_request()
+        return response
 
 
 # Register root and health endpoints first (before routers)
@@ -1035,6 +1036,14 @@ async def ensure_cors_headers(request: Request, call_next):
     Also enforces /me endpoint contract by converting 404s to 401s.
     """
     origin = request.headers.get("origin")
+    
+    # Log OPTIONS requests for debugging
+    if request.method == "OPTIONS":
+        logger.info(
+            f"[CORS DEBUG] OPTIONS request to {request.url.path}, "
+            f"Origin: {origin}, "
+            f"Allowed: {origin in cors_origins if origin else 'No origin header'}"
+        )
 
     response = await call_next(request)
 

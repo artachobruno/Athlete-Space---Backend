@@ -292,7 +292,7 @@ async def upload_manual_session(
                         workout = await create_structured_workout_from_manual_session(
                             session=session,
                             user_id=user_id,
-                            athlete_id=athlete_id,
+                            _athlete_id=athlete_id,
                             notes_raw=request.notes,
                             session_type=request.type,
                             distance_km=request.distance_km,

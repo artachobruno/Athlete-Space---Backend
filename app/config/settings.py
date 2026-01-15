@@ -154,9 +154,35 @@ class Settings(BaseSettings):
     @field_validator("google_redirect_uri")
     @classmethod
     def validate_google_redirect_uri(cls, value: str) -> str:
-        """Validate that redirect URI points to /auth/google/callback."""
-        if value and "/auth/google/callback" not in value:
+        """Validate that redirect URI points to /auth/google/callback.
+        
+        In production, MUST be exactly https://virtus-ai.onrender.com/auth/google/callback
+        to match the backend domain where OAuth callbacks are handled.
+        """
+        if not value:
+            return value
+        
+        # Validate path
+        if "/auth/google/callback" not in value:
             logger.warning(f"GOOGLE_REDIRECT_URI should point to /auth/google/callback, but got: {value}. This may cause OAuth failures.")
+            return value
+        
+        # CRITICAL: In production, enforce exact backend URL
+        is_production = bool(os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("DYNO"))
+        if is_production:
+            expected_uri = "https://virtus-ai.onrender.com/auth/google/callback"
+            if value != expected_uri:
+                error_msg = (
+                    f"⚠️ CRITICAL: GOOGLE_REDIRECT_URI must be exactly '{expected_uri}' in production, "
+                    f"but got: '{value}'\n"
+                    f"⚠️ OAuth callbacks will fail if redirect URI doesn't match backend domain.\n"
+                    f"⚠️ Set GOOGLE_REDIRECT_URI={expected_uri} in your deployment environment."
+                )
+                logger.error(error_msg)
+                # In production, override to correct value to prevent OAuth failures
+                logger.warning(f"⚠️ Overriding GOOGLE_REDIRECT_URI to '{expected_uri}' to prevent OAuth failures.")
+                return expected_uri
+        
         return value
 
     @field_validator("mcp_db_server_url")

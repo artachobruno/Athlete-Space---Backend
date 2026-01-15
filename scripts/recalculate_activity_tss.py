@@ -22,6 +22,7 @@ from sqlalchemy import select
 from app.db.models import Activity, UserSettings
 from app.db.session import get_session
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
+from app.workouts.models import Workout  # Import to ensure foreign key relationship is known
 
 BATCH_SIZE = 500
 

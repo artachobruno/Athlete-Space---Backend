@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo
 
 import os
 
+import os
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
@@ -314,7 +316,7 @@ def _infer_onboarding_complete_from_data(profile: AthleteProfile | None, setting
 
 
 @router.get("")
-def get_me(user_id: str | None = Depends(get_optional_user_id)):
+def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)):
     """Get current authenticated user info with aggregated data.
 
     Returns user information including email, onboarding status, profile,
@@ -327,6 +329,7 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
     This endpoint NEVER mutates state - it only reads and aggregates.
 
     Args:
+        request: FastAPI request object (for CORS headers)
         user_id: Current authenticated user ID (from auth dependency, None if not authenticated)
 
     Returns:
@@ -344,14 +347,50 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
     Raises:
         HTTPException: 401 if not authenticated (never 404)
     """
+    # Helper to add CORS headers to response
+    def add_cors_headers(response: JSONResponse) -> JSONResponse:
+        """Add CORS headers to response if origin is allowed."""
+        origin = request.headers.get("origin")
+        allowed_origins = _get_allowed_origins()
+        
+        # Log for debugging CORS issues
+        if origin:
+            logger.debug(f"[CORS] /me request from origin: {origin}, allowed: {origin in allowed_origins}")
+            if origin not in allowed_origins:
+                logger.warning(
+                    f"[CORS] /me request from disallowed origin: {origin}. "
+                    f"Allowed origins: {allowed_origins}"
+                )
+        
+        if origin and origin in allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
+            )
+            logger.debug(f"[CORS] Added CORS headers to /me response for origin: {origin}")
+        else:
+            logger.warning(
+                f"[CORS] /me response missing CORS headers. Origin: {origin}, "
+                f"Allowed origins: {allowed_origins}"
+            )
+        return response
+
     # 🚨 INVARIANT: /me must never return 404
     if user_id is None:
         logger.info("[API] /me endpoint called without authentication")
-        raise HTTPException(
+        # Return JSONResponse directly with CORS headers instead of raising HTTPException
+        # This ensures CORS headers are always present even on auth failures
+        response = JSONResponse(
             status_code=401,
-            detail="Not authenticated",
+            content={
+                "authenticated": False,
+                "detail": "Not authenticated. Please provide a valid Bearer token in the Authorization header or a session cookie.",
+            },
             headers={"WWW-Authenticate": "Bearer"},
         )
+        return add_cors_headers(response)
 
     logger.info(f"[API] /me endpoint called for user_id={user_id}")
 
@@ -483,7 +522,8 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
             except Exception as e:
                 logger.warning(f"[API] /me: Failed to load privacy settings: {e}")
 
-            return {
+            # Return JSONResponse with explicit CORS headers to ensure they're always present
+            response_data = {
                 "user_id": user_id,
                 "authenticated": True,
                 "email": user_email,
@@ -498,6 +538,8 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 "notifications": notifications_response,
                 "privacy": privacy_response,
             }
+            response = JSONResponse(content=response_data)
+            return add_cors_headers(response)
     except HTTPException as e:
         # Re-raise HTTPExceptions but ensure they're not 404
         # /me endpoint contract: valid auth = 200, no auth = 401, errors = 500
@@ -519,7 +561,7 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 f"[API] /me: Unhandled database schema error for user_id={user_id}: {e!r}. Returning default response."
             )
             # Return a valid response even on schema errors - this endpoint must always return 200 OK if authenticated
-            return {
+            response_data = {
                 "user_id": user_id,
                 "authenticated": True,
                 "email": user_email if user_email else "",
@@ -532,6 +574,8 @@ def get_me(user_id: str | None = Depends(get_optional_user_id)):
                 "notifications": None,
                 "privacy": None,
             }
+            response = JSONResponse(content=response_data)
+            return add_cors_headers(response)
         logger.exception(f"[API] /me: Unhandled ProgrammingError for user_id={user_id}: {e!r}")
         raise HTTPException(
             status_code=500,

@@ -8,6 +8,7 @@ This module implements Google OAuth flow:
 
 from __future__ import annotations
 
+import os
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -196,9 +197,12 @@ def google_login(
             detail="Google integration not configured",
         )
 
-    # Validate redirect URI
-    if not settings.google_redirect_uri or "/auth/google/callback" not in settings.google_redirect_uri:
-        logger.error(f"[GOOGLE_OAUTH] Invalid redirect URI: {settings.google_redirect_uri}")
+    # Get redirect URI from environment variable (NO FALLBACKS)
+    redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+
+    # Validate redirect URI format
+    if "/auth/google/callback" not in redirect_uri:
+        logger.error(f"[GOOGLE_OAUTH] Invalid redirect URI format: {redirect_uri}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Google redirect URI must point to /auth/google/callback",
@@ -212,7 +216,7 @@ def google_login(
         "https://accounts.google.com/o/oauth2/v2/auth"
         f"?client_id={settings.google_client_id}"
         "&response_type=code"
-        f"&redirect_uri={settings.google_redirect_uri}"
+        f"&redirect_uri={redirect_uri}"
         "&scope=openid email profile"
         f"&state={state}"
         "&access_type=offline"  # Required to get refresh token
@@ -251,9 +255,12 @@ def google_connect(user_id: str | None = Depends(get_optional_user_id)):
             detail="Google integration not configured",
         )
 
-    # Validate redirect URI
-    if not settings.google_redirect_uri or "/auth/google/callback" not in settings.google_redirect_uri:
-        logger.error(f"[GOOGLE_OAUTH] Invalid redirect URI: {settings.google_redirect_uri}")
+    # Get redirect URI from environment variable (NO FALLBACKS)
+    redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+
+    # Validate redirect URI format
+    if "/auth/google/callback" not in redirect_uri:
+        logger.error(f"[GOOGLE_OAUTH] Invalid redirect URI format: {redirect_uri}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Google redirect URI must point to /auth/google/callback",
@@ -267,7 +274,7 @@ def google_connect(user_id: str | None = Depends(get_optional_user_id)):
         "https://accounts.google.com/o/oauth2/v2/auth"
         f"?client_id={settings.google_client_id}"
         "&response_type=code"
-        f"&redirect_uri={settings.google_redirect_uri}"
+        f"&redirect_uri={redirect_uri}"
         "&scope=openid email profile"
         f"&state={state}"
         "&access_type=offline"  # Required to get refresh token
@@ -334,11 +341,13 @@ def google_callback(
     try:
         # Exchange code for tokens
         logger.info("[GOOGLE_OAUTH] Exchanging code for tokens")
+        # Get redirect URI from environment variable (NO FALLBACKS)
+        redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
         token_data = exchange_code_for_token(
             client_id=settings.google_client_id,
             client_secret=settings.google_client_secret,
             code=code,
-            redirect_uri=settings.google_redirect_uri,
+            redirect_uri=redirect_uri,
         )
 
         access_token = token_data["access_token"]

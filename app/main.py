@@ -674,11 +674,13 @@ async def deferred_heavy_init():
 
 
 # Configure CORS
-# Get allowed origins from environment variable or use defaults
-cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
-if cors_origins_env:
-    cors_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
-else:
+# Get allowed origins from environment variable
+# Format: comma-separated list, e.g., "https://athletespace.ai,https://www.athletespace.ai"
+# In production, CORS_ALLOWED_ORIGINS must be set
+try:
+    cors_origins = [origin.strip() for origin in os.environ["CORS_ALLOWED_ORIGINS"].split(",") if origin.strip()]
+except KeyError:
+    # Fallback for local development only
     cors_origins = [
         "https://athletespace.ai",  # Production frontend (custom domain)
         "https://www.athletespace.ai",  # Production frontend (www subdomain)
@@ -693,9 +695,13 @@ else:
         "ionic://localhost",  # Ionic (alternative)
         "http://localhost",  # Android localhost
     ]
+    # Remove duplicates and filter out empty strings
+    cors_origins = list(set(filter(None, cors_origins)))
+    logger.warning(
+        "[CORS] CORS_ALLOWED_ORIGINS not set, using fallback origins. "
+        "Set CORS_ALLOWED_ORIGINS environment variable in production."
+    )
 
-# Remove duplicates and filter out empty strings
-cors_origins = list(set(filter(None, cors_origins)))
 logger.info(f"[CORS] Configured allowed origins: {cors_origins}")
 
 # CRITICAL: CORS middleware MUST be added FIRST (before all other middleware)
@@ -705,20 +711,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "Accept",
-        "Origin",
-        "X-Requested-With",
-        "X-CSRFToken",
-        "X-Conversation-Id",
-        "Access-Control-Request-Method",
-        "Access-Control-Request-Headers",
-    ],
-    expose_headers=["*"],  # Expose all headers to frontend
-    max_age=3600,  # Cache preflight requests for 1 hour
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Register conversation ID middleware (after CORS)

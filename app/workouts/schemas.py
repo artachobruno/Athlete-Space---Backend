@@ -207,6 +207,37 @@ class WorkoutStepGroup(BaseModel):
     step_ids: list[str]
 
 
+class StructuredWorkoutInfo(BaseModel):
+    """Workout information in structured workout response."""
+
+    id: str
+    sport: str
+    source: str
+    total_distance_meters: int | None
+    total_duration_seconds: int | None
+    parse_status: str
+
+
+class StructuredWorkoutComparison(BaseModel):
+    """Comparison data in structured workout response."""
+
+    score: float
+    completed: bool
+    summary_json: dict[str, float | int | bool]
+
+
+class StructuredWorkoutResponse(BaseModel):
+    """Response schema for structured workout endpoint."""
+
+    status: str
+    workout_id: str | None = None
+    workout: StructuredWorkoutInfo | None = None
+    steps: list[dict[str, str | int | float | bool | dict[str, str | float | None] | None]]
+    groups: list[WorkoutStepGroup]
+    structured_available: bool
+    comparison: StructuredWorkoutComparison | None = None
+
+
 class ParsedStepSchema(BaseModel):
     """Parsed step schema for notes parsing response.
 

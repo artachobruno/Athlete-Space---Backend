@@ -31,6 +31,9 @@ from app.workouts.schemas import (
     ParseNotesResponse,
     StepComplianceSchema,
     StepInterpretationSchema,
+    StructuredWorkoutComparison,
+    StructuredWorkoutInfo,
+    StructuredWorkoutResponse,
     WorkoutComplianceResponse,
     WorkoutExportResponse,
     WorkoutInterpretationResponse,
@@ -46,17 +49,6 @@ from app.workouts.step_utils import infer_step_name
 from app.workouts.timeline import build_workout_timeline
 
 router = APIRouter(prefix="/workouts", tags=["workouts"])
-
-# Type alias for structured workout response
-StructuredWorkoutResponse = dict[
-    str,
-    str
-    | int
-    | list[dict[str, str | int | float | None]]
-    | dict[str, float | bool | dict[str, float | int | bool] | None]
-    | dict[str, str | int | None]
-    | None,
-]
 
 
 def get_workout_or_404(session: Session, workout_id: UUID, user_id: str) -> Workout:
@@ -148,7 +140,7 @@ def parse_notes(
     return parse_notes_stub(request)
 
 
-@router.get("/{workout_id}/structured")
+@router.get("/{workout_id}/structured", response_model=StructuredWorkoutResponse)
 def get_structured_workout(
     workout_id: UUID,
     user_id: str = Depends(get_current_user_id),
@@ -175,15 +167,15 @@ def get_structured_workout(
         workout = result.scalar_one_or_none()
 
         if not workout:
-            return {
-                "status": "not_found",
-                "workout_id": str(workout_id),
-                "workout": None,
-                "steps": [],
-                "groups": [],
-                "structured_available": False,
-                "comparison": None,
-            }
+            return StructuredWorkoutResponse(
+                status="not_found",
+                workout_id=str(workout_id),
+                workout=None,
+                steps=[],
+                groups=[],
+                structured_available=False,
+                comparison=None,
+            )
 
         steps = get_workout_steps(session, workout_id)
 
@@ -253,11 +245,11 @@ def get_structured_workout(
 
         # Build groups list for response
         groups_list = [
-            {
-                "group_id": group.group_id,
-                "repeat": group.repeat,
-                "step_ids": group.step_ids,
-            }
+            WorkoutStepGroup(
+                group_id=group.group_id,
+                repeat=group.repeat,
+                step_ids=group.step_ids,
+            )
             for group in groups
         ]
 
@@ -266,39 +258,39 @@ def get_structured_workout(
         comparison_result = session.execute(comparison_stmt)
         comparison = comparison_result.scalar_one_or_none()
 
-        comparison_dict: dict[str, float | bool | dict[str, float | int | bool] | None] | None = None
+        comparison_dict: StructuredWorkoutComparison | None = None
         if comparison:
-            comparison_dict = {
-                "score": comparison.overall_compliance_pct,
-                "completed": comparison.completed,
-                "summary_json": {
+            comparison_dict = StructuredWorkoutComparison(
+                score=comparison.overall_compliance_pct,
+                completed=comparison.completed,
+                summary_json={
                     "overall_compliance_pct": comparison.overall_compliance_pct,
                     "total_pause_seconds": comparison.total_pause_seconds,
                     "completed": comparison.completed,
                 },
-            }
+            )
 
         # Determine structured availability
         structured_available = bool(steps and len(steps) > 0)
 
-        return {
-            "status": "ok",
-            "workout": {
-                "id": workout.id,
-                "sport": workout.sport,
-                "source": workout.source,
-                "total_distance_meters": workout.total_distance_meters,
-                "total_duration_seconds": workout.total_duration_seconds,
-                "parse_status": workout.parse_status,
-            },
-            "steps": step_dicts,
-            "groups": groups_list,
-            "structured_available": structured_available,
-            "comparison": comparison_dict,
-        }
+        return StructuredWorkoutResponse(
+            status="ok",
+            workout=StructuredWorkoutInfo(
+                id=workout.id,
+                sport=workout.sport,
+                source=workout.source,
+                total_distance_meters=workout.total_distance_meters,
+                total_duration_seconds=workout.total_duration_seconds,
+                parse_status=workout.parse_status,
+            ),
+            steps=step_dicts,
+            groups=groups_list,
+            structured_available=structured_available,
+            comparison=comparison_dict,
+        )
 
 
-@router.put("/{workout_id}/steps")
+@router.put("/{workout_id}/steps", response_model=StructuredWorkoutResponse)
 def update_workout_steps(
     workout_id: UUID,
     request: WorkoutStepsUpdateRequest,
@@ -472,32 +464,32 @@ def update_workout_steps(
 
         # Build groups list for response
         groups_list = [
-            {
-                "group_id": group.group_id,
-                "repeat": group.repeat,
-                "step_ids": group.step_ids,
-            }
+            WorkoutStepGroup(
+                group_id=group.group_id,
+                repeat=group.repeat,
+                step_ids=group.step_ids,
+            )
             for group in groups
         ]
 
         # Determine structured availability
         structured_available = bool(steps and len(steps) > 0)
 
-        return {
-            "status": "ok",
-            "workout": {
-                "id": workout.id,
-                "sport": workout.sport,
-                "source": workout.source,
-                "total_distance_meters": workout.total_distance_meters,
-                "total_duration_seconds": workout.total_duration_seconds,
-                "parse_status": workout.parse_status,
-            },
-            "steps": step_dicts,
-            "groups": groups_list,
-            "structured_available": structured_available,
-            "comparison": None,  # Comparison not recomputed on step update
-        }
+        return StructuredWorkoutResponse(
+            status="ok",
+            workout=StructuredWorkoutInfo(
+                id=workout.id,
+                sport=workout.sport,
+                source=workout.source,
+                total_distance_meters=workout.total_distance_meters,
+                total_duration_seconds=workout.total_duration_seconds,
+                parse_status=workout.parse_status,
+            ),
+            steps=step_dicts,
+            groups=groups_list,
+            structured_available=structured_available,
+            comparison=None,  # Comparison not recomputed on step update
+        )
 
 
 @router.get("/{workout_id}", response_model=WorkoutSchema)

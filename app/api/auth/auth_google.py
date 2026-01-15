@@ -446,8 +446,8 @@ def google_callback(
         # Determine cookie domain
         host = request.headers.get("host", "")
         cookie_domain: str | None = None
-        if "onrender.com" in host:
-            cookie_domain = ".virtus-ai.onrender.com"
+        if "athletespace.ai" in host or "onrender.com" in host:
+            cookie_domain = ".athletespace.ai"
 
         # CRITICAL: Always set HTTP-only cookie for both web and mobile
         # Mobile WebView can persist cookies if they're set correctly with secure=True and samesite="none"

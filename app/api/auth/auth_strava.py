@@ -432,8 +432,8 @@ def strava_callback(
     # Determine cookie domain
     host = request.headers.get("host", "")
     cookie_domain: str | None = None
-    if "onrender.com" in host:
-        cookie_domain = ".virtus-ai.onrender.com"
+    if "athletespace.ai" in host or "onrender.com" in host:
+        cookie_domain = ".athletespace.ai"
 
     response.set_cookie(
         key="session",

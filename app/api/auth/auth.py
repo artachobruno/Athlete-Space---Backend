@@ -30,7 +30,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def _get_cookie_domain(request: Request) -> str | None:
     """Get cookie domain from request host.
 
-    For production (onrender.com), returns '.virtus-ai.onrender.com' to allow
+    For production (athletespace.ai), returns '.athletespace.ai' to allow
     cookie sharing across subdomains. For localhost, returns None (browser default).
 
     Args:
@@ -40,8 +40,8 @@ def _get_cookie_domain(request: Request) -> str | None:
         Cookie domain string (with leading dot for subdomain sharing) or None for localhost
     """
     host = request.headers.get("host", "")
-    if "onrender.com" in host:
-        return ".virtus-ai.onrender.com"
+    if "athletespace.ai" in host or "onrender.com" in host:
+        return ".athletespace.ai"
     return None
 
 

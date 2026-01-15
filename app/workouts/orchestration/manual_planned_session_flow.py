@@ -53,7 +53,7 @@ def _map_sport_type(session_type: str) -> str:
 async def create_structured_workout_from_manual_session(
     session: Session,
     user_id: str,
-    athlete_id: int,
+    _athlete_id: int,
     notes_raw: str,
     session_type: str,
     distance_km: float | None = None,
@@ -71,7 +71,7 @@ async def create_structured_workout_from_manual_session(
     Args:
         session: Database session (must be in transaction)
         user_id: User ID
-        athlete_id: Athlete ID
+        _athlete_id: Athlete ID (unused, kept for API compatibility)
         notes_raw: Raw notes from user input (required)
         session_type: Session type (Run, Ride, Bike, Swim, etc.)
         distance_km: Optional distance in kilometers
@@ -140,7 +140,8 @@ async def create_structured_workout_from_manual_session(
     )
 
     # HARD GUARD: Ensure workout.id exists before returning
-    assert workout.id is not None, "Workout must exist before PlannedSession creation"
+    if workout.id is None:
+        raise RuntimeError("Workout must exist before PlannedSession creation")
 
     logger.info(
         "Created structured workout for manual session",

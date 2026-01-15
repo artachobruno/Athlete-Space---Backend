@@ -26,6 +26,7 @@ from app.calendar.reconciliation_service import reconcile_calendar
 from app.db.models import Activity, PlannedSession, StravaAccount, User
 from app.db.session import get_session
 from app.utils.timezone import now_user, to_utc
+from app.workouts.models import Workout, WorkoutStep
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
@@ -950,9 +951,6 @@ def delete_planned_session(
         # Only delete workout if it's not referenced by any activities
         workout_id = planned_session.workout_id
         if workout_id:
-            from app.db.models import Activity
-            from app.workouts.models import Workout, WorkoutStep
-
             # Check if workout is referenced by any activities
             activity_count = session.execute(
                 select(func.count(Activity.id)).where(Activity.workout_id == workout_id)

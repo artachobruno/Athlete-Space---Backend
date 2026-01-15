@@ -31,6 +31,19 @@ MAX_CONTENT_SIZE = 1 * 1024 * 1024  # 1MB for text/CSV content
 MAX_SESSIONS_PER_REQUEST = 500
 
 
+def _ensure_workout_id_exists(workout: Workout) -> None:
+    """Ensure workout has an ID before creating PlannedSession.
+
+    Args:
+        workout: Workout instance to check
+
+    Raises:
+        RuntimeError: If workout.id is None
+    """
+    if workout.id is None:
+        raise RuntimeError("Workout must exist before PlannedSession creation")
+
+
 def _validate_production_auth(user_id: str) -> None:
     """Validate authentication in production environment.
 
@@ -331,7 +344,7 @@ async def upload_manual_session(
                     session.flush()
 
                 # HARD GUARD: Ensure workout.id exists before creating PlannedSession
-                assert workout.id is not None, "Workout must exist before PlannedSession creation"
+                _ensure_workout_id_exists(workout)
 
                 # Step 4: Create PlannedSession WITH workout_id (correct order)
                 planned_session = PlannedSession(

@@ -544,14 +544,29 @@ class CoachActionExecutor:
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
 
         if target_action == "plan_week":
-            # Legacy planner removed - plan_week is no longer supported
-            logger.warning(
-                "plan_week action requested but legacy planner removed",
-                user_id=deps.user_id,
-                athlete_id=deps.athlete_id,
+            # Validate intent and horizon
+            if intent != "plan":
+                logger.warning(
+                    "plan_week called with invalid intent",
+                    intent=intent,
+                    conversation_id=conversation_id,
+                )
+                return "Weekly planning requires intent='plan'."
+            if horizon != "week":
+                logger.warning(
+                    "plan_week called with invalid horizon",
+                    horizon=horizon,
+                    conversation_id=conversation_id,
+                )
+                return "Weekly planning requires horizon='week'."
+            logger.debug(
+                "ActionExecutor: Routing to plan_week execution",
                 conversation_id=conversation_id,
             )
-            return "Weekly planning has been replaced. Please create a race plan first using the new planner."
+            # Mark execution in turn-scoped guard BEFORE calling planner to prevent re-entry
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("plan_week")
+            return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
 
         # Fallback to intent/horizon mapping if no target_action
         if intent == "recommend" and horizon in {"next_session", "today"}:
@@ -568,6 +583,11 @@ class CoachActionExecutor:
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("plan_race_build")
             return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
+
+        if intent == "plan" and horizon == "week":
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("plan_week")
+            return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
 
         if intent == "plan" and horizon == "season":
             if deps.execution_guard:

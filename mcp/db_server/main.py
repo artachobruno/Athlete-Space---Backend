@@ -131,6 +131,7 @@ adjust_training_load_tool = _coach_tools_module.adjust_training_load_tool
 recommend_next_session_tool = _coach_tools_module.recommend_next_session_tool
 share_report_tool = _coach_tools_module.share_report_tool
 get_planned_sessions_tool = _coach_tools_module.get_planned_sessions_tool
+plan_week_tool = _coach_tools_module.plan_week_tool
 
 _progress_events_module = _load_module_from_path("mcp_db_progress_events", _tools_dir / "progress_events.py")
 emit_progress_event_tool = _progress_events_module.emit_progress_event_tool
@@ -195,6 +196,7 @@ async def call_tool(request: Request) -> JSONResponse:
             "get_yesterday_activities": get_yesterday_activities_tool,
             "save_planned_sessions": save_planned_sessions_tool,
             "add_workout": add_workout_tool,
+            "plan_week": plan_week_tool,
             "plan_season": plan_season_tool,
             "run_analysis": run_analysis_tool,
             "explain_training_state": explain_training_state_tool,

@@ -92,13 +92,21 @@ async def plan_week(
 ) -> str:
     """B8: Unified Planning Tool - Create weekly planned sessions.
 
+    This tool generates a 7-day training plan for the current week.
+    It is for PLANNING only - no modification logic.
+
+    Guardrails:
+    - Requires intent="plan" and horizon="week" (enforced by executor)
+    - Does not require race_date or race_distance (week plans are independent)
+    - Pure generation - no modification of existing plans
+
     Consumes:
     - TrainingSummary (B16)
     - TrainingConstraints (B17) - if user feedback provided
     - LoadAdjustmentDecision (B18) - computed from B16 + B17
 
     Produces:
-    - Planned sessions saved to calendar
+    - Planned sessions saved to calendar (exactly 7 days)
 
     Args:
         state: Current athlete state with load metrics and trends
@@ -108,6 +116,9 @@ async def plan_week(
 
     Returns:
         Success message with session count
+
+    Raises:
+        RuntimeError: If called with invalid context (should not happen if executor validates)
     """
     logger.info(
         "B8: Unified planning tool called",
@@ -117,6 +128,7 @@ async def plan_week(
         has_feedback=user_feedback is not None,
     )
 
+    # Validation guardrails
     if not user_id or not athlete_id:
         return "[CLARIFICATION] user_id and athlete_id are required for planning"
 

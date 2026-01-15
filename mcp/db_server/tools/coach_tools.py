@@ -49,19 +49,58 @@ def _parse_athlete_state(state_dict: dict) -> AthleteState:
         raise MCPError("INVALID_STATE", f"Invalid athlete state: {e!s}") from e
 
 
-def plan_week_tool(arguments: dict) -> dict:
-    """DEPRECATED MCP tool - removed in v2.
+async def plan_week_tool_impl(
+    state: AthleteState,
+    user_id: str | None,
+    athlete_id: int | None,
+    user_feedback: str | None,
+) -> str:
+    """Async wrapper for plan_week."""
+    return await plan_week(state, user_id, athlete_id, user_feedback)
 
-    This tool has been removed. Use plan_race_simple from app.planner.plan_race_simple instead.
+
+def plan_week_tool(arguments: dict) -> dict:
+    """Generate a 7-day training plan for the current week.
+
+    Contract: plan_week.json
+
+    Args:
+        arguments: Dictionary containing:
+            - state: AthleteState dict (required)
+            - user_id: User ID (required)
+            - athlete_id: Athlete ID (required)
+            - user_feedback: Optional user feedback for constraint generation
+
+    Returns:
+        Success message with plan details
 
     Raises:
-        RuntimeError: Always, to prevent accidental usage
+        MCPError: If inputs are invalid or planning fails
     """
-    _ = arguments
-    raise RuntimeError(
-        "Deprecated MCP planner tool. Removed in v2. "
-        "Use plan_race_simple from app.planner.plan_race_simple instead."
-    )
+    state_dict = arguments.get("state")
+    user_id = arguments.get("user_id")
+    athlete_id = arguments.get("athlete_id")
+    user_feedback = arguments.get("user_feedback")
+
+    if not state_dict or not isinstance(state_dict, dict):
+        raise MCPError("INVALID_INPUT", "Missing or invalid state")
+
+    if not user_id or not isinstance(user_id, str):
+        raise MCPError("INVALID_INPUT", "Missing or invalid user_id")
+
+    if athlete_id is None:
+        raise MCPError("INVALID_INPUT", "Missing athlete_id")
+
+    try:
+        state = _parse_athlete_state(state_dict)
+        result = asyncio.run(plan_week_tool_impl(state, user_id, athlete_id, user_feedback))
+    except MCPError:
+        raise
+    except Exception as e:
+        logger.error(f"Error planning week: {e}", exc_info=True)
+        raise MCPError("INTERNAL_ERROR", f"Failed to plan week: {e!s}") from e
+    else:
+        return {"message": result}
 
 
 def run_analysis_tool(arguments: dict) -> dict:

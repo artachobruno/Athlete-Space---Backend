@@ -59,7 +59,7 @@ def extract_workout_signals(notes: str | None) -> ExtractedWorkoutSignals:
     # Extract duration (minutes, hours)
     duration_s = _extract_duration(notes_lower)
 
-    # Detect intervals (keywords: "interval", "repeat", "x", "×")
+    # Detect intervals (keywords: "interval", "repeat", "x")
     has_intervals = _detect_intervals(notes_lower)
 
     # Extract intensity hints (easy, tempo, threshold, marathon pace, etc.)
@@ -81,7 +81,6 @@ def _extract_distance(notes_lower: str) -> float | None:
     - "16 km" / "16km"
     - "5000m" / "5000 meters"
     """
-    # Pattern: number + unit (miles/mi, km, meters/m)
     patterns = [
         (r"(\d+(?:\.\d+)?)\s*(?:miles|mi)\b", 1609.34),  # miles to meters
         (r"(\d+(?:\.\d+)?)\s*(?:km|kilometers?)\b", 1000.0),  # km to meters
@@ -108,7 +107,6 @@ def _extract_duration(notes_lower: str) -> int | None:
     - "1 hour" / "1 hr"
     - "45:00" (time format)
     """
-    # Pattern: number + unit (hours/hrs/hr, minutes/mins/min)
     patterns = [
         (r"(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b", 3600),  # hours to seconds
         (r"(\d+(?:\.\d+)?)\s*(?:minutes?|mins?|min)\b", 60),  # minutes to seconds
@@ -132,10 +130,10 @@ def _extract_duration(notes_lower: str) -> int | None:
                 minutes = int(time_match.group(2))
                 seconds = int(time_match.group(3))
                 return hours * 3600 + minutes * 60 + seconds
-            else:  # MM:SS (assume minutes:seconds)
-                minutes = int(time_match.group(1))
-                seconds = int(time_match.group(2))
-                return minutes * 60 + seconds
+            # MM:SS (assume minutes:seconds)
+            minutes = int(time_match.group(1))
+            seconds = int(time_match.group(2))
+            return minutes * 60 + seconds
         except ValueError:
             pass
 
@@ -145,22 +143,17 @@ def _extract_duration(notes_lower: str) -> int | None:
 def _detect_intervals(notes_lower: str) -> bool:
     """Detect if notes mention intervals.
 
-    Looks for keywords: interval, repeat, x, ×, sets
+    Looks for keywords: interval, repeat, x, sets
     """
     interval_keywords = [
         r"\bintervals?\b",
         r"\brepeats?\b",
         r"\b\d+\s*x\s*\d+",  # "5 x 400"
-        r"\b\d+\s*×\s*\d+",  # "5 × 400"
         r"\bsets\b",
         r"\breps\b",
     ]
 
-    for pattern in interval_keywords:
-        if re.search(pattern, notes_lower):
-            return True
-
-    return False
+    return any(re.search(pattern, notes_lower) for pattern in interval_keywords)
 
 
 def _extract_intensity_hint(notes_lower: str) -> str | None:

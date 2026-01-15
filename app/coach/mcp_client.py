@@ -31,6 +31,7 @@ MCP_TOOL_ROUTES: dict[str, str] = {
     "save_planned_sessions": MCP_DB_SERVER_URL,
     "get_planned_sessions": MCP_DB_SERVER_URL,
     "add_workout": MCP_DB_SERVER_URL,
+    "plan_week": MCP_DB_SERVER_URL,
     "plan_season": MCP_DB_SERVER_URL,
     "run_analysis": MCP_DB_SERVER_URL,
     "explain_training_state": MCP_DB_SERVER_URL,
@@ -49,6 +50,7 @@ HTTP_TIMEOUT = 30.0
 
 # Tool-specific timeouts (in seconds)
 TOOL_TIMEOUTS: dict[str, float] = {
+    "plan_week": 180.0,  # 3 minutes for weekly planning
     "plan_season": 300.0,  # 5 minutes for season planning
     "run_analysis": 120.0,  # 2 minutes for analysis
 }
@@ -325,7 +327,7 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]
     # Phase 6C: Reduced retries for heavy operations (planning, etc.)
     # Retries make sense for idempotent reads, not for heavy planners
     # Planning tools: 1 attempt (no retries). Other tools: 2 attempts (1 retry).
-    is_planning_tool = tool_name in {"plan_season"}
+    is_planning_tool = tool_name in {"plan_week", "plan_season"}
     max_retries = 1 if is_planning_tool else 2
 
     with trace(

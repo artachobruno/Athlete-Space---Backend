@@ -7,15 +7,12 @@ overview. No ingestion logic is performed here - all data comes from the databas
 from __future__ import annotations
 
 import csv
+import os
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from zoneinfo import ZoneInfo
-
-import os
-
-import os
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -24,7 +21,6 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError
 
 from app.api.dependencies.auth import get_current_user_id, get_optional_user_id
-from app.config.settings import settings
 from app.api.schemas.schemas import (
     AthleteProfileResponse,
     AthleteProfileUpdateRequest,
@@ -41,6 +37,7 @@ from app.api.schemas.schemas import (
     TrainingPreferencesResponse,
     TrainingPreferencesUpdateRequest,
 )
+from app.config.settings import settings
 from app.core.password import hash_password, verify_password
 from app.db.models import (
     Activity,
@@ -332,7 +329,7 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
         """Add CORS headers to response if origin is allowed."""
         origin = request.headers.get("origin")
         allowed_origins = _get_allowed_origins()
-        
+
         # Log for debugging CORS issues
         if origin:
             logger.debug(f"[CORS] /me request from origin: {origin}, allowed: {origin in allowed_origins}")
@@ -341,7 +338,7 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                     f"[CORS] /me request from disallowed origin: {origin}. "
                     f"Allowed origins: {allowed_origins}"
                 )
-        
+
         if origin and origin in allowed_origins:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"

@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.orm import make_transient
 
 from app.db.models import PlannedSession
 from app.db.session import get_session
@@ -91,8 +92,6 @@ def save_modified_session(
 
         # Detach the modified session from any session state
         # This ensures it's treated as a completely new object
-        from sqlalchemy.orm import make_transient
-
         make_transient(modified_session)
 
         # Set modification metadata - generate new ID for new session

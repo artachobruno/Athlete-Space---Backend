@@ -45,11 +45,11 @@ def db_session(monkeypatch):
     monkeypatch.setattr("app.db.session.get_engine", mock_get_engine)
 
     # Import models after patching engine
-    from app.db.models import Base, PlannedSession
-
     # Create all tables (SQLite will handle missing FK targets gracefully with proper setup)
     # We need to create workouts table first since PlannedSession references it
     from sqlalchemy import Column, String, Table
+
+    from app.db.models import Base, PlannedSession
 
     # Use extend_existing to avoid redefinition errors across tests
     if "workouts" not in Base.metadata.tables:
@@ -81,8 +81,8 @@ def db_session(monkeypatch):
     PlannedSession.__table__.create(engine, checkfirst=True)
 
     # Create session factory bound to our test engine
-    TestSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = TestSessionLocal()
+    test_session_local = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    session = test_session_local()
 
     # Patch get_session to return our test session
     # We need to patch it in multiple places where it might be imported
@@ -93,7 +93,7 @@ def db_session(monkeypatch):
     # Patch at the module level
     import app.db.session as session_module
     monkeypatch.setattr(session_module, "get_session", mock_get_session)
-    
+
     # Also patch in repository module if it imports get_session directly
     try:
         import app.plans.modify.repository as repo_module

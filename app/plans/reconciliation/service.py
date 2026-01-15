@@ -17,7 +17,6 @@ from app.athletes.models import AthletePaceProfile
 from app.db.models import Activity, Athlete, AthleteProfile, PlannedSession, StravaAccount, WorkoutReconciliation
 from app.plans.reconciliation.reconcile import reconcile_workout
 from app.plans.reconciliation.types import ExecutedWorkout
-from app.users.athlete_repository import AthleteRepository
 
 
 def extract_hr_from_activity(activity: Activity) -> tuple[int | None, int | None]:
@@ -120,9 +119,6 @@ def reconcile_activity_if_paired(
             f"Planned session {activity.planned_session_id} not found for activity {activity.id}"
         )
         return None
-
-    # Get athlete
-    athlete = AthleteRepository.get_or_create(session, activity.user_id)
 
     # Extract executed workout data
     avg_hr, max_hr = extract_hr_from_activity(activity)

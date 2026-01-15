@@ -715,6 +715,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Register conversation ID middleware (after CORS)
 # This ensures conversation_id is available to all downstream middleware and handlers
 @app.middleware("http")
@@ -1030,7 +1031,7 @@ async def ensure_cors_headers(request: Request, call_next):
     Also enforces /me endpoint contract by converting 404s to 401s.
     """
     origin = request.headers.get("origin")
-    
+
     # Log OPTIONS requests for debugging
     if request.method == "OPTIONS":
         logger.info(

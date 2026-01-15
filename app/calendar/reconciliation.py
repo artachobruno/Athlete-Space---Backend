@@ -285,9 +285,13 @@ def _find_candidate_activities(
 
         # Normalize activity time and check if within time window
         activity_time = ensure_utc(activity.start_time)
-        if activity_time is not None and window_start_utc is not None and window_end_utc is not None:
-            if window_start_utc <= activity_time <= window_end_utc:
-                candidates.append(activity)
+        if (
+            activity_time is not None
+            and window_start_utc is not None
+            and window_end_utc is not None
+            and window_start_utc <= activity_time <= window_end_utc
+        ):
+            candidates.append(activity)
 
     return candidates
 

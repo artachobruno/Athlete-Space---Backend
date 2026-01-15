@@ -21,8 +21,6 @@ STRUCTURE RULE:
 
 from datetime import datetime, timezone
 
-from app.planning.metrics.materialization import log_materialization_metrics
-
 from app.planning.compiler.assemble_week import assemble_week_plan
 from app.planning.compiler.skeleton_generator import generate_week_skeletons
 from app.planning.compiler.time_allocator import allocate_week_time
@@ -32,6 +30,7 @@ from app.planning.library.philosophy import TrainingPhilosophy
 from app.planning.library.session_template import SessionTemplate
 from app.planning.materialization.materialize_week import materialize_week
 from app.planning.materialization.validate import validate_materialized_sessions
+from app.planning.metrics.materialization import log_materialization_metrics
 from app.planning.output.models import WeekPlan
 from app.planning.phase import resolve_phase
 from app.planning.progress.emitter import emit_planning_progress

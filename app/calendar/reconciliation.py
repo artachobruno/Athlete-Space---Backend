@@ -24,6 +24,25 @@ from enum import StrEnum
 from loguru import logger
 
 
+def ensure_utc(dt: datetime | None) -> datetime | None:
+    """Normalize datetime to UTC-aware.
+
+    Converts naive datetimes to UTC-aware, and converts aware datetimes to UTC.
+    Returns None if input is None.
+
+    Args:
+        dt: Datetime to normalize (may be naive or aware)
+
+    Returns:
+        UTC-aware datetime, or None if input was None
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 class SessionStatus(StrEnum):
     """Session reconciliation status."""
 
@@ -255,14 +274,20 @@ def _find_candidate_activities(
     window_start = planned_datetime - timedelta(hours=config.time_tolerance_hours)
     window_end = planned_datetime + timedelta(hours=24 + config.time_tolerance_hours)
 
+    # Normalize window bounds to UTC
+    window_start_utc = ensure_utc(window_start)
+    window_end_utc = ensure_utc(window_end)
+
     for activity in completed_activities:
         # Skip if already matched
         if activity.activity_id in matched_activity_ids:
             continue
 
-        # Check if within time window
-        if window_start <= activity.start_time <= window_end:
-            candidates.append(activity)
+        # Normalize activity time and check if within time window
+        activity_time = ensure_utc(activity.start_time)
+        if activity_time is not None and window_start_utc is not None and window_end_utc is not None:
+            if window_start_utc <= activity_time <= window_end_utc:
+                candidates.append(activity)
 
     return candidates
 

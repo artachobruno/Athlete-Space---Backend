@@ -16,10 +16,11 @@ from sqlalchemy.exc import IntegrityError
 from app.api.dependencies.auth import get_current_user_id
 from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
-from app.db.models import Activity, StravaAccount
+from app.db.models import Activity, StravaAccount, UserSettings
 from app.db.session import get_session
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
+from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -275,6 +276,19 @@ def ingest_activities(
             workout = WorkoutFactory.get_or_create_for_activity(session, activity)
             WorkoutFactory.attach_activity(session, workout, activity)
 
+            # Compute TSS (works with or without streams_data - uses HR/RPE fallbacks if streams not available)
+            try:
+                user_settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                athlete_thresholds = _build_athlete_thresholds(user_settings)
+                tss = compute_activity_tss(activity, athlete_thresholds)
+                activity.tss = tss
+                activity.tss_version = "v2"
+                logger.debug(
+                    f"[INGESTION] Computed TSS for activity {strava_id}: tss={tss}, version=v2"
+                )
+            except Exception as e:
+                logger.warning(f"[INGESTION] Failed to compute TSS for activity {strava_id}: {e}")
+
             created_activities.append(activity)
             imported_count += 1
 
@@ -349,6 +363,19 @@ def ingest_activities(
                     # PHASE 3: Enforce workout + execution creation (mandatory invariant)
                     workout = WorkoutFactory.get_or_create_for_activity(session, activity)
                     WorkoutFactory.attach_activity(session, workout, activity)
+
+                    # Compute TSS (works with or without streams_data - uses HR/RPE fallbacks if streams not available)
+                    try:
+                        user_settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                        athlete_thresholds = _build_athlete_thresholds(user_settings)
+                        tss = compute_activity_tss(activity, athlete_thresholds)
+                        activity.tss = tss
+                        activity.tss_version = "v2"
+                        logger.debug(
+                            f"[INGESTION] Computed TSS for activity {strava_id} (retry): tss={tss}, version=v2"
+                        )
+                    except Exception as e:
+                        logger.warning(f"[INGESTION] Failed to compute TSS for activity {strava_id} (retry): {e}")
 
                     session.commit()
                     retry_imported += 1
@@ -458,3 +485,21 @@ def strava_ingest(
         ) from e
     else:
         return result
+
+
+def _build_athlete_thresholds(user_settings: UserSettings | None) -> AthleteThresholds | None:
+    """Build AthleteThresholds from UserSettings.
+
+    Args:
+        user_settings: User settings with threshold configuration
+
+    Returns:
+        AthleteThresholds instance or None if no user settings
+    """
+    if not user_settings:
+        return None
+
+    return AthleteThresholds(
+        ftp_watts=user_settings.ftp_watts,
+        threshold_pace_ms=user_settings.threshold_pace_ms,
+    )

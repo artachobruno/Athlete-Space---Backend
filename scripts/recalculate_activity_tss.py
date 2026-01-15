@@ -19,9 +19,9 @@ sys.path.insert(0, str(project_root))
 from loguru import logger
 from sqlalchemy import select
 
-from app.db.models import Activity
+from app.db.models import Activity, UserSettings
 from app.db.session import get_session
-from app.metrics.load_computation import compute_activity_tss
+from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 
 BATCH_SIZE = 500
 
@@ -53,7 +53,12 @@ def run(dry_run: bool = True) -> dict[str, int]:
             total_processed += 1
 
             try:
-                new_tss = compute_activity_tss(activity)
+                # Get user settings for threshold configuration
+                user_settings = db.query(UserSettings).filter_by(user_id=activity.user_id).first()
+                athlete_thresholds = _build_athlete_thresholds(user_settings)
+                
+                # Compute TSS with user-specific thresholds
+                new_tss = compute_activity_tss(activity, athlete_thresholds)
 
                 if new_tss is None:
                     total_skipped += 1
@@ -98,6 +103,24 @@ def run(dry_run: bool = True) -> dict[str, int]:
     logger.info(f"Total skipped: {total_skipped}")
 
     return summary
+
+
+def _build_athlete_thresholds(user_settings: UserSettings | None) -> AthleteThresholds | None:
+    """Build AthleteThresholds from UserSettings.
+
+    Args:
+        user_settings: User settings with threshold configuration
+
+    Returns:
+        AthleteThresholds instance or None if no user settings
+    """
+    if not user_settings:
+        return None
+
+    return AthleteThresholds(
+        ftp_watts=user_settings.ftp_watts,
+        threshold_pace_ms=user_settings.threshold_pace_ms,
+    )
 
 
 if __name__ == "__main__":

@@ -11,20 +11,35 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+class WorkoutTarget(BaseModel):
+    """Target values for a workout step."""
+
+    type: str | None = None
+    min: float | None = None
+    max: float | None = None
+    value: float | None = None
+    unit: str | None = None
+
+
 class WorkoutStepSchema(BaseModel):
     """Workout step schema for API responses."""
 
     id: UUID
     order: int
+    name: str
     type: str
+    kind: str | None = None
+    intensity: str | None = None
     duration_seconds: int | None
     distance_meters: int | None
-    target_metric: str | None
-    target_min: float | None
-    target_max: float | None
-    target_value: float | None
-    instructions: str | None
-    purpose: str | None
+    target: WorkoutTarget | None = None
+    target_metric: str | None = None
+    target_min: float | None = None
+    target_max: float | None = None
+    target_value: float | None = None
+    repeat_group_id: str | None = None
+    instructions: str | None = None
+    purpose: str | None = None
     inferred: bool
 
 
@@ -42,6 +57,33 @@ class WorkoutStepInputSchema(BaseModel):
     instructions: str | None = None
     purpose: str | None = None
     inferred: bool = False
+
+
+class WorkoutStepUpdateSchema(BaseModel):
+    """Workout step schema for updates (includes ID)."""
+
+    id: UUID
+    order: int
+    name: str
+    type: str
+    kind: str | None = None
+    intensity: str | None = None
+    duration_seconds: int | None = None
+    distance_meters: int | None = None
+    target: WorkoutTarget | None = None
+    target_metric: str | None = None
+    target_min: float | None = None
+    target_max: float | None = None
+    target_value: float | None = None
+    instructions: str | None = None
+    purpose: str | None = None
+    inferred: bool = False
+
+
+class WorkoutStepsUpdateRequest(BaseModel):
+    """Request schema for updating workout steps."""
+
+    steps: list[WorkoutStepUpdateSchema]
 
 
 class WorkoutSchema(BaseModel):
@@ -155,6 +197,14 @@ class WorkoutInterpretationResponse(BaseModel):
     verdict: str | None
     summary: str | None
     steps: list[StepInterpretationSchema]
+
+
+class WorkoutStepGroup(BaseModel):
+    """A group of repeated workout steps."""
+
+    group_id: str
+    repeat: int
+    step_ids: list[str]
 
 
 class ParsedStepSchema(BaseModel):

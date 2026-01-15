@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
@@ -35,9 +35,13 @@ from app.workouts.schemas import (
     WorkoutExportResponse,
     WorkoutInterpretationResponse,
     WorkoutSchema,
+    WorkoutStepGroup,
     WorkoutStepSchema,
+    WorkoutStepsUpdateRequest,
+    WorkoutTarget,
     WorkoutTimelineResponse,
 )
+from app.workouts.step_grouping import detect_repeating_patterns
 from app.workouts.step_utils import infer_step_name
 from app.workouts.timeline import build_workout_timeline
 
@@ -176,6 +180,7 @@ def get_structured_workout(
                 "workout_id": str(workout_id),
                 "workout": None,
                 "steps": [],
+                "groups": [],
                 "structured_available": False,
                 "comparison": None,
             }
@@ -186,22 +191,74 @@ def get_structured_workout(
         for step in steps:
             if not step.purpose and not step.instructions:
                 # Infer name if missing
-                inferred_name = infer_step_name(step)
+                inferred_name = infer_step_name(step, workout.raw_notes)
                 step.purpose = inferred_name
 
-        step_dicts = [
-            {
+        # Detect repeating patterns for grouping
+        groups = detect_repeating_patterns(steps)
+        step_id_to_group: dict[str, str] = {}
+        for group in groups:
+            for step_id in group.step_ids:
+                step_id_to_group[step_id] = group.group_id
+
+        # Build step dictionaries with enhanced schema
+        step_dicts = []
+        for step in steps:
+            # Build target object if target data exists
+            target: dict[str, str | float | None] | None = None
+            if step.target_metric or step.target_min is not None or step.target_max is not None or step.target_value is not None:
+                # Determine unit based on metric type
+                unit = None
+                if step.target_metric == "pace":
+                    unit = "min/km"
+                elif step.target_metric == "hr":
+                    unit = "bpm"
+                elif step.target_metric == "power":
+                    unit = "W"
+                elif step.target_metric == "rpe":
+                    unit = "RPE"
+
+                target = {
+                    "type": step.target_metric,
+                    "min": step.target_min,
+                    "max": step.target_max,
+                    "value": step.target_value,
+                    "unit": unit,
+                }
+
+            step_name = step.purpose or infer_step_name(step, workout.raw_notes)
+            step_kind = step.type  # Use type as kind for now
+            step_intensity = step.intensity_zone  # Use intensity_zone as intensity
+
+            step_dict = {
                 "id": step.id,
                 "order": step.order,
-                "name": step.purpose or infer_step_name(step),
+                "name": step_name,
                 "type": step.type,
+                "kind": step_kind,
+                "intensity": step_intensity,
                 "duration_seconds": step.duration_seconds,
                 "distance_meters": step.distance_meters,
+                "target": target,
                 "target_metric": step.target_metric,
                 "target_min": step.target_min,
                 "target_max": step.target_max,
+                "target_value": step.target_value,
+                "repeat_group_id": step_id_to_group.get(step.id),
+                "instructions": step.instructions,
+                "purpose": step.purpose,
+                "inferred": step.inferred,
             }
-            for step in steps
+            step_dicts.append(step_dict)
+
+        # Build groups list for response
+        groups_list = [
+            {
+                "group_id": group.group_id,
+                "repeat": group.repeat,
+                "step_ids": group.step_ids,
+            }
+            for group in groups
         ]
 
         # Get comparison data
@@ -235,8 +292,211 @@ def get_structured_workout(
                 "parse_status": workout.parse_status,
             },
             "steps": step_dicts,
+            "groups": groups_list,
             "structured_available": structured_available,
             "comparison": comparison_dict,
+        }
+
+
+@router.put("/{workout_id}/steps")
+def update_workout_steps(
+    workout_id: UUID,
+    request: WorkoutStepsUpdateRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> StructuredWorkoutResponse:
+    """Update workout steps.
+
+    Replaces all steps for the workout with the provided steps.
+    Steps are validated, persisted, and groups are recomputed.
+
+    Args:
+        workout_id: Workout UUID
+        request: Steps update request
+        user_id: Authenticated user ID
+
+    Returns:
+        Updated structured workout response with recomputed groups
+
+    Raises:
+        HTTPException: If workout not found, validation fails, or user mismatch
+    """
+    with get_session() as session:
+        # Verify workout exists and belongs to user
+        stmt = (
+            select(Workout)
+            .where(Workout.id == str(workout_id))
+            .where(Workout.user_id == user_id)
+        )
+        result = session.execute(stmt)
+        workout = result.scalar_one_or_none()
+
+        if not workout:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Workout {workout_id} not found",
+            )
+
+        # Validate steps
+        errors: list[str] = []
+        for idx, step in enumerate(request.steps):
+            # Must have either duration or distance
+            if step.duration_seconds is None and step.distance_meters is None:
+                errors.append(f"Step {idx + 1} (order {step.order}): must have either duration_seconds or distance_meters")
+
+            # Target validation
+            if (
+                step.target
+                and step.target.min is not None
+                and step.target.max is not None
+                and step.target.min > step.target.max
+            ):
+                errors.append(f"Step {idx + 1} (order {step.order}): target min ({step.target.min}) > max ({step.target.max})")
+
+            # Legacy target validation
+            if (
+                step.target_min is not None
+                and step.target_max is not None
+                and step.target_min > step.target_max
+            ):
+                errors.append(f"Step {idx + 1} (order {step.order}): target_min ({step.target_min}) > target_max ({step.target_max})")
+
+        if errors:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"errors": errors},
+            )
+
+        # Delete existing steps
+        delete_stmt = delete(WorkoutStep).where(WorkoutStep.workout_id == str(workout_id))
+        session.execute(delete_stmt)
+
+        # Create new steps from request
+        new_steps: list[WorkoutStep] = []
+        for step_update in request.steps:
+            # Extract target data
+            target_metric = step_update.target.type if step_update.target else step_update.target_metric
+            target_min = step_update.target.min if step_update.target else step_update.target_min
+            target_max = step_update.target.max if step_update.target else step_update.target_max
+            target_value = step_update.target.value if step_update.target else step_update.target_value
+
+            # Use purpose as name if provided, otherwise use name field
+            step_name = step_update.purpose or step_update.name
+
+            new_step = WorkoutStep(
+                id=str(step_update.id),
+                workout_id=str(workout_id),
+                order=step_update.order,
+                type=step_update.type,
+                duration_seconds=step_update.duration_seconds,
+                distance_meters=step_update.distance_meters,
+                target_metric=target_metric,
+                target_min=target_min,
+                target_max=target_max,
+                target_value=target_value,
+                intensity_zone=step_update.intensity,
+                instructions=step_update.instructions,
+                purpose=step_name,
+                inferred=step_update.inferred,
+            )
+            new_steps.append(new_step)
+            session.add(new_step)
+
+        session.commit()
+
+        # Re-run name inference for steps that need it
+        for step in new_steps:
+            if not step.purpose:
+                inferred_name = infer_step_name(step, workout.raw_notes)
+                step.purpose = inferred_name
+
+        session.commit()
+
+        # Reload steps to get fresh data
+        steps = get_workout_steps(session, workout_id)
+
+        # Detect repeating patterns for grouping
+        groups = detect_repeating_patterns(steps)
+        step_id_to_group: dict[str, str] = {}
+        for group in groups:
+            for step_id in group.step_ids:
+                step_id_to_group[step_id] = group.group_id
+
+        # Build step dictionaries with enhanced schema
+        step_dicts = []
+        for step in steps:
+            # Build target object if target data exists
+            target: dict[str, str | float | None] | None = None
+            if step.target_metric or step.target_min is not None or step.target_max is not None or step.target_value is not None:
+                unit = None
+                if step.target_metric == "pace":
+                    unit = "min/km"
+                elif step.target_metric == "hr":
+                    unit = "bpm"
+                elif step.target_metric == "power":
+                    unit = "W"
+                elif step.target_metric == "rpe":
+                    unit = "RPE"
+
+                target = {
+                    "type": step.target_metric,
+                    "min": step.target_min,
+                    "max": step.target_max,
+                    "value": step.target_value,
+                    "unit": unit,
+                }
+
+            step_name = step.purpose or infer_step_name(step, workout.raw_notes)
+            step_kind = step.type
+            step_intensity = step.intensity_zone
+
+            step_dict = {
+                "id": step.id,
+                "order": step.order,
+                "name": step_name,
+                "type": step.type,
+                "kind": step_kind,
+                "intensity": step_intensity,
+                "duration_seconds": step.duration_seconds,
+                "distance_meters": step.distance_meters,
+                "target": target,
+                "target_metric": step.target_metric,
+                "target_min": step.target_min,
+                "target_max": step.target_max,
+                "target_value": step.target_value,
+                "repeat_group_id": step_id_to_group.get(step.id),
+                "instructions": step.instructions,
+                "purpose": step.purpose,
+                "inferred": step.inferred,
+            }
+            step_dicts.append(step_dict)
+
+        # Build groups list for response
+        groups_list = [
+            {
+                "group_id": group.group_id,
+                "repeat": group.repeat,
+                "step_ids": group.step_ids,
+            }
+            for group in groups
+        ]
+
+        # Determine structured availability
+        structured_available = bool(steps and len(steps) > 0)
+
+        return {
+            "status": "ok",
+            "workout": {
+                "id": workout.id,
+                "sport": workout.sport,
+                "source": workout.source,
+                "total_distance_meters": workout.total_distance_meters,
+                "total_duration_seconds": workout.total_duration_seconds,
+                "parse_status": workout.parse_status,
+            },
+            "steps": step_dicts,
+            "groups": groups_list,
+            "structured_available": structured_available,
+            "comparison": None,  # Comparison not recomputed on step update
         }
 
 

@@ -13,13 +13,16 @@ from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+import os
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError
 
 from app.api.dependencies.auth import get_current_user_id, get_optional_user_id
+from app.config.settings import settings
 from app.api.schemas.schemas import (
     AthleteProfileResponse,
     AthleteProfileUpdateRequest,
@@ -61,13 +64,53 @@ from app.users.profile_service import create_user_settings, validate_user_settin
 router = APIRouter(prefix="/me", tags=["me"])
 
 
+def _get_allowed_origins() -> list[str]:
+    """Get list of allowed CORS origins, matching the logic in main.py."""
+    cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    if cors_origins_env:
+        cors_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+    else:
+        cors_origins = [
+            "https://athletespace.ai",  # Production frontend (custom domain)
+            "https://www.athletespace.ai",  # Production frontend (www subdomain)
+            "https://pace-ai.onrender.com",  # Production frontend (legacy)
+            "https://virtus-ai.onrender.com",  # Backend domain (for reference, not used by frontend)
+            settings.frontend_url,  # Frontend URL from settings
+            "http://localhost:5173",  # Local dev (Vite default)
+            "http://localhost:3000",  # Local dev (alternative port)
+            "http://localhost:8080",  # Local dev (alternative port)
+            "http://localhost:8501",  # Streamlit default
+            "capacitor://localhost",  # Capacitor iOS/Android
+            "ionic://localhost",  # Ionic (alternative)
+            "http://localhost",  # Android localhost
+        ]
+    # Remove duplicates and filter out empty strings
+    return list(set(filter(None, cors_origins)))
+
+
 @router.options("")
-async def options_me():
+async def options_me(request: Request):
     """Handle CORS preflight requests for /me endpoint.
 
     This ensures OPTIONS requests are handled before auth dependencies run.
+    Explicitly adds CORS headers to ensure preflight requests succeed.
     """
-    return Response(status_code=200)
+    origin = request.headers.get("origin")
+    allowed_origins = _get_allowed_origins()
+    
+    headers: dict[str, str] = {}
+    
+    # Add CORS headers if origin is in allowed list
+    if origin and origin in allowed_origins:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+        headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-Conversation-Id"
+        )
+        headers["Access-Control-Max-Age"] = "3600"  # Cache preflight for 1 hour
+    
+    return Response(status_code=200, headers=headers)
 
 
 def _get_user_info(session, user_id: str) -> tuple[str, str, str]:

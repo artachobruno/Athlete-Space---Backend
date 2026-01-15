@@ -15,7 +15,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Activity, PlannedSession
+from app.db.models import Activity, PlannedSession, UserSettings
 from app.workouts.canonical import StructuredWorkout
 from app.workouts.compliance_service import ComplianceService
 from app.workouts.conversion import canonical_step_to_db_step
@@ -287,6 +287,7 @@ class WorkoutFactory:
         raw_notes: str | None = None,
         planned_session_id: str | None = None,
         activity_id: str | None = None,
+        user_settings: UserSettings | None = None,
     ) -> Workout:
         """Create workout from structured workout (LLM output).
 
@@ -334,7 +335,13 @@ class WorkoutFactory:
             # Expand repeats: create multiple DB steps for repeated steps
             for _ in range(canonical_step.repeat):
                 step_id = str(uuid.uuid4())
-                db_step = canonical_step_to_db_step(canonical_step, workout_id, step_id)
+                db_step = canonical_step_to_db_step(
+                    canonical_step,
+                    workout_id,
+                    step_id,
+                    sport=structured.sport,
+                    user_settings=user_settings,
+                )
                 db_step.order = current_order
                 current_order += 1
                 session.add(db_step)

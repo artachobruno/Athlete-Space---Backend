@@ -15,8 +15,10 @@ This is the ONLY place where LLM is called for manual planned sessions.
 from __future__ import annotations
 
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.models import UserSettings
 from app.workouts.attribute_extraction import extract_workout_signals
 from app.workouts.input import ActivityInput
 from app.workouts.llm.step_generator import generate_steps_from_notes
@@ -127,6 +129,12 @@ async def create_structured_workout_from_manual_session(
     )
     structured_workout = await generate_steps_from_notes(activity_input)
 
+    # Step 3.5: Fetch user settings for target calculation
+    user_settings_result = session.execute(
+        select(UserSettings).where(UserSettings.user_id == user_id)
+    ).first()
+    user_settings = user_settings_result[0] if user_settings_result else None
+
     # Step 4: WorkoutFactory.create_from_structured_workout()
     # NOTE: planned_session_id is None here - it will be set when PlannedSession is created
     workout = WorkoutFactory.create_from_structured_workout(
@@ -137,6 +145,7 @@ async def create_structured_workout_from_manual_session(
         raw_notes=notes_raw,
         planned_session_id=None,  # Will be set when PlannedSession is created
         activity_id=None,
+        user_settings=user_settings,
     )
 
     # HARD GUARD: Ensure workout.id exists before returning

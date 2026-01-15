@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import uuid
 
+from app.db.models import UserSettings
 from app.workouts.canonical import StepIntensity, StepTargetType, StructuredWorkout, WorkoutStep
 from app.workouts.models import Workout as DBWorkout
 from app.workouts.models import WorkoutStep as DBWorkoutStep
 from app.workouts.step_utils import infer_step_name
+from app.workouts.target_calculation import calculate_target_from_intensity
 
 
 def intensity_to_step_type(intensity: StepIntensity) -> str:
@@ -39,6 +41,8 @@ def canonical_step_to_db_step(
     canonical_step: WorkoutStep,
     workout_id: str,
     step_id: str,
+    sport: str | None = None,
+    user_settings: UserSettings | None = None,
 ) -> DBWorkoutStep:
     """Convert canonical workout step to database model.
 
@@ -46,6 +50,8 @@ def canonical_step_to_db_step(
         canonical_step: Canonical workout step
         workout_id: Workout ID
         step_id: Step ID
+        sport: Sport type (for target calculation)
+        user_settings: User settings (for target calculation)
 
     Returns:
         Database WorkoutStep model
@@ -54,10 +60,27 @@ def canonical_step_to_db_step(
     if canonical_step.is_recovery:
         step_type = "recovery"
 
-    # Map target_type to target_metric
+    # Calculate target values from intensity and user thresholds
     target_metric = None
-    if canonical_step.target_type != StepTargetType.NONE:
-        target_metric = canonical_step.target_type.value
+    target_min = None
+    target_max = None
+    target_value = None
+
+    if sport and user_settings:
+        calculated_target_type, calc_min, calc_max, calc_value = calculate_target_from_intensity(
+            intensity=canonical_step.intensity,
+            sport=sport,
+            user_settings=user_settings,
+        )
+        if calculated_target_type != StepTargetType.NONE:
+            target_metric = calculated_target_type.value
+            target_min = calc_min
+            target_max = calc_max
+            target_value = calc_value
+    else:
+        # Fallback to canonical target_type if no user settings
+        if canonical_step.target_type != StepTargetType.NONE:
+            target_metric = canonical_step.target_type.value
 
     # Ensure step has a name - use canonical name or infer from attributes
     step_name = canonical_step.name if canonical_step.name else "Steady"
@@ -84,9 +107,9 @@ def canonical_step_to_db_step(
         duration_seconds=canonical_step.duration_seconds,
         distance_meters=canonical_step.distance_meters,
         target_metric=target_metric,
-        target_min=None,  # Not in canonical schema yet
-        target_max=None,  # Not in canonical schema yet
-        target_value=None,  # Not in canonical schema yet
+        target_min=target_min,
+        target_max=target_max,
+        target_value=target_value,
         intensity_zone=canonical_step.intensity.value,
         instructions=step_name,
         purpose=step_name,

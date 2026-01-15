@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PairingDecision, PlannedSession
 from app.plans.reconciliation.service import reconcile_activity_if_paired
+from app.workouts.workout_factory import WorkoutFactory
 
 
 def _log_decision(
@@ -130,6 +131,36 @@ def manual_pair(
             f"Manually paired activity {activity_id} with planned session {planned_session_id}",
             user_id=user_id,
         )
+
+        # Ensure workout exists for planned session
+        try:
+            workout = WorkoutFactory.get_or_create_for_planned_session(session, plan)
+            logger.debug(
+                f"Workout ensured for planned session {plan.id}",
+                workout_id=workout.id,
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to get/create workout for planned session {plan.id}: {e}",
+            )
+            # Continue even if workout creation fails - pairing still succeeds
+            workout = None
+
+        # Update activity.workout_id to point to planned workout
+        if workout:
+            activity.workout_id = workout.id
+
+            # Create WorkoutExecution (triggers compliance calculation)
+            try:
+                WorkoutFactory.attach_activity(session, workout, activity)
+                logger.debug(
+                    f"Created execution and compliance for workout {workout.id}",
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to create execution/compliance for workout {workout.id}: {e}",
+                )
+                # Continue even if execution/compliance creation fails
 
         # Perform HR-based reconciliation (passive, read-only)
         try:

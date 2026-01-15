@@ -58,7 +58,10 @@ class CalendarSession(BaseModel):
     status: str = Field(description="Session status: planned | completed | skipped | cancelled | missed")
     notes: str | None = Field(description="Optional session notes", default=None)
     workout_id: str | None = Field(description="Workout ID if this session has a structured workout", default=None)
-    completed_activity_id: str | None = Field(description="External activity ID (e.g., Strava activity ID) if session is completed", default=None)
+    completed_activity_id: str | None = Field(
+        description="External activity ID (e.g., Strava activity ID) if session is completed",
+        default=None,
+    )
     completed: bool = Field(description="Completion flag (true if session was completed)", default=False)
     completed_at: str | None = Field(description="ISO 8601 datetime when session was completed", default=None)
 

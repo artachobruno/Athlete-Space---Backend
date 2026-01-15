@@ -9,9 +9,153 @@ from __future__ import annotations
 from loguru import logger
 from sqlalchemy import delete, select
 
+from app.db.models import UserSettings
 from app.db.session import get_session
+from app.workouts.canonical import StepIntensity, StepTargetType
 from app.workouts.llm_parser import ParsedStep, ParsedWorkout, parse_workout_notes
 from app.workouts.models import Workout, WorkoutStep
+from app.workouts.target_calculation import calculate_target_from_intensity
+
+
+def _validate_steps(parsed: ParsedWorkout, workout: Workout, session) -> tuple[bool, list[str]]:
+    """Validate parsed steps and collect warnings.
+
+    Args:
+        parsed: Parsed workout
+        workout: Workout object
+        session: Database session
+
+    Returns:
+        Tuple of (should_continue, validation_warnings)
+    """
+    validation_warnings: list[str] = []
+
+    if not parsed.steps:
+        workout.parse_status = "failed"
+        workout.llm_output_json = {"error": "No steps parsed", "warnings": validation_warnings}
+        session.flush()
+        return False, validation_warnings
+
+    for step in parsed.steps:
+        if step.distance_meters is not None and step.distance_meters < 0:
+            validation_warnings.append(f"Step {step.order} has negative distance_meters")
+        if step.duration_seconds is not None and step.duration_seconds < 0:
+            validation_warnings.append(f"Step {step.order} has negative duration_seconds")
+
+        if step.distance_meters is None and step.duration_seconds is None:
+            workout.parse_status = "failed"
+            workout.llm_output_json = {
+                "error": f"Step {step.order} missing both distance_meters and duration_seconds",
+                "warnings": validation_warnings,
+            }
+            session.flush()
+            return False, validation_warnings
+
+    if validation_warnings:
+        workout.parse_status = "failed"
+        workout.llm_output_json = {
+            "error": "Invalid structured output from LLM",
+            "warnings": validation_warnings,
+        }
+        session.flush()
+        return False, validation_warnings
+
+    return True, validation_warnings
+
+
+def _calculate_step_targets(
+    parsed_step: ParsedStep,
+    user_settings: UserSettings | None,
+    workout: Workout,
+) -> tuple[str | None, float | None, float | None, float | None]:
+    """Calculate target values for a workout step.
+
+    Args:
+        parsed_step: Parsed step
+        user_settings: User settings for target calculation
+        workout: Workout object
+
+    Returns:
+        Tuple of (target_metric, target_min, target_max, target_value)
+    """
+    target_metric: str | None = None
+    target_min: float | None = None
+    target_max: float | None = None
+    target_value: float | None = None
+
+    if parsed_step.target:
+        target_type_raw = parsed_step.target.get("type")
+        if isinstance(target_type_raw, str):
+            target_metric = target_type_raw.lower()
+        target_low_raw = parsed_step.target.get("low")
+        if isinstance(target_low_raw, (int, float)):
+            target_min = float(target_low_raw)
+        target_high_raw = parsed_step.target.get("high")
+        if isinstance(target_high_raw, (int, float)):
+            target_max = float(target_high_raw)
+
+    if not target_metric and user_settings and workout.sport:
+        step_type_lower = parsed_step.type.lower() if parsed_step.type else ""
+        intensity: StepIntensity | None = None
+
+        if step_type_lower in {"warmup", "cooldown", "rest"}:
+            intensity = StepIntensity.EASY
+        elif step_type_lower == "steady":
+            intensity = StepIntensity.FLOW
+        elif step_type_lower == "interval":
+            intensity = StepIntensity.THRESHOLD
+
+        if intensity:
+            calc_target_type, calc_min, calc_max, calc_value = calculate_target_from_intensity(
+                intensity=intensity,
+                sport=workout.sport,
+                user_settings=user_settings,
+            )
+            if calc_target_type != StepTargetType.NONE:
+                target_metric = calc_target_type.value
+                target_min = calc_min
+                target_max = calc_max
+                target_value = calc_value
+
+    return target_metric, target_min, target_max, target_value
+
+
+def _persist_workout_steps(
+    session,
+    workout_id: str,
+    parsed: ParsedWorkout,
+    workout: Workout,
+    user_settings: UserSettings | None,
+) -> None:
+    """Persist workout steps to database.
+
+    Args:
+        session: Database session
+        workout_id: Workout ID
+        parsed: Parsed workout
+        workout: Workout object
+        user_settings: User settings for target calculation
+    """
+    delete_stmt = delete(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
+    session.execute(delete_stmt)
+
+    for parsed_step in parsed.steps:
+        target_metric, target_min, target_max, target_value = _calculate_step_targets(
+            parsed_step, user_settings, workout
+        )
+
+        workout_step = WorkoutStep(
+            workout_id=workout_id,
+            order=parsed_step.order,
+            type=parsed_step.type,
+            distance_meters=parsed_step.distance_meters,
+            duration_seconds=parsed_step.duration_seconds,
+            target_metric=target_metric,
+            target_min=target_min,
+            target_max=target_max,
+            target_value=target_value,
+        )
+        session.add(workout_step)
 
 
 def validate_parsed_workout(
@@ -110,40 +254,8 @@ def ensure_workout_steps(workout_id: str) -> None:
                 return
 
             # Strict schema validation
-            validation_warnings: list[str] = []
-
-            # Check for required fields and negative values
-            if not parsed.steps:
-                workout.parse_status = "failed"
-                workout.llm_output_json = {"error": "No steps parsed", "warnings": validation_warnings}
-                session.flush()
-                return
-
-            for step in parsed.steps:
-                # Check for negative values
-                if step.distance_meters is not None and step.distance_meters < 0:
-                    validation_warnings.append(f"Step {step.order} has negative distance_meters")
-                if step.duration_seconds is not None and step.duration_seconds < 0:
-                    validation_warnings.append(f"Step {step.order} has negative duration_seconds")
-
-                # Check that step has either distance or duration
-                if step.distance_meters is None and step.duration_seconds is None:
-                    workout.parse_status = "failed"
-                    workout.llm_output_json = {
-                        "error": f"Step {step.order} missing both distance_meters and duration_seconds",
-                        "warnings": validation_warnings,
-                    }
-                    session.flush()
-                    return
-
-            # Reject if validation warnings indicate invalid output
-            if validation_warnings:
-                workout.parse_status = "failed"
-                workout.llm_output_json = {
-                    "error": "Invalid structured output from LLM",
-                    "warnings": validation_warnings,
-                }
-                session.flush()
+            should_continue, _ = _validate_steps(parsed, workout, session)
+            if not should_continue:
                 return
 
             # Validate totals
@@ -160,44 +272,14 @@ def ensure_workout_steps(workout_id: str) -> None:
                 session.flush()
                 return
 
+            # Fetch user settings for target calculation
+            user_settings_result = session.execute(
+                select(UserSettings).where(UserSettings.user_id == workout.user_id)
+            ).first()
+            user_settings = user_settings_result[0] if user_settings_result else None
+
             # Persist steps (transactional: delete old, insert new)
-            # Delete existing steps
-            delete_stmt = delete(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
-            session.execute(delete_stmt)
-
-            # Insert new steps
-            for parsed_step in parsed.steps:
-                # Map target to workout step fields
-                target_type: str | None = None
-                target_low: float | None = None
-                target_high: float | None = None
-
-                if parsed_step.target:
-                    target_type_raw = parsed_step.target.get("type")
-                    if isinstance(target_type_raw, str):
-                        target_type = target_type_raw.lower()
-                    target_low_raw = parsed_step.target.get("low")
-                    if isinstance(target_low_raw, (int, float)):
-                        target_low = float(target_low_raw)
-                    else:
-                        target_low = None
-                    target_high_raw = parsed_step.target.get("high")
-                    if isinstance(target_high_raw, (int, float)):
-                        target_high = float(target_high_raw)
-                    else:
-                        target_high = None
-
-                workout_step = WorkoutStep(
-                    workout_id=workout_id,
-                    order=parsed_step.order,
-                    type=parsed_step.type,
-                    distance_meters=parsed_step.distance_meters,
-                    duration_seconds=parsed_step.duration_seconds,
-                    target_metric=target_type,
-                    target_min=target_low,
-                    target_max=target_high,
-                )
-                session.add(workout_step)
+            _persist_workout_steps(session, workout_id, parsed, workout, user_settings)
 
             # Check confidence after persisting steps
             # If confidence is low, mark as ambiguous but keep steps

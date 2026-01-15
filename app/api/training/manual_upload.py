@@ -5,11 +5,12 @@ Phase 2 & 3: Fallback endpoints for manual uploads (non-chat).
 
 import os
 import uuid
-from datetime import datetime, timezone, date as date_type
+from datetime import date as date_type
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
-from pydantic import BaseModel, Field, model_validator, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
@@ -161,6 +162,26 @@ def _get_athlete_id_from_user_id(user_id: str) -> int:
         return int(result[0].athlete_id)
 
 
+def _raise_invalid_date_format(value: str) -> None:
+    """Raise ValueError for invalid date format."""
+    raise ValueError(f"Invalid date format: {value}. Expected YYYY-MM-DD or ISO datetime string")
+
+
+def _raise_invalid_date_type(value_type: type) -> None:
+    """Raise ValueError for invalid date type."""
+    raise ValueError(f"Invalid date type: {value_type}")
+
+
+def _raise_invalid_week_start_format(value: str) -> None:
+    """Raise ValueError for invalid week_start format."""
+    raise ValueError(f"Invalid week_start format: {value}. Expected YYYY-MM-DD or ISO datetime string")
+
+
+def _raise_invalid_week_start_type(value_type: type) -> None:
+    """Raise ValueError for invalid week_start type."""
+    raise ValueError(f"Invalid week_start type: {value_type}")
+
+
 class ManualSessionRequest(BaseModel):
     """Request model for manual session upload."""
 
@@ -183,28 +204,33 @@ class ManualSessionRequest(BaseModel):
                 return value
             # If naive, assume UTC
             return value.replace(tzinfo=timezone.utc)
-        
+
         if isinstance(value, date_type):
             # Convert date to datetime at midnight UTC
             return datetime.combine(value, datetime.min.time()).replace(tzinfo=timezone.utc)
-        
+
         if isinstance(value, str):
             # Try parsing as datetime first (ISO format with time)
             try:
                 parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                # Try parsing as date (YYYY-MM-DD)
+                try:
+                    # Parse date components to avoid naive datetime warning
+                    parts = value.split("-")
+                    if len(parts) != 3:
+                        _raise_invalid_date_format(value)
+                    year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+                    date_obj = date_type(year, month, day)
+                    parsed = datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    _raise_invalid_date_format(value)
+            else:
                 return parsed
-            except ValueError:
-                pass
-            
-            # Try parsing as date (YYYY-MM-DD)
-            try:
-                date_obj = datetime.strptime(value, "%Y-%m-%d").date()
-                return datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
-            except ValueError:
-                raise ValueError(f"Invalid date format: {value}. Expected YYYY-MM-DD or ISO datetime string")
-        
+            return parsed
+
         raise ValueError(f"Invalid date type: {type(value)}")
 
     @model_validator(mode="after")
@@ -234,30 +260,36 @@ class ManualWeekRequest(BaseModel):
         """Parse week_start date string to timezone-aware datetime."""
         if value is None:
             return None
-        
+
         if isinstance(value, datetime):
             if value.tzinfo is not None:
                 return value
             return value.replace(tzinfo=timezone.utc)
-        
+
         if isinstance(value, date_type):
             return datetime.combine(value, datetime.min.time()).replace(tzinfo=timezone.utc)
-        
+
         if isinstance(value, str):
             try:
                 parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                # Try parsing as date (YYYY-MM-DD)
+                try:
+                    # Parse date components to avoid naive datetime warning
+                    parts = value.split("-")
+                    if len(parts) != 3:
+                        _raise_invalid_week_start_format(value)
+                    year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+                    date_obj = date_type(year, month, day)
+                    parsed = datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    _raise_invalid_week_start_format(value)
+            else:
                 return parsed
-            except ValueError:
-                pass
-            
-            try:
-                date_obj = datetime.strptime(value, "%Y-%m-%d").date()
-                return datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
-            except ValueError:
-                raise ValueError(f"Invalid week_start format: {value}. Expected YYYY-MM-DD or ISO datetime string")
-        
+            return parsed
+
         raise ValueError(f"Invalid week_start type: {type(value)}")
 
 

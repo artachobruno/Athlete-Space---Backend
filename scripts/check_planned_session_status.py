@@ -3,7 +3,7 @@
 
 Usage:
     python scripts/check_planned_session_status.py [date]
-    
+
     If no date is provided, defaults to 2025-01-16 (tomorrow).
     Date format: YYYY-MM-DD
 """
@@ -11,13 +11,18 @@ Usage:
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 
 from loguru import logger
 from sqlalchemy import select
 
 from app.db.models import PlannedSession, User
 from app.db.session import get_session
+
+
+def _raise_invalid_date_format(target_date: str) -> None:
+    """Raise ValueError for invalid date format."""
+    logger.error(f"❌ Invalid date format: {target_date}. Expected YYYY-MM-DD format.")
 
 
 def check_planned_session_status(target_date: str | None = None) -> int:
@@ -31,11 +36,17 @@ def check_planned_session_status(target_date: str | None = None) -> int:
     """
     if target_date is None:
         target_date = "2025-01-16"
-    
+
     try:
-        parsed_date = datetime.strptime(target_date, "%Y-%m-%d").date()
-    except ValueError as e:
-        logger.error(f"❌ Invalid date format: {target_date}. Expected YYYY-MM-DD format.")
+        # Parse date components manually to avoid naive datetime warning
+        parts = target_date.split("-")
+        if len(parts) != 3:
+            _raise_invalid_date_format(target_date)
+            return 1
+        year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+        parsed_date = date(year, month, day)
+    except (ValueError, IndexError):
+        _raise_invalid_date_format(target_date)
         return 1
 
     logger.info(f"🔍 Checking planned sessions for date: {parsed_date}")
@@ -43,8 +54,8 @@ def check_planned_session_status(target_date: str | None = None) -> int:
     try:
         with get_session() as session:
             # Convert date to datetime range (start and end of day in UTC)
-            start_datetime = datetime.combine(parsed_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-            end_datetime = datetime.combine(parsed_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+            start_datetime = datetime.combine(parsed_date, datetime.min.time()).replace(tzinfo=UTC)
+            end_datetime = datetime.combine(parsed_date, datetime.max.time()).replace(tzinfo=UTC)
 
             # Query all planned sessions for this date
             result = session.execute(

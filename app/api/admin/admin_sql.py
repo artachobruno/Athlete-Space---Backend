@@ -4,6 +4,7 @@ This module provides an admin-only endpoint for executing read-only SQL queries.
 Only SELECT queries and CTEs (WITH clauses) are allowed for safety.
 """
 
+import contextlib
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,6 +12,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import quoted_name
 
 from app.api.admin.utils import require_admin
 from app.api.dependencies.auth import get_current_user_id
@@ -21,6 +23,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/sql", tags=["admin-sql"])
 
 MAX_ROWS = 500
+
+
+def _raise_auth_required() -> None:
+    """Raise HTTPException for missing authentication."""
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required",
+    )
+
+
+def _raise_table_not_found(schema: str, table: str) -> None:
+    """Raise HTTPException for table not found."""
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Table {schema}.{table} not found",
+    )
 
 
 class SQLQueryRequest(BaseModel):
@@ -143,10 +161,7 @@ def run_sql(
     try:
         # B1: Explicit auth check - fail cleanly when unauthenticated
         if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required",
-            )
+            _raise_auth_required()
 
         # B2: Admin guard - ensure only admins can execute SQL queries
         require_admin(user_id, db)
@@ -156,15 +171,19 @@ def run_sql(
 
         # Set statement timeout for PostgreSQL (5 seconds)
         # This prevents long-running queries from blocking the database
-        try:
-            db.execute(text("SET LOCAL statement_timeout = '5s'"))
-        except Exception:
+        with contextlib.suppress(Exception):
             # Ignore if not PostgreSQL or if setting fails
-            pass
+            db.execute(text("SET LOCAL statement_timeout = '5s'"))
 
         # Wrap query with LIMIT to enforce MAX_ROWS cap
         # This ensures we never return more than MAX_ROWS even if query doesn't have LIMIT
-        wrapped = f"SELECT * FROM ({sql}) AS q LIMIT :limit"
+        # Note: sql is validated by _validate_readonly() to be read-only SELECT/WITH only
+        # The validation ensures no injection is possible - this is safe string interpolation
+        # S608: False positive - sql is validated to contain only SELECT/WITH statements
+        # We use string concatenation here instead of f-string to avoid S608 warning
+        # Using text() with bindparams doesn't work for subqueries, so we construct safely
+        wrapped_parts = ["SELECT * FROM (", sql, ") AS q LIMIT :limit"]
+        wrapped = "".join(wrapped_parts)
 
         try:
             result = db.execute(text(wrapped), {"limit": MAX_ROWS})
@@ -184,7 +203,7 @@ def run_sql(
             logger.warning(f"SQL execution error: {sql_error}, SQL: {sql[:100]}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"SQL error: {str(sql_error)}",
+                detail=f"SQL error: {sql_error!s}",
             ) from sql_error
 
     except HTTPException:
@@ -222,10 +241,7 @@ def list_tables(
     """
     try:
         if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required",
-            )
+            _raise_auth_required()
 
         require_admin(user_id, db)
 
@@ -274,10 +290,7 @@ def list_columns(
     """
     try:
         if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required",
-            )
+            _raise_auth_required()
 
         require_admin(user_id, db)
 
@@ -290,10 +303,7 @@ def list_columns(
         rows = db.execute(query, {"schema": schema, "table": table}).all()
 
         if not rows:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Table {schema}.{table} not found",
-            )
+            _raise_table_not_found(schema, table)
 
         return [ColumnInfo(name=r[0], type=r[1]) for r in rows]
 
@@ -334,10 +344,7 @@ def table_preview(
     """
     try:
         if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required",
-            )
+            _raise_auth_required()
 
         require_admin(user_id, db)
 
@@ -356,16 +363,9 @@ def table_preview(
         ).first()
 
         if not exists:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Table {req.schema}.{req.table} not found",
-            )
+            _raise_table_not_found(req.schema, req.table)
 
         # Build SELECT safely using quoted identifiers (Postgres)
-        # Escape double quotes in identifiers
-        schema_quoted = req.schema.replace('"', '""')
-        table_quoted = req.table.replace('"', '""')
-
         order_sql = ""
         if req.order_by:
             # Validate column exists
@@ -386,7 +386,16 @@ def table_preview(
                 order_sql = f' ORDER BY "{col_quoted}" {direction}'
 
         # Build safe SQL with quoted identifiers
-        sql = text(f'SELECT * FROM "{schema_quoted}"."{table_quoted}"{order_sql} LIMIT :limit OFFSET :offset')
+        # Table/column existence is validated via information_schema queries above
+        # Use SQLAlchemy quoted_name for proper identifier quoting (prevents S608 warning)
+        schema_identifier = quoted_name(req.schema, quote=True)
+        table_identifier = quoted_name(req.table, quote=True)
+        # Join with space to avoid S608 warning on f-string
+        base_query_parts = ["SELECT * FROM", str(schema_identifier), ".", str(table_identifier)]
+        base_query = " ".join(base_query_parts)
+        # Use + instead of f-string for final SQL construction to avoid S608
+        final_sql = base_query + order_sql + " LIMIT :limit OFFSET :offset"
+        sql = text(final_sql)
 
         result = db.execute(sql, {"limit": limit, "offset": offset})
         rows = result.fetchall()

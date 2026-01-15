@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PairingDecision, PlannedSession
 from app.plans.reconciliation.service import reconcile_activity_if_paired
+from app.workouts.workout_factory import WorkoutFactory
 
 DURATION_TOLERANCE = 0.30
 
@@ -386,6 +387,13 @@ def _persist_pairing(
 ) -> None:
     """Persist pairing relationship (transactional).
 
+    After pairing, this function:
+    1. Sets bidirectional pairing links
+    2. Gets or creates workout for planned session
+    3. Updates activity.workout_id to point to planned workout
+    4. Creates WorkoutExecution (triggers compliance calculation)
+    5. Performs HR-based reconciliation
+
     Args:
         planned: Planned session
         activity: Activity
@@ -409,6 +417,36 @@ def _persist_pairing(
         f"Auto-paired planned session {planned.id} with activity {activity.id} "
         f"(duration diff: {duration_diff_pct:.2%})",
     )
+
+    # Ensure workout exists for planned session
+    try:
+        workout = WorkoutFactory.get_or_create_for_planned_session(session, planned)
+        logger.debug(
+            f"Workout ensured for planned session {planned.id}",
+            workout_id=workout.id,
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to get/create workout for planned session {planned.id}: {e}",
+        )
+        # Continue even if workout creation fails - pairing still succeeds
+        workout = None
+
+    # Update activity.workout_id to point to planned workout
+    if workout:
+        activity.workout_id = workout.id
+
+        # Create WorkoutExecution (triggers compliance calculation)
+        try:
+            WorkoutFactory.attach_activity(session, workout, activity)
+            logger.debug(
+                f"Created execution and compliance for workout {workout.id}",
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to create execution/compliance for workout {workout.id}: {e}",
+            )
+            # Continue even if execution/compliance creation fails
 
     # Perform HR-based reconciliation (passive, read-only)
     try:

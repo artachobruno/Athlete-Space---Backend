@@ -17,10 +17,76 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PlannedSession, UserSettings
 from app.workouts.canonical import StructuredWorkout
+from app.workouts.canonical import WorkoutStep as CanonicalWorkoutStep
 from app.workouts.compliance_service import ComplianceService
 from app.workouts.conversion import canonical_step_to_db_step
 from app.workouts.execution_models import WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
+
+# One mile in meters (exact conversion)
+MILE_IN_METERS = 1609.34
+
+
+def _break_down_long_step(step: CanonicalWorkoutStep) -> list[CanonicalWorkoutStep]:
+    """Break down a step longer than 1 mile into 1-mile chunks.
+
+    If a step has distance_meters > 1 mile (1609.34m), it will be broken down
+    into multiple steps of 1 mile each, with a final step for any remainder.
+
+    Examples:
+        - 5 miles = 5x 1 mile steps
+        - 4.5 miles = 4x 1 mile steps + 1x 0.5 mile step
+
+    Args:
+        step: Canonical workout step to potentially break down
+
+    Returns:
+        List of canonical workout steps (original step if no breakdown needed)
+    """
+    # Only break down distance-based steps
+    if step.distance_meters is None:
+        return [step]
+
+    # Only break down if longer than 1 mile
+    if step.distance_meters <= MILE_IN_METERS:
+        return [step]
+
+    # Calculate how many full miles we have
+    total_distance = float(step.distance_meters)
+    full_miles = int(total_distance // MILE_IN_METERS)
+    remainder_meters = total_distance - (full_miles * MILE_IN_METERS)
+
+    broken_steps: list[CanonicalWorkoutStep] = []
+
+    # Create full 1-mile steps
+    for _ in range(full_miles):
+        broken_step = CanonicalWorkoutStep(
+            order=step.order,
+            name=step.name,
+            duration_seconds=None,
+            distance_meters=round(MILE_IN_METERS),
+            intensity=step.intensity,
+            target_type=step.target_type,
+            repeat=1,
+            is_recovery=step.is_recovery,
+        )
+        broken_steps.append(broken_step)
+
+    # Add remainder step if there is one (> 0.5 meters to avoid tiny steps)
+    if remainder_meters > 0.5:
+        remainder_step = CanonicalWorkoutStep(
+            order=step.order,
+            name=step.name,
+            duration_seconds=None,
+            distance_meters=round(remainder_meters),
+            intensity=step.intensity,
+            target_type=step.target_type,
+            repeat=1,
+            is_recovery=step.is_recovery,
+        )
+        broken_steps.append(remainder_step)
+
+    return broken_steps
 
 
 def _map_sport_type(activity_type: str | None) -> str:
@@ -302,6 +368,7 @@ class WorkoutFactory:
             raw_notes: Original raw notes from user input
             planned_session_id: Optional planned session ID to link
             activity_id: Optional activity ID to link
+            user_settings: Optional user settings for workout creation
 
         Returns:
             Workout instance with steps created
@@ -329,28 +396,33 @@ class WorkoutFactory:
         session.add(workout)
         session.flush()
 
-        # Create steps (expand repeats)
+        # Create steps (expand repeats and break down long steps)
         current_order = 0
         for canonical_step in structured.steps:
             # Expand repeats: create multiple DB steps for repeated steps
             for _ in range(canonical_step.repeat):
-                step_id = str(uuid.uuid4())
-                db_step = canonical_step_to_db_step(
-                    canonical_step,
-                    workout_id,
-                    step_id,
-                    sport=structured.sport,
-                    user_settings=user_settings,
-                )
-                db_step.order = current_order
-                current_order += 1
-                session.add(db_step)
+                # Break down long steps (> 1 mile) into 1-mile chunks
+                broken_steps = _break_down_long_step(canonical_step)
+
+                # Create DB steps for each broken-down step
+                for broken_step in broken_steps:
+                    step_id = str(uuid.uuid4())
+                    db_step = canonical_step_to_db_step(
+                        broken_step,
+                        workout_id,
+                        step_id,
+                        sport=structured.sport,
+                        user_settings=user_settings,
+                    )
+                    db_step.order = current_order
+                    current_order += 1
+                    session.add(db_step)
 
         logger.info(
             "Created workout from structured workout",
             workout_id=workout_id,
             user_id=user_id,
-            step_count=sum(step.repeat for step in structured.steps),
+            step_count=current_order,
         )
 
         return workout

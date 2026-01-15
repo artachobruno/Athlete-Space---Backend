@@ -20,6 +20,25 @@ from app.db.session import get_session
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 
 
+def _raise_user_not_found_auth(request: Request, user_id: str) -> None:
+    """Raise HTTPException for user not found in auth context."""
+    logger.warning(f"Auth failed: User not found user_id={user_id}, Path: {request.url.path}")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="User not found",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _raise_inactive_user(request: Request, user_id: str) -> None:
+    """Raise HTTPException for inactive user."""
+    logger.warning(f"Auth failed: Inactive user user_id={user_id}, Path: {request.url.path}")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Account inactive. Please sign up again.",
+    )
+
+
 def _get_auth_token(request: Request, token: str | None = Depends(oauth2_scheme)) -> str | None:
     """Extract auth token from either Authorization header or cookie.
 
@@ -126,20 +145,11 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
         with get_session() as session:
             user_result = session.execute(select(User).where(User.id == user_id)).first()
             if not user_result:
-                logger.warning(f"Auth failed: User not found user_id={user_id}, Path: {request.url.path}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User not found",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+                _raise_user_not_found_auth(request, user_id)
 
             user = user_result[0]
             if not user.is_active:
-                logger.warning(f"Auth failed: Inactive user user_id={user_id}, Path: {request.url.path}")
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Account inactive. Please sign up again.",
-                )
+                _raise_inactive_user(request, user_id)
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise

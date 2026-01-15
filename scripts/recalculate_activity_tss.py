@@ -58,7 +58,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
                 # Get user settings for threshold configuration
                 user_settings = db.query(UserSettings).filter_by(user_id=activity.user_id).first()
                 athlete_thresholds = _build_athlete_thresholds(user_settings)
-                
+
                 # Compute TSS with user-specific thresholds
                 new_tss = compute_activity_tss(activity, athlete_thresholds)
 

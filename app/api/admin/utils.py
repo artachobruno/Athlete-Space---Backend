@@ -1,11 +1,20 @@
 """Admin utility functions for access control."""
 
 from fastapi import HTTPException, status
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.models import User
+
+
+def _raise_user_not_found() -> None:
+    """Raise HTTPException for user not found."""
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="User not found",
+    )
 
 
 def require_admin(user_id: str, session: Session) -> None:
@@ -48,10 +57,7 @@ def require_admin(user_id: str, session: Session) -> None:
         try:
             user_result = session.execute(select(User).where(User.id == user_id)).first()
             if not user_result:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User not found",
-                )
+                _raise_user_not_found()
 
             user = user_result[0]
             admin_email_list = [email.strip().lower() for email in settings.admin_emails.split(",") if email.strip()]
@@ -61,8 +67,6 @@ def require_admin(user_id: str, session: Session) -> None:
             raise
         except Exception as e:
             # Log but don't expose internal errors - just deny access
-            from loguru import logger
-
             logger.error(f"Error checking admin email for user_id={user_id}: {e}")
             # Fall through to 403 below
 

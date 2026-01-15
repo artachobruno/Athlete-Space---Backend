@@ -77,10 +77,9 @@ def canonical_step_to_db_step(
             target_min = calc_min
             target_max = calc_max
             target_value = calc_value
-    else:
-        # Fallback to canonical target_type if no user settings
-        if canonical_step.target_type != StepTargetType.NONE:
-            target_metric = canonical_step.target_type.value
+    # Fallback to canonical target_type if no user settings
+    elif canonical_step.target_type != StepTargetType.NONE:
+        target_metric = canonical_step.target_type.value
 
     # Ensure step has a name - use canonical name or infer from attributes
     step_name = canonical_step.name if canonical_step.name else "Steady"

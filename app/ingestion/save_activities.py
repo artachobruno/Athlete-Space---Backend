@@ -125,7 +125,7 @@ def _update_existing_activity(
     existing.duration_seconds = record.duration_sec
     existing.distance_meters = record.distance_m
     existing.elevation_gain_meters = record.elevation_m
-    
+
     data_updated = False
     if raw_json is not None:
         existing.raw_json = raw_json
@@ -138,12 +138,12 @@ def _update_existing_activity(
     if streams_data is not None:
         existing.streams_data = streams_data
         data_updated = True
-    
+
     # Recompute effort metrics and TSS if data was updated
     # TSS will use the best available data (streams > HR > RPE)
     if data_updated:
         _compute_and_persist_effort(session, existing)
-    
+
     return existing
 
 

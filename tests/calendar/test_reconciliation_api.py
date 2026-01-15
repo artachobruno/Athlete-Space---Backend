@@ -154,7 +154,6 @@ class TestSeasonEndpointCounters:
 
     def test_planned_session_db_vs_final_counters(self, db_session):
         """Test that planned_sessions_db == planned_sessions_final for future planned session."""
-        from datetime import datetime, timezone
 
         from sqlalchemy import select
 
@@ -173,7 +172,7 @@ class TestSeasonEndpointCounters:
         db_session.commit()
 
         # Create planned session in the future with status="planned"
-        future_date = datetime.now(timezone.utc) + timedelta(days=7)
+        future_date = datetime.now(UTC) + timedelta(days=7)
         planned_session = PlannedSession(
             id="planned-session-1",
             user_id=test_user_id,
@@ -189,30 +188,31 @@ class TestSeasonEndpointCounters:
         db_session.commit()
 
         # Mock get_current_user_id to return test user
-        with patch("app.calendar.api.get_current_user_id", return_value=test_user_id):
-            # Mock _get_athlete_id to return None (no reconciliation if no athlete_id)
-            with patch("app.calendar.api._get_athlete_id", return_value=None):
-                # Call season endpoint
-                response = get_season(user_id=test_user_id)
+        # Mock _get_athlete_id to return None (no reconciliation if no athlete_id)
+        with (
+            patch("app.calendar.api.get_current_user_id", return_value=test_user_id),
+            patch("app.calendar.api._get_athlete_id", return_value=None),
+        ):
+            # Call season endpoint
+            response = get_season(user_id=test_user_id)
 
-                # Assert: DB counters should match final counters for planned sessions
-                assert response.planned_sessions_db == 1, "Should have 1 planned session in DB"
-                assert response.planned_sessions_final == 1, "Should have 1 planned session final"
-                assert response.planned_sessions_db == response.planned_sessions_final, (
-                    "For future planned session with no reconciliation, "
-                    "DB and final counts should match"
-                )
-                assert response.completed_sessions_db == 0, "Should have 0 completed sessions in DB"
-                assert response.completed_sessions_final == 0, "Should have 0 completed sessions final"
+            # Assert: DB counters should match final counters for planned sessions
+            assert response.planned_sessions_db == 1, "Should have 1 planned session in DB"
+            assert response.planned_sessions_final == 1, "Should have 1 planned session final"
+            assert response.planned_sessions_db == response.planned_sessions_final, (
+                "For future planned session with no reconciliation, "
+                "DB and final counts should match"
+            )
+            assert response.completed_sessions_db == 0, "Should have 0 completed sessions in DB"
+            assert response.completed_sessions_final == 0, "Should have 0 completed sessions final"
 
     def test_planned_session_with_missed_reconciliation(self, db_session):
         """Test that MISSED reconciliation preserves planned count."""
-        from datetime import datetime, timezone
 
-        from app.calendar.reconciliation import ReconciliationResult, SessionStatus
         from sqlalchemy import select
 
         from app.calendar.api import _run_reconciliation_safe, get_season
+        from app.calendar.reconciliation import ReconciliationResult, SessionStatus
         from app.db.models import PlannedSession, User
         from app.db.session import get_session
 
@@ -227,7 +227,7 @@ class TestSeasonEndpointCounters:
         db_session.commit()
 
         # Create planned session in the past (should be MISSED if no activity)
-        past_date = datetime.now(timezone.utc) - timedelta(days=7)
+        past_date = datetime.now(UTC) - timedelta(days=7)
         planned_session = PlannedSession(
             id="planned-session-missed",
             user_id=test_user_id,

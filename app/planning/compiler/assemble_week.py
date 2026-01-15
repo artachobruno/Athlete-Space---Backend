@@ -7,6 +7,7 @@ Distance is always derived from time x pace.
 from app.planning.compiler.week_skeleton import Day, WeekSkeleton
 from app.planning.library.session_template import SessionType
 from app.planning.output.models import MaterializedSession, WeekPlan
+from app.plans.types import WorkoutIntent
 
 
 def assemble_week_plan(
@@ -44,6 +45,15 @@ def assemble_week_plan(
         "rest": "rest",
     }
 
+    # Map DayRole to WorkoutIntent
+    # Intent describes purpose, not pace. Intent is stable under modification.
+    role_to_intent: dict[str, WorkoutIntent] = {
+        "long": "long",
+        "hard": "quality",  # Hard days are quality sessions
+        "easy": "easy",
+        "rest": "rest",
+    }
+
     for day, minutes in allocation.items():
         # Only create sessions for days with non-zero minutes
         if minutes == 0:
@@ -51,6 +61,7 @@ def assemble_week_plan(
 
         role = skeleton.days[day]
         session_type = role_to_session_type[role]
+        intent = role_to_intent[role]
 
         # Distance is DERIVED from time x pace
         miles = round(minutes / pace_min_per_mile, 2)
@@ -58,6 +69,7 @@ def assemble_week_plan(
         sessions.append(
             MaterializedSession(
                 day=day,
+                intent=intent,
                 session_template_id="UNASSIGNED",
                 session_type=session_type,
                 duration_minutes=minutes,

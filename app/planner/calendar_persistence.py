@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.db.models import PlannedSession as DBPlannedSession
 from app.domains.training_plan.enums import DayType, WeekFocus
 from app.domains.training_plan.models import PlanContext, PlannedSession, PlannedWeek, SessionTextOutput
+from app.plans.week_planner import assign_intent_from_day_type
 
 
 @dataclass
@@ -135,7 +136,7 @@ def _map_session_type(day_type: DayType) -> str:
         day_type: Day type enum
 
     Returns:
-        Session type string (easy, threshold, long, etc.)
+        Session type string (easy, threshold, long, etc.) - legacy/auxiliary field
     """
     mapping: dict[DayType, str] = {
         DayType.EASY: "easy",
@@ -146,6 +147,26 @@ def _map_session_type(day_type: DayType) -> str:
         DayType.CROSS: "cross",
     }
     return mapping.get(day_type, "easy")
+
+
+def _map_intent_from_day_type(day_type: DayType) -> str:
+    """Map day_type to workout intent (authoritative field).
+
+    Args:
+        day_type: DayType enum
+
+    Returns:
+        Workout intent string (rest, easy, long, quality)
+    """
+    # Map DayType enum values to intent
+    if day_type == DayType.REST:
+        return "rest"
+    if day_type == DayType.LONG:
+        return "long"
+    if day_type == DayType.QUALITY:
+        return "quality"
+    # Default to easy for EASY, CROSS, RACE, etc.
+    return "easy"
 
 
 def _extract_distance_mi(session: PlannedSession, text_output: SessionTextOutput | None) -> float | None:
@@ -351,6 +372,7 @@ def _upsert_session(
     time_str = _get_time_default(planned_session)
     phase = _determine_phase(week.focus)
     session_type = _map_session_type(planned_session.day_type)
+    intent = _map_intent_from_day_type(planned_session.day_type)  # Authoritative field
     tags = _get_tags(planned_session)
     philosophy_id = ctx.philosophy.philosophy_id if ctx.philosophy else None
     template_id = planned_session.template.template_id
@@ -401,6 +423,7 @@ def _upsert_session(
         db_session_obj.time = time_str
         db_session_obj.intensity = session_type
         db_session_obj.session_type = session_type
+        db_session_obj.intent = intent  # Authoritative field
         db_session_obj.tags = tags if tags else None
         db_session_obj.phase = phase
         db_session_obj.philosophy_id = philosophy_id
@@ -425,6 +448,7 @@ def _upsert_session(
             distance_mi=distance_mi,
             intensity=session_type,
             session_type=session_type,
+            intent=intent,  # Authoritative field
             notes=description,
             plan_type=ctx.plan_type.value,
             week_number=week.week_index,

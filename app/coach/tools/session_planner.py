@@ -20,6 +20,7 @@ from app.db.session import get_session
 from app.pairing.auto_pairing_service import try_auto_pair
 from app.persistence.retry.queue import enqueue_retry
 from app.persistence.retry.types import PlannedSessionRetryJob
+from app.plans.week_planner import infer_intent_from_session_type
 from app.workouts.guards import assert_planned_session_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -261,6 +262,12 @@ def save_sessions_to_database(
 
                 # Phase 6: Persist exactly what LLM returns - no field mutation, no auto-fill
                 # Only extract fields that exist in session_data - no defaults
+                # Intent: Set from session_data if provided, otherwise infer from session_type
+                session_type = session_data.get("session_type") or session_data.get("intensity")
+                intent = session_data.get("intent")
+                if not intent and session_type:
+                    intent = infer_intent_from_session_type(session_type)
+
                 planned_session = PlannedSession(
                     user_id=user_id,
                     athlete_id=athlete_id,
@@ -271,6 +278,8 @@ def save_sessions_to_database(
                     duration_minutes=session_data.get("duration_minutes"),  # Exactly as LLM provided
                     distance_km=session_data.get("distance_km"),  # Exactly as LLM provided
                     intensity=session_data.get("intensity"),  # Exactly as LLM provided
+                    session_type=session_type,  # Legacy/auxiliary field
+                    intent=intent,  # Authoritative field
                     notes=session_data.get("notes") or session_data.get("description"),  # Use description if notes not provided
                     plan_type=plan_type,
                     plan_id=plan_id,

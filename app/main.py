@@ -710,8 +710,10 @@ if cors_origins_env:
     cors_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
 else:
     cors_origins = [
+        "https://athletespace.ai",  # Production frontend (custom domain)
+        "https://www.athletespace.ai",  # Production frontend (www subdomain)
         "https://pace-ai.onrender.com",  # Production frontend (legacy)
-        "https://virtus-ai.onrender.com",  # Production frontend
+        "https://virtus-ai.onrender.com",  # Backend domain (for reference, not used by frontend)
         settings.frontend_url,  # Frontend URL from settings
         "http://localhost:5173",  # Local dev (Vite default)
         "http://localhost:3000",  # Local dev (alternative port)

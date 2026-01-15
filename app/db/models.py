@@ -587,7 +587,12 @@ class PlannedSession(Base):
     source: Mapped[str] = mapped_column(String, nullable=False, default="planner_v2")  # Source system identifier
     philosophy_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Training philosophy ID (e.g., "daniels")
     template_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Session template ID
-    session_type: Mapped[str | None] = mapped_column(String, nullable=True)  # Session type: easy, threshold, long, etc.
+    session_type: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )  # Session type: easy, threshold, long, etc. (legacy/auxiliary)
+    intent: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )  # Workout intent: rest, easy, long, quality (authoritative)
     distance_mi: Mapped[float | None] = mapped_column(Float, nullable=True)  # Distance in miles
     tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)  # Session tags
 
@@ -992,3 +997,36 @@ class CoachAthlete(Base):
 
     can_edit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class WorkoutReconciliation(Base):
+    """Workout reconciliation results - read-only observation storage.
+
+    Stores HR-based pace reconciliation results comparing planned vs executed workouts.
+    This is observation + interpretation only - no plan mutations.
+
+    Fields:
+    - planned_session_id: Foreign key to planned_sessions.id
+    - effort_mismatch: Classification of effort mismatch (too_easy, on_target, too_hard, unknown)
+    - hr_zone: Observed HR zone (if available)
+    - recommendation: Human-readable recommendation (if mismatch detected)
+    - created_at: Reconciliation creation timestamp
+    """
+
+    __tablename__ = "workout_reconciliations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    planned_session_id: Mapped[str] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    effort_mismatch: Mapped[str] = mapped_column(String, nullable=False)  # too_easy, on_target, too_hard, unknown
+    hr_zone: Mapped[str | None] = mapped_column(String, nullable=True)
+    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    __table_args__ = (
+        Index("idx_reconciliation_planned_session", "planned_session_id"),
+        Index("idx_reconciliation_user_created", "user_id", "created_at"),
+    )

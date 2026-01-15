@@ -21,6 +21,7 @@ from app.coach.errors import ToolContractViolationError
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import get_conversation_progress
+from app.coach.tools.modify_day import modify_day
 from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
 from app.core.slot_extraction import generate_clarification_for_missing_slots

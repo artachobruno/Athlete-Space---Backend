@@ -313,10 +313,16 @@ async def plan_week(
         )
 
     # Use canonical pipeline
+    # NOTE: Volume is calculated in MILES (not km). All distance calculations use miles.
+    # See app/plans/README.md for volume and pace semantics.
     def volume_calculator(_week_idx: int) -> float:
-        """Calculate volume for the week (convert hours to miles)."""
+        """Calculate volume for the week (convert hours to miles).
+
+        Returns volume in MILES. The canonical pipeline expects miles.
+        """
         # Convert hours to approximate miles (assuming ~8 min/mile pace)
         # This is a rough conversion - the actual volume allocator will handle distribution
+        # TODO: Use athlete's race goal pace from AthletePaceProfile when available
         return adjusted_volume_hours * 7.5  # ~7.5 miles per hour at 8 min/mile
 
     planned_weeks, persist_result = await execute_canonical_pipeline(

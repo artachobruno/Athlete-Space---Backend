@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PairingDecision, PlannedSession
+from app.plans.reconciliation.service import reconcile_activity_if_paired
 
 DURATION_TOLERANCE = 0.30
 
@@ -408,6 +409,12 @@ def _persist_pairing(
         f"Auto-paired planned session {planned.id} with activity {activity.id} "
         f"(duration diff: {duration_diff_pct:.2%})",
     )
+
+    # Perform HR-based reconciliation (passive, read-only)
+    try:
+        reconcile_activity_if_paired(session, activity)
+    except Exception as e:
+        logger.warning(f"Reconciliation failed after pairing {activity.id} with {planned.id}: {e}")
 
 
 def try_auto_pair(

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.planning.library.session_template import SessionType
+from app.plans.types import WorkoutIntent
 
 Day = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
@@ -22,6 +23,7 @@ class MaterializedSession:
 
     Attributes:
         day: Day of week
+        intent: Workout intent (rest, easy, long, quality) - required and immutable
         session_template_id: ID of template this session is based on
         session_type: Type of session
         duration_minutes: PRIMARY - duration in minutes (FINAL, validated)
@@ -30,6 +32,7 @@ class MaterializedSession:
     """
 
     day: Day
+    intent: WorkoutIntent  # Required - describes purpose, not pace
     session_template_id: str
     session_type: SessionType
 

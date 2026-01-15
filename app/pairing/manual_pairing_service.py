@@ -14,6 +14,7 @@ from loguru import logger
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PairingDecision, PlannedSession
+from app.plans.reconciliation.service import reconcile_activity_if_paired
 
 
 def _log_decision(
@@ -129,6 +130,12 @@ def manual_pair(
             f"Manually paired activity {activity_id} with planned session {planned_session_id}",
             user_id=user_id,
         )
+
+        # Perform HR-based reconciliation (passive, read-only)
+        try:
+            reconcile_activity_if_paired(session, activity)
+        except Exception as e:
+            logger.warning(f"Reconciliation failed after manual pairing {activity_id} with {planned_session_id}: {e}")
 
 
 def manual_unpair(

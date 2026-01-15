@@ -259,9 +259,14 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
             )
 
             # Use canonical pipeline
+            # NOTE: Volume is calculated in MILES (not km). All distance calculations use miles.
+            # See app/plans/README.md for volume and pace semantics.
             def volume_calculator(week_idx: int) -> float:
-                """Calculate volume for a week (season plans use moderate progression)."""
-                base_volume = 40.0
+                """Calculate volume for a week (season plans use moderate progression).
+
+                Returns volume in MILES. The canonical pipeline expects miles.
+                """
+                base_volume = 40.0  # Base volume in miles
                 return base_volume + (week_idx * 1.5)  # Moderate progression for season plans
 
             _planned_weeks, persist_result = await execute_canonical_pipeline(

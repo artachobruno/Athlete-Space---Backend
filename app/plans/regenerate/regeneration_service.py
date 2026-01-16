@@ -10,8 +10,9 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.coach.diff.plan_diff import build_plan_diff
 from app.coach.explainability import explain_plan_revision
-from app.db.models import AthleteProfile, PlanRevision
+from app.db.models import AthleteProfile, PlannedSession, PlanRevision
 from app.db.session import get_session
 from app.plans.modify.plan_revision_repo import create_plan_revision
 from app.plans.regenerate.regeneration_executor import execute_regeneration
@@ -189,7 +190,29 @@ def regenerate_plan(
         )
 
         try:
-            # Step 4: Execute regeneration (async)
+            # Step 4: Fetch old sessions before regeneration
+            start_datetime = datetime.combine(req.start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            end_datetime = None
+            if req.end_date:
+                end_datetime = datetime.combine(req.end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+
+            old_sessions_query = select(PlannedSession).where(
+                PlannedSession.user_id == user_id,
+                PlannedSession.athlete_id == athlete_id,
+                PlannedSession.date >= start_datetime,
+            )
+
+            if end_datetime:
+                old_sessions_query = old_sessions_query.where(PlannedSession.date <= end_datetime)
+
+            # Only get non-completed sessions (those that will be replaced)
+            old_sessions_query = old_sessions_query.where(
+                PlannedSession.status.notin_(["completed", "cancelled", "skipped"]),
+            )
+
+            old_sessions = list(session.execute(old_sessions_query).scalars().all())
+
+            # Step 5: Execute regeneration (async)
             # Create a new event loop for this synchronous context
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -207,14 +230,22 @@ def regenerate_plan(
             finally:
                 loop.close()
 
-            # Step 5: Update revision → status="regenerated"
+            # Step 6: Generate diff using diff engine
+            diff = build_plan_diff(
+                before_sessions=old_sessions,
+                after_sessions=new_sessions,
+                scope="plan",
+            )
+
+            # Step 7: Update revision → status="regenerated"
             revision.status = "regenerated"
             if revision.deltas is None:
                 revision.deltas = {}
             revision.deltas["regenerated_sessions_count"] = len(new_sessions)
+            revision.deltas["diff"] = diff.model_dump()
             session.flush()
 
-            # Step 6: Generate explanation
+            # Step 8: Generate explanation
             explanation = None
             try:
                 # Convert DB PlanRevision to Pydantic PlanRevision
@@ -250,7 +281,7 @@ def regenerate_plan(
                 )
                 # Don't fail regeneration if explanation fails
 
-            # Step 7: Commit
+            # Step 9: Commit
             session.commit()
 
             logger.info(

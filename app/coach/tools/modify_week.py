@@ -12,6 +12,7 @@ from datetime import date, datetime, timezone
 from loguru import logger
 from sqlalchemy import update
 
+from app.coach.diff.plan_diff import build_plan_diff
 from app.coach.explainability import explain_plan_revision
 from app.coach.tools.modify_day import modify_day
 from app.db.models import AthleteProfile, PlannedSession
@@ -533,15 +534,12 @@ def modify_week(
             reason=modification.reason,
         )
 
-        # Create before/after snapshots for revision
-        before_snapshot = {
-            "session_count": len(original_sessions),
-            "session_ids": [s.id for s in original_sessions],
-        }
-        after_snapshot = {
-            "session_count": len(saved_sessions),
-            "session_ids": [s.id for s in saved_sessions],
-        }
+        # Generate diff using diff engine
+        diff = build_plan_diff(
+            before_sessions=original_sessions,
+            after_sessions=saved_sessions,
+            scope="week",
+        )
 
         revision = builder.finalize()
 
@@ -557,8 +555,7 @@ def modify_week(
                 affected_start=start_date,
                 affected_end=end_date,
                 deltas={
-                    "before": before_snapshot,
-                    "after": after_snapshot,
+                    "diff": diff.model_dump(),
                     "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
                 },
             )

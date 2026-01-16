@@ -86,6 +86,7 @@ def save_modified_sessions(
     original_sessions: list[PlannedSession],
     modified_sessions: list[PlannedSession],
     modification_reason: str | None = None,
+    revision_id: str | None = None,
 ) -> list[PlannedSession]:
     """Save modified sessions as new planned sessions.
 
@@ -98,6 +99,7 @@ def save_modified_sessions(
         original_sessions: Original PlannedSession objects
         modified_sessions: Modified PlannedSession objects (new instances)
         modification_reason: Optional reason for modification
+        revision_id: Optional revision ID to link these sessions to a plan revision
 
     Returns:
         List of saved PlannedSession objects
@@ -130,6 +132,10 @@ def save_modified_sessions(
                         if existing_notes
                         else f"[Modified: {modification_reason}]"
                     )
+
+            # Set revision_id if provided
+            if revision_id:
+                modified_session.revision_id = revision_id
 
             # Add as new object
             db.add(modified_session)

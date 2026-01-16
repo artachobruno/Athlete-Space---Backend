@@ -9,10 +9,12 @@ import copy
 from datetime import date, datetime, timezone
 
 from loguru import logger
+from sqlalchemy import update
 
 from app.coach.tools.modify_day import modify_day
 from app.db.models import AthleteProfile, PlannedSession
 from app.db.session import get_session as _get_session
+from app.plans.modify.plan_revision_repo import create_plan_revision
 from app.plans.modify.repository import get_planned_session_by_date
 from app.plans.modify.types import DayModification
 from app.plans.modify.week_repository import (
@@ -94,6 +96,27 @@ def modify_week(
         builder.set_range(modification.start_date, modification.end_date)
     except ValueError as e:
         revision = builder.finalize()
+
+        # Persist blocked revision
+        with get_session() as db:
+            create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_week",
+                status="blocked",
+                reason=modification.reason,
+                blocked_reason=f"Invalid date format: {e}",
+                affected_start=start_date if "start_date" in locals() else None,
+                affected_end=end_date if "end_date" in locals() else None,
+                deltas={
+                    "before": None,
+                    "after": None,
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                },
+            )
+            db.commit()
+
         return {
             "success": False,
             "error": f"Invalid date format: {e}",
@@ -183,6 +206,27 @@ def modify_week(
                 triggered=True,
             )
         revision = builder.finalize()
+
+        # Persist blocked revision
+        with get_session() as db:
+            create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_week",
+                status="blocked",
+                reason=modification.reason,
+                blocked_reason=str(e),
+                affected_start=start_date,
+                affected_end=end_date,
+                deltas={
+                    "before": None,
+                    "after": None,
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                },
+            )
+            db.commit()
+
         return {
             "success": False,
             "error": f"Invalid modification: {e}",
@@ -227,6 +271,27 @@ def modify_week(
                             new=delta.new,
                         )
                 revision = builder.finalize()
+
+                # Persist blocked revision (replace_day failed)
+                with get_session() as db:
+                    create_plan_revision(
+                        session=db,
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                        revision_type="modify_week",
+                        status="blocked",
+                        reason=modification.reason,
+                        blocked_reason=result.get("error", "Unknown error"),
+                        affected_start=start_date,
+                        affected_end=end_date,
+                        deltas={
+                            "before": None,
+                            "after": None,
+                            "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                        },
+                    )
+                    db.commit()
+
                 return {
                     "success": False,
                     "error": result.get("error", "Unknown error"),
@@ -262,7 +327,37 @@ def modify_week(
             # Normalize to: {success, message, modified_sessions: [...]}
             modified_session_id = result.get("modified_session_id")
             if modified_session_id:
+                # Create before/after snapshots for revision
+                before_snapshot = {
+                    "session_count": 1,
+                    "session_ids": [result.get("original_session_id")] if result.get("original_session_id") else [],
+                }
+                after_snapshot = {
+                    "session_count": 1,
+                    "session_ids": [modified_session_id],
+                }
+
                 revision = builder.finalize()
+
+                # Persist applied revision (replace_day succeeded)
+                with get_session() as db:
+                    create_plan_revision(
+                        session=db,
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                        revision_type="modify_week",
+                        status="applied",
+                        reason=modification.reason,
+                        affected_start=start_date,
+                        affected_end=end_date,
+                        deltas={
+                            "before": before_snapshot,
+                            "after": after_snapshot,
+                            "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                        },
+                    )
+                    db.commit()
+
                 return {
                     "success": True,
                     "message": result.get("message", "Session modified successfully"),
@@ -271,12 +366,53 @@ def modify_week(
                 }
 
             revision = builder.finalize()
+
+            # Persist applied revision (fallback case)
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_week",
+                    status="applied",
+                    reason=modification.reason,
+                    affected_start=start_date,
+                    affected_end=end_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 **result,
                 "revision": revision,
             }
         else:
             revision = builder.finalize()
+
+            # Persist blocked revision (unknown change_type)
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_week",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason=f"Unknown change_type: {modification.change_type}",
+                    affected_start=start_date,
+                    affected_end=end_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": f"Unknown change_type: {modification.change_type}",
@@ -341,7 +477,48 @@ def modify_week(
             reason=modification.reason,
         )
 
+        # Create before/after snapshots for revision
+        before_snapshot = {
+            "session_count": len(original_sessions),
+            "session_ids": [s.id for s in original_sessions],
+        }
+        after_snapshot = {
+            "session_count": len(saved_sessions),
+            "session_ids": [s.id for s in saved_sessions],
+        }
+
         revision = builder.finalize()
+
+        # Persist applied revision
+        with get_session() as db:
+            revision_record = create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_week",
+                status="applied",
+                reason=modification.reason,
+                affected_start=start_date,
+                affected_end=end_date,
+                deltas={
+                    "before": before_snapshot,
+                    "after": after_snapshot,
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                },
+            )
+            db.commit()
+
+            # Update saved sessions with revision_id
+            if saved_sessions:
+                session_ids = [s.id for s in saved_sessions]
+                with get_session() as update_db:
+                    update_db.execute(
+                        update(PlannedSession)
+                        .where(PlannedSession.id.in_(session_ids))
+                        .values(revision_id=revision_record.id)
+                    )
+                    update_db.commit()
+
         return {
             "success": True,
             "message": f"Modified {len(saved_sessions)} sessions",
@@ -352,6 +529,27 @@ def modify_week(
     except Exception as e:
         logger.exception("MODIFY → week: Failed to apply modification")
         revision = builder.finalize()
+
+        # Persist blocked revision (exception during modification)
+        with get_session() as db:
+            create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_week",
+                status="blocked",
+                reason=modification.reason,
+                blocked_reason=f"Failed to apply modification: {e}",
+                affected_start=start_date,
+                affected_end=end_date,
+                deltas={
+                    "before": None,
+                    "after": None,
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                },
+            )
+            db.commit()
+
         return {
             "success": False,
             "error": f"Failed to apply modification: {e}",

@@ -13,6 +13,16 @@ from sqlalchemy.orm import sessionmaker
 pytest_plugins = ["tests.mcp.conftest"]
 
 
+@pytest.fixture
+def test_athlete_id() -> int:
+    """Test athlete ID fixture.
+
+    Returns a stable athlete ID for use in tests.
+    Matches the pattern used across plan tools (athlete_id=1).
+    """
+    return 1
+
+
 @pytest.fixture(scope="function")
 def db_session(monkeypatch):
     """

@@ -607,6 +607,9 @@ class PlannedSession(Base):
     # Workout relationship (mandatory invariant)
     workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
 
+    # Revision tracking
+    revision_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # Reference to plan_revisions.id
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
@@ -1033,4 +1036,48 @@ class WorkoutReconciliation(Base):
     __table_args__ = (
         Index("idx_reconciliation_planned_session", "planned_session_id"),
         Index("idx_reconciliation_user_created", "user_id", "created_at"),
+    )
+
+
+class PlanRevision(Base):
+    """Append-only audit table for plan modifications.
+
+    Every plan modification (applied or blocked) is persisted here.
+    This enables querying, replaying, and auditing all plan changes.
+
+    Schema:
+    - id: UUID primary key
+    - user_id: User ID who made the modification
+    - athlete_id: Athlete ID whose plan was modified
+    - revision_type: Type of revision (modify_day, modify_week, modify_season, modify_race)
+    - status: Status of revision (applied, blocked)
+    - reason: Optional reason for modification
+    - blocked_reason: Optional reason if blocked
+    - affected_start: Start date of affected range (nullable)
+    - affected_end: End date of affected range (nullable)
+    - deltas: JSON field storing before/after snapshots and changes
+    - created_at: Timestamp when revision was created
+    """
+
+    __tablename__ = "plan_revisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    revision_type: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)  # applied | blocked
+
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    affected_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    affected_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    deltas: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    __table_args__ = (
+        Index("idx_plan_revisions_athlete_created", "athlete_id", "created_at"),
     )

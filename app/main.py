@@ -41,6 +41,7 @@ from app.api.onboarding.onboarding import router as onboarding_router
 from app.api.settings.settings import router as settings_router
 from app.api.strava.strava import router as strava_router
 from app.api.training.manual_upload import router as manual_upload_router
+from app.api.training.plan_revisions import router as plan_revisions_router
 from app.api.training.state import router as state_router
 from app.api.training.training import router as training_router
 from app.api.user.me import router as me_router
@@ -75,14 +76,17 @@ from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_add_activity_tss import migrate_add_activity_tss
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
+from scripts.migrate_add_conversation_summaries_table import migrate_add_conversation_summaries_table
 from scripts.migrate_add_conversation_summary import migrate_add_conversation_summary
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
 from scripts.migrate_add_phase_to_planned_sessions import migrate_add_phase_to_planned_sessions
+from scripts.migrate_add_plan_revisions_table import migrate_add_plan_revisions_table
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
+from scripts.migrate_add_revision_id_to_planned_sessions import migrate_add_revision_id_to_planned_sessions
 from scripts.migrate_add_session_order_to_planned_sessions import migrate_add_session_order_to_planned_sessions
 from scripts.migrate_add_source_to_planned_sessions import migrate_add_source_to_planned_sessions
 from scripts.migrate_add_streams_data import migrate_add_streams_data
@@ -291,6 +295,22 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_add_source_to_planned_sessions: {e}")
         logger.exception(f"✗ Migration failed: migrate_add_source_to_planned_sessions - {e}")
+
+    try:
+        logger.info("Running migration: plan_revisions table")
+        migrate_add_plan_revisions_table()
+        logger.info("✓ Migration completed: plan_revisions table")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_plan_revisions_table: {e}")
+        logger.exception(f"✗ Migration failed: migrate_add_plan_revisions_table - {e}")
+
+    try:
+        logger.info("Running migration: planned_sessions revision_id column")
+        migrate_add_revision_id_to_planned_sessions()
+        logger.info("✓ Migration completed: planned_sessions revision_id column")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_revision_id_to_planned_sessions: {e}")
+        logger.exception(f"✗ Migration failed: migrate_add_revision_id_to_planned_sessions - {e}")
 
     try:
         logger.info("Running migration: activities id column (integer to UUID)")
@@ -869,6 +889,7 @@ app.include_router(ops_router)
 app.include_router(ai_ops_router)
 app.include_router(state_router)
 app.include_router(training_router)
+app.include_router(plan_revisions_router)
 app.include_router(webhooks_router)
 app.include_router(workouts_router)
 

@@ -70,6 +70,7 @@ def save_modified_session(
     original_session: PlannedSession,
     modified_session: PlannedSession,
     modification_reason: str | None = None,
+    revision_id: str | None = None,
 ) -> PlannedSession:
     """Save a modified session as a new planned session.
 
@@ -82,6 +83,7 @@ def save_modified_session(
         original_session: Original PlannedSession
         modified_session: Modified PlannedSession (new instance)
         modification_reason: Optional reason for modification
+        revision_id: Optional revision ID to link this session to a plan revision
 
     Returns:
         Saved PlannedSession (new instance)
@@ -99,6 +101,10 @@ def save_modified_session(
         modified_session.id = new_id
         modified_session.created_at = datetime.now(timezone.utc)
         modified_session.updated_at = datetime.now(timezone.utc)
+
+        # Set revision_id if provided
+        if revision_id:
+            modified_session.revision_id = revision_id
 
         # Store reference to original in notes or a metadata field
         if modification_reason:

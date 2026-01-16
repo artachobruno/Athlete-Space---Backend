@@ -9,9 +9,11 @@ import copy
 from datetime import date, datetime, timezone
 
 from loguru import logger
+from sqlalchemy import update
 
 from app.db.models import AthleteProfile, PlannedSession
 from app.db.session import get_session as _get_session
+from app.plans.modify.plan_revision_repo import create_plan_revision
 from app.plans.modify.repository import get_planned_session_by_date, save_modified_session
 from app.plans.modify.types import DayModification
 from app.plans.modify.validators import validate_pace_for_intent, validate_race_day_modification
@@ -116,6 +118,27 @@ def modify_day(
             triggered=True,
         )
         revision = builder.finalize()
+
+        # Persist blocked revision
+        with get_session() as db:
+            create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_day",
+                status="blocked",
+                reason=modification.reason,
+                blocked_reason=str(e),
+                affected_start=target_date,
+                affected_end=target_date,
+                deltas={
+                    "before": None,
+                    "after": None,
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                },
+            )
+            db.commit()
+
         return {
             "success": False,
             "error": f"Invalid modification: {e}",
@@ -131,6 +154,27 @@ def modify_day(
 
     if original_session is None:
         revision = builder.finalize()
+
+        # Persist blocked revision (no session found)
+        with get_session() as db:
+            create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_day",
+                status="blocked",
+                reason=modification.reason,
+                blocked_reason=f"No planned session found for date {target_date.isoformat()}",
+                affected_start=target_date,
+                affected_end=target_date,
+                deltas={
+                    "before": None,
+                    "after": None,
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                },
+            )
+            db.commit()
+
         return {
             "success": False,
             "error": f"No planned session found for date {target_date.isoformat()}",
@@ -165,6 +209,27 @@ def modify_day(
     if modification.change_type == "adjust_distance":
         if new_session.distance_mi is None:
             revision = builder.finalize()
+
+            # Persist blocked revision
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_day",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason="Cannot adjust distance: session is duration-based",
+                    affected_start=target_date,
+                    affected_end=target_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": "Cannot adjust distance: session is duration-based",
@@ -172,6 +237,27 @@ def modify_day(
             }
         if not isinstance(modification.value, (int, float)):
             revision = builder.finalize()
+
+            # Persist blocked revision
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_day",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason=f"Invalid distance value: {modification.value}",
+                    affected_start=target_date,
+                    affected_end=target_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": f"Invalid distance value: {modification.value}",
@@ -193,6 +279,27 @@ def modify_day(
     elif modification.change_type == "adjust_duration":
         if new_session.duration_minutes is None:
             revision = builder.finalize()
+
+            # Persist blocked revision
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_day",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason="Cannot adjust duration: session is distance-based",
+                    affected_start=target_date,
+                    affected_end=target_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": "Cannot adjust duration: session is distance-based",
@@ -200,6 +307,27 @@ def modify_day(
             }
         if not isinstance(modification.value, (int, float)):
             revision = builder.finalize()
+
+            # Persist blocked revision
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_day",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason=f"Invalid duration value: {modification.value}",
+                    affected_start=target_date,
+                    affected_end=target_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": f"Invalid duration value: {modification.value}",
@@ -220,9 +348,32 @@ def modify_day(
 
     elif modification.change_type == "adjust_pace":
         if not isinstance(modification.value, str):
+            revision = builder.finalize()
+
+            # Persist blocked revision
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_day",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason=f"Invalid pace zone: {modification.value}",
+                    affected_start=target_date,
+                    affected_end=target_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": f"Invalid pace zone: {modification.value}",
+                "revision": revision,
             }
 
         # Estimate pace (athlete_profile passed from orchestrator if available)
@@ -271,6 +422,27 @@ def modify_day(
                 triggered=True,
             )
             revision = builder.finalize()
+
+            # Persist blocked revision
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_day",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason=str(e),
+                    affected_start=target_date,
+                    affected_end=target_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": str(e),
@@ -288,9 +460,32 @@ def modify_day(
 
     elif modification.change_type == "replace_metrics":
         if not isinstance(modification.value, dict):
+            revision = builder.finalize()
+
+            # Persist blocked revision
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_day",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason=f"Invalid metrics dict: {modification.value}",
+                    affected_start=target_date,
+                    affected_end=target_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": f"Invalid metrics dict: {modification.value}",
+                "revision": revision,
             }
 
         # Create WorkoutMetrics from dict
@@ -307,9 +502,32 @@ def modify_day(
                 new_session.duration_minutes = new_metrics.duration_min
 
         except Exception as e:
+            revision = builder.finalize()
+
+            # Persist blocked revision
+            with get_session() as db:
+                create_plan_revision(
+                    session=db,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    revision_type="modify_day",
+                    status="blocked",
+                    reason=modification.reason,
+                    blocked_reason=f"Invalid metrics: {e}",
+                    affected_start=target_date,
+                    affected_end=target_date,
+                    deltas={
+                        "before": None,
+                        "after": None,
+                        "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    },
+                )
+                db.commit()
+
             return {
                 "success": False,
                 "error": f"Invalid metrics: {e}",
+                "revision": revision,
             }
 
     # 5. Intent handling (critical)
@@ -357,16 +575,80 @@ def modify_day(
             original_id=original_session.id,
             new_id=saved_session.id,
         )
+
+        # Create before/after snapshots for revision
+        before_snapshot = {
+            "id": original_session.id,
+            "distance_mi": original_session.distance_mi,
+            "duration_minutes": original_session.duration_minutes,
+            "intent": original_session.intent,
+        }
+        after_snapshot = {
+            "id": saved_session.id,
+            "distance_mi": saved_session.distance_mi,
+            "duration_minutes": saved_session.duration_minutes,
+            "intent": saved_session.intent,
+        }
+
+        revision = builder.finalize()
+
+        # Persist applied revision
+        with get_session() as db:
+            revision_record = create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_day",
+                status="applied",
+                reason=modification.reason,
+                affected_start=target_date,
+                affected_end=target_date,
+                deltas={
+                    "before": before_snapshot,
+                    "after": after_snapshot,
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                },
+            )
+            db.commit()
+
+            # Update saved session with revision_id
+            with get_session() as update_db:
+                update_db.execute(
+                    update(PlannedSession)
+                    .where(PlannedSession.id == saved_session.id)
+                    .values(revision_id=revision_record.id)
+                )
+                update_db.commit()
     except Exception as e:
         logger.exception("MODIFY → day: Failed to save modified session")
         revision = builder.finalize()
+
+        # Persist blocked revision (save failed)
+        with get_session() as db:
+            create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_day",
+                status="blocked",
+                reason=modification.reason,
+                blocked_reason=f"Failed to save modified session: {e}",
+                affected_start=target_date,
+                affected_end=target_date,
+                deltas={
+                    "before": None,
+                    "after": None,
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                },
+            )
+            db.commit()
+
         return {
             "success": False,
             "error": f"Failed to save modified session: {e}",
             "revision": revision,
         }
     else:
-        revision = builder.finalize()
         return {
             "success": True,
             "message": "Session modified successfully",

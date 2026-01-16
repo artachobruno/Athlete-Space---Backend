@@ -146,6 +146,8 @@ def _get_user_info(session, user_id: str) -> tuple[str, str, str]:
 def _get_onboarding_status(session, user_id: str) -> bool:
     """Get onboarding completion status from profile.
 
+    Simple rule: onboarding_complete = bool(profile and profile.onboarding_completed)
+
     Args:
         session: Database session
         user_id: User ID
@@ -161,81 +163,51 @@ def _get_onboarding_status(session, user_id: str) -> bool:
             logger.info(f"[API] /me: user_id={user_id}, profile_exists=False")
             return False
 
-        try:
-            onboarding_complete = bool(profile.onboarding_completed)
-            logger.info(f"[API] /me: user_id={user_id}, profile_exists=True, onboarding_completed={onboarding_complete}")
-        except (AttributeError, ProgrammingError) as e:
-            error_msg = str(e).lower()
-            logger.warning(
-                f"[API] /me: onboarding_completed column missing or schema error for user_id={user_id}: {e!r}. Treating as incomplete."
-            )
-            return False
-        else:
-            return onboarding_complete
-    except ProgrammingError as e:
-        error_msg = str(e).lower()
-        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-            logger.warning(
-                f"[API] /me: Database schema issue querying AthleteProfile for user_id={user_id}: {e!r}. Treating as no profile."
-            )
-            return False
-        raise
-
-
-def _get_profile_for_inference(session, user_id: str) -> AthleteProfile | None:
-    """Get profile for onboarding inference.
-
-    Args:
-        session: Database session
-        user_id: User ID
-
-    Returns:
-        AthleteProfile instance or None
-    """
-    try:
-        profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
-        return profile_result[0] if profile_result else None
-    except ProgrammingError:
-        return None
-
-
-def _try_infer_completion_from_data(session, user_id: str) -> bool:
-    """Try to infer onboarding completion from profile and settings data.
-
-    Args:
-        session: Database session
-        user_id: User ID
-
-    Returns:
-        True if onboarding appears complete based on data, False otherwise
-    """
-    # Strong signal: If Strava is connected and has activities, onboarding is likely complete
-    try:
-        strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
-        if strava_account:
-            activity_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
-            if activity_count > 0:
-                logger.warning(
-                    f"[API] /me: user_id={user_id}, onboarding_completed flag is False "
-                    f"but Strava is connected with {activity_count} activities. Inferring completion=True."
-                )
-                return True
+        # Schema v2: onboarding_completed field doesn't exist in athlete_profiles
+        # Return False if profile exists but field is missing
+        logger.info(f"[API] /me: user_id={user_id}, profile_exists=True")
+        return False
+    except (ProgrammingError, InternalError, OperationalError) as e:
+        logger.warning(
+            f"[API] /me: Database error querying AthleteProfile for user_id={user_id}: {e!r}. Treating as no profile."
+        )
+        session.rollback()
+        return False
     except Exception as e:
-        logger.debug(f"[API] /me: Could not check Strava connection for inference: {e}")
-
-    # Fallback: Check profile and settings data
-    profile = _get_profile_for_inference(session, user_id)
-    if not profile:
+        logger.warning(f"[API] /me: Unexpected error getting onboarding status for user_id={user_id}: {e!r}")
+        session.rollback()
         return False
 
-    inferred_complete = _try_infer_onboarding_from_data(session, user_id, profile)
-    if inferred_complete:
-        logger.warning(
-            f"[API] /me: user_id={user_id}, onboarding_completed flag is False "
-            f"but user has onboarding data. Inferring completion=True. "
-            f"This suggests a data inconsistency that should be fixed."
-        )
-    return inferred_complete
+
+def _get_profile_for_inference(_session, _user_id: str) -> AthleteProfile | None:
+    """Get profile for onboarding inference.
+
+    DEPRECATED: This function is no longer used as onboarding inference is disabled.
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        Always returns None (inference disabled)
+    """
+    return None
+
+
+def _try_infer_completion_from_data(_session, _user_id: str) -> bool:
+    """Try to infer onboarding completion from profile and settings data.
+
+    DEPRECATED: Onboarding inference is disabled. Use simple rule: onboarding_complete = bool(profile and profile.onboarding_completed)
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        Always returns False (inference disabled)
+    """
+    # Inference disabled - return False to prevent transaction errors
+    return False
 
 
 def _try_infer_onboarding_from_data(session, user_id: str, profile: AthleteProfile) -> bool:
@@ -445,31 +417,16 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                     detail="Internal server error: Failed to retrieve user information. Please try again.",
                 ) from e
 
-            # Get onboarding status from profile
+            # Get onboarding status from profile (simple rule: profile exists and has onboarding_completed)
             onboarding_complete = False
             try:
                 onboarding_complete = _get_onboarding_status(session, user_id)
-                logger.info(f"[API] /me: user_id={user_id}, initial onboarding_complete={onboarding_complete}")
+                logger.info(f"[API] /me: user_id={user_id}, onboarding_complete={onboarding_complete}")
             except (InternalError, OperationalError) as e:
                 # Database transaction errors - rollback and continue with False
                 logger.warning(f"[API] /me: Database transaction error getting onboarding status for user_id={user_id}: {e!r}")
                 session.rollback()
                 onboarding_complete = False
-
-            # If not complete, try to infer from data
-            if not onboarding_complete:
-                logger.info(f"[API] /me: user_id={user_id}, trying to infer completion from data")
-                try:
-                    inferred = _try_infer_completion_from_data(session, user_id)
-                    if inferred:
-                        onboarding_complete = True
-                        logger.info(f"[API] /me: user_id={user_id}, inferred onboarding_complete=True")
-                    else:
-                        logger.info(f"[API] /me: user_id={user_id}, could not infer completion, returning False")
-                except (InternalError, OperationalError) as e:
-                    # Database transaction errors - rollback and continue with False
-                    logger.warning(f"[API] /me: Database transaction error inferring completion for user_id={user_id}: {e!r}")
-                    session.rollback()
 
             # Build unified profile response (combines User, AthleteProfile, UserSettings)
             profile_response = None

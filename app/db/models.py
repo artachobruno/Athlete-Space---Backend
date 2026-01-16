@@ -812,54 +812,30 @@ class AthleteProfile(Base):
     """Athlete profile information for onboarding and coaching.
 
     Stores athlete-specific data that influences coaching decisions.
+    Schema v2: Matches database schema exactly.
     """
 
     __tablename__ = "athlete_profiles"
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
 
-    # Basic info
-    name: Mapped[str | None] = mapped_column(String, nullable=True)
-    email: Mapped[str | None] = mapped_column(String, nullable=True)
-    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    gender: Mapped[str | None] = mapped_column(String, nullable=True)
-    date_of_birth: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Basic info (schema v2: matches DB columns)
+    first_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    sex: Mapped[str | None] = mapped_column(String, nullable=True)  # CHECK: 'male','female','other'
+    birthdate: Mapped[date | None] = mapped_column(Date, nullable=True)
     height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
-    height_in: Mapped[float | None] = mapped_column(Float, nullable=True)
-    weight_lbs: Mapped[float | None] = mapped_column(Float, nullable=True)
-    location: Mapped[str | None] = mapped_column(String, nullable=True)
-    unit_system: Mapped[str | None] = mapped_column(String, nullable=True)
-    strava_connected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    strava_athlete_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    # Training history
-    years_training: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    primary_sport: Mapped[str | None] = mapped_column(String, nullable=True)
-
-    # Goals
-    primary_goal: Mapped[str | None] = mapped_column(Text, nullable=True)
-    target_races: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    goals: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    target_event: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    extracted_race_attributes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    extracted_injury_attributes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-
-    # Race and taper
-    race_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
-    taper_weeks: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
-    # Health and constraints
-    injury_history: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    current_injuries: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    training_constraints: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Training metrics (schema v2)
+    ftp_watts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    threshold_pace_sec_per_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    baseline_weekly_run_km: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),

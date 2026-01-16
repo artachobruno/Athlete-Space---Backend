@@ -60,7 +60,6 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
-    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)  # Nullable for OAuth users
     auth_provider: Mapped[str] = mapped_column(String, nullable=False)  # CHECK constraint in DB: 'google', 'email', 'apple'
     google_sub: Mapped[str | None] = mapped_column(String, nullable=True, unique=True, index=True)
     role: Mapped[str] = mapped_column(String, nullable=False, default="athlete")  # CHECK constraint in DB: 'athlete', 'coach', 'admin'

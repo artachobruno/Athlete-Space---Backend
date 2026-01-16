@@ -519,16 +519,18 @@ def initialize_database() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Manage application lifespan - initialize database and start scheduler on startup.
+    """Manage application lifespan - minimal setup only, heavy work deferred.
 
     CRITICAL: This function must NEVER raise exceptions or block for long periods.
     Render's port scanner requires the server to bind and stay alive immediately.
 
-    Heavy initialization (migrations, schedulers) is deferred to background tasks
-    after the server has started and bound to the port.
+    Heavy initialization (migrations, schedulers) is deferred to the deferred_heavy_init()
+    startup event, which runs AFTER the server has bound to the port and started serving requests.
+    This prevents Render deployment timeouts.
     """
     logging.info(">>> lifespan startup begin <<<")
     print("LIFESPAN START", flush=True)
+    logger.info("FastAPI lifespan starting - server will bind to port immediately (heavy initialization deferred)")
 
     # Initialize app state to track initialization status
     _app.state.db_ready = False
@@ -539,26 +541,71 @@ async def lifespan(_app: FastAPI):
     set_process_start_time(time.time())
     logger.info("[OPS] Initialized ops metrics tracking")
 
-    # Attempt database initialization - but DO NOT raise on failure
-    # This allows the server to start even if DB is temporarily unavailable
+    # CRITICAL: Yield control to FastAPI IMMEDIATELY - this allows the server to bind to the port
+    # Render's port scanner requires the server to bind quickly. Heavy initialization
+    # (migrations, schedulers) is deferred to the deferred_heavy_init() startup event
+    # that runs AFTER the server has bound and started serving requests.
+    # This prevents Render deployment timeouts by ensuring the port is available immediately.
+    logging.info(">>> lifespan: yielding to FastAPI immediately (server will bind now) <<<")
+    print("LIFESPAN YIELD", flush=True)
+    logger.info("FastAPI server binding to port - migrations and schedulers will start after server is ready")
+    await asyncio.sleep(0)
+    yield
+
+    # Shutdown code (runs when app is shutting down)
+    logging.info(">>> lifespan: shutdown <<<")
+
+    # Shutdown scheduler
+    if _app.state.scheduler:
+        try:
+            _app.state.scheduler.shutdown()
+            logger.info("[SCHEDULER] Stopped scheduler")
+        except Exception as e:
+            logger.exception("[SCHEDULER] Error during shutdown: {}", e)
+
+
+logging.info(">>> creating FastAPI app <<<")
+app = FastAPI(title="Virtus AI", lifespan=lifespan)
+logging.info(">>> FastAPI app created (migrations will run after server binds) <<<")
+logger.info("FastAPI application initialized - server will bind to port immediately")
+
+
+@app.on_event("startup")
+async def deferred_heavy_init():
+    """Run heavy initialization tasks after server has started and bound to port.
+
+    This runs AFTER the server is up and serving requests, so it doesn't block
+    Render's port detection. Heavy operations (migrations, schedulers, initial sync ticks)
+    are deferred here.
+
+    CRITICAL: This ensures Render's port scanner can detect the server immediately,
+    preventing deployment timeouts.
+    """
+    # Wait a short moment to ensure server is fully up and bound to port
+    await asyncio.sleep(2)
+
+    logging.info(">>> deferred_heavy_init: starting heavy initialization <<<")
+    print("DEFERRED INIT START", flush=True)
+
+    # Step 1: Initialize database and run migrations (heavy operation)
     try:
+        logger.info("[DEFERRED INIT] Starting database initialization and migrations...")
         initialize_database()
-        _app.state.db_ready = True
-        logging.info(">>> database initialized successfully <<<")
+        app.state.db_ready = True
+        logging.info(">>> deferred_heavy_init: database initialized successfully <<<")
         print("DB INIT DONE", flush=True)
     except Exception as e:
-        logging.exception(">>> lifespan: database init failed <<<")
+        logging.exception(">>> deferred_heavy_init: database init failed <<<")
         print(f"DB INIT FAILED: {e}", flush=True)
         logger.exception("Database initialization failed - running in degraded mode")
         traceback.print_exc(file=sys.stdout)
-        # DO NOT raise - allow server to start in degraded mode
-        _app.state.db_ready = False
+        # DO NOT raise - allow server to continue serving in degraded mode
+        app.state.db_ready = False
 
-    # Start scheduler - but only if DB is ready
-    # Scheduler startup is relatively lightweight, but we still don't want to block
-    if _app.state.db_ready:
+    # Step 2: Start scheduler (only if DB is ready)
+    if app.state.db_ready:
         try:
-            logging.info(">>> lifespan: starting scheduler <<<")
+            logging.info(">>> deferred_heavy_init: starting scheduler <<<")
             scheduler = BackgroundScheduler()
             # Run background sync every 6 hours (Step 5: automated sync)
             scheduler.add_job(
@@ -596,8 +643,8 @@ async def lifespan(_app: FastAPI):
                 replace_existing=True,
             )
             scheduler.start()
-            _app.state.scheduler = scheduler
-            _app.state.scheduler_ready = True
+            app.state.scheduler = scheduler
+            app.state.scheduler_ready = True
             logger.info("[SCHEDULER] Started automatic background sync scheduler (runs every 6 hours)")
             logger.info(
                 "[SCHEDULER] Started ingestion tick scheduler "
@@ -607,13 +654,12 @@ async def lifespan(_app: FastAPI):
             logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
         except Exception as e:
             logger.exception("[SCHEDULER] Failed to start scheduler: {}", e)
-            _app.state.scheduler_ready = False
+            app.state.scheduler_ready = False
             # Don't fail startup if scheduler fails
     else:
         logger.warning("[SCHEDULER] Skipping scheduler startup - database not ready")
 
-    # Initialize template library (required for planner)
-    # This must succeed - if it fails, the planner will not work
+    # Step 3: Initialize template library (required for planner)
     try:
         logger.info("[TEMPLATE_LIBRARY] Initializing template library from cache")
         initialize_template_library_from_cache()
@@ -628,69 +674,35 @@ async def lifespan(_app: FastAPI):
             "Run: python scripts/precompute_embeddings.py --templates"
         )
 
-    # Yield control to FastAPI immediately - this allows the server to bind to the port
-    # CRITICAL: Everything before yield runs during startup, everything after runs during shutdown
-    logging.info(">>> lifespan: yielding to FastAPI (server will bind now) <<<")
-    print("LIFESPAN YIELD", flush=True)
-    await asyncio.sleep(0)
-    yield
-
-    # Shutdown code (runs when app is shutting down)
-    logging.info(">>> lifespan: shutdown <<<")
-
-    # Shutdown scheduler
-    if _app.state.scheduler:
-        try:
-            _app.state.scheduler.shutdown()
-            logger.info("[SCHEDULER] Stopped scheduler")
-        except Exception as e:
-            logger.exception("[SCHEDULER] Error during shutdown: {}", e)
-
-
-logging.info(">>> creating FastAPI app <<<")
-app = FastAPI(title="Virtus AI", lifespan=lifespan)
-logging.info(">>> FastAPI app created <<<")
-
-
-@app.on_event("startup")
-async def deferred_heavy_init():
-    """Run heavy initialization tasks after server has started and bound to port.
-
-    This runs AFTER the server is up and serving requests, so it doesn't block
-    Render's port detection. Heavy operations like initial sync ticks are deferred here.
-    """
-    # Wait a short moment to ensure server is fully up
-    await asyncio.sleep(2)
-
+    # Step 4: Run initial sync/ingestion ticks (non-blocking - don't wait for completion)
     db_ready = getattr(app.state, "db_ready", False)
-    if not db_ready:
-        logger.warning("[DEFERRED INIT] Skipping deferred init - database not ready")
-        return
+    if db_ready:
+        try:
+            def run_sync_tick():
+                try:
+                    sync_tick()
+                    logger.info("[DEFERRED INIT] Initial background sync tick completed")
+                except Exception as e:
+                    logger.exception("[DEFERRED INIT] Initial background sync tick failed: {}", e)
 
-    logging.info(">>> deferred_heavy_init: starting background tasks <<<")
-    try:
-        # Run initial sync tick (non-blocking - don't wait for completion)
+            def run_ingestion_tick():
+                try:
+                    ingestion_tick()
+                    logger.info("[DEFERRED INIT] Initial ingestion tick completed")
+                except Exception as e:
+                    logger.exception("[DEFERRED INIT] Initial ingestion tick failed: {}", e)
 
-        def run_sync_tick():
-            try:
-                sync_tick()
-                logger.info("[DEFERRED INIT] Initial background sync tick completed")
-            except Exception as e:
-                logger.exception("[DEFERRED INIT] Initial background sync tick failed: {}", e)
+            threading.Thread(target=run_sync_tick, daemon=True).start()
+            threading.Thread(target=run_ingestion_tick, daemon=True).start()
+            logging.info(">>> deferred_heavy_init: background tasks started <<<")
+        except Exception as e:
+            logger.exception("[DEFERRED INIT] Failed to start background tasks: {}", e)
+            # Don't fail if deferred init fails
+    else:
+        logger.warning("[DEFERRED INIT] Skipping initial sync/ingestion ticks - database not ready")
 
-        def run_ingestion_tick():
-            try:
-                ingestion_tick()
-                logger.info("[DEFERRED INIT] Initial ingestion tick completed")
-            except Exception as e:
-                logger.exception("[DEFERRED INIT] Initial ingestion tick failed: {}", e)
-
-        threading.Thread(target=run_sync_tick, daemon=True).start()
-        threading.Thread(target=run_ingestion_tick, daemon=True).start()
-        logging.info(">>> deferred_heavy_init: background tasks started <<<")
-    except Exception as e:
-        logger.exception("[DEFERRED INIT] Failed to start background tasks: {}", e)
-        # Don't fail if deferred init fails
+    logging.info(">>> deferred_heavy_init: heavy initialization complete <<<")
+    print("DEFERRED INIT DONE", flush=True)
 
 
 # Configure CORS

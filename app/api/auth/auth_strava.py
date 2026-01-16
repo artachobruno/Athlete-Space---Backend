@@ -202,7 +202,7 @@ def _encrypt_and_store_tokens(
         athlete_id: Strava athlete ID
         access_token: Access token to encrypt
         refresh_token: Refresh token to encrypt
-        expires_at: Token expiration timestamp
+        expires_at: Token expiration timestamp (UNIX epoch seconds)
     """
     try:
         encrypted_access_token = encrypt_token(access_token)
@@ -215,6 +215,13 @@ def _encrypt_and_store_tokens(
             detail="Failed to encrypt tokens",
         ) from e
 
+    # Convert expires_at from UNIX epoch seconds to datetime (schema v2: TIMESTAMPTZ)
+    expires_at_dt = datetime.fromtimestamp(expires_at, tz=timezone.utc)
+
+    # Guard: Ensure expires_at is a timezone-aware datetime
+    assert isinstance(expires_at_dt, datetime)
+    assert expires_at_dt.tzinfo is not None
+
     with get_session() as session:
         existing = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
 
@@ -224,7 +231,7 @@ def _encrypt_and_store_tokens(
             account.athlete_id = athlete_id
             account.access_token = encrypted_access_token
             account.refresh_token = encrypted_refresh_token
-            account.expires_at = expires_at
+            account.expires_at = expires_at_dt
         else:
             logger.info(f"[STRAVA_OAUTH] Creating new Strava account for user_id={user_id}")
             account = StravaAccount(
@@ -232,7 +239,7 @@ def _encrypt_and_store_tokens(
                 athlete_id=athlete_id,
                 access_token=encrypted_access_token,
                 refresh_token=encrypted_refresh_token,
-                expires_at=expires_at,
+                expires_at=expires_at_dt,
                 last_sync_at=None,
             )
             session.add(account)

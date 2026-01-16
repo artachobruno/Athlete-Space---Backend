@@ -5,6 +5,7 @@ Only SELECT queries and CTEs (WITH clauses) are allowed for safety.
 """
 
 import contextlib
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -190,8 +191,28 @@ def run_sql(
             rows = result.fetchall()
             columns = list(result.keys())
 
-            # Convert rows to JSON-safe values using FastAPI's encoder
-            safe_rows = [[jsonable_encoder(v) for v in row] for row in rows]
+            # Convert rows to JSON-safe values
+            safe_rows: list[list[str | int | float | None]] = []
+            for row in rows:
+                row_values = list(row)
+                safe_row: list[str | int | float | None] = []
+                for val in row_values:
+                    try:
+                        if val is None:
+                            safe_row.append(None)
+                        elif isinstance(val, (dict, list)):
+                            # JSON/JSONB columns - serialize to JSON string
+                            safe_row.append(json.dumps(jsonable_encoder(val)))
+                        else:
+                            encoded = jsonable_encoder(val)
+                            if isinstance(encoded, (str, int, float)) or encoded is None:
+                                safe_row.append(encoded)
+                            else:
+                                safe_row.append(str(encoded))
+                    except Exception as encode_error:
+                        logger.warning(f"Failed to encode value {type(val).__name__}: {encode_error}")
+                        safe_row.append(str(val))
+                safe_rows.append(safe_row)
 
             return SQLQueryResponse(
                 columns=columns,
@@ -402,7 +423,38 @@ def table_preview(
         columns = list(result.keys())
 
         # Convert rows to JSON-safe values
-        safe_rows = [[jsonable_encoder(v) for v in row] for row in rows]
+        # Handle SQLAlchemy Row objects properly - convert to tuple first
+        safe_rows: list[list[str | int | float | None]] = []
+        for row in rows:
+            # Convert Row to tuple/list for iteration
+            row_values = list(row)
+            safe_row: list[str | int | float | None] = []
+            for val in row_values:
+                try:
+                    # Handle None values
+                    if val is None:
+                        safe_row.append(None)
+                    # Handle dict/list (from JSON/JSONB columns) - convert to JSON string
+                    elif isinstance(val, (dict, list)):
+                        # JSON/JSONB columns need to be serialized to JSON strings
+                        # since the response model only allows str | int | float | None
+                        safe_row.append(json.dumps(jsonable_encoder(val)))
+                    else:
+                        # For other types (str, int, float, datetime, etc.), use jsonable_encoder
+                        encoded = jsonable_encoder(val)
+                        # Ensure result is one of the allowed types
+                        if isinstance(encoded, (str, int, float)) or encoded is None:
+                            safe_row.append(encoded)
+                        else:
+                            # Convert unexpected types to string
+                            safe_row.append(str(encoded))
+                except Exception as encode_error:
+                    # If encoding fails, convert to string as fallback
+                    logger.warning(
+                        f"Failed to encode value {type(val).__name__} for table {req.schema}.{req.table}: {encode_error}"
+                    )
+                    safe_row.append(str(val))
+            safe_rows.append(safe_row)
 
         return SQLQueryResponse(
             columns=columns,
@@ -413,8 +465,9 @@ def table_preview(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Failed to preview table {req.schema}.{req.table}")
+        error_msg = str(e)
+        logger.exception(f"Failed to preview table {req.schema}.{req.table}: {error_msg}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=f"Internal server error: {error_msg}",
         ) from e

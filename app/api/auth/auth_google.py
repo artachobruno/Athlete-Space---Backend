@@ -425,7 +425,6 @@ def google_callback(
                         password_hash=None,  # OAuth users don't need passwords
                         auth_provider=AuthProvider.google.value,
                         google_sub=google_sub,
-                        strava_athlete_id=None,
                         created_at=datetime.now(timezone.utc),
                         last_login_at=None,
                     )

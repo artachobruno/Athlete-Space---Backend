@@ -153,9 +153,8 @@ def signup(request: SignupRequest, http_request: Request):
             id=user_id,
             email=normalized_email,
             password_hash=password_hash,
-            auth_provider=AuthProvider.password,
+            auth_provider=AuthProvider.password.value,
             google_sub=None,
-            strava_athlete_id=None,
             created_at=datetime.now(timezone.utc),
             last_login_at=None,
         )

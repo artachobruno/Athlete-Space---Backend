@@ -12,25 +12,28 @@ from typing import Any, NoReturn
 from loguru import logger
 from sqlalchemy import select
 
+from app.coach.adapters.week_modification_adapter import to_week_modification
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.clarification import (
     generate_proactive_clarification,
     generate_slot_clarification,
 )
 from app.coach.errors import ToolContractViolationError
+from app.coach.extraction.modify_week_extractor import extract_week_modification_llm
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import get_conversation_progress
 from app.coach.tools.modify_day import modify_day
+from app.coach.tools.modify_week import modify_week
 from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
 from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
 from app.db.models import PlannedSession, SeasonPlan
 from app.db.session import get_session
-from app.planner.modify_day_simple import modify_single_day
 from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
+from app.plans.modify.types import DayModification
 
 
 def serialize_for_mcp(obj: Any) -> Any:
@@ -597,8 +600,13 @@ class CoachActionExecutor:
 
         if intent == "modify" and horizon == "day":
             if deps.execution_guard:
-                deps.execution_guard.mark_executed("modify_single_day")
+                deps.execution_guard.mark_executed("modify_day")
             return await CoachActionExecutor._execute_modify_day(decision, deps, conversation_id)
+
+        if intent == "modify" and horizon == "week":
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("modify_week")
+            return await CoachActionExecutor._execute_modify_week(decision, deps, conversation_id)
 
         if intent == "adjust":
             if deps.execution_guard:
@@ -768,15 +776,113 @@ class CoachActionExecutor:
             return "Something went wrong while planning your session. Please try again."
 
     @staticmethod
+    def _build_day_modification_from_context(
+        structured_data: dict[str, Any],
+        message: str | None,
+        existing_session: PlannedSession | None = None,
+    ) -> DayModification:
+        """Convert unstructured modification context to structured DayModification.
+
+        This is a temporary bridge until NLU provides structured DayModification directly.
+        TODO: Update NLU to extract structured DayModification in structured_data.
+
+        Args:
+            structured_data: Structured data from orchestrator
+            message: User message (fallback)
+            existing_session: Optional existing session for context
+
+        Returns:
+            DayModification object
+
+        Raises:
+            ValueError: If modification cannot be inferred
+        """
+        # Try to extract structured DayModification from structured_data first
+        if "modification" in structured_data:
+            mod_dict = structured_data["modification"]
+            if isinstance(mod_dict, dict) and "change_type" in mod_dict:
+                return DayModification(**mod_dict)
+
+        # Infer from structured_data fields
+        change_type: str | None = None
+        value: float | str | dict | None = None
+        reason: str | None = structured_data.get("reason")
+        explicit_intent_change = structured_data.get("explicit_intent_change")
+
+        if "change_type" in structured_data:
+            change_type = str(structured_data["change_type"])
+        if "value" in structured_data:
+            value = structured_data["value"]
+
+        # Fallback: infer from adjustment text
+        adjustment = structured_data.get("adjustment", "")
+        if isinstance(adjustment, str):
+            adjustment_lower = adjustment.lower()
+            if "duration" in adjustment_lower or "time" in adjustment_lower:
+                change_type = "adjust_duration"
+                # Try to extract numeric value (e.g., "reduce by 20%" or "30 minutes")
+                # For now, default to None and let modify_day handle it
+            elif "distance" in adjustment_lower or "miles" in adjustment_lower or "mileage" in adjustment_lower:
+                change_type = "adjust_distance"
+            elif "pace" in adjustment_lower:
+                change_type = "adjust_pace"
+                # Try to extract pace zone (e.g., "easy", "threshold")
+                # For now, default to None
+            elif "shorten" in adjustment_lower:
+                change_type = "adjust_duration"
+                value = None  # Will need explicit value or infer from session
+
+        # Infer from message if still unclear
+        if not change_type and message:
+            message_lower = message.lower()
+            if "shorten" in message_lower or "reduce time" in message_lower or "less time" in message_lower:
+                change_type = "adjust_duration"
+            elif "reduce distance" in message_lower or "shorter distance" in message_lower:
+                change_type = "adjust_distance"
+            elif "change pace" in message_lower or "faster" in message_lower or "slower" in message_lower:
+                change_type = "adjust_pace"
+
+        # If still unclear, default to replace_metrics with minimal change
+        # This preserves session structure while allowing modification
+        if not change_type:
+            change_type = "replace_metrics"
+            # Build minimal metrics dict from existing session if available
+            if existing_session:
+                metrics_dict: dict[str, Any] = {"primary": "distance" if existing_session.distance_mi else "duration"}
+                if existing_session.distance_mi:
+                    metrics_dict["distance_miles"] = existing_session.distance_mi
+                if existing_session.duration_minutes:
+                    metrics_dict["duration_min"] = existing_session.duration_minutes
+                value = metrics_dict
+            else:
+                value = None
+
+        if not reason and message:
+            message_lower = message.lower()
+            if "tired" in message_lower or "fatigue" in message_lower:
+                reason = "fatigue adjustment"
+            elif "time" in message_lower or "short" in message_lower:
+                reason = "time constraint"
+            else:
+                reason = "user request"
+
+        return DayModification(
+            change_type=change_type,  # type: ignore
+            value=value,
+            reason=reason,
+            explicit_intent_change=explicit_intent_change,
+        )
+
+    @staticmethod
     async def _execute_modify_day(
         decision: OrchestratorAgentResponse,
         deps: CoachDeps,
         conversation_id: str | None = None,
     ) -> str:
-        """Execute single-day session modification.
+        """Execute single-day session modification using structured modify_day().
 
-        Uses embedding-only selection to replace one existing planned session
-        with a better template match. No hard filters, no thresholds, no fallbacks.
+        Uses the structured modification path which preserves intent and metrics semantics.
+        This replaces the embedding-based modify_single_day() approach.
 
         Args:
             decision: Orchestrator decision
@@ -786,7 +892,7 @@ class CoachActionExecutor:
         Returns:
             Success message with modification details
         """
-        tool_name = "modify_single_day"
+        tool_name = "modify_day"
         step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
 
         if conversation_id and step_info:
@@ -799,26 +905,7 @@ class CoachActionExecutor:
             return "I need your athlete ID to modify a session. Please check your account settings."
 
         try:
-            # Extract modification context from structured_data or message
-            modification_context: dict[str, str] = {}
             structured_data = decision.structured_data or {}
-
-            # Extract reason and adjustment from structured_data
-            if "reason" in structured_data:
-                modification_context["reason"] = str(structured_data["reason"])
-            if "adjustment" in structured_data:
-                modification_context["adjustment"] = str(structured_data["adjustment"])
-
-            # Fallback: extract from message if not in structured_data
-            if not modification_context.get("reason") and decision.message:
-                message_lower = decision.message.lower()
-                if "tired" in message_lower or "fatigue" in message_lower:
-                    modification_context["reason"] = "fatigue adjustment"
-                elif "shorten" in message_lower or "time" in message_lower:
-                    modification_context["reason"] = "time constraint"
-                    modification_context["adjustment"] = "shorten duration"
-                else:
-                    modification_context["reason"] = "user request"
 
             # Get target date (default to today)
             target_date = datetime.now(tz=timezone.utc).date()
@@ -829,7 +916,7 @@ class CoachActionExecutor:
                 elif isinstance(date_value, str):
                     target_date = date.fromisoformat(date_value)
 
-            # Find existing session for target date
+            # Fetch existing session to help infer modification if needed
             target_datetime_start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
             target_datetime_end = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=timezone.utc)
 
@@ -850,13 +937,28 @@ class CoachActionExecutor:
                 if not existing_session:
                     return f"No planned session found for {target_date.isoformat()}. Please plan a session first."
 
-                # Modify the session
-                updated_session = modify_single_day(
+                # Build structured DayModification from context
+                modification = CoachActionExecutor._build_day_modification_from_context(
+                    structured_data=structured_data,
+                    message=decision.message,
                     existing_session=existing_session,
-                    modification_context=modification_context,
                 )
 
-                # Save changes to database
+                # Call structured modify_day()
+                result = modify_day(
+                    context={
+                        "user_id": deps.user_id,
+                        "athlete_id": deps.athlete_id,
+                        "target_date": target_date.isoformat(),
+                        "modification": modification.model_dump(),
+                    }
+                )
+
+                if not result.get("success"):
+                    error_msg = result.get("error", "Unknown error")
+                    return f"Could not modify session: {error_msg}"
+
+                # Commit changes (modify_day creates new session via save_modified_session)
                 db_session.commit()
 
             if conversation_id and step_info:
@@ -864,10 +966,9 @@ class CoachActionExecutor:
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
 
             logger.info(
-                "Single-day session modified successfully",
-                old_template=existing_session.template_id,
-                new_template=updated_session.template_id,
-                reason=modification_context.get("reason", ""),
+                "Single-day session modified successfully (structured path)",
+                modification_type=modification.change_type,
+                reason=modification.reason,
                 conversation_id=conversation_id,
             )
 
@@ -875,7 +976,8 @@ class CoachActionExecutor:
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
 
             # Return success message
-            return f"Modified your session for {target_date.isoformat()}. New template: {updated_session.template_id}."
+            change_type_label = modification.change_type.replace("_", " ").title()
+            return f"Modified your session for {target_date.isoformat()}. Change: {change_type_label}."
 
         except Exception as e:
             if conversation_id and step_info:
@@ -890,6 +992,91 @@ class CoachActionExecutor:
                 error=str(e),
             )
             return "Something went wrong while modifying your session. Please try again."
+
+    @staticmethod
+    async def _execute_modify_week(
+        decision: OrchestratorAgentResponse,
+        deps: CoachDeps,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Execute week modification using structured modify_week().
+
+        Uses LLM extraction to get structured intent, then applies modifications
+        following structured principles (preserve intent, non-destructive, deterministic).
+
+        Args:
+            decision: Orchestrator decision
+            deps: Dependencies with athlete state and context
+            conversation_id: Optional conversation ID
+
+        Returns:
+            Success message with modification details
+        """
+        tool_name = "modify_week"
+        step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
+
+        if conversation_id and step_info:
+            step_id, label = step_info
+            await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
+
+        if not deps.user_id or not isinstance(deps.user_id, str):
+            return "I need your user ID to modify a week. Please check your account settings."
+        if deps.athlete_id is None:
+            return "I need your athlete ID to modify a week. Please check your account settings."
+
+        try:
+            # Extract structured week modification via LLM
+            user_message = decision.message or ""
+            today = datetime.now(tz=timezone.utc).date()
+
+            extracted = await extract_week_modification_llm(user_message, today)
+
+            # Convert extracted to structured WeekModification
+            week_modification = to_week_modification(extracted, today)
+
+            # Call structured modify_week()
+            result = modify_week(
+                user_id=deps.user_id,
+                athlete_id=deps.athlete_id,
+                modification=week_modification,
+            )
+
+            if not result.get("success"):
+                error_msg = result.get("error", "Unknown error")
+                return f"Could not modify week: {error_msg}"
+
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+
+            logger.info(
+                "Week modification successful (structured path)",
+                change_type=week_modification.change_type,
+                session_count=len(result.get("modified_sessions", [])),
+                conversation_id=conversation_id,
+            )
+
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
+
+            # Return success message
+            change_type_label = week_modification.change_type.replace("_", " ").title()
+            message = result.get("message", "Week modified successfully")
+            return f"{message}. Change: {change_type_label}."
+
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(
+                    conversation_id, step_id, label, "failed", message=str(e)
+                )
+            logger.exception(
+                "Week modification failed",
+                tool=tool_name,
+                conversation_id=conversation_id,
+                error=str(e),
+            )
+            return "Something went wrong while modifying your week. Please try again."
 
     @staticmethod
     async def _execute_plan_week(

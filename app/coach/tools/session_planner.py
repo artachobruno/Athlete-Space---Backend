@@ -15,7 +15,7 @@ from app.calendar.conflicts import (
 )
 from app.coach.mcp_client import call_tool_safe
 from app.coach.mcp_health import mcp_is_healthy
-from app.db.models import PlannedSession
+from app.db.models import PlannedSession, StravaAccount
 from app.db.session import get_session
 from app.pairing.auto_pairing_service import try_auto_pair
 from app.persistence.retry.queue import enqueue_retry
@@ -77,6 +77,40 @@ def _normalize_sport_type(
 def _raise_timezone_naive_error(session_date_raw: str) -> None:
     """Raise error for timezone-naive date from ISO string."""
     raise ValueError(f"Timezone-naive date from ISO string: {session_date_raw}")
+
+
+def _validate_user_id_athlete_id_match(session: Any, user_id: str, athlete_id: int) -> None:
+    """Validate that user_id matches athlete_id via StravaAccount.
+
+    This prevents data integrity issues where planned sessions have mismatched
+    user_id and athlete_id, which prevents pairing with activities.
+
+    Args:
+        session: Database session
+        user_id: User ID to validate
+        athlete_id: Athlete ID to validate
+
+    Raises:
+        ValueError: If user_id doesn't match athlete_id via StravaAccount
+    """
+    account = session.execute(
+        select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id))
+    ).first()
+
+    if not account:
+        logger.warning(
+            f"No StravaAccount found for athlete_id={athlete_id}, "
+            f"cannot validate user_id match for planned session"
+        )
+        return  # Skip validation if no StravaAccount (e.g., manual uploads without Strava)
+
+    correct_user_id = account[0].user_id
+    if correct_user_id != user_id:
+        raise ValueError(
+            f"user_id mismatch: planned session user_id={user_id} doesn't match "
+            f"StravaAccount user_id={correct_user_id} for athlete_id={athlete_id}. "
+            f"This will prevent pairing with activities."
+        )
 
 
 def _parse_session_date(session_date_raw: date | datetime | str | None) -> datetime | None:
@@ -279,6 +313,9 @@ def save_sessions_to_database(
     saved_count = 0
     with get_session() as session:
         try:
+            # Validate user_id matches athlete_id to prevent pairing issues
+            _validate_user_id_athlete_id_match(session, user_id, athlete_id)
+
             for session_data in sessions_to_save:
                 session_date_raw = session_data.get("date")
                 parsed_date = _parse_session_date(session_date_raw)

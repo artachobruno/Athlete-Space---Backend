@@ -201,6 +201,8 @@ def modify_day(context: dict) -> dict:
             validate_workout_metrics(new_metrics)
 
             # Apply to session
+            # Note: Explicit conversion from WorkoutMetrics.distance_miles to PlannedSession.distance_mi
+            # This is intentional - WorkoutMetrics uses distance_miles, PlannedSession uses distance_mi
             if new_metrics.primary == "distance":
                 new_session.distance_mi = new_metrics.distance_miles
             elif new_metrics.primary == "duration":

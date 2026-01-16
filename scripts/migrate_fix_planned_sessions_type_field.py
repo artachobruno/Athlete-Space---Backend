@@ -46,6 +46,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import PlannedSession
 from app.db.session import SessionLocal
+from app.workouts.models import Workout  # Import Workout for foreign key validation
 
 # Workout types that should NOT be in the type field
 WORKOUT_TYPES = {

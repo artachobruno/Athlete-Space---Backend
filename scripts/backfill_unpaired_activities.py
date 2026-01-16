@@ -75,7 +75,11 @@ def process_unpaired_activities(
     }
 
     # Build query for unpaired activities
-    query = select(Activity).where(Activity.planned_session_id.is_(None))
+    # Filter out activities with null user_id (invalid data that would cause pairing decision errors)
+    query = select(Activity).where(
+        Activity.planned_session_id.is_(None),
+        Activity.user_id.isnot(None),
+    )
 
     if user_id:
         query = query.where(Activity.user_id == user_id)
@@ -97,6 +101,12 @@ def process_unpaired_activities(
 
     for activity in activities:
         try:
+            # Skip activities with null user_id (shouldn't happen due to query filter, but double-check)
+            if not activity.user_id:
+                logger.warning(f"Skipping activity {activity.id} - user_id is None")
+                stats["skipped"] += 1
+                continue
+
             activity_date = activity.start_time.date()
             logger.debug(
                 f"Processing activity {activity.id}: "

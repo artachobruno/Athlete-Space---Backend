@@ -14,6 +14,7 @@ from loguru import logger
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PairingDecision, PlannedSession
+from app.pairing.session_links import unlink_by_activity, upsert_link
 from app.plans.reconciliation.service import reconcile_activity_if_paired
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -102,21 +103,18 @@ def manual_pair(
         )
 
     with session.begin():
-        # Clear existing activity → plan link
-        if activity.planned_session_id:
-            old_plan = session.get(PlannedSession, activity.planned_session_id)
-            if old_plan:
-                old_plan.completed_activity_id = None
-
-        # Clear existing plan → activity link
-        if plan.completed_activity_id:
-            old_activity = session.get(Activity, plan.completed_activity_id)
-            if old_activity:
-                old_activity.planned_session_id = None
-
-        # Set new pairing
-        activity.planned_session_id = plan.id
-        plan.completed_activity_id = activity.id
+        # Schema v2: Use SessionLink for pairing
+        # upsert_link handles clearing existing links automatically
+        upsert_link(
+            session=session,
+            user_id=user_id,
+            planned_session_id=planned_session_id,
+            activity_id=activity_id,
+            status="confirmed",
+            method="manual",
+            confidence=1.0,
+            notes="Manually paired by user",
+        )
 
         _log_decision(
             user_id=user_id,
@@ -200,14 +198,17 @@ def manual_unpair(
             detail="Activity does not belong to user",
         )
 
+    # Schema v2: Get plan from SessionLink before unlinking
+    from app.pairing.session_links import get_link_for_activity
+
+    link = get_link_for_activity(session, activity_id)
     plan = None
-    if activity.planned_session_id:
-        plan = session.get(PlannedSession, activity.planned_session_id)
+    if link:
+        plan = session.get(PlannedSession, link.planned_session_id)
 
     with session.begin():
-        activity.planned_session_id = None
-        if plan:
-            plan.completed_activity_id = None
+        # Schema v2: Use SessionLink for unpairing
+        unlink_by_activity(session, activity_id, reason="Manual unpair by user")
 
         _log_decision(
             user_id=user_id,

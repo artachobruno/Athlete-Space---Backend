@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.calendar.reconciliation import ReconciliationResult, SessionStatus
 from app.db.models import Activity, PlannedSession
 from app.db.session import get_session
+from app.pairing.session_links import get_link_for_planned, upsert_link
 from app.workouts.execution_models import WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
 from app.workouts.workout_factory import WorkoutFactory
@@ -93,8 +94,9 @@ def auto_match_sessions(
                     )
                     continue
 
-                # Skip if already matched to the same activity (idempotency)
-                if planned_session.completed_activity_id == result.matched_activity_id:
+                # Schema v2: Skip if already matched to the same activity (idempotency)
+                existing_link = get_link_for_planned(session, result.session_id)
+                if existing_link and existing_link.activity_id == result.matched_activity_id:
                     logger.debug(
                         "Planned session already matched to this activity",
                         session_id=result.session_id,
@@ -168,14 +170,25 @@ def auto_match_sessions(
                 elif result.status == SessionStatus.PARTIAL:
                     planned_workout.status = "matched"  # Still matched even if partial
 
-                # Update planned session
-                planned_session.completed_activity_id = result.matched_activity_id
-                planned_session.completed = True
-                planned_session.completed_at = datetime.now(timezone.utc)
+                # Schema v2: Update planned session status
                 if result.status == SessionStatus.COMPLETED:
                     planned_session.status = "completed"
                 elif result.status == SessionStatus.PARTIAL:
                     planned_session.status = "completed"  # Still mark as completed even if partial
+
+                # Schema v2: Create/update SessionLink with 'confirmed' status (auto-match is final)
+                # Use reconciliation confidence if available, default to 0.9 for auto-match
+                confidence_score = result.confidence if hasattr(result, "confidence") and result.confidence else 0.9
+                upsert_link(
+                    session=session,
+                    user_id=user_id,
+                    planned_session_id=result.session_id,
+                    activity_id=result.matched_activity_id,
+                    status="confirmed",  # Auto-match creates confirmed links (final decision)
+                    method="auto",
+                    confidence=confidence_score,
+                    notes=f"Auto-matched via reconciliation: {result.status.value}",
+                )
 
                 matched_count += 1
 
@@ -185,7 +198,7 @@ def auto_match_sessions(
                     activity_id=result.matched_activity_id,
                     planned_workout_id=planned_workout.id,
                     status=result.status.value,
-                    confidence=result.confidence,
+                    confidence=confidence_score,
                 )
 
             except Exception:

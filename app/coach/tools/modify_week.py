@@ -17,6 +17,7 @@ from app.coach.diff.plan_diff import build_plan_diff
 from app.coach.explainability import explain_plan_revision
 from app.coach.tools.modify_day import modify_day
 from app.db.models import AthleteProfile, PlannedSession
+from app.db.schema_v2_map import combine_date_time, mi_to_meters, minutes_to_seconds
 from app.db.session import get_session as _get_session
 from app.plans.modify.plan_revision_repo import create_plan_revision
 from app.plans.modify.repository import get_planned_session_by_date
@@ -479,40 +480,48 @@ def modify_week(
 
         # Record deltas for all modified sessions
         for original, modified in zip(original_sessions, modified_sessions, strict=False):
+            # Schema v2: Get date from starts_at
+            session_date = modified.starts_at.date() if modified.starts_at else None
+            date_str = session_date.isoformat() if session_date else ""
+
             # Record session creation
             builder.add_delta(
                 entity_type="session",
                 entity_id=modified.id,
-                date=modified.date.date().isoformat(),
+                date=date_str,
                 field="session_created",
                 old=original.id,
                 new=modified.id,
             )
 
-            # Record field changes
-            if original.distance_mi != modified.distance_mi:
+            # Record field changes (use compatibility properties for user-friendly display)
+            original_distance_mi = original.distance_mi if hasattr(original, "distance_mi") else (original.distance_meters / 1609.34 if original.distance_meters else None)
+            modified_distance_mi = modified.distance_mi if hasattr(modified, "distance_mi") else (modified.distance_meters / 1609.34 if modified.distance_meters else None)
+            if original_distance_mi != modified_distance_mi:
                 builder.add_delta(
                     entity_type="session",
                     entity_id=modified.id,
-                    date=modified.date.date().isoformat(),
+                    date=date_str,
                     field="distance_mi",
-                    old=original.distance_mi,
-                    new=modified.distance_mi,
+                    old=original_distance_mi,
+                    new=modified_distance_mi,
                 )
-            if original.duration_minutes != modified.duration_minutes:
+            original_duration_min = original.duration_minutes if hasattr(original, "duration_minutes") else (original.duration_seconds // 60 if original.duration_seconds else None)
+            modified_duration_min = modified.duration_minutes if hasattr(modified, "duration_minutes") else (modified.duration_seconds // 60 if modified.duration_seconds else None)
+            if original_duration_min != modified_duration_min:
                 builder.add_delta(
                     entity_type="session",
                     entity_id=modified.id,
-                    date=modified.date.date().isoformat(),
+                    date=date_str,
                     field="duration_minutes",
-                    old=original.duration_minutes,
-                    new=modified.duration_minutes,
+                    old=original_duration_min,
+                    new=modified_duration_min,
                 )
             if original.intent != modified.intent:
                 builder.add_delta(
                     entity_type="session",
                     entity_id=modified.id,
-                    date=modified.date.date().isoformat(),
+                    date=date_str,
                     field="intent",
                     old=original.intent,
                     new=modified.intent,
@@ -679,7 +688,11 @@ def _apply_volume_modification(
     rest_sessions = [s for s in original_sessions if s.intent == "rest" or s.intent is None]
 
     # Compute current weekly volume (miles only)
-    current_volume = sum(s.distance_mi or 0.0 for s in original_sessions if s.distance_mi)
+    # Schema v2: Use compatibility property or convert from meters
+    current_volume = sum(
+        (s.distance_mi if hasattr(s, "distance_mi") and s.distance_mi else (s.distance_meters / 1609.34 if s.distance_meters else 0.0))
+        for s in original_sessions
+    )
 
     # Determine target delta
     if modification.percent is not None:
@@ -723,7 +736,10 @@ def _apply_volume_modification(
             easy_scale = 1.0 + modification.percent
         else:
             # Fallback to delta-based scaling for absolute miles
-            easy_volume = sum(s.distance_mi or 0.0 for s in easy_sessions if s.distance_mi)
+            easy_volume = sum(
+                (s.distance_mi if hasattr(s, "distance_mi") and s.distance_mi else (s.distance_meters / 1609.34 if s.distance_meters else 0.0))
+                for s in easy_sessions
+            )
             if easy_volume > 0:
                 easy_scale = 1.0 + (remaining_delta / easy_volume)
             else:
@@ -734,9 +750,18 @@ def _apply_volume_modification(
 
         for session in easy_sessions:
             cloned = clone_session(session)
-            if cloned.distance_mi:
-                cloned.distance_mi *= easy_scale
-                # Recalculate duration if pace is known (optional enhancement)
+            # Schema v2: Modify distance_meters (convert from miles for calculation)
+            if cloned.distance_meters:
+                # Get current distance in miles for calculation
+                current_miles = cloned.distance_mi if hasattr(cloned, "distance_mi") and cloned.distance_mi else (cloned.distance_meters / 1609.34)
+                new_miles = current_miles * easy_scale
+                cloned.distance_meters = mi_to_meters(new_miles)
+            elif hasattr(cloned, "distance_mi") and cloned.distance_mi:
+                # Fallback if compatibility property works
+                current_miles = cloned.distance_mi
+                new_miles = current_miles * easy_scale
+                cloned.distance_meters = mi_to_meters(new_miles)
+            # Recalculate duration if pace is known (optional enhancement)
             modified_sessions.append(cloned)
 
         # Easy sessions have absorbed the reduction/increase
@@ -745,23 +770,38 @@ def _apply_volume_modification(
 
     # Apply remaining delta to long sessions (if any)
     if long_sessions and remaining_delta != 0:
-        long_volume = sum(s.distance_mi or 0.0 for s in long_sessions if s.distance_mi)
+        long_volume = sum(
+            (s.distance_mi if hasattr(s, "distance_mi") and s.distance_mi else (s.distance_meters / 1609.34 if s.distance_meters else 0.0))
+            for s in long_sessions
+        )
         if long_volume > 0:
             long_scale = 1.0 + (remaining_delta / long_volume)
             # Ensure long run stays above minimum
-            min_long_scale = MIN_LONG_DISTANCE_MILES / max(long_sessions[0].distance_mi or 0.0, MIN_LONG_DISTANCE_MILES)
+            first_long_miles = (
+                long_sessions[0].distance_mi
+                if hasattr(long_sessions[0], "distance_mi") and long_sessions[0].distance_mi
+                else (long_sessions[0].distance_meters / 1609.34 if long_sessions[0].distance_meters else 0.0)
+            )
+            min_long_scale = MIN_LONG_DISTANCE_MILES / max(first_long_miles, MIN_LONG_DISTANCE_MILES)
             long_scale = max(min_long_scale, long_scale)
 
             for session in long_sessions:
                 cloned = clone_session(session)
-                if cloned.distance_mi is not None:
-                    distance_mi = cloned.distance_mi * long_scale
+                # Schema v2: Modify distance_meters
+                if cloned.distance_meters is not None:
+                    current_miles = cloned.distance_mi if hasattr(cloned, "distance_mi") and cloned.distance_mi else (cloned.distance_meters / 1609.34)
+                    distance_mi = current_miles * long_scale
                     # Ensure minimum long distance
-                    cloned.distance_mi = max(distance_mi, MIN_LONG_DISTANCE_MILES)
+                    final_miles = max(distance_mi, MIN_LONG_DISTANCE_MILES)
+                    cloned.distance_meters = mi_to_meters(final_miles)
+                elif hasattr(cloned, "distance_mi") and cloned.distance_mi is not None:
+                    distance_mi = cloned.distance_mi * long_scale
+                    final_miles = max(distance_mi, MIN_LONG_DISTANCE_MILES)
+                    cloned.distance_meters = mi_to_meters(final_miles)
                 modified_sessions.append(cloned)
 
-    # Sort by date to maintain order
-    modified_sessions.sort(key=lambda s: s.date)
+    # Sort by starts_at to maintain order (schema v2)
+    modified_sessions.sort(key=lambda s: s.starts_at if s.starts_at else datetime.min.replace(tzinfo=timezone.utc))
 
     return modified_sessions
 
@@ -798,16 +838,22 @@ def _apply_shift_modification(
 
     # Process each original session
     for original_session in original_sessions:
-        session_date = original_session.date.date()
+        # Schema v2: Get date from starts_at
+        session_date = original_session.starts_at.date() if original_session.starts_at else None
+        if session_date is None:
+            # Skip sessions without starts_at
+            modified_sessions.append(clone_session(original_session))
+            continue
 
         if session_date in shift_map_parsed:
             # This session is being shifted
             new_date = shift_map_parsed[session_date]
             cloned = clone_session(original_session)
 
-            # Update date
-            new_datetime = datetime.combine(new_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-            cloned.date = new_datetime
+            # Schema v2: Update starts_at (preserve time from original)
+            original_time = original_session.starts_at.time() if original_session.starts_at else None
+            time_str = original_time.strftime("%H:%M") if original_time else None
+            cloned.starts_at = combine_date_time(new_date, time_str)
 
             # Add shift metadata to notes
             shift_note = f"[Shifted from {session_date.isoformat()}]"
@@ -822,8 +868,8 @@ def _apply_shift_modification(
             # Keep unchanged
             modified_sessions.append(clone_session(original_session))
 
-    # Sort by date
-    modified_sessions.sort(key=lambda s: s.date)
+    # Sort by starts_at (schema v2)
+    modified_sessions.sort(key=lambda s: s.starts_at if s.starts_at else datetime.min.replace(tzinfo=timezone.utc))
 
     return modified_sessions
 

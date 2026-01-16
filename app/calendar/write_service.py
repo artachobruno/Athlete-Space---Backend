@@ -13,6 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.calendar.conflicts import CalendarConflict, ConflictType, detect_execution_conflicts_batch
 from app.db.models import AthleteProfile, PlannedSession, StravaAccount
+from app.db.schema_v2_map import (
+    combine_date_time,
+    km_to_meters,
+    mi_to_meters,
+    minutes_to_seconds,
+    normalize_sport,
+)
 from app.db.session import get_session
 from app.planning.execution.contracts import ExecutableSession
 from app.planning.execution.guards import validate_executable_sessions
@@ -69,23 +76,24 @@ class CalendarWriteService:
     def _executable_to_planned_session(
         executable: ExecutableSession,
         user_id: str,
-        athlete_id: int,
+        athlete_id: int,  # Kept for _get_athlete_id compatibility, but not used in PlannedSession schema v2
     ) -> PlannedSession:
-        """Convert ExecutableSession to PlannedSession model.
+        """Convert ExecutableSession to PlannedSession model (schema v2).
 
         Args:
             executable: ExecutableSession to convert
             user_id: User ID
-            athlete_id: Athlete ID
+            athlete_id: Athlete ID (for compatibility, not used in PlannedSession schema v2)
 
         Returns:
             PlannedSession model instance (not yet added to session)
         """
-        # Convert date to datetime (midnight UTC)
+        # Schema v2: Convert date to datetime and combine with time (if any) into starts_at
         session_date = datetime.combine(executable.date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        starts_at = combine_date_time(session_date, None)  # No time in ExecutableSession, use midnight
 
-        # Convert distance_miles to distance_km (1 mile = 1.60934 km)
-        distance_km = executable.distance_miles * 1.60934
+        # Schema v2: Convert distance_miles to distance_meters
+        distance_meters = mi_to_meters(executable.distance_miles) if executable.distance_miles else None
 
         # Generate title from session_type
         title = executable.session_type.title() + " Run"
@@ -102,25 +110,24 @@ class CalendarWriteService:
         }
         intensity = intensity_map.get(executable.session_type)
 
+        # Schema v2: Convert duration_minutes to duration_seconds
+        duration_seconds = minutes_to_seconds(executable.duration_minutes)
+
         return PlannedSession(
             id=executable.session_id,
             user_id=user_id,
-            athlete_id=athlete_id,
-            date=session_date,
-            time=None,  # No time specified in ExecutableSession
-            type="Run",  # Default to Run for Phase 6A
+            starts_at=starts_at,  # Schema v2: combined date + time (TIMESTAMPTZ)
+            sport=normalize_sport("run"),  # Schema v2: sport instead of type, default to "run"
             title=title,
-            duration_minutes=executable.duration_minutes,
-            distance_km=round(distance_km, 2),
+            duration_seconds=duration_seconds,  # Schema v2: duration_seconds instead of duration_minutes
+            distance_meters=distance_meters,  # Schema v2: distance_meters instead of distance_km
             intensity=intensity,
             notes=None,
-            plan_type="season",  # Default for Phase 6A
-            plan_id=executable.plan_id,
-            week_number=executable.week_index + 1,  # week_number is 1-based
-            status="planned",
-            completed=False,
-            completed_at=None,
-            completed_activity_id=None,
+            season_plan_id=executable.plan_id,  # Schema v2: season_plan_id instead of plan_id
+            status="planned",  # Schema v2: default status
+            session_type=executable.session_type,  # Store session type
+            tags=[],  # Schema v2: tags is JSONB array, default empty
+            source="planner_v2",  # Schema v2: source field
         )
 
     def write_week(
@@ -179,19 +186,21 @@ class CalendarWriteService:
             if not sessions:
                 return WriteResult(sessions_written=0, conflicts_detected=[], dry_run=dry_run)
 
+            # Schema v2: Build starts_at timestamps for date range query
             session_dates = [s.date for s in sessions]
             min_date = min(session_dates)
             max_date = max(session_dates)
+            min_datetime = datetime.combine(min_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            max_datetime = datetime.combine(max_date, datetime.max.time()).replace(tzinfo=timezone.utc)
 
-            # Fetch existing sessions
+            # Fetch existing sessions (schema v2: use starts_at instead of date, remove athlete_id)
             existing_sessions = list(
                 session.execute(
                     select(PlannedSession)
                     .where(
                         PlannedSession.user_id == user_id,
-                        PlannedSession.athlete_id == athlete_id,
-                        PlannedSession.date >= datetime.combine(min_date, datetime.min.time()).replace(tzinfo=timezone.utc),
-                        PlannedSession.date <= datetime.combine(max_date, datetime.max.time()).replace(tzinfo=timezone.utc),
+                        PlannedSession.starts_at >= min_datetime,
+                        PlannedSession.starts_at <= max_datetime,
                     )
                 ).scalars()
             )
@@ -212,11 +221,13 @@ class CalendarWriteService:
                         )
 
             # Convert ExecutableSession to dict format for conflict detection
+            # Schema v2: Convert to starts_at for conflict detection (if conflict detection expects it)
+            # Note: conflict detection may still expect old format - update separately if needed
             candidate_sessions = [
                 {
                     "id": s.session_id,
-                    "date": s.date,
-                    "duration_minutes": s.duration_minutes,
+                    "date": s.date,  # Conflict detection may still use this
+                    "duration_minutes": s.duration_minutes,  # Conflict detection may still use this
                     "time": None,  # No time in ExecutableSession
                 }
                 for s in sessions

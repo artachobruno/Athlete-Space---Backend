@@ -44,43 +44,39 @@ class UserRole(enum.Enum):
 class User(Base):
     """User table for authentication and user context.
 
-    Users can authenticate via email/password or Google OAuth.
+    Users can authenticate via email/password, Google OAuth, or Apple.
     Stores:
-    - id: User ID (string UUID format)
+    - id: User ID (UUID format)
     - email: User email (required, unique, indexed)
-    - password_hash: Hashed password (nullable for OAuth users)
-    - auth_provider: Authentication provider (password or google)
-    - google_sub: Google user ID (sub claim, nullable, unique when set)
-    - strava_athlete_id: Strava athlete ID (optional, nullable, unique when set)
+    - auth_provider: Authentication provider ('google', 'email', 'apple')
+    - role: User role ('athlete', 'coach', 'admin')
+    - timezone: User timezone (default: 'UTC')
+    - onboarding_complete: Whether onboarding is complete
     - created_at: Timestamp when user was created
-    - last_login_at: Timestamp of last login (optional, nullable)
+    - updated_at: Last update timestamp
     """
 
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
-    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
-    auth_provider: Mapped[AuthProvider] = mapped_column(Enum(AuthProvider), nullable=False)
-    google_sub: Mapped[str | None] = mapped_column(String, nullable=True, unique=True, index=True)
-    strava_athlete_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True, index=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole, name="userrole", create_constraint=False),
+    auth_provider: Mapped[str] = mapped_column(String, nullable=False)  # CHECK constraint in DB: 'google', 'email', 'apple'
+    role: Mapped[str] = mapped_column(String, nullable=False, default="athlete")  # CHECK constraint in DB: 'athlete', 'coach', 'admin'
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active")  # CHECK constraint in DB: 'active', 'disabled', 'deleted'
+    timezone: Mapped[str] = mapped_column(String, nullable=False, default="UTC")
+    onboarding_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
         nullable=False,
-        default=UserRole.athlete,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
     first_name: Mapped[str | None] = mapped_column(String, nullable=True)
     last_name: Mapped[str | None] = mapped_column(String, nullable=True)
     timezone: Mapped[str] = mapped_column(String, nullable=False, default="UTC")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    __table_args__ = (
-        Index("idx_users_email", "email", unique=False),  # Already unique, but explicit index
-        Index("idx_users_google_sub", "google_sub", unique=False),  # Already unique, but explicit index
-        Index("idx_users_strava_athlete_id", "strava_athlete_id", unique=False),  # Already unique, but explicit index
-    )
 
     athlete: Mapped[Athlete | None] = relationship("Athlete", uselist=False, back_populates="user")
     coach: Mapped[Coach | None] = relationship("Coach", uselist=False, back_populates="user")
@@ -119,32 +115,35 @@ class StravaAuth(Base):
 
 
 class Activity(Base):
-    """Strava activity records stored as immutable facts.
+    """Activity records stored as immutable facts.
 
-    Step 1: Raw activity data from Strava API.
+    Schema v2: Activities are normalized from raw provider data.
     Activities are never updated - only inserted.
-    Duplicate prevention via unique constraint on (user_id, strava_activity_id).
+    Duplicate prevention via unique constraint on (user_id, source, source_activity_id).
 
     Schema:
     - id: UUID primary key
-    - user_id: Foreign key to users.id (Clerk user ID)
-    - strava_activity_id: Strava's activity ID (for duplicate prevention)
-    - athlete_id: Strava athlete ID (for filtering)
-    - type: Activity type (run, ride, etc.)
-    - start_time: Activity start timestamp (UTC, indexed)
-    - duration_seconds: Activity duration
-    - distance_meters: Distance in meters
-    - elevation_gain_meters: Elevation gain
-    - raw_json: Full Strava API response (JSON)
-    - streams_data: Time-series streams data (GPS, HR, power, etc.)
-    - source: Source system (default: "strava")
-    - tss: Training Stress Score (computed, nullable)
+    - user_id: Foreign key to users.id (UUID)
+    - source: Source system ('strava', 'manual', 'import')
+    - source_activity_id: Provider's activity ID (text, for duplicate prevention)
+    - sport: Sport type ('run', 'ride', 'swim', 'strength', 'walk', 'other')
+    - starts_at: Activity start timestamp (TIMESTAMPTZ, indexed)
+    - ends_at: Activity end timestamp (TIMESTAMPTZ, nullable)
+    - duration_seconds: Activity duration (integer, required, >= 0)
+    - distance_meters: Distance in meters (nullable, >= 0)
+    - elevation_gain_meters: Elevation gain (nullable, >= 0)
+    - calories: Calories burned (nullable, >= 0)
+    - tss: Training Stress Score (computed, nullable, >= 0)
     - tss_version: Version identifier for TSS computation method (nullable)
+    - title: Activity title (nullable)
+    - notes: Activity notes (nullable)
+    - metrics: JSONB containing HR, pace series, power, laps, raw_json, streams_data, etc.
     - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
 
     Constraints:
-    - Unique constraint: (user_id, strava_activity_id) prevents duplicates
-    - All timestamps are UTC (no timezone ambiguity)
+    - Unique constraint: (user_id, source, source_activity_id) prevents duplicates
+    - All timestamps are TIMESTAMPTZ (timezone-aware)
     - Activities are immutable (no updates, only inserts)
     """
 
@@ -152,34 +151,76 @@ class Activity(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    strava_activity_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    athlete_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    type: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
-    start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    distance_meters: Mapped[float | None] = mapped_column(Float, nullable=True)
-    elevation_gain_meters: Mapped[float | None] = mapped_column(Float, nullable=True)
-    raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    streams_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    source: Mapped[str] = mapped_column(String, nullable=False, default="strava")
-    tss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(String, nullable=False, default="strava")  # CHECK: 'strava', 'manual', 'import'
+    source_activity_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Provider's activity ID (text)
+    sport: Mapped[str] = mapped_column(String, nullable=False, index=True)  # CHECK: 'run', 'ride', 'swim', 'strength', 'walk', 'other'
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)  # Required, >= 0
+    distance_meters: Mapped[float | None] = mapped_column(Float, nullable=True)  # >= 0
+    elevation_gain_meters: Mapped[float | None] = mapped_column(Float, nullable=True)  # >= 0
+    calories: Mapped[float | None] = mapped_column(Float, nullable=True)  # >= 0
+    tss: Mapped[float | None] = mapped_column(Float, nullable=True)  # >= 0
     tss_version: Mapped[str | None] = mapped_column(String, nullable=True)
-    normalized_power: Mapped[float | None] = mapped_column(Float, nullable=True)
-    effort_source: Mapped[str | None] = mapped_column(String, nullable=True)
-    intensity_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # JSONB: HR, pace, power, raw_json, streams_data, etc.
 
     # Workout relationship (mandatory invariant)
     workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
 
-    # Pairing relationship
-    planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "strava_activity_id", name="uq_activity_user_strava_id"),
-        Index("idx_activities_user_start_time", "user_id", "start_time"),  # Common query: user activities by date range
+        UniqueConstraint("user_id", "source", "source_activity_id", name="uq_activity_user_source_id"),
+        Index("idx_activities_user_time", "user_id", "starts_at"),  # Common query: user activities by date range
     )
+
+    # TEMPORARY: Compatibility properties for migration (schema v2)
+    # TODO: Remove these after all code is migrated
+    @property
+    def start_time(self) -> datetime:
+        """Compatibility: map starts_at → start_time (old field name)."""
+        return self.starts_at
+
+    @property
+    def type(self) -> str:
+        """Compatibility: map sport → type (old field name)."""
+        return self.sport
+
+    @property
+    def strava_activity_id(self) -> str | None:
+        """Compatibility: map source_activity_id → strava_activity_id (old field name)."""
+        if self.source == "strava":
+            return self.source_activity_id
+        return None
+
+    @property
+    def raw_json(self) -> dict | None:
+        """Compatibility: extract raw_json from metrics dict (old field name)."""
+        if self.metrics and isinstance(self.metrics, dict):
+            return self.metrics.get("raw_json")
+        return None
+
+    @property
+    def streams_data(self) -> dict | None:
+        """Compatibility: extract streams_data from metrics dict (old field name)."""
+        if self.metrics and isinstance(self.metrics, dict):
+            return self.metrics.get("streams_data")
+        return None
+
+    @property
+    def athlete_id(self) -> str | None:
+        """Compatibility: removed field (schema v2 uses user_id only)."""
+        # This always returns None - athlete_id is removed in schema v2
+        # Included only to prevent AttributeError during migration
+        return None
 
 
 class CoachMessage(Base):
@@ -557,63 +598,66 @@ class WeeklyReport(Base):
 class PlannedSession(Base):
     """Planned training sessions generated by race/season planning tools.
 
-    Stores individual training sessions that are planned for future dates.
+    Schema v2: Planned sessions for future dates.
     These sessions can be displayed in the calendar and tracked for completion.
+    Linking to activities is done via session_links table, not direct foreign keys.
+
+    Schema:
+    - id: UUID primary key
+    - user_id: Foreign key to users.id (UUID)
+    - season_plan_id: Foreign key to season_plans.id (nullable)
+    - revision_id: Foreign key to plan_revisions.id (nullable)
+    - starts_at: Session start timestamp (TIMESTAMPTZ, required, indexed)
+    - ends_at: Session end timestamp (TIMESTAMPTZ, nullable)
+    - sport: Sport type ('run', 'ride', 'swim', 'strength', 'other')
+    - session_type: Session type ('easy', 'tempo', 'long', 'interval', etc.)
+    - title: Session title (nullable)
+    - notes: Session notes (nullable)
+    - duration_seconds: Planned duration in seconds (nullable, >= 0)
+    - distance_meters: Planned distance in meters (nullable, >= 0)
+    - intensity: Intensity level ('Z1..Z5', 'RPE', etc., nullable)
+    - intent: Workout intent ('rest', 'easy', 'long', 'quality', nullable)
+    - workout_id: Foreign key to workouts.id (nullable)
+    - status: Status ('planned', 'completed', 'skipped', 'moved', 'canceled')
+    - tags: JSONB array of tags (default: empty array)
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
     """
 
     __tablename__ = "planned_sessions"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    season_plan_id: Mapped[str | None] = mapped_column(String, ForeignKey("season_plans.id"), nullable=True, index=True)
+    revision_id: Mapped[str | None] = mapped_column(String, ForeignKey("plan_revisions.id"), nullable=True, index=True)
+
+    # Canonical time
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Session details
-    date: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    time: Mapped[str | None] = mapped_column(String, nullable=True)  # HH:MM format
-    type: Mapped[str] = mapped_column(String, nullable=False)  # Run, Bike, Swim, etc.
-    title: Mapped[str] = mapped_column(String, nullable=False)
-    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
-    intensity: Mapped[str | None] = mapped_column(String, nullable=True)  # easy, moderate, hard, race
-    notes_raw: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Original raw user input (immutable)")
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)  # Optional derived notes
+    sport: Mapped[str] = mapped_column(String, nullable=False)  # CHECK: 'run', 'ride', 'swim', 'strength', 'other'
+    session_type: Mapped[str | None] = mapped_column(String, nullable=True)  # 'easy', 'tempo', 'long', 'interval', etc.
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)  # >= 0
+    distance_meters: Mapped[float | None] = mapped_column(Float, nullable=True)  # >= 0
+    intensity: Mapped[str | None] = mapped_column(String, nullable=True)  # 'Z1..Z5', 'RPE', etc.
+    intent: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # 'rest', 'easy', 'long', 'quality', etc.
 
-    # Planning context
-    plan_type: Mapped[str] = mapped_column(String, nullable=False)  # "race" or "season"
-    plan_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # Reference to race/season plan
-    week_number: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Week in the plan
-    session_order: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Order within day (0-based, for idempotency)
-    phase: Mapped[str | None] = mapped_column(String, nullable=True)  # Training phase: "build" or "taper"
-    source: Mapped[str] = mapped_column(String, nullable=False, default="planner_v2")  # Source system identifier
-    philosophy_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Training philosophy ID (e.g., "daniels")
-    template_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Session template ID
-    session_type: Mapped[str | None] = mapped_column(
-        String, nullable=True
-    )  # Session type: easy, threshold, long, etc. (legacy/auxiliary)
-    intent: Mapped[str | None] = mapped_column(
-        String, nullable=True, index=True
-    )  # Workout intent: rest, easy, long, quality (authoritative)
-    distance_mi: Mapped[float | None] = mapped_column(Float, nullable=True)  # Distance in miles
-    tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)  # Session tags
-
-    # Status tracking
-    status: Mapped[str] = mapped_column(String, nullable=False, default="planned")  # planned, completed, skipped, cancelled
-
-    # Completion tracking
-    completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    completed_activity_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Link to actual Activity if completed
-
-    # Workout relationship (mandatory invariant)
+    # Workout relationship
     workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
 
-    # Revision tracking
-    revision_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # Reference to plan_revisions.id
+    # Status tracking
+    status: Mapped[str] = mapped_column(String, nullable=False, default="planned")  # CHECK: 'planned', 'completed', 'skipped', 'moved', 'canceled'
+
+    # Tags (JSONB array)
+    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)  # JSONB array of tags
 
     # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -621,22 +665,126 @@ class PlannedSession(Base):
 
     @property
     def is_locked(self) -> bool:
-        """Check if session is locked (has completed_activity_id).
+        """Check if session is locked (has a confirmed session_link).
 
         Locked sessions cannot be dragged, moved, or deleted.
+        In schema v2, we check session_links table instead of completed_activity_id.
         """
-        return self.completed_activity_id is not None
+        # This will need to be updated to query session_links table
+        # For now, return False - the implementation will be added when session_links model is added
+        return False
+
+    # TEMPORARY: Compatibility properties for migration (schema v2)
+    # TODO: Remove these after all code is migrated
+    @property
+    def date(self) -> datetime:
+        """Compatibility: map starts_at → date (old field name)."""
+        return self.starts_at
+
+    @property
+    def time(self) -> str | None:
+        """Compatibility: extract time string from starts_at (old field name)."""
+        if self.starts_at:
+            return self.starts_at.strftime("%H:%M")
+        return None
+
+    @property
+    def type(self) -> str:
+        """Compatibility: map sport → type (old field name)."""
+        return self.sport
+
+    @property
+    def duration_minutes(self) -> int | None:
+        """Compatibility: convert duration_seconds → duration_minutes (old field name)."""
+        if self.duration_seconds is None:
+            return None
+        return self.duration_seconds // 60
+
+    @property
+    def distance_km(self) -> float | None:
+        """Compatibility: convert distance_meters → distance_km (old field name)."""
+        if self.distance_meters is None:
+            return None
+        return self.distance_meters / 1000.0
+
+    @property
+    def distance_mi(self) -> float | None:
+        """Compatibility: convert distance_meters → distance_mi (old field name)."""
+        if self.distance_meters is None:
+            return None
+        return self.distance_meters / 1609.344
+
+    @property
+    def completed_activity_id(self) -> str | None:
+        """Compatibility: removed field (schema v2 uses session_links table)."""
+        # This always returns None - completed_activity_id is removed in schema v2
+        # Included only to prevent AttributeError during migration
+        return None
+
+    @property
+    def athlete_id(self) -> str | None:
+        """Compatibility: removed field (schema v2 uses user_id only)."""
+        # This always returns None - athlete_id is removed in schema v2
+        # Included only to prevent AttributeError during migration
+        return None
+
+    @property
+    def plan_id(self) -> str | None:
+        """Compatibility: map season_plan_id → plan_id (old field name)."""
+        return self.season_plan_id
 
     __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "athlete_id",
-            "plan_id",
-            "date",
-            "session_order",
-            name="uq_planned_sessions_user_athlete_plan_date_order",
-        ),
-        Index("idx_planned_sessions_user_date", "user_id", "date"),  # Common query: user sessions by date range
+        Index("idx_planned_sessions_user_time", "user_id", "starts_at"),  # Common query: user sessions by date range
+        Index("idx_planned_sessions_revision", "revision_id"),  # Fast lookup by revision
+    )
+
+
+class SessionLink(Base):
+    """Canonical pairing between planned sessions and completed activities.
+
+    Schema v2: Replaces direct foreign keys (planned_session_id, completed_activity_id).
+    Enforces one-to-one relationships: one planned_session can link to one activity, vice versa.
+
+    Schema:
+    - id: UUID primary key
+    - user_id: Foreign key to users.id (UUID)
+    - planned_session_id: Foreign key to planned_sessions.id (required, unique)
+    - activity_id: Foreign key to activities.id (required, unique)
+    - status: Link status ('proposed', 'confirmed', 'rejected')
+    - confidence: Confidence score (0.0-1.0, nullable)
+    - method: Pairing method ('auto', 'manual')
+    - notes: Optional notes (nullable)
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
+
+    Constraints:
+    - Unique on planned_session_id (one link per planned session)
+    - Unique on activity_id (one link per activity)
+    - Enables many-to-many relationships in the future if needed
+    """
+
+    __tablename__ = "session_links"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    planned_session_id: Mapped[str] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=False, index=True, unique=True)
+    activity_id: Mapped[str] = mapped_column(String, ForeignKey("activities.id"), nullable=False, index=True, unique=True)
+
+    status: Mapped[str] = mapped_column(String, nullable=False, default="proposed")  # CHECK: 'proposed', 'confirmed', 'rejected'
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.0-1.0
+    method: Mapped[str] = mapped_column(String, nullable=False, default="auto")  # CHECK: 'auto', 'manual'
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("idx_session_links_user", "user_id", "status"),  # Fast lookup by user and status
     )
 
 

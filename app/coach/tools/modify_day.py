@@ -16,6 +16,7 @@ from app.coach.diff.confidence import compute_revision_confidence, requires_appr
 from app.coach.diff.plan_diff import build_plan_diff
 from app.coach.explainability import explain_plan_revision
 from app.db.models import AthleteProfile, PlannedSession
+from app.db.schema_v2_map import mi_to_meters, minutes_to_seconds
 from app.db.session import get_session as _get_session
 from app.plans.modify.plan_revision_repo import create_plan_revision
 from app.plans.modify.repository import get_planned_session_by_date, save_modified_session
@@ -272,7 +273,8 @@ def modify_day(
     # Then convert back to PlannedSession fields
 
     if modification.change_type == "adjust_distance":
-        if new_session.distance_mi is None:
+        # Schema v2: Check distance_meters (via compatibility property for reading)
+        if new_session.distance_meters is None or (hasattr(new_session, "distance_mi") and new_session.distance_mi is None):
             revision = builder.finalize()
 
             # Persist blocked revision
@@ -328,21 +330,28 @@ def modify_day(
                 "error": f"Invalid distance value: {modification.value}",
                 "revision": revision,
             }
-        old_distance = new_session.distance_mi
-        new_session.distance_mi = float(modification.value)
-        # Record delta
+        # Schema v2: Store old distance (miles for delta logging, but convert to meters for DB)
+        # Compatibility property handles conversion
+        old_distance_mi = new_session.distance_mi if hasattr(new_session, "distance_mi") else (
+            new_session.distance_meters / 1609.34 if new_session.distance_meters else None
+        )
+        # Modification value is in miles, convert to meters for schema v2
+        new_distance_meters = mi_to_meters(float(modification.value))
+        new_session.distance_meters = new_distance_meters
+        # Record delta (in miles for user-friendly display)
         builder.add_delta(
             entity_type="session",
             entity_id=original_session.id,
             date=target_date.isoformat(),
             field="distance_mi",
-            old=old_distance,
-            new=new_session.distance_mi,
+            old=old_distance_mi,
+            new=float(modification.value),
         )
         # Recalculate duration if pace is known (optional enhancement)
 
     elif modification.change_type == "adjust_duration":
-        if new_session.duration_minutes is None:
+        # Schema v2: Check duration_seconds (via compatibility property for reading)
+        if new_session.duration_seconds is None or (hasattr(new_session, "duration_minutes") and new_session.duration_minutes is None):
             revision = builder.finalize()
 
             # Persist blocked revision
@@ -398,16 +407,22 @@ def modify_day(
                 "error": f"Invalid duration value: {modification.value}",
                 "revision": revision,
             }
-        old_duration = new_session.duration_minutes
-        new_session.duration_minutes = int(modification.value)
-        # Record delta
+        # Schema v2: Store old duration (minutes for delta logging, but convert to seconds for DB)
+        # Compatibility property handles conversion
+        old_duration_min = new_session.duration_minutes if hasattr(new_session, "duration_minutes") else (
+            new_session.duration_seconds // 60 if new_session.duration_seconds else None
+        )
+        # Modification value is in minutes, convert to seconds for schema v2
+        new_duration_seconds = minutes_to_seconds(int(modification.value))
+        new_session.duration_seconds = new_duration_seconds
+        # Record delta (in minutes for user-friendly display)
         builder.add_delta(
             entity_type="session",
             entity_id=original_session.id,
             date=target_date.isoformat(),
             field="duration_minutes",
-            old=old_duration,
-            new=new_session.duration_minutes,
+            old=old_duration_min,
+            new=int(modification.value),
         )
         # Recalculate distance if pace is known (optional enhancement)
 
@@ -559,12 +574,12 @@ def modify_day(
             validate_workout_metrics(new_metrics)
 
             # Apply to session
-            # Note: Explicit conversion from WorkoutMetrics.distance_miles to PlannedSession.distance_mi
-            # This is intentional - WorkoutMetrics uses distance_miles, PlannedSession uses distance_mi
+            # Schema v2: Convert WorkoutMetrics to schema v2 fields
+            # WorkoutMetrics uses distance_miles/duration_min, PlannedSession v2 uses distance_meters/duration_seconds
             if new_metrics.primary == "distance":
-                new_session.distance_mi = new_metrics.distance_miles
+                new_session.distance_meters = mi_to_meters(new_metrics.distance_miles)
             elif new_metrics.primary == "duration":
-                new_session.duration_minutes = new_metrics.duration_min
+                new_session.duration_seconds = minutes_to_seconds(new_metrics.duration_min)
 
         except Exception as e:
             revision = builder.finalize()
@@ -650,11 +665,19 @@ def modify_day(
                     "pending_session": {
                         "original_id": original_session.id,
                         "modified_data": {
-                            "distance_mi": new_session.distance_mi,
-                            "duration_minutes": new_session.duration_minutes,
+                            "distance_mi": (
+                                new_session.distance_mi
+                                if hasattr(new_session, "distance_mi")
+                                else (new_session.distance_meters / 1609.34 if new_session.distance_meters else None)
+                            ),
+                            "duration_minutes": (
+                                new_session.duration_minutes
+                                if hasattr(new_session, "duration_minutes")
+                                else (new_session.duration_seconds // 60 if new_session.duration_seconds else None)
+                            ),
                             "intent": new_session.intent,
                             "title": new_session.title,
-                            "type": new_session.type,
+                            "sport": new_session.sport,  # Schema v2: sport instead of type
                         },
                     },
                 },

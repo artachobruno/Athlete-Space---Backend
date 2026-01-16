@@ -16,6 +16,12 @@ from app.calendar.conflicts import (
 from app.coach.mcp_client import call_tool_safe
 from app.coach.mcp_health import mcp_is_healthy
 from app.db.models import PlannedSession, StravaAccount
+from app.db.schema_v2_map import (
+    combine_date_time,
+    km_to_meters,
+    minutes_to_seconds,
+    normalize_sport,
+)
 from app.db.session import get_session
 from app.pairing.auto_pairing_service import try_auto_pair
 from app.persistence.retry.queue import enqueue_retry
@@ -247,12 +253,11 @@ def save_sessions_to_database(
         existing_sessions = db_session.execute(
             select(PlannedSession)
             .where(
-                PlannedSession.user_id == user_id,
-                PlannedSession.athlete_id == athlete_id,
-                PlannedSession.date >= datetime.combine(min_date, datetime.min.time()).replace(tzinfo=timezone.utc),
-                PlannedSession.date <= datetime.combine(max_date, datetime.max.time()).replace(tzinfo=timezone.utc),
+                    PlannedSession.user_id == user_id,
+                    PlannedSession.starts_at >= datetime.combine(min_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+                    PlannedSession.starts_at <= datetime.combine(max_date, datetime.max.time()).replace(tzinfo=timezone.utc),
             )
-            .order_by(PlannedSession.date)
+            .order_by(PlannedSession.starts_at)
         ).scalars().all()
         existing_sessions_list = list(existing_sessions)
 
@@ -322,16 +327,21 @@ def save_sessions_to_database(
                 if parsed_date is None:
                     continue
 
-                # Check if session already exists (same user, athlete, date, and title)
-                # Also check plan_id if provided for idempotency
+                # Schema v2: Combine date and time into starts_at
+                time_str = session_data.get("time")
+                starts_at = combine_date_time(parsed_date, time_str) if parsed_date else None
+                if starts_at is None:
+                    continue
+
+                # Check if session already exists (same user, starts_at, and title)
+                # Also check plan_id if provided for idempotency (schema v2: plan_id maps to season_plan_id)
                 query = select(PlannedSession).where(
                     PlannedSession.user_id == user_id,
-                    PlannedSession.athlete_id == athlete_id,
-                    PlannedSession.date == parsed_date,
+                    PlannedSession.starts_at == starts_at,
                     PlannedSession.title == session_data.get("title"),
                 )
                 if plan_id:
-                    query = query.where(PlannedSession.plan_id == plan_id)
+                    query = query.where(PlannedSession.season_plan_id == plan_id)
 
                 existing = session.scalar(query)
 
@@ -339,8 +349,7 @@ def save_sessions_to_database(
                     logger.debug(
                         "Skipping duplicate planned session",
                         user_id=user_id,
-                        athlete_id=athlete_id,
-                        date=parsed_date.isoformat(),
+                        starts_at=starts_at.isoformat(),
                         title=session_data.get("title"),
                         plan_id=plan_id,
                     )
@@ -354,28 +363,29 @@ def save_sessions_to_database(
                 if not intent and session_type:
                     intent = infer_intent_from_session_type(session_type)
 
-                # Normalize type to be a sport type (Run, Bike, Swim, etc.), not a workout type
+                # Schema v2: Normalize sport (type -> sport, use normalize_sport helper)
                 type_raw = session_data.get("type")
-                normalized_type = _normalize_sport_type(type_raw)
+                normalized_sport = normalize_sport(type_raw or "run")  # Default to "run" if None
+
+                # Schema v2: Convert units and combine date+time
+                duration_seconds = minutes_to_seconds(session_data.get("duration_minutes"))
+                distance_km = session_data.get("distance_km")
+                distance_meters = km_to_meters(distance_km) if distance_km is not None else None
 
                 planned_session = PlannedSession(
                     user_id=user_id,
-                    athlete_id=athlete_id,
-                    date=parsed_date,
-                    time=session_data.get("time"),  # Exactly as LLM provided
-                    type=normalized_type,  # Normalized to sport type (Run, Bike, Swim, etc.)
-                    title=session_data.get("title"),  # Exactly as LLM provided
-                    duration_minutes=session_data.get("duration_minutes"),  # Exactly as LLM provided
-                    distance_km=session_data.get("distance_km"),  # Exactly as LLM provided
-                    intensity=session_data.get("intensity"),  # Exactly as LLM provided
+                    starts_at=starts_at,  # Schema v2: combined date + time (TIMESTAMPTZ)
+                    sport=normalized_sport,  # Schema v2: sport instead of type, normalized
+                    title=session_data.get("title"),  # Required NOT NULL
+                    duration_seconds=duration_seconds,  # Schema v2: duration_seconds instead of duration_minutes
+                    distance_meters=distance_meters,  # Schema v2: distance_meters instead of distance_km
+                    intensity=session_data.get("intensity"),  # Easy, moderate, hard, race, etc.
                     session_type=session_type,  # Legacy/auxiliary field
-                    intent=intent,  # Authoritative field
+                    intent=intent,  # Authoritative field: rest, easy, long, quality
                     notes=session_data.get("notes") or session_data.get("description"),  # Use description if notes not provided
-                    plan_type=plan_type,
-                    plan_id=plan_id,
-                    week_number=session_data.get("week_number"),  # Exactly as LLM provided
-                    status="planned",
-                    completed=False,
+                    season_plan_id=plan_id,  # Schema v2: season_plan_id instead of plan_id
+                    status="planned",  # Schema v2: default status
+                    tags=[],  # Schema v2: tags is JSONB array, default empty
                 )
 
                 session.add(planned_session)
@@ -386,8 +396,7 @@ def save_sessions_to_database(
                     "[PLANNED_SESSION_CREATED]",
                     session_id=planned_session.id,
                     user_id=user_id,
-                    athlete_id=athlete_id,
-                    scheduled_date=parsed_date.isoformat() if parsed_date else None,
+                    starts_at=planned_session.starts_at.isoformat() if planned_session.starts_at else None,
                     status="planned",
                     title=planned_session.title,
                     workout_id=planned_session.workout_id,
@@ -422,20 +431,24 @@ def save_sessions_to_database(
                 )
                 # Re-check which sessions were actually saved before the error
                 # This is a best-effort count - some may have been saved
+                # Schema v2: Use starts_at instead of date
                 saved_count = 0
                 for session_data in sessions_to_save:
                     session_date_raw = session_data.get("date")
                     parsed_date = _parse_session_date(session_date_raw)
                     if parsed_date is None:
                         continue
+                    time_str = session_data.get("time")
+                    starts_at = combine_date_time(parsed_date, time_str) if parsed_date else None
+                    if starts_at is None:
+                        continue
                     query = select(PlannedSession).where(
                         PlannedSession.user_id == user_id,
-                        PlannedSession.athlete_id == athlete_id,
-                        PlannedSession.date == parsed_date,
+                        PlannedSession.starts_at == starts_at,
                         PlannedSession.title == session_data.get("title"),
                     )
                     if plan_id:
-                        query = query.where(PlannedSession.plan_id == plan_id)
+                        query = query.where(PlannedSession.season_plan_id == plan_id)
                     if session.scalar(query):
                         saved_count += 1
                 logger.info(
@@ -457,19 +470,23 @@ def save_sessions_to_database(
             )
 
             # PHASE 7: Assert invariant holds (guard check)
+            # Schema v2: Use starts_at instead of date
             try:
                 for session_data in sessions_to_save:
                     parsed_date = _parse_session_date(session_data.get("date"))
                     if parsed_date is None:
                         continue
+                    time_str = session_data.get("time")
+                    starts_at = combine_date_time(parsed_date, time_str) if parsed_date else None
+                    if starts_at is None:
+                        continue
                     query = select(PlannedSession).where(
                         PlannedSession.user_id == user_id,
-                        PlannedSession.athlete_id == athlete_id,
-                        PlannedSession.date == parsed_date,
+                        PlannedSession.starts_at == starts_at,
                         PlannedSession.title == session_data.get("title"),
                     )
                     if plan_id:
-                        query = query.where(PlannedSession.plan_id == plan_id)
+                        query = query.where(PlannedSession.season_plan_id == plan_id)
                     saved_session = session.scalar(query)
                     if saved_session:
                         assert_planned_session_has_workout(saved_session)

@@ -7,6 +7,7 @@ Only SELECT queries and CTEs (WITH clauses) are allowed for safety.
 import contextlib
 import json
 import logging
+from collections.abc import Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.encoders import jsonable_encoder
@@ -79,6 +80,47 @@ class TablePreviewRequest(BaseModel):
     offset: int = 0
     order_by: str | None = None
     order_dir: str = "desc"  # "asc"|"desc"
+
+
+def _convert_value_to_safe(val: object) -> str | int | float | None:
+    """Convert a single value to a JSON-safe type.
+
+    Args:
+        val: Value to convert (may be any type)
+
+    Returns:
+        JSON-safe value (str | int | float | None)
+    """
+    try:
+        if val is None:
+            return None
+        if isinstance(val, (dict, list)):
+            # JSON/JSONB columns - serialize to JSON string
+            return json.dumps(jsonable_encoder(val))
+        encoded = jsonable_encoder(val)
+        if isinstance(encoded, (str, int, float)) or encoded is None:
+            return encoded
+        return str(encoded)
+    except Exception as encode_error:
+        logger.warning(f"Failed to encode value {type(val).__name__}: {encode_error}")
+        return str(val)
+
+
+def _convert_rows_to_safe(rows: Sequence[Sequence[object]]) -> list[list[str | int | float | None]]:
+    """Convert database rows to JSON-safe format.
+
+    Args:
+        rows: Sequence of database rows (each row is a sequence of values)
+
+    Returns:
+        List of rows, each row is a list of JSON-safe values
+    """
+    safe_rows: list[list[str | int | float | None]] = []
+    for row in rows:
+        row_values = list(row)
+        safe_row = [_convert_value_to_safe(val) for val in row_values]
+        safe_rows.append(safe_row)
+    return safe_rows
 
 
 def _validate_readonly(sql: str) -> str:
@@ -192,27 +234,7 @@ def run_sql(
             columns = list(result.keys())
 
             # Convert rows to JSON-safe values
-            safe_rows: list[list[str | int | float | None]] = []
-            for row in rows:
-                row_values = list(row)
-                safe_row: list[str | int | float | None] = []
-                for val in row_values:
-                    try:
-                        if val is None:
-                            safe_row.append(None)
-                        elif isinstance(val, (dict, list)):
-                            # JSON/JSONB columns - serialize to JSON string
-                            safe_row.append(json.dumps(jsonable_encoder(val)))
-                        else:
-                            encoded = jsonable_encoder(val)
-                            if isinstance(encoded, (str, int, float)) or encoded is None:
-                                safe_row.append(encoded)
-                            else:
-                                safe_row.append(str(encoded))
-                    except Exception as encode_error:
-                        logger.warning(f"Failed to encode value {type(val).__name__}: {encode_error}")
-                        safe_row.append(str(val))
-                safe_rows.append(safe_row)
+            safe_rows = _convert_rows_to_safe(rows)
 
             return SQLQueryResponse(
                 columns=columns,
@@ -423,38 +445,7 @@ def table_preview(
         columns = list(result.keys())
 
         # Convert rows to JSON-safe values
-        # Handle SQLAlchemy Row objects properly - convert to tuple first
-        safe_rows: list[list[str | int | float | None]] = []
-        for row in rows:
-            # Convert Row to tuple/list for iteration
-            row_values = list(row)
-            safe_row: list[str | int | float | None] = []
-            for val in row_values:
-                try:
-                    # Handle None values
-                    if val is None:
-                        safe_row.append(None)
-                    # Handle dict/list (from JSON/JSONB columns) - convert to JSON string
-                    elif isinstance(val, (dict, list)):
-                        # JSON/JSONB columns need to be serialized to JSON strings
-                        # since the response model only allows str | int | float | None
-                        safe_row.append(json.dumps(jsonable_encoder(val)))
-                    else:
-                        # For other types (str, int, float, datetime, etc.), use jsonable_encoder
-                        encoded = jsonable_encoder(val)
-                        # Ensure result is one of the allowed types
-                        if isinstance(encoded, (str, int, float)) or encoded is None:
-                            safe_row.append(encoded)
-                        else:
-                            # Convert unexpected types to string
-                            safe_row.append(str(encoded))
-                except Exception as encode_error:
-                    # If encoding fails, convert to string as fallback
-                    logger.warning(
-                        f"Failed to encode value {type(val).__name__} for table {req.schema}.{req.table}: {encode_error}"
-                    )
-                    safe_row.append(str(val))
-            safe_rows.append(safe_row)
+        safe_rows = _convert_rows_to_safe(rows)
 
         return SQLQueryResponse(
             columns=columns,

@@ -100,14 +100,25 @@ def _save_week_sessions_and_get_ids(
             if existing:
                 continue  # Skip duplicate
 
+            # Map session type to intent
+            session_type_to_intent = {
+                "easy": "easy",
+                "workout": "quality",
+                "long": "long",
+                "rest": "rest",
+            }
+            intent = session_type_to_intent.get(session_dict.get("type", "").lower(), "easy")
+
             # Create session
             planned_session = PlannedSession(
                 user_id=user_id,
                 athlete_id=athlete_id,
                 date=session_dict["date"],
                 time=session_dict.get("time"),
-                type=session_dict["type"],
+                type=session_dict.get("sport", "Run"),  # Use sport field for PlannedSession.type
                 title=session_dict["title"],
+                session_type=session_dict.get("type"),  # Store session type (easy/workout/long/rest)
+                intent=intent,  # Map to intent field,
                 duration_minutes=session_dict.get("duration_minutes"),
                 distance_km=session_dict.get("distance_km"),
                 intensity=session_dict.get("intensity"),
@@ -187,8 +198,9 @@ class ManualSessionRequest(BaseModel):
 
     date: datetime = Field(..., description="Session date and time (timezone-aware)")
     time: str | None = Field(default=None, description="Session time (HH:MM format)")
-    type: str = Field(..., description="Activity type (Run, Bike, Swim, etc.)")
-    title: str | None = Field(default=None, description="Session title (auto-generated from type if not provided)")
+    sport: str = Field(..., description="Sport type (Run, Bike, Swim, Triathlon, Crossfit, Strength, Walk)")
+    type: str = Field(..., description="Session type (easy, workout, long, rest)")
+    title: str | None = Field(default=None, description="Session title (auto-generated if not provided)")
     duration_minutes: int | None = Field(default=None, description="Duration in minutes")
     distance_km: float | None = Field(default=None, description="Distance in kilometers")
     intensity: str | None = Field(default=None, description="Intensity (easy, moderate, hard, race)")
@@ -235,9 +247,12 @@ class ManualSessionRequest(BaseModel):
 
     @model_validator(mode="after")
     def generate_title_if_missing(self) -> "ManualSessionRequest":
-        """Generate title from type if title is not provided."""
+        """Generate title from sport and type if title is not provided."""
         if not self.title:
-            self.title = self.type
+            # Create title from sport and session type
+            sport_display = self.sport.capitalize()
+            type_display = self.type.capitalize()
+            self.title = f"{type_display} {sport_display}"
         return self
 
 
@@ -358,10 +373,15 @@ async def upload_manual_session(
         athlete_id = _get_athlete_id_from_user_id(user_id)
 
         # Validate minimal fields
+        if not request.sport:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Sport is a required field",
+            )
         if not request.type:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Type is a required field",
+                detail="Session type is a required field",
             )
 
         def _raise_missing_workout_id() -> None:
@@ -444,17 +464,28 @@ async def upload_manual_session(
                 # HARD GUARD: Ensure workout.id exists before creating PlannedSession
                 _ensure_workout_id_exists(workout)
 
+                # Map session type to intent
+                session_type_to_intent = {
+                    "easy": "easy",
+                    "workout": "quality",
+                    "long": "long",
+                    "rest": "rest",
+                }
+                intent = session_type_to_intent.get(request.type.lower(), "easy")
+
                 # Step 4: Create PlannedSession WITH workout_id (correct order)
                 planned_session = PlannedSession(
                     user_id=user_id,
                     athlete_id=athlete_id,
                     date=request.date,
                     time=request.time,
-                    type=request.type,
+                    type=request.sport,  # Use sport field for PlannedSession.type (Run, Bike, Swim, etc.)
                     title=request.title,  # Required NOT NULL
                     duration_minutes=request.duration_minutes,
                     distance_km=request.distance_km,
                     intensity=request.intensity,
+                    session_type=request.type,  # Store session type (easy/workout/long/rest)
+                    intent=intent,  # Map to intent field
                     notes_raw=request.notes,  # Raw user input (immutable)
                     notes=request.notes,  # Keep for backward compatibility
                     plan_type="manual",  # Required NOT NULL

@@ -62,8 +62,11 @@ def _normalize_activity_type(activity_type: str | None) -> str | None:
 def _types_match(planned_type: str, activity_type: str | None) -> bool:
     """Check if activity type matches planned type.
 
+    Handles cases where planned_type might be incorrectly set to a workout type
+    (easy, long, threshold) instead of a sport type (Run, Bike, Swim).
+
     Args:
-        planned_type: Planned session type
+        planned_type: Planned session type (may be sport type or workout type)
         activity_type: Activity type (may be None)
 
     Returns:
@@ -78,7 +81,21 @@ def _types_match(planned_type: str, activity_type: str | None) -> bool:
     if not planned_normalized or not activity_normalized:
         return False
 
-    return planned_normalized == activity_normalized
+    # Direct match
+    if planned_normalized == activity_normalized:
+        return True
+
+    # If planned_type is a workout type (easy, long, threshold, etc.) instead of sport type,
+    # assume it's a Run and match against Run activities
+    # This handles backward compatibility with incorrectly set type fields
+    workout_types = {
+        "easy", "long", "threshold", "tempo", "interval", "vo2", "fartlek",
+        "recovery", "rest", "race", "moderate", "hard", "quality", "hills",
+        "strides", "aerobic", "steady", "marathon", "economy", "speed",
+    }
+
+    # Workout type likely means it's a Run - allow pairing
+    return planned_normalized in workout_types and activity_normalized == "run"
 
 
 def _get_unpaired_plans(

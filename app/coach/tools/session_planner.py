@@ -25,6 +25,55 @@ from app.workouts.guards import assert_planned_session_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
 
+def _normalize_sport_type(
+    type_raw: str | None,
+) -> str:
+    """Normalize type field to be a sport type (Run, Bike, Swim, etc.).
+
+    The PlannedSession.type field should contain sport types (Run, Bike, Swim, etc.),
+    NOT workout types (easy, long, threshold, etc.). Workout types belong in
+    the intent or session_type fields.
+
+    This function performs simple normalization (capitalization and common aliases),
+    but does NOT attempt to infer sport from workout types or titles.
+
+    Args:
+        type_raw: Raw type value from LLM (should be a sport type)
+
+    Returns:
+        Normalized sport type (defaults to "Run" if None or invalid)
+    """
+    if not type_raw:
+        return "Run"  # Default to Run
+
+    type_lower = type_raw.lower().strip()
+
+    # Sport types - return normalized (capitalized)
+    sport_types: dict[str, str] = {
+        "run": "Run",
+        "running": "Run",
+        "ride": "Bike",
+        "bike": "Bike",
+        "biking": "Bike",
+        "cycling": "Bike",
+        "cycle": "Bike",
+        "swim": "Swim",
+        "swimming": "Swim",
+        "tri": "Triathlon",
+        "triathlon": "Triathlon",
+        "crossfit": "Crossfit",
+        "strength": "Strength",
+        "walk": "Walk",
+        "walking": "Walk",
+    }
+
+    if type_lower in sport_types:
+        return sport_types[type_lower]
+
+    # Unknown type - capitalize first letter as fallback
+    return type_raw.capitalize()
+
+
 def _raise_timezone_naive_error(session_date_raw: str) -> None:
     """Raise error for timezone-naive date from ISO string."""
     raise ValueError(f"Timezone-naive date from ISO string: {session_date_raw}")
@@ -268,12 +317,16 @@ def save_sessions_to_database(
                 if not intent and session_type:
                     intent = infer_intent_from_session_type(session_type)
 
+                # Normalize type to be a sport type (Run, Bike, Swim, etc.), not a workout type
+                type_raw = session_data.get("type")
+                normalized_type = _normalize_sport_type(type_raw)
+
                 planned_session = PlannedSession(
                     user_id=user_id,
                     athlete_id=athlete_id,
                     date=parsed_date,
                     time=session_data.get("time"),  # Exactly as LLM provided
-                    type=session_data.get("type"),  # Exactly as LLM provided
+                    type=normalized_type,  # Normalized to sport type (Run, Bike, Swim, etc.)
                     title=session_data.get("title"),  # Exactly as LLM provided
                     duration_minutes=session_data.get("duration_minutes"),  # Exactly as LLM provided
                     distance_km=session_data.get("distance_km"),  # Exactly as LLM provided

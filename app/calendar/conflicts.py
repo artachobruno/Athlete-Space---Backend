@@ -82,6 +82,8 @@ def _get_session_title(session: PlannedSession | dict) -> str:
         if not title:
             raise ValueError("Session title is required")
         return title
+    if session.title is None:
+        raise ValueError("Session title is required")
     return session.title
 
 
@@ -304,7 +306,7 @@ def detect_conflicts(
                             date=candidate_date,
                             existing_session_id=existing.id,
                             candidate_session_id=candidate_id,
-                            existing_session_title=existing.title,
+                            existing_session_title=existing.title or "",
                             candidate_session_title=candidate_title,
                             reason="all_day_overlap",
                         )
@@ -329,7 +331,7 @@ def detect_conflicts(
                             date=candidate_date,
                             existing_session_id=existing.id,
                             candidate_session_id=candidate_id,
-                            existing_session_title=existing.title,
+                            existing_session_title=existing.title or "",
                             candidate_session_title=candidate_title,
                             reason="time_overlap",
                         )
@@ -350,7 +352,7 @@ def detect_conflicts(
                                 date=candidate_date,
                                 existing_session_id=existing.id,
                                 candidate_session_id=candidate_id,
-                                existing_session_title=existing.title,
+                                existing_session_title=existing.title or "",
                                 candidate_session_title=candidate_title,
                                 reason="multiple_key_sessions",
                             )

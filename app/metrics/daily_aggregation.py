@@ -47,8 +47,8 @@ def aggregate_daily_training(user_id: str) -> None:
             activity_count = session.execute(
                 select(Activity.id).where(
                     Activity.user_id == user_id,
-                    func.date(Activity.start_time) >= start_date,
-                    func.date(Activity.start_time) <= end_date,
+                    func.date(Activity.starts_at) >= start_date,
+                    func.date(Activity.starts_at) <= end_date,
                 ).limit(1)
             ).scalar()
 

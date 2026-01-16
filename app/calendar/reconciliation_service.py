@@ -96,7 +96,7 @@ def reconcile_calendar(
 def _fetch_planned_sessions(
     session: Session,
     user_id: str,
-    athlete_id: int,
+    _athlete_id: int,  # Unused: kept for API compatibility
     start_date: date,
     end_date: date,
 ) -> list[PlannedSession]:
@@ -119,11 +119,10 @@ def _fetch_planned_sessions(
         select(PlannedSession)
         .where(
             PlannedSession.user_id == user_id,
-            PlannedSession.athlete_id == athlete_id,
-            PlannedSession.date >= start_datetime,
-            PlannedSession.date <= end_datetime,
+            PlannedSession.starts_at >= start_datetime,
+            PlannedSession.starts_at <= end_datetime,
         )
-        .order_by(PlannedSession.date)
+        .order_by(PlannedSession.starts_at)
     )
 
     return list(result.scalars().all())
@@ -153,10 +152,10 @@ def _fetch_completed_activities(
         select(Activity)
         .where(
             Activity.user_id == user_id,
-            Activity.start_time >= start_datetime,
-            Activity.start_time <= end_datetime,
+            Activity.starts_at >= start_datetime,
+            Activity.starts_at <= end_datetime,
         )
-        .order_by(Activity.start_time)
+        .order_by(Activity.starts_at)
     )
 
     return list(result.scalars().all())

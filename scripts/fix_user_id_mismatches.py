@@ -119,9 +119,16 @@ def find_and_fix_mismatches(
     logger.info("Checking Activities...")
     logger.info("=" * 80)
 
-    activities_query = select(Activity).where(Activity.athlete_id.isnot(None))
+    # Schema v2: athlete_id property always returns None, query by source and source_activity_id instead
+    activities_query = select(Activity).where(Activity.source == "strava")
     if athlete_id:
-        activities_query = activities_query.where(Activity.athlete_id == str(athlete_id))
+        # Get user_id from athlete_id via StravaAccount
+        account_result = db.execute(
+            select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id)).limit(1)
+        ).first()
+        if account_result:
+            user_id_from_athlete = account_result[0].user_id
+            activities_query = activities_query.where(Activity.user_id == user_id_from_athlete)
 
     activities = list(db.scalars(activities_query).all())
     stats["activities_checked"] = len(activities)
@@ -171,16 +178,33 @@ def find_and_fix_mismatches(
     logger.info("Checking Planned Sessions...")
     logger.info("=" * 80)
 
-    planned_query = select(PlannedSession).where(PlannedSession.athlete_id.isnot(None))
+    # Schema v2: athlete_id property always returns None, query by user_id instead
+    planned_query = select(PlannedSession)
     if athlete_id:
-        planned_query = planned_query.where(PlannedSession.athlete_id == athlete_id)
+        # Get user_id from athlete_id via StravaAccount
+        account_result = db.execute(
+            select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id)).limit(1)
+        ).first()
+        if account_result:
+            user_id_from_athlete = account_result[0].user_id
+            planned_query = planned_query.where(PlannedSession.user_id == user_id_from_athlete)
 
     planned_sessions = list(db.scalars(planned_query).all())
     stats["planned_sessions_checked"] = len(planned_sessions)
 
     for planned in planned_sessions:
         try:
-            correct_user_id = athlete_to_user.get(planned.athlete_id)
+            # Schema v2: athlete_id property always returns None, use user_id directly
+            if not planned.user_id:
+                continue
+            # Get athlete_id from user_id via StravaAccount
+            account_for_planned = db.execute(
+                select(StravaAccount).where(StravaAccount.user_id == planned.user_id).limit(1)
+            ).first()
+            if not account_for_planned:
+                continue
+            athlete_id_from_user = account_for_planned[0].athlete_id
+            correct_user_id = athlete_to_user.get(athlete_id_from_user)
             if not correct_user_id:
                 logger.debug(
                     f"Planned session {planned.id}: No StravaAccount found for "

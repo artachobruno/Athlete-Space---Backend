@@ -168,9 +168,9 @@ def get_risk_flags(user_id: str = Depends(get_current_user_id)):
                 select(Activity)
                 .where(
                     Activity.user_id == user_id,
-                    Activity.start_time >= since,
+                    Activity.starts_at >= since,
                 )
-                .order_by(Activity.start_time.desc())
+                .order_by(Activity.starts_at.desc())
             )
             .scalars()
             .all()

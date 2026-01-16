@@ -71,11 +71,16 @@ def _get_preference(settings: UserSettings | None, key: str, default: bool | str
         default: Default value to return if not found
 
     Returns:
-        Preference value or default
+        Preference value or default (never None)
     """
     if not settings or not settings.preferences:
+        if default is None:
+            raise ValueError(f"Default value cannot be None for key {key}")
         return default
-    return settings.preferences.get(key, default)
+    result = settings.preferences.get(key, default)
+    if result is None:
+        raise ValueError(f"Preference value cannot be None for key {key}")
+    return result
 
 
 def _get_allowed_origins() -> list[str]:
@@ -144,9 +149,9 @@ def _get_user_info(session, user_id: str) -> tuple[str, str, str]:
 
 
 def _get_onboarding_status(session, user_id: str) -> bool:
-    """Get onboarding completion status from profile.
+    """Get onboarding completion status from User table.
 
-    Simple rule: onboarding_complete = bool(profile and profile.onboarding_completed)
+    Simple rule: onboarding_complete = User.onboarding_complete
 
     Args:
         session: Database session
@@ -156,20 +161,17 @@ def _get_onboarding_status(session, user_id: str) -> bool:
         True if onboarding is complete, False otherwise
     """
     try:
-        profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
-        profile = profile_result[0] if profile_result else None
-
-        if not profile:
-            logger.info(f"[API] /me: user_id={user_id}, profile_exists=False")
+        user_result = session.execute(select(User).where(User.id == user_id)).first()
+        if not user_result:
+            logger.warning(f"[API] /me: User not found for user_id={user_id}")
             return False
 
-        # Schema v2: onboarding_completed field doesn't exist in athlete_profiles
-        # Return False if profile exists but field is missing
-        logger.info(f"[API] /me: user_id={user_id}, profile_exists=True")
-        return False
+        user = user_result[0]
+        onboarding_complete = bool(user.onboarding_complete)
+        logger.info(f"[API] /me: user_id={user_id}, onboarding_complete={onboarding_complete}")
     except (ProgrammingError, InternalError, OperationalError) as e:
         logger.warning(
-            f"[API] /me: Database error querying AthleteProfile for user_id={user_id}: {e!r}. Treating as no profile."
+            f"[API] /me: Database error querying User for user_id={user_id}: {e!r}. Treating as not complete."
         )
         session.rollback()
         return False
@@ -177,6 +179,8 @@ def _get_onboarding_status(session, user_id: str) -> bool:
         logger.warning(f"[API] /me: Unexpected error getting onboarding status for user_id={user_id}: {e!r}")
         session.rollback()
         return False
+    else:
+        return onboarding_complete
 
 
 def _get_profile_for_inference(_session, _user_id: str) -> AthleteProfile | None:
@@ -241,43 +245,20 @@ def _try_infer_onboarding_from_data(session, user_id: str, profile: AthleteProfi
         raise
 
 
-def _infer_onboarding_complete_from_data(profile: AthleteProfile | None, settings: UserSettings | None) -> bool:
+def _infer_onboarding_complete_from_data(_profile: AthleteProfile | None, _settings: UserSettings | None) -> bool:
     """Infer if onboarding was completed based on profile and settings data.
 
-    This is a fallback check when the onboarding_completed flag might be incorrect.
-    If the user has substantial onboarding data, we infer they completed onboarding.
+    DEPRECATED: This function is no longer used. Onboarding status comes from User.onboarding_complete.
 
     Args:
-        profile: AthleteProfile instance or None
-        settings: UserSettings instance or None
+        profile: AthleteProfile instance or None (unused)
+        settings: UserSettings instance or None (unused)
 
     Returns:
-        True if onboarding appears to be completed based on data
+        Always returns False (inference disabled)
     """
-    if not profile and not settings:
-        return False
-
-    # Check if profile has substantial data
-    has_profile_data = False
-    if profile:
-        has_profile_data = bool(
-            profile.name or profile.goals or profile.target_event or profile.weight_kg or profile.height_cm or profile.date_of_birth
-        )
-
-    # Check if settings have substantial data
-    has_settings_data = False
-    if settings:
-        has_settings_data = bool(
-            settings.years_of_training
-            or settings.primary_sports
-            or settings.available_days
-            or settings.weekly_hours
-            or settings.training_focus
-            or settings.goal
-        )
-
-    # If either has substantial data, infer onboarding was completed
-    return has_profile_data or has_settings_data
+    # Inference disabled - use User.onboarding_complete instead
+    return False
 
 
 @router.get("")
@@ -450,22 +431,23 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
             except Exception as e:
                 logger.warning(f"[API] /me: Failed to load profile: {e}")
 
-            # Aggregate training preferences
+            # Aggregate training preferences from preferences JSONB
             training_prefs_response = None
             try:
                 settings = session.query(UserSettings).filter_by(user_id=user_id).first()
                 if settings:
                     session.expunge(settings)
+                    prefs = settings.preferences or {}
                     training_prefs_response = TrainingPreferencesResponse(
-                        years_of_training=settings.years_of_training or 0,
-                        primary_sports=settings.primary_sports or [],
-                        available_days=settings.available_days or [],
-                        weekly_hours=settings.weekly_hours or 10.0,
-                        training_focus=settings.training_focus or "general_fitness",
-                        injury_history=settings.injury_history or False,
-                        injury_notes=settings.injury_notes,
-                        consistency=settings.consistency,
-                        goal=settings.goal,
+                        years_of_training=prefs.get("years_of_training", 0),
+                        primary_sports=prefs.get("primary_sports", []),
+                        available_days=prefs.get("available_days", []),
+                        weekly_hours=prefs.get("weekly_hours", 10.0),
+                        training_focus=prefs.get("training_focus", "general_fitness"),
+                        injury_history=prefs.get("injury_history", False),
+                        injury_notes=prefs.get("injury_notes"),
+                        consistency=prefs.get("consistency"),
+                        goal=prefs.get("goal"),
                     ).model_dump()
             except (InternalError, OperationalError) as e:
                 # Database transaction errors - rollback and log, but continue with None
@@ -1832,7 +1814,7 @@ def _build_unified_profile_response(
     user_first_name: str | None,
     user_last_name: str | None,
     user_timezone: str,
-    profile: AthleteProfile | None,
+    profile: AthleteProfile | None,  # noqa: ARG001
     settings: UserSettings | None,
 ) -> dict[str, str | int | float | None]:
     """Build unified profile response from User, AthleteProfile, and UserSettings.
@@ -1855,49 +1837,55 @@ def _build_unified_profile_response(
         user_first_name: First name from User table
         user_last_name: Last name from User table
         user_timezone: Timezone from User table
-        profile: AthleteProfile instance (optional)
+        profile: AthleteProfile instance (optional, currently unused but kept for API compatibility)
         settings: UserSettings instance (optional)
 
     Returns:
         Dictionary with unified profile data
     """
+    # Get preferences from JSONB
+    prefs = (settings.preferences or {}) if settings else {}
+
     # Map goal_type from training_focus
     goal_type = None
-    if settings and settings.training_focus:
-        if settings.training_focus == "race_focused":
+    training_focus = prefs.get("training_focus")
+    if training_focus:
+        if training_focus == "race_focused":
             # Can't distinguish between performance and completion from training_focus alone
             # Default to "performance" for now
             goal_type = "performance"
-        elif settings.training_focus == "general_fitness":
+        elif training_focus == "general_fitness":
             goal_type = "general"
 
     # Convert available_days (list) to availability_days_per_week (int)
     availability_days_per_week = None
-    if settings and settings.available_days:
-        availability_days_per_week = len(settings.available_days)
+    available_days = prefs.get("available_days")
+    if available_days:
+        availability_days_per_week = len(available_days)
 
     # Map injury_status from injury_history and injury_notes
     injury_status = None
-    if settings:
-        if settings.injury_history is True:
-            if settings.injury_notes:
-                injury_status = "managing"
-            else:
-                injury_status = "injured"
-        elif settings.injury_history is False:
-            injury_status = "none"
+    injury_history = prefs.get("injury_history")
+    injury_notes = prefs.get("injury_notes")
+    if injury_history is True:
+        if injury_notes:
+            injury_status = "managing"
+        else:
+            injury_status = "injured"
+    elif injury_history is False:
+        injury_status = "none"
 
     return {
         "first_name": user_first_name,
         "last_name": user_last_name,
         "timezone": user_timezone,
-        "primary_sport": profile.primary_sport if profile else None,
+        "primary_sport": None,  # Schema v2: primary_sport not in athlete_profiles
         "goal_type": goal_type,
-        "experience_level": settings.consistency if settings else None,
+        "experience_level": prefs.get("consistency"),
         "availability_days_per_week": availability_days_per_week,
-        "availability_hours_per_week": settings.weekly_hours if settings else None,
+        "availability_hours_per_week": prefs.get("weekly_hours"),
         "injury_status": injury_status,
-        "injury_notes": settings.injury_notes if settings else None,
+        "injury_notes": injury_notes,
     }
 
 

@@ -54,7 +54,7 @@ def get_user_activity_date_range(user_id: str) -> tuple[date | None, date]:
     """
     with get_session() as session:
         # Get first activity date
-        first_result = session.execute(select(func.min(Activity.start_time)).where(Activity.user_id == user_id)).scalar()
+        first_result = session.execute(select(func.min(Activity.starts_at)).where(Activity.user_id == user_id)).scalar()
 
         if not first_result:
             return None, datetime.now(UTC).date()
@@ -101,10 +101,10 @@ def recompute_user_training_load(user_id: str, start_date: date, end_date: date)
             select(Activity)
             .where(
                 Activity.user_id == user_id,
-                Activity.start_time >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=UTC),
-                Activity.start_time <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=UTC),
+                Activity.starts_at >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=UTC),
+                Activity.starts_at <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=UTC),
             )
-            .order_by(Activity.start_time)
+            .order_by(Activity.starts_at)
         ).all()
 
         activity_list = [a[0] for a in activities]

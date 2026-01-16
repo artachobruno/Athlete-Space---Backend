@@ -62,10 +62,10 @@ def check_planned_session_status(target_date: str | None = None) -> int:
                 select(PlannedSession, User)
                 .join(User, PlannedSession.user_id == User.id)
                 .where(
-                    PlannedSession.date >= start_datetime,
-                    PlannedSession.date <= end_datetime,
+                    PlannedSession.starts_at >= start_datetime,
+                    PlannedSession.starts_at <= end_datetime,
                 )
-                .order_by(PlannedSession.date, PlannedSession.time)
+                .order_by(PlannedSession.starts_at)
             )
 
             sessions = result.all()

@@ -48,10 +48,10 @@ def recompute_metrics_for_user(
             select(Activity)
             .where(
                 Activity.user_id == user_id,
-                Activity.start_time >= datetime.combine(since_date, datetime.min.time()).replace(tzinfo=timezone.utc),
-                Activity.start_time <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc),
+                Activity.starts_at >= datetime.combine(since_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+                Activity.starts_at <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc),
             )
-            .order_by(Activity.start_time)
+            .order_by(Activity.starts_at)
         ).all()
 
         activity_list = [a[0] for a in activities]

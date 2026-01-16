@@ -257,7 +257,7 @@ def _planned_session_to_calendar(
         date=planned.starts_at.strftime("%Y-%m-%d") if planned.starts_at else "",
         time=time_str,
         type=session_type,
-        title=planned.title,
+        title=planned.title or "",
         duration_minutes=planned.duration_seconds // 60 if planned.duration_seconds else None,  # Convert seconds to minutes for response
         distance_km=round(planned.distance_meters / 1000.0, 2) if planned.distance_meters else None,  # Convert meters to km
         intensity=planned.intensity,

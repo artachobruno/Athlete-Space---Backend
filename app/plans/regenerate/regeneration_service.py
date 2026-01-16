@@ -201,12 +201,11 @@ def regenerate_plan(
 
             old_sessions_query = select(PlannedSession).where(
                 PlannedSession.user_id == user_id,
-                PlannedSession.athlete_id == athlete_id,
-                PlannedSession.date >= start_datetime,
+                PlannedSession.starts_at >= start_datetime,
             )
 
             if end_datetime:
-                old_sessions_query = old_sessions_query.where(PlannedSession.date <= end_datetime)
+                old_sessions_query = old_sessions_query.where(PlannedSession.starts_at <= end_datetime)
 
             # Only get non-completed sessions (those that will be replaced)
             old_sessions_query = old_sessions_query.where(

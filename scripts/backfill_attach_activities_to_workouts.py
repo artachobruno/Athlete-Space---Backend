@@ -130,7 +130,7 @@ def main() -> None:
                 select(Activity)
                 .outerjoin(attached_ps, Activity.id == attached_ps.completed_activity_id)
                 .where(attached_ps.completed_activity_id.is_(None))
-                .order_by(Activity.start_time)
+                .order_by(Activity.starts_at)
             )
             .scalars()
             .all()

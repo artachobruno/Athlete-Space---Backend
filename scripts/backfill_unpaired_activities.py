@@ -86,9 +86,9 @@ def process_unpaired_activities(
 
     if days:
         cutoff_date = datetime.now(UTC) - timedelta(days=days)
-        query = query.where(Activity.start_time >= cutoff_date)
+        query = query.where(Activity.starts_at >= cutoff_date)
 
-    query = query.order_by(Activity.start_time.desc())
+    query = query.order_by(Activity.starts_at.desc())
 
     activities = list(db.scalars(query).all())
     stats["activities_found"] = len(activities)

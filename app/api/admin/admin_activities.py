@@ -9,7 +9,7 @@ router = APIRouter(prefix="/admin/activities", tags=["admin"])
 @router.get("/recent")
 def recent_activities(limit: int = 10):
     with get_session() as session:
-        rows = session.query(Activity).order_by(Activity.start_time.desc()).limit(limit).all()
+        rows = session.query(Activity).order_by(Activity.starts_at.desc()).limit(limit).all()
 
     return [
         {

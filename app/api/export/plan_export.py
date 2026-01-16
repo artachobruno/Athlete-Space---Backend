@@ -55,8 +55,8 @@ def export_plan_csv(
         sessions = (
             session.execute(
                 select(PlannedSession)
-                .where(PlannedSession.plan_id == plan_id, PlannedSession.user_id == user_id)
-                .order_by(PlannedSession.date)
+                .where(PlannedSession.season_plan_id == plan_id, PlannedSession.user_id == user_id)
+                .order_by(PlannedSession.starts_at)
             )
             .scalars()
             .all()

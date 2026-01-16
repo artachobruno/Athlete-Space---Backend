@@ -318,9 +318,8 @@ async def test_1_basic_weekly_planning():
             session.execute(
                 select(PlannedSession).where(
                     PlannedSession.user_id == TEST_USER_ID,
-                    PlannedSession.athlete_id == TEST_ATHLETE_ID,
-                    PlannedSession.date >= monday,
-                    PlannedSession.date <= sunday,
+                    PlannedSession.starts_at >= monday,
+                    PlannedSession.starts_at <= sunday,
                 )
             )
             .scalars()
@@ -439,9 +438,8 @@ async def test_2_planning_with_fatigue_feedback():
                 session.execute(
                     select(PlannedSession).where(
                         PlannedSession.user_id == TEST_USER_ID,
-                        PlannedSession.athlete_id == TEST_ATHLETE_ID,
-                        PlannedSession.date >= monday,
-                        PlannedSession.date <= sunday,
+                        PlannedSession.starts_at >= monday,
+                        PlannedSession.starts_at <= sunday,
                     )
                 )
                 .scalars()
@@ -503,9 +501,8 @@ async def test_3_forced_rest_days():
             session.execute(
                 select(PlannedSession).where(
                     PlannedSession.user_id == TEST_USER_ID,
-                    PlannedSession.athlete_id == TEST_ATHLETE_ID,
-                    PlannedSession.date >= monday,
-                    PlannedSession.date <= sunday,
+                    PlannedSession.starts_at >= monday,
+                    PlannedSession.starts_at <= sunday,
                 )
             )
             .scalars()
@@ -562,11 +559,10 @@ async def test_4_calendar_visibility():
                 select(PlannedSession)
                 .where(
                     PlannedSession.user_id == TEST_USER_ID,
-                    PlannedSession.athlete_id == TEST_ATHLETE_ID,
-                    PlannedSession.date >= monday,
-                    PlannedSession.date <= sunday,
+                    PlannedSession.starts_at >= monday,
+                    PlannedSession.starts_at <= sunday,
                 )
-                .order_by(PlannedSession.date)
+                .order_by(PlannedSession.starts_at)
             )
             .scalars()
             .all()

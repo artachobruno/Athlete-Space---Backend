@@ -43,7 +43,7 @@ def fix_user_training_load(user_id: str) -> dict[str, int | str]:
     with get_session() as session:
         # Get date range from activities
         first_result = session.execute(
-            select(func.min(Activity.start_time)).where(Activity.user_id == user_id)
+            select(func.min(Activity.starts_at)).where(Activity.user_id == user_id)
         ).scalar()
 
         if not first_result:
@@ -66,10 +66,10 @@ def fix_user_training_load(user_id: str) -> dict[str, int | str]:
             select(Activity)
             .where(
                 Activity.user_id == user_id,
-                Activity.start_time >= datetime.combine(first_date, datetime.min.time()).replace(tzinfo=UTC),
-                Activity.start_time <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=UTC),
+                Activity.starts_at >= datetime.combine(first_date, datetime.min.time()).replace(tzinfo=UTC),
+                Activity.starts_at <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=UTC),
             )
-            .order_by(Activity.start_time)
+            .order_by(Activity.starts_at)
         ).all()
 
         activity_list = [a[0] for a in activities]

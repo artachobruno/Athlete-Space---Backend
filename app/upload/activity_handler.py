@@ -83,7 +83,8 @@ def upload_activity_from_chat(
             existing_by_hash = session.execute(
                 select(Activity).where(
                     Activity.user_id == user_id,
-                    Activity.strava_activity_id == upload_hash,
+                    Activity.source == "strava",
+                    Activity.source_activity_id == upload_hash,
                 )
             ).first()
 
@@ -99,8 +100,8 @@ def upload_activity_from_chat(
             existing_by_time = session.execute(
                 select(Activity).where(
                     Activity.user_id == user_id,
-                    Activity.start_time >= time_window_start,
-                    Activity.start_time <= time_window_end,
+                    Activity.starts_at >= time_window_start,
+                    Activity.starts_at <= time_window_end,
                 )
             ).first()
 

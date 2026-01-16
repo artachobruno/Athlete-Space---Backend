@@ -20,7 +20,7 @@ def validate_regeneration(
     today: date,
     session: Session,
     user_id: str,
-    athlete_id: int,
+    _athlete_id: int,  # Unused: kept for API compatibility
 ) -> None:
     """Validate regeneration request against safety rules.
 
@@ -79,12 +79,11 @@ def validate_regeneration(
 
     query = select(PlannedSession).where(
         PlannedSession.user_id == user_id,
-        PlannedSession.athlete_id == athlete_id,
-        PlannedSession.date >= start_datetime,
+        PlannedSession.starts_at >= start_datetime,
     )
 
     if end_datetime:
-        query = query.where(PlannedSession.date <= end_datetime)
+        query = query.where(PlannedSession.starts_at <= end_datetime)
 
     # Exclude completed/cancelled/skipped sessions
     query = query.where(

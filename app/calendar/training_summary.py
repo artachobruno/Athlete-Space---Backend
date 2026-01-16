@@ -190,7 +190,7 @@ def build_training_summary(
 def _fetch_planned_sessions(
     session: Session,
     user_id: str,
-    athlete_id: int,
+    _athlete_id: int,  # Unused: kept for API compatibility
     start_date: date,
     end_date: date,
 ) -> list[PlannedSession]:
@@ -202,11 +202,10 @@ def _fetch_planned_sessions(
         select(PlannedSession)
         .where(
             PlannedSession.user_id == user_id,
-            PlannedSession.athlete_id == athlete_id,
-            PlannedSession.date >= start_datetime,
-            PlannedSession.date <= end_datetime,
+            PlannedSession.starts_at >= start_datetime,
+            PlannedSession.starts_at <= end_datetime,
         )
-        .order_by(PlannedSession.date)
+        .order_by(PlannedSession.starts_at)
     )
 
     return list(result.scalars().all())
@@ -227,7 +226,7 @@ def _fetch_matched_activities(
             Activity.user_id == user_id,
             Activity.id.in_(activity_ids),
         )
-        .order_by(Activity.start_time)
+        .order_by(Activity.starts_at)
     )
 
     return list(result.scalars().all())
@@ -553,7 +552,7 @@ def _extract_key_sessions(
                 key_sessions.append(
                     KeySession(
                         date=recon.date,
-                        title=planned.title,
+                        title=planned.title or "",
                         status=recon.status.value,
                         matched_activity_id=recon.matched_activity_id,
                     )
@@ -575,7 +574,7 @@ def _extract_key_sessions(
                     key_sessions.append(
                         KeySession(
                             date=recon.date,
-                            title=planned.title,
+                            title=planned.title or "",
                             status=recon.status.value,
                             matched_activity_id=recon.matched_activity_id,
                         )
@@ -597,7 +596,7 @@ def _extract_key_sessions(
                 key_sessions.append(
                     KeySession(
                         date=recon.date,
-                        title=planned.title,
+                        title=planned.title or "",
                         status=recon.status.value,
                         matched_activity_id=recon.matched_activity_id,
                     )

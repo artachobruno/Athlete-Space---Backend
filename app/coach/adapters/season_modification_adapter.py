@@ -11,7 +11,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.coach.extraction.modify_season_extractor import ExtractedSeasonModification
-from app.db.models import PlannedSession, SeasonPlan
+from app.db.models import PlannedSession, SeasonPlan, StravaAccount
 from app.db.session import get_session
 from app.plans.modify.season_types import SeasonModification
 
@@ -26,6 +26,16 @@ def _get_season_weeks(athlete_id: int) -> list[int]:
         List of week numbers (1-based) for the active season
     """
     with get_session() as db:
+        # Get user_id from athlete_id via StravaAccount
+        account_result = db.execute(
+            select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id)).limit(1)
+        ).first()
+
+        if not account_result:
+            return []
+
+        user_id = account_result[0].user_id
+
         # Get active season plan
         season_plan = (
             db.execute(
@@ -36,49 +46,48 @@ def _get_season_weeks(athlete_id: int) -> list[int]:
             .scalar_one_or_none()
         )
 
-        if season_plan is None:
-            # Fallback: get week numbers from PlannedSession
-            sessions = (
-                db.execute(
-                    select(PlannedSession)
-                    .where(
-                        PlannedSession.athlete_id == athlete_id,
-                        PlannedSession.plan_type == "season",
-                        PlannedSession.completed.is_(False),
-                    )
-                    .distinct(PlannedSession.week_number)
-                    .order_by(PlannedSession.week_number)
-                )
-                .scalars()
-                .all()
-            )
+        # If no season plan or no start date, can't calculate week numbers
+        if not season_plan or not season_plan.start_date:
+            # Use total_weeks if available
+            if season_plan and season_plan.total_weeks:
+                return list(range(1, season_plan.total_weeks + 1))
+            return []
 
-            return sorted({s.week_number for s in sessions if s.week_number is not None})
-
-        # Get week numbers from planned sessions for this season
+        # Get planned sessions for this season
         sessions = (
             db.execute(
                 select(PlannedSession)
                 .where(
-                    PlannedSession.athlete_id == athlete_id,
-                    PlannedSession.plan_type == "season",
-                    PlannedSession.plan_id == season_plan.id,
-                    PlannedSession.completed.is_(False),
+                    PlannedSession.user_id == user_id,
+                    PlannedSession.season_plan_id == season_plan.id,
+                    PlannedSession.status != "completed",
                 )
-                .distinct(PlannedSession.week_number)
-                .order_by(PlannedSession.week_number)
+                .distinct(PlannedSession.starts_at)
+                .order_by(PlannedSession.starts_at)
             )
             .scalars()
             .all()
         )
 
-        week_numbers = sorted({s.week_number for s in sessions if s.week_number is not None})
+        # Calculate week numbers from dates relative to season start
+        season_start = season_plan.start_date.date() if isinstance(season_plan.start_date, datetime) else season_plan.start_date
+        days_since_monday = season_start.weekday()
+        first_monday = season_start - timedelta(days=days_since_monday)
+
+        week_numbers = set()
+        for session in sessions:
+            if session.starts_at:
+                session_date = session.starts_at.date()
+                days_diff = (session_date - first_monday).days
+                if days_diff >= 0:
+                    week_num = (days_diff // 7) + 1
+                    week_numbers.add(week_num)
 
         # If no sessions found, use total_weeks from season plan
         if not week_numbers and season_plan.total_weeks:
-            week_numbers = list(range(1, season_plan.total_weeks + 1))
+            week_numbers = set(range(1, season_plan.total_weeks + 1))
 
-        return week_numbers
+        return sorted(week_numbers)
 
 
 def _resolve_phase_to_weeks(phase: str, season_weeks: list[int]) -> list[int]:

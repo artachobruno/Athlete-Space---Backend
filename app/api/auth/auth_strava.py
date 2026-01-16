@@ -219,8 +219,10 @@ def _encrypt_and_store_tokens(
     expires_at_dt = datetime.fromtimestamp(expires_at, tz=timezone.utc)
 
     # Guard: Ensure expires_at is a timezone-aware datetime
-    assert isinstance(expires_at_dt, datetime)
-    assert expires_at_dt.tzinfo is not None
+    if not isinstance(expires_at_dt, datetime):
+        raise TypeError(f"expires_at_dt must be a datetime, got {type(expires_at_dt)}")
+    if expires_at_dt.tzinfo is None:
+        raise ValueError("expires_at_dt must be timezone-aware")
 
     with get_session() as session:
         existing = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()

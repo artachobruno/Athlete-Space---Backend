@@ -218,9 +218,9 @@ def _get_activities_for_context(user_id: str) -> list[Activity]:
                 select(Activity)
                 .where(
                     Activity.user_id == user_id,
-                    Activity.start_time >= since,
+                    Activity.starts_at >= since,
                 )
-                .order_by(Activity.start_time.desc())
+                .order_by(Activity.starts_at.desc())
             )
             .scalars()
             .all()

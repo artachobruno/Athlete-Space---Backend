@@ -173,7 +173,7 @@ def _determine_before_parameter(account: StravaAccount, session) -> int:
         Unix timestamp to use as `before` parameter
     """
     # Always check the actual oldest activity in the database
-    oldest_activity_result = session.execute(select(func.min(Activity.start_time)).where(Activity.user_id == account.user_id)).scalar()
+    oldest_activity_result = session.execute(select(func.min(Activity.starts_at)).where(Activity.user_id == account.user_id)).scalar()
 
     if oldest_activity_result:
         # Use the oldest activity date from database

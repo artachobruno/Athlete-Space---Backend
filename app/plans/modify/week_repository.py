@@ -37,16 +37,15 @@ def get_planned_sessions_in_range(
 
     with get_session() as db:
         query = select(PlannedSession).where(
-            PlannedSession.athlete_id == athlete_id,
-            PlannedSession.date >= target_datetime_start,
-            PlannedSession.date <= target_datetime_end,
-            PlannedSession.completed == False,  # noqa: E712
+            PlannedSession.starts_at >= target_datetime_start,
+            PlannedSession.starts_at <= target_datetime_end,
+            PlannedSession.status != "completed",
         )
 
         if user_id:
             query = query.where(PlannedSession.user_id == user_id)
 
-        query = query.order_by(PlannedSession.date)
+        query = query.order_by(PlannedSession.starts_at)
 
         sessions = list(db.execute(query).scalars().all())
 

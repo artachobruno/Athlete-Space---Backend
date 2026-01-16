@@ -169,7 +169,7 @@ def get_activities(
             try:
                 start_date = date.fromisoformat(start)
                 start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-                query = query.where(Activity.start_time >= start_datetime)
+                query = query.where(Activity.starts_at >= start_datetime)
             except ValueError:
                 logger.warning(f"[ACTIVITIES] Invalid start date format: {start}, ignoring filter")
 
@@ -177,7 +177,7 @@ def get_activities(
             try:
                 end_date = date.fromisoformat(end)
                 end_datetime = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
-                query = query.where(Activity.start_time <= end_datetime)
+                query = query.where(Activity.starts_at <= end_datetime)
             except ValueError:
                 logger.warning(f"[ACTIVITIES] Invalid end date format: {end}, ignoring filter")
 
@@ -187,14 +187,14 @@ def get_activities(
             try:
                 start_date = date.fromisoformat(start)
                 start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-                count_query = count_query.where(Activity.start_time >= start_datetime)
+                count_query = count_query.where(Activity.starts_at >= start_datetime)
             except ValueError:
                 pass
         if end:
             try:
                 end_date = date.fromisoformat(end)
                 end_datetime = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
-                count_query = count_query.where(Activity.start_time <= end_datetime)
+                count_query = count_query.where(Activity.starts_at <= end_datetime)
             except ValueError:
                 pass
 
@@ -202,7 +202,7 @@ def get_activities(
 
         # Get paginated activities with filters applied
         activities_result = session.execute(
-            query.order_by(Activity.start_time.desc()).limit(limit).offset(offset)
+            query.order_by(Activity.starts_at.desc()).limit(limit).offset(offset)
         )
 
         activities = []
@@ -614,7 +614,8 @@ def upload_activity_file(
         existing_by_hash = session.execute(
             select(Activity).where(
                 Activity.user_id == user_id,
-                Activity.strava_activity_id == upload_hash,
+                Activity.source == "strava",
+                Activity.source_activity_id == upload_hash,
             )
         ).first()
 
@@ -634,8 +635,8 @@ def upload_activity_file(
         existing_by_time = session.execute(
             select(Activity).where(
                 Activity.user_id == user_id,
-                Activity.start_time >= time_window_start,
-                Activity.start_time <= time_window_end,
+                Activity.starts_at >= time_window_start,
+                Activity.starts_at <= time_window_end,
             )
         ).first()
 
@@ -716,7 +717,8 @@ def upload_activity_file(
                 existing = session.execute(
                     select(Activity).where(
                         Activity.user_id == user_id,
-                        Activity.strava_activity_id == upload_hash,
+                        Activity.source == "strava",
+                        Activity.source_activity_id == upload_hash,
                     )
                 ).first()
                 if existing:

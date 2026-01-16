@@ -38,9 +38,9 @@ def get_recent_activities_tool(arguments: dict) -> dict:
                     select(Activity)
                     .where(
                         Activity.user_id == user_id,
-                        Activity.start_time >= since,
-                    )
-                    .order_by(Activity.start_time.desc())
+                    Activity.starts_at >= since,
+                )
+                .order_by(Activity.starts_at.desc())
                 )
                 .scalars()
                 .all()
@@ -95,10 +95,10 @@ def get_yesterday_activities_tool(arguments: dict) -> dict:
                     select(Activity)
                     .where(
                         Activity.user_id == user_id,
-                        Activity.start_time >= yesterday_start,
-                        Activity.start_time < yesterday_end,
+                        Activity.starts_at >= yesterday_start,
+                        Activity.starts_at < yesterday_end,
                     )
-                    .order_by(Activity.start_time.desc())
+                    .order_by(Activity.starts_at.desc())
                 )
                 .scalars()
                 .all()

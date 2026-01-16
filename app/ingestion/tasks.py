@@ -69,7 +69,7 @@ def incremental_task(athlete_id: int) -> None:
                 elapsed = time.time() - task_start
                 logger.exception(f"[INGESTION] Incremental sync failed for athlete_id={athlete_id} after {elapsed:.2f}s")
                 _record_error(session, user, e)
-                raise
+                # DO NOT re-raise - background task must not fail after response
 
 
 def backfill_task(athlete_id: int) -> None:
@@ -127,7 +127,7 @@ def backfill_task(athlete_id: int) -> None:
                 elapsed = time.time() - task_start
                 logger.exception(f"[INGESTION] Backfill sync failed for athlete_id={athlete_id} after {elapsed:.2f}s")
                 _record_error(session, user, e)
-                raise
+                # DO NOT re-raise - background task must not fail after response
 
 
 def history_backfill_task(user_id: str) -> None:
@@ -162,16 +162,16 @@ def history_backfill_task(user_id: str) -> None:
             except RateLimitError as e:
                 elapsed = time.time() - task_start
                 logger.warning(f"[INGESTION] History backfill rate limited for user_id={user_id} after {elapsed:.2f}s: {e}")
-                raise
+                # DO NOT re-raise - background task must not fail after response
             except TokenRefreshError as e:
                 elapsed = time.time() - task_start
                 logger.error(f"[INGESTION] History backfill token error for user_id={user_id} after {elapsed:.2f}s: {e}")
-                raise
+                # DO NOT re-raise - background task must not fail after response
             except HistoryBackfillError:
                 elapsed = time.time() - task_start
                 logger.exception(f"[INGESTION] History backfill failed for user_id={user_id} after {elapsed:.2f}s")
-                raise
+                # DO NOT re-raise - background task must not fail after response
             except Exception:
                 elapsed = time.time() - task_start
                 logger.exception(f"[INGESTION] History backfill unexpected error for user_id={user_id} after {elapsed:.2f}s")
-                raise
+                # DO NOT re-raise - background task must not fail after response

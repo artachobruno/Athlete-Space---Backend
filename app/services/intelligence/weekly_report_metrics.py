@@ -26,10 +26,12 @@ def compute_weekly_report_metrics(athlete_id: int, week_start: datetime) -> dict
     week_end = week_start + timedelta(days=6)
 
     with get_session() as session:
-        # Get user_id from athlete_id (via StravaAccount or PlannedSession)
-        user_id_result = session.execute(select(PlannedSession.user_id).where(PlannedSession.athlete_id == athlete_id).limit(1)).first()
+        # Get user_id from athlete_id via StravaAccount
+        account_result = session.execute(
+            select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id)).limit(1)
+        ).first()
 
-        if not user_id_result:
+        if not account_result:
             logger.warning(f"No user_id found for athlete_id={athlete_id}, skipping metrics computation")
             return {
                 "summary_score": None,
@@ -37,16 +39,16 @@ def compute_weekly_report_metrics(athlete_id: int, week_start: datetime) -> dict
                 "adherence_percentage": None,
             }
 
-        user_id = user_id_result[0]
+        user_id = account_result[0].user_id
 
         # Get planned sessions for the week
+        week_end_datetime = week_end.replace(hour=23, minute=59, second=59)
         planned_sessions = (
             session.execute(
                 select(PlannedSession).where(
                     PlannedSession.user_id == user_id,
-                    PlannedSession.athlete_id == athlete_id,
-                    PlannedSession.date >= week_start,
-                    PlannedSession.date <= week_end,
+                    PlannedSession.starts_at >= week_start,
+                    PlannedSession.starts_at <= week_end_datetime,
                     PlannedSession.status != "cancelled",
                 )
             )
@@ -59,8 +61,8 @@ def compute_weekly_report_metrics(athlete_id: int, week_start: datetime) -> dict
             session.execute(
                 select(Activity).where(
                     Activity.user_id == user_id,
-                    Activity.start_time >= week_start,
-                    Activity.start_time <= week_end.replace(hour=23, minute=59, second=59),
+                    Activity.starts_at >= week_start,
+                    Activity.starts_at <= week_end.replace(hour=23, minute=59, second=59),
                 )
             )
             .scalars()
@@ -127,7 +129,7 @@ def compute_weekly_report_metrics(athlete_id: int, week_start: datetime) -> dict
             # Check if activities are spread throughout the week
             consistency_score = 0.0
             if activities_completed > 0:
-                activity_dates = {a.start_time.date() for a in completed_activities}
+                activity_dates = {a.starts_at.date() for a in completed_activities}
                 days_trained = len(activity_dates)
                 # Ideal: 5-6 days of training per week
                 if days_trained >= 5:

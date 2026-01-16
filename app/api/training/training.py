@@ -141,8 +141,8 @@ def get_training_state(user_id: str = Depends(get_current_user_id)):
         month_activities = session.execute(
             select(Activity).where(
                 Activity.user_id == user_id,
-                Activity.start_time >= datetime.combine(month_start, datetime.min.time()).replace(tzinfo=timezone.utc),
-                Activity.start_time <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
+                Activity.starts_at >= datetime.combine(month_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+                Activity.starts_at <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
             )
         ).all()
 
@@ -209,8 +209,8 @@ def get_training_distribution(period: str = "week", user_id: str = Depends(get_c
         activities = session.execute(
             select(Activity).where(
                 Activity.user_id == user_id,
-                Activity.start_time >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc),
-                Activity.start_time <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc),
+                Activity.starts_at >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+                Activity.starts_at <= datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc),
             )
         ).all()
 

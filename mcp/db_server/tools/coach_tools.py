@@ -336,12 +336,12 @@ def get_planned_sessions_tool(arguments: dict) -> dict:
 
             # Apply date filters if provided
             if start_date:
-                query = query.where(PlannedSession.date >= start_date)
+                query = query.where(PlannedSession.starts_at >= start_date)
             if end_date:
-                query = query.where(PlannedSession.date <= end_date)
+                query = query.where(PlannedSession.starts_at <= end_date)
 
-            # Order by date (ascending)
-            query = query.order_by(PlannedSession.date)
+            # Order by starts_at (ascending)
+            query = query.order_by(PlannedSession.starts_at)
 
             sessions = db.execute(query).scalars().all()
 

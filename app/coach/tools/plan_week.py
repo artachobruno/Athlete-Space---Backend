@@ -72,9 +72,8 @@ def _check_weekly_plan_exists(user_id: str | None, athlete_id: int | None) -> bo
                 select(PlannedSession)
                 .where(
                     PlannedSession.user_id == user_id,
-                    PlannedSession.athlete_id == athlete_id,
-                    PlannedSession.date >= monday,
-                    PlannedSession.date <= sunday,
+                    PlannedSession.starts_at >= monday,
+                    PlannedSession.starts_at <= sunday,
                 )
                 .limit(1)
             )

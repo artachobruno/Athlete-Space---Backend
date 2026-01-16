@@ -15,7 +15,7 @@ from app.db.session import get_session
 
 
 def get_planned_session_by_date(
-    athlete_id: int,
+    _athlete_id: int,  # Unused: kept for API compatibility
     target_date: date,
     user_id: str | None = None,
 ) -> PlannedSession | None:
@@ -42,15 +42,14 @@ def get_planned_session_by_date(
 
     with get_session() as db:
         query = select(PlannedSession).where(
-            PlannedSession.athlete_id == athlete_id,
-            PlannedSession.date >= target_datetime_start,
-            PlannedSession.date <= target_datetime_end,
+            PlannedSession.starts_at >= target_datetime_start,
+            PlannedSession.starts_at <= target_datetime_end,
         )
 
         if user_id:
             query = query.where(PlannedSession.user_id == user_id)
 
-        query = query.order_by(PlannedSession.date)
+        query = query.order_by(PlannedSession.starts_at)
 
         sessions = list(db.execute(query).scalars().all())
 

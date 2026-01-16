@@ -943,12 +943,11 @@ class CoachActionExecutor:
                     select(PlannedSession)
                     .where(
                         PlannedSession.user_id == deps.user_id,
-                        PlannedSession.athlete_id == deps.athlete_id,
-                        PlannedSession.date >= target_datetime_start,
-                        PlannedSession.date <= target_datetime_end,
-                        PlannedSession.completed == False,  # noqa: E712
+                        PlannedSession.starts_at >= target_datetime_start,
+                        PlannedSession.starts_at <= target_datetime_end,
+                        PlannedSession.status != "completed",
                     )
-                    .order_by(PlannedSession.date)
+                    .order_by(PlannedSession.starts_at)
                     .limit(1)
                 ).scalar_one_or_none()
 

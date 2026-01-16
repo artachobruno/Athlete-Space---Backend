@@ -254,7 +254,8 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         existing = session.execute(
             select(Activity).where(
                 Activity.user_id == user_id,
-                Activity.strava_activity_id == strava_id,
+                Activity.source == "strava",
+                Activity.source_activity_id == str(strava_id),
             )
         ).first()
 
@@ -349,7 +350,8 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
             existing = session.execute(
                 select(Activity).where(
                     Activity.user_id == user_id,
-                    Activity.strava_activity_id == strava_id,
+                    Activity.source == "strava",
+                    Activity.source_activity_id == str(strava_id),
                 )
             ).first()
             if existing:

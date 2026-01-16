@@ -35,7 +35,9 @@ project_root_str = str(project_root)
 if project_root_str not in sys.path:
     sys.path.insert(0, project_root_str)
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
+from datetime import date as date_type
+from datetime import time as time_type
 
 from loguru import logger
 from sqlalchemy import select, text
@@ -180,12 +182,24 @@ def migrate_calendar_to_planned(user_id: str | None = None) -> dict[str, int]:
                     stats["skipped"] += 1
                     continue
 
+                # Convert cal_date to datetime range for starts_at comparison
+                if isinstance(cal_date, datetime):
+                    cal_date_start = cal_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                    cal_date_end = cal_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+                elif isinstance(cal_date, date_type):
+                    cal_date_start = datetime.combine(cal_date, datetime.min.time())
+                    cal_date_end = datetime.combine(cal_date, datetime.max.time())
+                else:
+                    logger.warning(f"Invalid cal_date type: {type(cal_date)}")
+                    stats["skipped"] += 1
+                    continue
+
                 # Check if already migrated (by date + title + user)
                 existing = session.execute(
                     select(PlannedSession).where(
                         PlannedSession.user_id == cal_user_id,
-                        PlannedSession.athlete_id == athlete_id,
-                        PlannedSession.date == cal_date,
+                        PlannedSession.starts_at >= cal_date_start,
+                        PlannedSession.starts_at <= cal_date_end,
                         PlannedSession.title == cal_title,
                     )
                 ).scalar_one_or_none()
@@ -205,34 +219,70 @@ def migrate_calendar_to_planned(user_id: str | None = None) -> dict[str, int]:
                 if cal_status not in {"planned", "completed", "skipped", "cancelled"}:
                     cal_status = "completed" if cal_status == "completed" else "planned"
 
-                # Create planned_session
+                # Schema v2: Combine date + time into starts_at (TIMESTAMPTZ)
+                if isinstance(cal_date, datetime):
+                    starts_at = cal_date
+                else:
+                    # If cal_date is a date, combine with cal_time
+                    if cal_time:
+                        time_parts = cal_time.split(":")
+                        hour = int(time_parts[0]) if len(time_parts) > 0 else 0
+                        minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+                        starts_at = datetime.combine(cal_date, time_type(hour=hour, minute=minute))
+                    else:
+                        starts_at = datetime.combine(cal_date, datetime.min.time())
+
+                    # Make timezone-aware
+                    if starts_at.tzinfo is None:
+                        starts_at = starts_at.replace(tzinfo=UTC)
+
+                # Schema v2: Map type to sport
+                sport_type = str(row_dict.get("type", "Run")).lower()
+                sport_mapping = {
+                    "run": "run",
+                    "ride": "ride",
+                    "swim": "swim",
+                    "strength": "strength",
+                    "walk": "walk",
+                }
+                sport = sport_mapping.get(sport_type, "other")
+
+                # Schema v2: Convert duration_minutes to duration_seconds
+                duration_seconds = None
+                duration_minutes_raw = row_dict.get("duration_minutes")
+                if duration_minutes_raw is not None and not isinstance(duration_minutes_raw, datetime):
+                    try:
+                        duration_seconds = int(duration_minutes_raw) * 60
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid duration_minutes: {duration_minutes_raw}, skipping")
+
+                # Schema v2: Convert distance_km to distance_meters
+                distance_meters = None
+                distance_km_raw = row_dict.get("distance_km")
+                if distance_km_raw is not None and not isinstance(distance_km_raw, datetime):
+                    try:
+                        distance_meters = float(distance_km_raw) * 1000
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid distance_km: {distance_km_raw}, skipping")
+
+                # Create planned_session (schema v2 fields only)
                 planned_session = PlannedSession(
                     user_id=cal_user_id,
-                    athlete_id=athlete_id,
-                    date=cal_date,
-                    time=cal_time,
-                    type=str(row_dict.get("type", "Run")),
+                    season_plan_id=None,  # Not from calendar migration
+                    revision_id=None,
+                    starts_at=starts_at,
+                    ends_at=None,  # Not available in calendar_sessions
+                    sport=sport,
+                    session_type=None,  # Not available in calendar_sessions
                     title=cal_title,
-                    duration_minutes=row_dict.get("duration_minutes"),
-                    distance_km=row_dict.get("distance_km"),
-                    intensity=None,  # Not available in calendar_sessions
                     notes=None,  # Not available in calendar_sessions
-                    plan_type="migrated",  # Mark as migrated
-                    plan_id=None,
-                    week_number=None,
-                    session_order=None,
-                    phase=None,
-                    source="calendar_migration",
-                    philosophy_id=None,
-                    template_id=None,
-                    session_type=None,
-                    distance_mi=None,
-                    tags=None,
-                    status=cal_status,
-                    completed=(cal_status == "completed"),
-                    completed_at=cal_date if cal_status == "completed" else None,
-                    completed_activity_id=str(row_dict.get("activity_id")) if row_dict.get("activity_id") else None,
+                    duration_seconds=duration_seconds,
+                    distance_meters=distance_meters,
+                    intensity=None,  # Not available in calendar_sessions
+                    intent=None,  # Not available in calendar_sessions
                     workout_id=None,  # Will be set by factory
+                    status=cal_status,
+                    tags=[],  # Schema v2: tags is JSONB array
                 )
 
                 # Preserve timestamps if available

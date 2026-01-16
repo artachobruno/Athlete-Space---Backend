@@ -13,7 +13,7 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from app.coach.tools.modify_week import modify_week
-from app.db.models import PlannedSession, SeasonPlan
+from app.db.models import PlannedSession, SeasonPlan, StravaAccount
 from app.db.session import get_session
 from app.plans.modify.season_types import SeasonModification
 from app.plans.modify.season_validators import validate_season_modification
@@ -37,21 +37,26 @@ def _get_week_date_range(athlete_id: int, week_number: int, user_id: str | None 
         ValueError: If no sessions found for the week
     """
     with get_session() as db:
+        # Get user_id from athlete_id if not provided
+        if user_id is None:
+            account_result = db.execute(
+                select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id)).limit(1)
+            ).first()
+            if account_result:
+                user_id = account_result[0].user_id
+            else:
+                raise ValueError(f"No user_id found for athlete_id={athlete_id}")
+
         query = (
             select(
-                func.min(PlannedSession.date).label("min_date"),
-                func.max(PlannedSession.date).label("max_date"),
+                func.min(PlannedSession.starts_at).label("min_date"),
+                func.max(PlannedSession.starts_at).label("max_date"),
             )
             .where(
-                PlannedSession.athlete_id == athlete_id,
-                PlannedSession.plan_type == "season",
-                PlannedSession.week_number == week_number,
-                PlannedSession.completed.is_(False),
+                PlannedSession.user_id == user_id,
+                PlannedSession.status != "completed",
             )
         )
-
-        if user_id:
-            query = query.where(PlannedSession.user_id == user_id)
 
         result = db.execute(query).first()
 
@@ -102,22 +107,61 @@ def _get_season_weeks(athlete_id: int) -> list[int]:
         List of week numbers (1-based)
     """
     with get_session() as db:
+        # Get user_id from athlete_id
+        account_result = db.execute(
+            select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id)).limit(1)
+        ).first()
+        if not account_result:
+            return []
+
+        user_id = account_result[0].user_id
+
+        # Get season plan to calculate week numbers from start date
+        season_plan = (
+            db.execute(
+                select(SeasonPlan)
+                .where(SeasonPlan.athlete_id == athlete_id, SeasonPlan.is_active.is_(True))
+                .order_by(SeasonPlan.version.desc())
+            )
+            .scalar_one_or_none()
+        )
+
+        if not season_plan or not season_plan.start_date:
+            # Can't calculate week numbers without season plan start date
+            return []
+
         sessions = (
             db.execute(
                 select(PlannedSession)
                 .where(
-                    PlannedSession.athlete_id == athlete_id,
-                    PlannedSession.plan_type == "season",
-                    PlannedSession.completed.is_(False),
+                    PlannedSession.user_id == user_id,
+                    PlannedSession.status != "completed",
                 )
-                .distinct(PlannedSession.week_number)
-                .order_by(PlannedSession.week_number)
+                .distinct(PlannedSession.starts_at)
+                .order_by(PlannedSession.starts_at)
             )
             .scalars()
             .all()
         )
 
-        return sorted({s.week_number for s in sessions if s.week_number is not None})
+        # Calculate week numbers from dates relative to season start
+        if not season_plan.start_date:
+            return []
+
+        season_start = season_plan.start_date.date() if isinstance(season_plan.start_date, datetime) else season_plan.start_date
+        days_since_monday = season_start.weekday()
+        first_monday = season_start - timedelta(days=days_since_monday)
+
+        week_numbers = set()
+        for session in sessions:
+            if session.starts_at:
+                session_date = session.starts_at.date()
+                days_diff = (session_date - first_monday).days
+                if days_diff >= 0:
+                    week_num = (days_diff // 7) + 1
+                    week_numbers.add(week_num)
+
+        return sorted(week_numbers)
 
 
 def modify_season(

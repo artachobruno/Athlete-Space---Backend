@@ -48,10 +48,14 @@ def fetch_and_save_streams(
         logger.debug(f"[FETCH_STREAMS] Activity {activity.id} already has streams data, skipping")
         return False
 
+    if activity.source != "strava" or not activity.source_activity_id:
+        logger.warning("[FETCH_STREAMS] Activity is not from Strava or missing source_activity_id")
+        return False
+
     try:
-        strava_activity_id = int(activity.strava_activity_id)
+        strava_activity_id = int(activity.source_activity_id)
     except (ValueError, TypeError):
-        logger.warning(f"[FETCH_STREAMS] Invalid strava_activity_id: {activity.strava_activity_id}")
+        logger.warning(f"[FETCH_STREAMS] Invalid source_activity_id: {activity.source_activity_id}")
         return False
 
     logger.info(f"[FETCH_STREAMS] Fetching streams for activity {strava_activity_id}")
@@ -146,10 +150,10 @@ def fetch_streams_for_recent_activities(
             .where(
                 Activity.user_id == user_id,
                 Activity.source == "strava",
-                Activity.start_time >= cutoff_date,
+                Activity.starts_at >= cutoff_date,
                 Activity.streams_data.is_(None),
             )
-            .order_by(Activity.start_time.desc())
+            .order_by(Activity.starts_at.desc())
             .limit(limit)
         )
         .scalars()

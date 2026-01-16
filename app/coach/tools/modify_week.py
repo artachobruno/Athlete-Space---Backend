@@ -5,12 +5,14 @@ Intent distribution is preserved unless explicitly overridden.
 Never calls plan_week, never infers intent, never touches other weeks.
 """
 
+import asyncio
 import copy
 from datetime import date, datetime, timezone
 
 from loguru import logger
 from sqlalchemy import update
 
+from app.coach.explainability import explain_plan_revision
 from app.coach.tools.modify_day import modify_day
 from app.db.models import AthleteProfile, PlannedSession
 from app.db.session import get_session as _get_session
@@ -33,6 +35,47 @@ from app.plans.revision.builder import PlanRevisionBuilder
 get_session = _get_session
 
 MIN_LONG_DISTANCE_MILES = 8.0  # Minimum long run distance
+
+
+def _generate_explanation_sync(
+    revision,
+    athlete_profile: AthleteProfile | None = None,
+) -> dict | None:
+    """Generate explanation for a revision (sync wrapper for async function).
+
+    Args:
+        revision: PlanRevision object
+        athlete_profile: Optional athlete profile
+
+    Returns:
+        Explanation dict or None if generation fails
+    """
+    try:
+        athlete_context = {}
+        if athlete_profile and athlete_profile.race_date:
+            athlete_context["race_date"] = athlete_profile.race_date
+
+        deltas_dict = {
+            "deltas": [delta.model_dump() for delta in revision.deltas],
+        }
+        constraints_triggered = [r.rule_id for r in revision.rules if r.triggered]
+
+        explanation = asyncio.run(
+            explain_plan_revision(
+                revision=revision,
+                deltas=deltas_dict,
+                athlete_profile=athlete_context if athlete_context else None,
+                constraints_triggered=constraints_triggered if constraints_triggered else None,
+            )
+        )
+        return explanation.model_dump() if explanation else None
+    except Exception as e:
+        logger.warning(
+            "Failed to generate explanation for revision",
+            revision_id=revision.revision_id,
+            error=str(e),
+        )
+        return None
 
 
 def modify_week(
@@ -122,10 +165,12 @@ def modify_week(
             )
             db.commit()
 
+        explanation = _generate_explanation_sync(revision, athlete_profile)
         return {
             "success": False,
             "error": f"Invalid date format: {e}",
             "revision": revision,
+            "explanation": explanation,
         }
 
     # Fetch sessions in range
@@ -232,10 +277,12 @@ def modify_week(
             )
             db.commit()
 
+        explanation = _generate_explanation_sync(revision, athlete_profile)
         return {
             "success": False,
             "error": f"Invalid modification: {e}",
             "revision": revision,
+            "explanation": explanation,
         }
 
     # Apply modification based on change_type
@@ -297,10 +344,12 @@ def modify_week(
                     )
                     db.commit()
 
+                explanation = _generate_explanation_sync(revision, athlete_profile)
                 return {
                     "success": False,
                     "error": result.get("error", "Unknown error"),
                     "revision": revision,
+                    "explanation": explanation,
                 }
 
             # Merge revision from modify_day
@@ -418,10 +467,12 @@ def modify_week(
                 )
                 db.commit()
 
+            explanation = _generate_explanation_sync(revision, athlete_profile)
             return {
                 "success": False,
                 "error": f"Unknown change_type: {modification.change_type}",
                 "revision": revision,
+                "explanation": explanation,
             }
 
         # Record deltas for all modified sessions
@@ -524,11 +575,13 @@ def modify_week(
                     )
                     update_db.commit()
 
+        explanation = _generate_explanation_sync(revision, athlete_profile)
         result = {
             "success": True,
             "message": f"Modified {len(saved_sessions)} sessions",
             "modified_sessions": [s.id for s in saved_sessions],
             "revision": revision,
+            "explanation": explanation,
         }
 
         # Optional: Trigger regeneration if requested
@@ -582,10 +635,12 @@ def modify_week(
             )
             db.commit()
 
+        explanation = _generate_explanation_sync(revision, athlete_profile)
         return {
             "success": False,
             "error": f"Failed to apply modification: {e}",
             "revision": revision,
+            "explanation": explanation,
         }
     else:
         return result

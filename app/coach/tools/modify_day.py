@@ -5,12 +5,14 @@ Intent is preserved unless explicitly overridden.
 Never calls plan_day, never infers intent, never touches other days.
 """
 
+import asyncio
 import copy
 from datetime import date, datetime, timezone
 
 from loguru import logger
 from sqlalchemy import update
 
+from app.coach.explainability import explain_plan_revision
 from app.db.models import AthleteProfile, PlannedSession
 from app.db.session import get_session as _get_session
 from app.plans.modify.plan_revision_repo import create_plan_revision
@@ -144,10 +146,38 @@ def modify_day(
             )
             db.commit()
 
+        # Generate explanation for blocked revision
+        explanation = None
+        try:
+            athlete_context = {}
+            if athlete_profile and athlete_profile.race_date:
+                athlete_context["race_date"] = athlete_profile.race_date
+
+            deltas_dict = {
+                "deltas": [delta.model_dump() for delta in revision.deltas],
+            }
+            constraints_triggered = [r.rule_id for r in revision.rules if r.triggered]
+
+            explanation = asyncio.run(
+                explain_plan_revision(
+                    revision=revision,
+                    deltas=deltas_dict,
+                    athlete_profile=athlete_context if athlete_context else None,
+                    constraints_triggered=constraints_triggered if constraints_triggered else None,
+                )
+            )
+        except Exception as explain_error:
+            logger.warning(
+                "Failed to generate explanation for blocked revision",
+                revision_id=revision.revision_id,
+                error=str(explain_error),
+            )
+
         return {
             "success": False,
             "error": f"Invalid modification: {e}",
             "revision": revision,
+            "explanation": explanation.model_dump() if explanation else None,
         }
 
     # 2. Fetch the target session deterministically
@@ -180,10 +210,38 @@ def modify_day(
             )
             db.commit()
 
+        # Generate explanation for blocked revision (no session found)
+        explanation = None
+        try:
+            athlete_context = {}
+            if athlete_profile and athlete_profile.race_date:
+                athlete_context["race_date"] = athlete_profile.race_date
+
+            deltas_dict = {
+                "deltas": [delta.model_dump() for delta in revision.deltas],
+            }
+            constraints_triggered = [r.rule_id for r in revision.rules if r.triggered]
+
+            explanation = asyncio.run(
+                explain_plan_revision(
+                    revision=revision,
+                    deltas=deltas_dict,
+                    athlete_profile=athlete_context if athlete_context else None,
+                    constraints_triggered=constraints_triggered if constraints_triggered else None,
+                )
+            )
+        except Exception as explain_error:
+            logger.warning(
+                "Failed to generate explanation for blocked revision",
+                revision_id=revision.revision_id,
+                error=str(explain_error),
+            )
+
         return {
             "success": False,
             "error": f"No planned session found for date {target_date.isoformat()}",
             "revision": revision,
+            "explanation": explanation.model_dump() if explanation else None,
         }
 
     logger.info(
@@ -654,12 +712,47 @@ def modify_day(
             "revision": revision,
         }
     else:
+        # Generate explanation for the revision
+        explanation = None
+        try:
+            # Build athlete context for explanation
+            athlete_context = {}
+            if athlete_profile and athlete_profile.race_date:
+                athlete_context["race_date"] = athlete_profile.race_date
+                # Add other context fields as needed
+
+            # Build deltas dict from revision
+            deltas_dict = {
+                "deltas": [delta.model_dump() for delta in revision.deltas],
+            }
+
+            # Extract constraints triggered
+            constraints_triggered = [r.rule_id for r in revision.rules if r.triggered]
+
+            # Call explainability (async from sync context)
+            explanation = asyncio.run(
+                explain_plan_revision(
+                    revision=revision,
+                    deltas=deltas_dict,
+                    athlete_profile=athlete_context if athlete_context else None,
+                    constraints_triggered=constraints_triggered if constraints_triggered else None,
+                )
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to generate revision explanation",
+                revision_id=revision.revision_id,
+                error=str(e),
+            )
+            # Don't fail the operation if explanation fails
+
         result = {
             "success": True,
             "message": "Session modified successfully",
             "modified_session_id": saved_session.id,
             "original_session_id": original_session.id,
             "revision": revision,
+            "explanation": explanation.model_dump() if explanation else None,
         }
 
         # Optional: Trigger regeneration if requested

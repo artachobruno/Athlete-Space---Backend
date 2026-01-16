@@ -4,7 +4,7 @@ Deterministic, stateless helpers for race/taper calculations.
 Reusable across day/week/season validators.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from app.plans.race.constants import TAPER_WEEKS_DEFAULT
 
@@ -61,3 +61,18 @@ def is_taper_week(
         return False
     delta_weeks = (race_date - week_start).days // 7
     return 0 < delta_weeks <= taper_weeks
+
+
+def get_taper_start_date(race_date: date, taper_weeks: int) -> date:
+    """Calculate the start date of the taper period.
+
+    The taper period starts taper_weeks weeks before the race date.
+
+    Args:
+        race_date: Race date
+        taper_weeks: Number of taper weeks before race
+
+    Returns:
+        Start date of the taper period
+    """
+    return race_date - timedelta(weeks=taper_weeks)

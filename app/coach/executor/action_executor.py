@@ -40,7 +40,8 @@ from app.db.session import get_session
 from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
 from app.plans.modify.types import DayModification
-from app.plans.revision import PlanRevisionRegistry, build_explanation_payload
+from app.plans.revision.explanation_payload import build_explanation_payload
+from app.plans.revision.registry import PlanRevisionRegistry
 
 
 def serialize_for_mcp(obj: Any) -> Any:

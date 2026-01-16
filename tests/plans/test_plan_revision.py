@@ -17,7 +17,8 @@ from app.db.models import AthleteProfile, PlannedSession
 from app.plans.modify.types import DayModification
 from app.plans.modify.week_types import WeekModification
 from app.plans.race.constants import TAPER_WEEKS_DEFAULT
-from app.plans.revision import PlanRevision, PlanRevisionBuilder, RevisionOutcome
+from app.plans.revision.builder import PlanRevisionBuilder
+from app.plans.revision.types import PlanRevision, RevisionOutcome
 
 
 @pytest.fixture

@@ -18,7 +18,9 @@ from app.plans.modify.repository import get_planned_session_by_date, save_modifi
 from app.plans.modify.types import DayModification
 from app.plans.modify.validators import validate_pace_for_intent, validate_race_day_modification
 from app.plans.pace import estimate_pace
-from app.plans.revision import PlanRevisionBuilder
+from app.plans.regenerate.regeneration_service import regenerate_plan
+from app.plans.regenerate.types import RegenerationRequest
+from app.plans.revision.builder import PlanRevisionBuilder
 from app.plans.types import WorkoutMetrics
 from app.plans.validators import validate_workout_metrics
 from app.plans.week_planner import infer_intent_from_session_type
@@ -31,6 +33,7 @@ def modify_day(
     context: dict,
     *,
     athlete_profile: AthleteProfile | None = None,
+    auto_regenerate: bool = False,
 ) -> dict:
     """Modify a single planned workout day.
 
@@ -48,6 +51,8 @@ def modify_day(
         athlete_profile: Optional athlete profile for race day protection.
             If None, race day protection is skipped. Should be fetched by
             orchestrator and passed down (tools do not access DB).
+        auto_regenerate: If True, automatically trigger plan regeneration
+            after successful modification. Defaults to False.
 
     Returns:
         Dictionary with:
@@ -649,10 +654,39 @@ def modify_day(
             "revision": revision,
         }
     else:
-        return {
+        result = {
             "success": True,
             "message": "Session modified successfully",
             "modified_session_id": saved_session.id,
             "original_session_id": original_session.id,
             "revision": revision,
         }
+
+        # Optional: Trigger regeneration if requested
+        if auto_regenerate:
+            try:
+                today = datetime.now(timezone.utc).date()
+                regen_req = RegenerationRequest(
+                    start_date=today,
+                    mode="partial",
+                    reason=f"Auto-regenerate after modify_day on {target_date.isoformat()}",
+                )
+                regen_revision = regenerate_plan(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    req=regen_req,
+                )
+                result["regeneration_revision"] = regen_revision
+                logger.info(
+                    "Auto-regeneration triggered after modify_day",
+                    revision_id=regen_revision.id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Auto-regeneration failed after modify_day",
+                    error=str(e),
+                )
+                # Don't fail the modify_day operation if regeneration fails
+                result["regeneration_error"] = str(e)
+
+        return result

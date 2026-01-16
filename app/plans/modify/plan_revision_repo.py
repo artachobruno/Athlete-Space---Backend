@@ -82,3 +82,28 @@ def list_plan_revisions(
         .order_by(PlanRevision.created_at.desc())
     )
     return list(session.execute(query).scalars().all())
+
+
+def list_regenerations(
+    session: Session,
+    athlete_id: int,
+) -> list[PlanRevision]:
+    """List plan regenerations for an athlete, ordered by creation time (newest first).
+
+    Args:
+        session: Database session
+        athlete_id: Athlete ID to query regenerations for
+
+    Returns:
+        List of PlanRevision instances with revision_type="regenerate_plan",
+        ordered by created_at DESC
+    """
+    query = (
+        select(PlanRevision)
+        .where(
+            PlanRevision.athlete_id == athlete_id,
+            PlanRevision.revision_type == "regenerate_plan",
+        )
+        .order_by(PlanRevision.created_at.desc())
+    )
+    return list(session.execute(query).scalars().all())

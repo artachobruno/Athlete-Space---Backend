@@ -25,7 +25,9 @@ from app.plans.modify.week_repository import (
 from app.plans.modify.week_types import WeekModification
 from app.plans.modify.week_validators import validate_week_modification
 from app.plans.race.utils import is_race_week, is_taper_week
-from app.plans.revision import PlanRevisionBuilder
+from app.plans.regenerate.regeneration_service import regenerate_plan
+from app.plans.regenerate.types import RegenerationRequest
+from app.plans.revision.builder import PlanRevisionBuilder
 
 # Re-export for testability
 get_session = _get_session
@@ -40,6 +42,7 @@ def modify_week(
     modification: WeekModification,
     user_request: str | None = None,
     athlete_profile: AthleteProfile | None = None,
+    auto_regenerate: bool = False,
 ) -> dict:
     """Modify a week range of planned workouts.
 
@@ -59,6 +62,8 @@ def modify_week(
         athlete_profile: Optional athlete profile for race/taper protection.
             If None, race/taper protection is skipped. Should be fetched by
             orchestrator and passed down (tools do not access DB).
+        auto_regenerate: If True, automatically trigger plan regeneration
+            after successful modification. Defaults to False.
 
     Returns:
         Dictionary with:
@@ -519,12 +524,39 @@ def modify_week(
                     )
                     update_db.commit()
 
-        return {
+        result = {
             "success": True,
             "message": f"Modified {len(saved_sessions)} sessions",
             "modified_sessions": [s.id for s in saved_sessions],
             "revision": revision,
         }
+
+        # Optional: Trigger regeneration if requested
+        if auto_regenerate:
+            try:
+                today = datetime.now(timezone.utc).date()
+                regen_req = RegenerationRequest(
+                    start_date=today,
+                    mode="partial",
+                    reason=f"Auto-regenerate after modify_week from {start_date.isoformat()} to {end_date.isoformat()}",
+                )
+                regen_revision = regenerate_plan(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    req=regen_req,
+                )
+                result["regeneration_revision"] = regen_revision
+                logger.info(
+                    "Auto-regeneration triggered after modify_week",
+                    revision_id=regen_revision.id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Auto-regeneration failed after modify_week",
+                    error=str(e),
+                )
+                # Don't fail the modify_week operation if regeneration fails
+                result["regeneration_error"] = str(e)
 
     except Exception as e:
         logger.exception("MODIFY → week: Failed to apply modification")
@@ -555,6 +587,8 @@ def modify_week(
             "error": f"Failed to apply modification: {e}",
             "revision": revision,
         }
+    else:
+        return result
 
 
 def _apply_volume_modification(

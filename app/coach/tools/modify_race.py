@@ -21,6 +21,8 @@ from app.db.models import AthleteProfile
 from app.db.session import get_session
 from app.plans.modify.race_types import RaceModification
 from app.plans.modify.race_validators import validate_race_modification
+from app.plans.regenerate.regeneration_service import regenerate_plan
+from app.plans.regenerate.types import RegenerationRequest
 
 
 def modify_race(
@@ -28,6 +30,7 @@ def modify_race(
     user_id: str,
     athlete_id: int,
     modification: RaceModification,
+    auto_regenerate: bool = False,
 ) -> dict:
     """Modify race-specific attributes.
 
@@ -43,6 +46,8 @@ def modify_race(
         user_id: User ID
         athlete_id: Athlete ID
         modification: RaceModification object
+        auto_regenerate: If True, automatically trigger plan regeneration
+            after successful modification. Defaults to False.
 
     Returns:
         Dictionary with:
@@ -189,10 +194,39 @@ def modify_race(
                 "error": f"Failed to apply modification: {e}",
             }
         else:
-            return {
+            result = {
                 "success": True,
                 "race_updated": True,
                 "message": f"Race {modification.change_type} applied successfully",
                 "warnings": warnings,
                 "next_recommended_actions": next_recommended_actions,
             }
+
+            # Optional: Trigger regeneration if requested
+            if auto_regenerate:
+                try:
+                    today = datetime.now(timezone.utc).date()
+                    regen_req = RegenerationRequest(
+                        start_date=today,
+                        mode="partial",
+                        reason=f"Auto-regenerate after modify_race: {modification.change_type}",
+                    )
+                    regen_revision = regenerate_plan(
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                        req=regen_req,
+                    )
+                    result["regeneration_revision"] = regen_revision
+                    logger.info(
+                        "Auto-regeneration triggered after modify_race",
+                        revision_id=regen_revision.id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Auto-regeneration failed after modify_race",
+                        error=str(e),
+                    )
+                    # Don't fail the modify_race operation if regeneration fails
+                    result["regeneration_error"] = str(e)
+
+            return result

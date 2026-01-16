@@ -257,7 +257,6 @@ def _persist_week_sessions(
     *,
     plan_id: str,
     user_id: str,
-    athlete_id: int,
 ) -> tuple[int, int, int, list[str]]:
     """Persist all sessions for a single week.
 
@@ -268,7 +267,6 @@ def _persist_week_sessions(
         plan_start: Plan start date
         plan_id: Plan ID
         user_id: User ID
-        athlete_id: Athlete ID
 
     Returns:
         Tuple of (created_count, updated_count, skipped_count, warnings_list)
@@ -300,7 +298,6 @@ def _persist_week_sessions(
                     plan_start=plan_start,
                     plan_id=plan_id,
                     user_id=user_id,
-                    athlete_id=athlete_id,
                     session_order=session_order,
                 )
 
@@ -346,7 +343,6 @@ def _upsert_session(
     plan_start: date,
     plan_id: str,
     user_id: str,
-    athlete_id: int,
     session_order: int,
 ) -> str:
     """Upsert a single session into the database.
@@ -359,7 +355,6 @@ def _upsert_session(
         plan_start: Plan start date (Monday of first week)
         plan_id: Plan identifier
         user_id: User ID
-        athlete_id: Athlete ID
         session_order: Order of session within the day (0-based)
 
     Returns:
@@ -367,7 +362,6 @@ def _upsert_session(
     """
     # Compute calendar date
     session_date = _compute_session_date(plan_start, week.week_index, planned_session.day_index)
-    session_datetime = datetime.combine(session_date, datetime.min.time()).replace(tzinfo=timezone.utc)
 
     # Extract data from planned session
     text_output = planned_session.text_output
@@ -392,7 +386,6 @@ def _upsert_session(
     sport = normalize_sport("run")  # Default to "run", can be extended later
 
     # Build unique constraint key for lookup (schema v2 dedupe key)
-    # Using: (user_id, starts_at, COALESCE(title,''), COALESCE(sport,''))
     # Note: We use title and sport for additional uniqueness beyond just starts_at
     try:
         # Build query conditions (schema v2: no athlete_id, use starts_at, season_plan_id)
@@ -552,7 +545,6 @@ def persist_plan(
                     plan_start=plan_start,
                     plan_id=plan_id,
                     user_id=user_id,
-                    athlete_id=athlete_id,
                 )
                 created += week_created
                 updated += week_updated

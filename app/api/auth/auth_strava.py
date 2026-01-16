@@ -156,12 +156,12 @@ def _resolve_or_create_user_id(athlete_id: str, user_id: str) -> str:
 
         user = user_result[0]
 
-        # Verify user has credentials (email and password)
-        if not user.email or not user.password_hash:
-            logger.error(f"[STRAVA_OAUTH] User missing credentials: user_id={user_id}")
+        # Verify user has email (required for OAuth linking)
+        if not user.email:
+            logger.error(f"[STRAVA_OAUTH] User missing email: user_id={user_id}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User must have email and password credentials. Please sign up first.",
+                detail="User must have an email address. Please sign up first.",
             )
 
         # Update user with strava_athlete_id if not set

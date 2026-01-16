@@ -10,6 +10,7 @@ import csv
 import os
 import threading
 import time
+from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from zoneinfo import ZoneInfo
@@ -59,6 +60,22 @@ from app.services.training_preferences import extract_and_store_race_info
 from app.users.profile_service import create_user_settings, validate_user_settings_not_null
 
 router = APIRouter(prefix="/me", tags=["me"])
+
+
+def _get_preference(settings: UserSettings | None, key: str, default: bool | str | None) -> bool | str:
+    """Get a preference value from UserSettings preferences JSONB.
+
+    Args:
+        settings: UserSettings instance (may be None)
+        key: Preference key name
+        default: Default value to return if not found
+
+    Returns:
+        Preference value or default
+    """
+    if not settings or not settings.preferences:
+        return default
+    return settings.preferences.get(key, default)
 
 
 def _get_allowed_origins() -> list[str]:
@@ -505,15 +522,16 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
             try:
                 settings = session.query(UserSettings).filter_by(user_id=user_id).first()
                 if settings:
+                    prefs = settings.preferences or {}
                     notifications_response = NotificationsResponse(
-                        email_notifications=settings.email_notifications if settings.email_notifications is not None else True,
-                        push_notifications=settings.push_notifications if settings.push_notifications is not None else True,
-                        workout_reminders=settings.workout_reminders if settings.workout_reminders is not None else True,
-                        training_load_alerts=settings.training_load_alerts if settings.training_load_alerts is not None else True,
-                        race_reminders=settings.race_reminders if settings.race_reminders is not None else True,
-                        weekly_summary=settings.weekly_summary if settings.weekly_summary is not None else True,
-                        goal_achievements=settings.goal_achievements if settings.goal_achievements is not None else True,
-                        coach_messages=settings.coach_messages if settings.coach_messages is not None else True,
+                        email_notifications=prefs.get("email_notifications", True),
+                        push_notifications=prefs.get("push_notifications", True),
+                        workout_reminders=prefs.get("workout_reminders", True),
+                        training_load_alerts=prefs.get("training_load_alerts", True),
+                        race_reminders=prefs.get("race_reminders", True),
+                        weekly_summary=prefs.get("weekly_summary", True),
+                        goal_achievements=prefs.get("goal_achievements", True),
+                        coach_messages=prefs.get("coach_messages", True),
                     ).model_dump()
             except (InternalError, OperationalError) as e:
                 # Database transaction errors - rollback and log, but continue with None
@@ -527,10 +545,11 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
             try:
                 settings = session.query(UserSettings).filter_by(user_id=user_id).first()
                 if settings:
+                    prefs = settings.preferences or {}
                     privacy_response = PrivacySettingsResponse(
-                        profile_visibility=settings.profile_visibility or "private",
-                        share_activity_data=settings.share_activity_data or False,
-                        share_training_metrics=settings.share_training_metrics or False,
+                        profile_visibility=prefs.get("profile_visibility", "private"),
+                        share_activity_data=prefs.get("share_activity_data", False),
+                        share_training_metrics=prefs.get("share_training_metrics", False),
                     ).model_dump()
             except (InternalError, OperationalError) as e:
                 # Database transaction errors - rollback and log, but continue with None
@@ -739,15 +758,12 @@ def _create_new_profile(session, user_id: str) -> AthleteProfile:
         New AthleteProfile instance
     """
     # Try to get athlete_id from StravaAccount if available
-    athlete_id = 0
     try:
         strava_account = session.query(StravaAccount).filter_by(user_id=user_id).first()
         if strava_account:
-            # Try to parse athlete_id as int, fallback to 0
-            try:
-                athlete_id = int(strava_account.athlete_id)
-            except (ValueError, TypeError):
-                athlete_id = 0
+            # Try to parse athlete_id as int (validation only, no assignment)
+            with suppress(ValueError, TypeError):
+                _ = int(strava_account.athlete_id)
     except Exception as e:
         logger.debug(f"Could not get athlete_id for user {user_id}: {e}")
 
@@ -2163,9 +2179,6 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
                 _validate_goal_text(request.goal)
             settings.goal = request.goal
 
-            # Validate all NOT NULL constraints before commit (hard guardrail)
-            validate_user_settings_not_null(settings)
-
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
 
@@ -2231,11 +2244,12 @@ def get_privacy_settings(user_id: str = Depends(get_current_user_id)):
 
             session.expunge(settings)
 
-            # Return stored values exactly as persisted (no inference)
+            # Return stored values from preferences JSONB
+            prefs = settings.preferences or {}
             return PrivacySettingsResponse(
-                profile_visibility=settings.profile_visibility,
-                share_activity_data=settings.share_activity_data,
-                share_training_metrics=settings.share_training_metrics,
+                profile_visibility=prefs.get("profile_visibility", "private"),
+                share_activity_data=prefs.get("share_activity_data", False),
+                share_training_metrics=prefs.get("share_training_metrics", False),
             )
     except Exception as e:
         # Check if this is a database schema error (missing column)
@@ -2274,17 +2288,16 @@ def update_privacy_settings(request: PrivacySettingsUpdateRequest, user_id: str 
                 settings = create_user_settings(user_id=user_id)
                 session.add(settings)
 
-            # Full object overwrite - set all fields from request
+            # Update preferences JSONB from request
+            if settings.preferences is None:
+                settings.preferences = {}
             if request.profile_visibility is not None:
                 _validate_profile_visibility(request.profile_visibility)
-                settings.profile_visibility = request.profile_visibility
+                settings.preferences["profile_visibility"] = request.profile_visibility
             if request.share_activity_data is not None:
-                settings.share_activity_data = request.share_activity_data
+                settings.preferences["share_activity_data"] = request.share_activity_data
             if request.share_training_metrics is not None:
-                settings.share_training_metrics = request.share_training_metrics
-
-            # Validate all NOT NULL constraints before commit (hard guardrail)
-            validate_user_settings_not_null(settings)
+                settings.preferences["share_training_metrics"] = request.share_training_metrics
 
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -2292,11 +2305,12 @@ def update_privacy_settings(request: PrivacySettingsUpdateRequest, user_id: str 
             session.expunge(settings)
 
             logger.info(f"[API] Privacy settings updated for user_id={user_id}")
-            # Return stored values exactly as persisted (no inference)
+            # Return stored values from preferences JSONB
+            prefs = settings.preferences or {}
             return PrivacySettingsResponse(
-                profile_visibility=settings.profile_visibility,
-                share_activity_data=settings.share_activity_data,
-                share_training_metrics=settings.share_training_metrics,
+                profile_visibility=prefs.get("profile_visibility", "private"),
+                share_activity_data=prefs.get("share_activity_data", False),
+                share_training_metrics=prefs.get("share_training_metrics", False),
             )
     except HTTPException:
         raise
@@ -2336,16 +2350,17 @@ def get_notifications(user_id: str = Depends(get_current_user_id)):
 
             session.expunge(settings)
 
-            # Return stored values exactly as persisted (no inference)
+            # Return stored values from preferences JSONB
+            prefs = settings.preferences or {}
             return NotificationsResponse(
-                email_notifications=settings.email_notifications,
-                push_notifications=settings.push_notifications,
-                workout_reminders=settings.workout_reminders,
-                training_load_alerts=settings.training_load_alerts,
-                race_reminders=settings.race_reminders,
-                weekly_summary=settings.weekly_summary,
-                goal_achievements=settings.goal_achievements,
-                coach_messages=settings.coach_messages,
+                email_notifications=prefs.get("email_notifications", True),
+                push_notifications=prefs.get("push_notifications", True),
+                workout_reminders=prefs.get("workout_reminders", True),
+                training_load_alerts=prefs.get("training_load_alerts", True),
+                race_reminders=prefs.get("race_reminders", True),
+                weekly_summary=prefs.get("weekly_summary", True),
+                goal_achievements=prefs.get("goal_achievements", True),
+                coach_messages=prefs.get("coach_messages", True),
             )
     except Exception as e:
         # Check if this is a database schema error (missing column)
@@ -2389,26 +2404,25 @@ def update_notifications(request: NotificationsUpdateRequest, user_id: str = Dep
                 settings = create_user_settings(user_id=user_id)
                 session.add(settings)
 
-            # Update fields from request (only if not None to preserve NOT NULL constraints)
+            # Update preferences JSONB from request
+            if settings.preferences is None:
+                settings.preferences = {}
             if request.email_notifications is not None:
-                settings.email_notifications = request.email_notifications
+                settings.preferences["email_notifications"] = request.email_notifications
             if request.push_notifications is not None:
-                settings.push_notifications = request.push_notifications
+                settings.preferences["push_notifications"] = request.push_notifications
             if request.workout_reminders is not None:
-                settings.workout_reminders = request.workout_reminders
+                settings.preferences["workout_reminders"] = request.workout_reminders
             if request.training_load_alerts is not None:
-                settings.training_load_alerts = request.training_load_alerts
+                settings.preferences["training_load_alerts"] = request.training_load_alerts
             if request.race_reminders is not None:
-                settings.race_reminders = request.race_reminders
+                settings.preferences["race_reminders"] = request.race_reminders
             if request.weekly_summary is not None:
-                settings.weekly_summary = request.weekly_summary
+                settings.preferences["weekly_summary"] = request.weekly_summary
             if request.goal_achievements is not None:
-                settings.goal_achievements = request.goal_achievements
+                settings.preferences["goal_achievements"] = request.goal_achievements
             if request.coach_messages is not None:
-                settings.coach_messages = request.coach_messages
-
-            # Validate all NOT NULL constraints before commit (hard guardrail)
-            validate_user_settings_not_null(settings)
+                settings.preferences["coach_messages"] = request.coach_messages
 
             settings.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -2416,16 +2430,17 @@ def update_notifications(request: NotificationsUpdateRequest, user_id: str = Dep
             session.expunge(settings)
 
             logger.info(f"[API] Notifications updated for user_id={user_id}")
-            # Return stored values exactly as persisted (no inference)
+            # Return stored values from preferences JSONB
+            prefs = settings.preferences or {}
             return NotificationsResponse(
-                email_notifications=settings.email_notifications,
-                push_notifications=settings.push_notifications,
-                workout_reminders=settings.workout_reminders,
-                training_load_alerts=settings.training_load_alerts,
-                race_reminders=settings.race_reminders,
-                weekly_summary=settings.weekly_summary,
-                goal_achievements=settings.goal_achievements,
-                coach_messages=settings.coach_messages,
+                email_notifications=prefs.get("email_notifications", True),
+                push_notifications=prefs.get("push_notifications", True),
+                workout_reminders=prefs.get("workout_reminders", True),
+                training_load_alerts=prefs.get("training_load_alerts", True),
+                race_reminders=prefs.get("race_reminders", True),
+                weekly_summary=prefs.get("weekly_summary", True),
+                goal_achievements=prefs.get("goal_achievements", True),
+                coach_messages=prefs.get("coach_messages", True),
             )
     except Exception as e:
         logger.exception(f"Error updating notifications: {e}")
@@ -2633,31 +2648,43 @@ def export_data(
                         "notifications": (
                             NotificationsResponse(
                                 email_notifications=(
-                                    settings.email_notifications if settings and settings.email_notifications is not None else True
+                                    (settings.preferences or {}).get("email_notifications", True) if settings else True
                                 ),
                                 push_notifications=(
-                                    settings.push_notifications if settings and settings.push_notifications is not None else True
+                                    (settings.preferences or {}).get("push_notifications", True) if settings else True
                                 ),
                                 workout_reminders=(
-                                    settings.workout_reminders if settings and settings.workout_reminders is not None else True
+                                    (settings.preferences or {}).get("workout_reminders", True) if settings else True
                                 ),
                                 training_load_alerts=(
-                                    settings.training_load_alerts if settings and settings.training_load_alerts is not None else True
+                                    (settings.preferences or {}).get("training_load_alerts", True) if settings else True
                                 ),
-                                race_reminders=(settings.race_reminders if settings and settings.race_reminders is not None else True),
-                                weekly_summary=(settings.weekly_summary if settings and settings.weekly_summary is not None else True),
+                                race_reminders=((settings.preferences or {}).get("race_reminders", True) if settings else True),
+                                weekly_summary=((settings.preferences or {}).get("weekly_summary", True) if settings else True),
                                 goal_achievements=(
-                                    settings.goal_achievements if settings and settings.goal_achievements is not None else True
+                                    (settings.preferences or {}).get("goal_achievements", True) if settings else True
                                 ),
-                                coach_messages=(settings.coach_messages if settings and settings.coach_messages is not None else True),
+                                coach_messages=((settings.preferences or {}).get("coach_messages", True) if settings else True),
                             ).model_dump()
                             if settings
                             else None
                         ),
                         "privacy": PrivacySettingsResponse(
-                            profile_visibility=settings.profile_visibility or "private" if settings else "private",
-                            share_activity_data=settings.share_activity_data or False if settings else False,
-                            share_training_metrics=settings.share_training_metrics or False if settings else False,
+                            profile_visibility=(
+                                (settings.preferences or {}).get("profile_visibility", "private")
+                                if settings
+                                else "private"
+                            ),
+                            share_activity_data=(
+                                (settings.preferences or {}).get("share_activity_data", False)
+                                if settings
+                                else False
+                            ),
+                            share_training_metrics=(
+                                (settings.preferences or {}).get("share_training_metrics", False)
+                                if settings
+                                else False
+                            ),
                         ).model_dump()
                         if settings
                         else None,
@@ -2817,7 +2844,7 @@ def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_c
             user = user_result[0]
 
             # Check if user has password auth (schema v2: auth_provider is string, not enum)
-            if user.auth_provider != "password" and user.auth_provider != "email":
+            if user.auth_provider not in {"password", "email"}:
                 _raise_oauth_account()
 
             # Verify current password

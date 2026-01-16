@@ -152,7 +152,7 @@ def _update_existing_activity(
     data_updated = False
     if existing.metrics is None:
         existing.metrics = {}
-    
+
     if raw_json is not None:
         existing.metrics["raw_json"] = raw_json
         data_updated = True
@@ -161,7 +161,7 @@ def _update_existing_activity(
             existing.metrics["raw_json"] = {}
         existing.metrics["raw_json"]["average_heartrate"] = record.avg_hr
         data_updated = True
-    
+
     if streams_data is not None:
         existing.metrics["streams_data"] = streams_data
         data_updated = True
@@ -214,14 +214,14 @@ def _create_new_activity(
         f"type={type(raw_json)}, is_dict={isinstance(raw_json, dict) if raw_json else False}"
     )
     prepared_raw_json = _prepare_raw_json(raw_json, record)
-    
+
     # Build metrics dict (schema v2: raw_json and streams_data go here)
     metrics_dict: dict = {}
     if prepared_raw_json is not None:
         metrics_dict["raw_json"] = prepared_raw_json
     if streams_data is not None:
         metrics_dict["streams_data"] = streams_data
-    
+
     normalized_sport = _normalize_sport(record.sport)
     logger.debug(
         f"[SAVE_ACTIVITIES] Creating Activity object (schema v2): user_id={user_id}, "

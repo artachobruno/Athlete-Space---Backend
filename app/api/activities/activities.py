@@ -23,6 +23,7 @@ from app.integrations.strava.client import StravaClient
 from app.integrations.strava.service import get_strava_client
 from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.pairing.auto_pairing_service import try_auto_pair
+from app.pairing.session_links import get_link_for_activity, unlink_by_activity
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -781,8 +782,6 @@ def unpair_activity(
             )
 
         # Schema v2: Check if paired via SessionLink
-        from app.pairing.session_links import get_link_for_activity, unlink_by_activity
-
         link = get_link_for_activity(session, activity_id)
         if not link:
             raise HTTPException(

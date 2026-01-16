@@ -27,7 +27,7 @@ def create_access_token(user_id: str) -> str:
     user_id_str = str(user_id) if user_id is not None else ""
     if not user_id_str:
         raise ValueError("user_id cannot be None or empty")
-    
+
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id_str,

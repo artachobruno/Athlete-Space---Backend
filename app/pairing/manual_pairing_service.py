@@ -14,7 +14,7 @@ from loguru import logger
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PairingDecision, PlannedSession
-from app.pairing.session_links import unlink_by_activity, upsert_link
+from app.pairing.session_links import get_link_for_activity, unlink_by_activity, upsert_link
 from app.plans.reconciliation.service import reconcile_activity_if_paired
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -199,8 +199,6 @@ def manual_unpair(
         )
 
     # Schema v2: Get plan from SessionLink before unlinking
-    from app.pairing.session_links import get_link_for_activity
-
     link = get_link_for_activity(session, activity_id)
     plan = None
     if link:

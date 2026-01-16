@@ -62,7 +62,7 @@ def get_calendar_items_from_view(
         items = []
         for row in rows:
             item_dict: dict[str, Any] = {}
-            for key in row.keys():
+            for key in row:
                 item_dict[key] = row[key]
             items.append(item_dict)
 
@@ -74,8 +74,6 @@ def get_calendar_items_from_view(
             planned_count=sum(1 for item in items if item.get("kind") == "planned"),
             activity_count=sum(1 for item in items if item.get("kind") == "activity"),
         )
-
-        return items
     except Exception as e:
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg or "relation" in error_msg:
@@ -86,6 +84,16 @@ def get_calendar_items_from_view(
             return []
         logger.exception(f"[CALENDAR] Failed to query calendar_items view: {e!r}")
         raise
+    else:
+        logger.debug(
+            f"Fetched {len(items)} calendar items from view",
+            user_id=user_id,
+            start=start,
+            end=end,
+            planned_count=sum(1 for item in items if item.get("kind") == "planned"),
+            activity_count=sum(1 for item in items if item.get("kind") == "activity"),
+        )
+        return items
 
 
 def calendar_session_from_view_row(row: dict[str, Any]) -> CalendarSession:
@@ -101,7 +109,6 @@ def calendar_session_from_view_row(row: dict[str, Any]) -> CalendarSession:
     item_id = str(row["item_id"])
     kind = str(row["kind"])
     starts_at: datetime | None = row.get("starts_at")
-    ends_at: datetime | None = row.get("ends_at")
     sport: str | None = row.get("sport")
     title: str | None = row.get("title")
     status: str = str(row.get("status", "planned"))

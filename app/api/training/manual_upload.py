@@ -80,14 +80,12 @@ def _raise_duplicate_session_error() -> None:
 def _save_week_sessions_and_get_ids(
     session_dicts: list[dict],
     user_id: str,
-    athlete_id: int,
 ) -> list[str]:
     """Save week sessions to database and return their IDs.
 
     Args:
         session_dicts: List of session dictionaries to save
         user_id: User ID
-        athlete_id: Athlete ID
 
     Returns:
         List of session IDs (skips duplicates)
@@ -169,6 +167,54 @@ def _save_week_sessions_and_get_ids(
                         session_ids[i] = result[0].id
 
     return session_ids
+
+
+def _get_session_ids_for_upload(
+    session_dicts: list[dict],
+    user_id: str,
+    saved_count: int,
+) -> list[str]:
+    """Get session IDs for uploaded sessions by querying starts_at range.
+
+    Args:
+        session_dicts: List of session dictionaries
+        user_id: User ID
+        saved_count: Number of saved sessions
+
+    Returns:
+        List of session IDs
+    """
+    if saved_count <= 0:
+        return []
+
+    # Build starts_at timestamps for date range query
+    starts_at_list: list[datetime] = []
+    for s in session_dicts:
+        session_date = s.get("date")
+        session_time = s.get("time")
+        if session_date:
+            starts_at = combine_date_time(session_date, session_time)
+            if starts_at:
+                starts_at_list.append(starts_at)
+
+    if not starts_at_list:
+        return []
+
+    min_starts_at = min(starts_at_list)
+    max_starts_at = max(starts_at_list)
+
+    with get_session() as session:
+        results = session.execute(
+            select(PlannedSession)
+            .where(PlannedSession.user_id == user_id)
+            .where(PlannedSession.starts_at >= min_starts_at)
+            .where(PlannedSession.starts_at <= max_starts_at)
+            .where(PlannedSession.source == "manual")
+            .order_by(PlannedSession.created_at.desc())
+            .limit(saved_count)
+        ).all()
+
+        return [row[0].id for row in results[:saved_count]]
 
 
 def _get_athlete_id_from_user_id(user_id: str) -> int:
@@ -632,35 +678,7 @@ async def upload_manual_week(
             )
 
             # Get created session IDs (query by starts_at range) (schema v2)
-            session_ids: list[str] = []
-            if saved_count > 0:
-                with get_session() as session:
-                    # Schema v2: Build starts_at timestamps for date range query
-                    starts_at_list: list[datetime] = []
-                    for s in session_dicts:
-                        session_date = s.get("date")
-                        session_time = s.get("time")
-                        if session_date:
-                            starts_at = combine_date_time(session_date, session_time)
-                            if starts_at:
-                                starts_at_list.append(starts_at)
-
-                    if starts_at_list:
-                        min_starts_at = min(starts_at_list)
-                        max_starts_at = max(starts_at_list)
-
-                        # Schema v2: use starts_at instead of date, remove plan_type (not in schema v2)
-                        results = session.execute(
-                            select(PlannedSession)
-                            .where(PlannedSession.user_id == user_id)
-                            .where(PlannedSession.starts_at >= min_starts_at)
-                            .where(PlannedSession.starts_at <= max_starts_at)
-                            .where(PlannedSession.source == "manual")  # Schema v2: use source instead of plan_type
-                            .order_by(PlannedSession.created_at.desc())
-                            .limit(saved_count)
-                        ).all()
-
-                        session_ids = [row[0].id for row in results[:saved_count]]
+            session_ids = _get_session_ids_for_upload(session_dicts, user_id, saved_count)
 
             logger.info(
                 "Manual week uploaded successfully",
@@ -769,35 +787,7 @@ async def upload_manual_season(
             )
 
             # Get created session IDs (query by starts_at range) (schema v2)
-            session_ids: list[str] = []
-            if saved_count > 0:
-                # Schema v2: Build starts_at timestamps for date range query
-                starts_at_list: list[datetime] = []
-                for s in all_sessions:
-                    session_date = s.get("date")
-                    session_time = s.get("time")
-                    if session_date:
-                        starts_at = combine_date_time(session_date, session_time)
-                        if starts_at:
-                            starts_at_list.append(starts_at)
-
-                if starts_at_list:
-                    min_starts_at = min(starts_at_list)
-                    max_starts_at = max(starts_at_list)
-
-                    with get_session() as session:
-                        # Schema v2: use starts_at instead of date, use source instead of plan_type
-                        results = session.execute(
-                            select(PlannedSession)
-                            .where(PlannedSession.user_id == user_id)
-                            .where(PlannedSession.starts_at >= min_starts_at)
-                            .where(PlannedSession.starts_at <= max_starts_at)
-                            .where(PlannedSession.source == "manual")  # Schema v2: use source instead of plan_type
-                            .order_by(PlannedSession.created_at.desc())
-                            .limit(saved_count)
-                        ).all()
-
-                        session_ids = [row[0].id for row in results[:saved_count]]
+            session_ids = _get_session_ids_for_upload(all_sessions, user_id, saved_count)
 
             logger.info(
                 "Manual season uploaded successfully",

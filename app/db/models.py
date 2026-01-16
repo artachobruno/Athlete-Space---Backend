@@ -650,7 +650,8 @@ class PlannedSession(Base):
     workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
 
     # Status tracking
-    status: Mapped[str] = mapped_column(String, nullable=False, default="planned")  # CHECK: 'planned', 'completed', 'skipped', 'moved', 'canceled'
+    # CHECK: 'planned', 'completed', 'skipped', 'moved', 'canceled'
+    status: Mapped[str] = mapped_column(String, nullable=False, default="planned")
 
     # Tags (JSONB array)
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)  # JSONB array of tags

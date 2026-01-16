@@ -6,6 +6,8 @@ Use these utilities during the migration to ensure consistent transformations.
 
 from __future__ import annotations
 
+from datetime import datetime, time, timezone
+
 
 def normalize_sport(sport: str) -> str:
     """Normalize sport string to schema v2 values.
@@ -218,8 +220,6 @@ def combine_date_time(date_value, time_value: str | None = None):
         >>> combine_date_time(d, "14:30")
         datetime.datetime(2024, 1, 15, 14, 30, tzinfo=timezone.utc)
     """
-    from datetime import datetime, time, timezone
-
     # Handle date_value as datetime, date, or string
     if isinstance(date_value, datetime):
         dt = date_value

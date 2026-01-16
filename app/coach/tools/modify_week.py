@@ -495,8 +495,19 @@ def modify_week(
             )
 
             # Record field changes (use compatibility properties for user-friendly display)
-            original_distance_mi = original.distance_mi if hasattr(original, "distance_mi") else (original.distance_meters / 1609.34 if original.distance_meters else None)
-            modified_distance_mi = modified.distance_mi if hasattr(modified, "distance_mi") else (modified.distance_meters / 1609.34 if modified.distance_meters else None)
+            if hasattr(original, "distance_mi") and original.distance_mi:
+                original_distance_mi = original.distance_mi
+            elif original.distance_meters:
+                original_distance_mi = original.distance_meters / 1609.34
+            else:
+                original_distance_mi = None
+
+            if hasattr(modified, "distance_mi") and modified.distance_mi:
+                modified_distance_mi = modified.distance_mi
+            elif modified.distance_meters:
+                modified_distance_mi = modified.distance_meters / 1609.34
+            else:
+                modified_distance_mi = None
             if original_distance_mi != modified_distance_mi:
                 builder.add_delta(
                     entity_type="session",
@@ -506,8 +517,19 @@ def modify_week(
                     old=original_distance_mi,
                     new=modified_distance_mi,
                 )
-            original_duration_min = original.duration_minutes if hasattr(original, "duration_minutes") else (original.duration_seconds // 60 if original.duration_seconds else None)
-            modified_duration_min = modified.duration_minutes if hasattr(modified, "duration_minutes") else (modified.duration_seconds // 60 if modified.duration_seconds else None)
+            if hasattr(original, "duration_minutes") and original.duration_minutes:
+                original_duration_min = original.duration_minutes
+            elif original.duration_seconds:
+                original_duration_min = original.duration_seconds // 60
+            else:
+                original_duration_min = None
+
+            if hasattr(modified, "duration_minutes") and modified.duration_minutes:
+                modified_duration_min = modified.duration_minutes
+            elif modified.duration_seconds:
+                modified_duration_min = modified.duration_seconds // 60
+            else:
+                modified_duration_min = None
             if original_duration_min != modified_duration_min:
                 builder.add_delta(
                     entity_type="session",
@@ -736,10 +758,14 @@ def _apply_volume_modification(
             easy_scale = 1.0 + modification.percent
         else:
             # Fallback to delta-based scaling for absolute miles
-            easy_volume = sum(
-                (s.distance_mi if hasattr(s, "distance_mi") and s.distance_mi else (s.distance_meters / 1609.34 if s.distance_meters else 0.0))
-                for s in easy_sessions
-            )
+            def get_distance_miles(session):
+                if hasattr(session, "distance_mi") and session.distance_mi:
+                    return session.distance_mi
+                if session.distance_meters:
+                    return session.distance_meters / 1609.34
+                return 0.0
+
+            easy_volume = sum(get_distance_miles(s) for s in easy_sessions)
             if easy_volume > 0:
                 easy_scale = 1.0 + (remaining_delta / easy_volume)
             else:
@@ -753,7 +779,10 @@ def _apply_volume_modification(
             # Schema v2: Modify distance_meters (convert from miles for calculation)
             if cloned.distance_meters:
                 # Get current distance in miles for calculation
-                current_miles = cloned.distance_mi if hasattr(cloned, "distance_mi") and cloned.distance_mi else (cloned.distance_meters / 1609.34)
+                if hasattr(cloned, "distance_mi") and cloned.distance_mi:
+                    current_miles = cloned.distance_mi
+                else:
+                    current_miles = cloned.distance_meters / 1609.34
                 new_miles = current_miles * easy_scale
                 cloned.distance_meters = mi_to_meters(new_miles)
             elif hasattr(cloned, "distance_mi") and cloned.distance_mi:
@@ -789,7 +818,10 @@ def _apply_volume_modification(
                 cloned = clone_session(session)
                 # Schema v2: Modify distance_meters
                 if cloned.distance_meters is not None:
-                    current_miles = cloned.distance_mi if hasattr(cloned, "distance_mi") and cloned.distance_mi else (cloned.distance_meters / 1609.34)
+                    if hasattr(cloned, "distance_mi") and cloned.distance_mi:
+                        current_miles = cloned.distance_mi
+                    else:
+                        current_miles = cloned.distance_meters / 1609.34
                     distance_mi = current_miles * long_scale
                     # Ensure minimum long distance
                     final_miles = max(distance_mi, MIN_LONG_DISTANCE_MILES)

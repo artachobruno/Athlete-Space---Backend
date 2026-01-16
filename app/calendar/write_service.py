@@ -71,14 +71,12 @@ class CalendarWriteService:
     def _executable_to_planned_session(
         executable: ExecutableSession,
         user_id: str,
-        athlete_id: int,  # Kept for _get_athlete_id compatibility, but not used in PlannedSession schema v2
     ) -> PlannedSession:
         """Convert ExecutableSession to PlannedSession model (schema v2).
 
         Args:
             executable: ExecutableSession to convert
             user_id: User ID
-            athlete_id: Athlete ID (for compatibility, not used in PlannedSession schema v2)
 
         Returns:
             PlannedSession model instance (not yet added to session)
@@ -272,7 +270,7 @@ class CalendarWriteService:
                     continue
 
                 # Create PlannedSession
-                planned = self._executable_to_planned_session(executable, user_id, athlete_id)
+                planned = self._executable_to_planned_session(executable, user_id)
                 session.add(planned)
                 sessions_written += 1
 

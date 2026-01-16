@@ -28,10 +28,9 @@ def get_link_for_planned(session: Session, planned_session_id: str) -> SessionLi
     Returns:
         SessionLink if found, None otherwise
     """
-    result = session.execute(
+    return session.execute(
         select(SessionLink).where(SessionLink.planned_session_id == planned_session_id)
     ).scalar_one_or_none()
-    return result
 
 
 def get_link_for_activity(session: Session, activity_id: str) -> SessionLink | None:
@@ -44,10 +43,9 @@ def get_link_for_activity(session: Session, activity_id: str) -> SessionLink | N
     Returns:
         SessionLink if found, None otherwise
     """
-    result = session.execute(
+    return session.execute(
         select(SessionLink).where(SessionLink.activity_id == activity_id)
     ).scalar_one_or_none()
-    return result
 
 
 def upsert_link(
@@ -111,25 +109,23 @@ def upsert_link(
 
     # Delete any existing link for planned_session_id (if it points elsewhere)
     existing_planned_link = get_link_for_planned(session, planned_session_id)
-    if existing_planned_link:
-        if existing_planned_link.activity_id != activity_id:
-            logger.debug(
-                "Removing existing link for planned_session",
-                planned_session_id=planned_session_id,
-                old_activity_id=existing_planned_link.activity_id,
-            )
-            session.delete(existing_planned_link)
+    if existing_planned_link and existing_planned_link.activity_id != activity_id:
+        logger.debug(
+            "Removing existing link for planned_session",
+            planned_session_id=planned_session_id,
+            old_activity_id=existing_planned_link.activity_id,
+        )
+        session.delete(existing_planned_link)
 
     # Delete any existing link for activity_id (if it points elsewhere)
     existing_activity_link = get_link_for_activity(session, activity_id)
-    if existing_activity_link:
-        if existing_activity_link.planned_session_id != planned_session_id:
-            logger.debug(
-                "Removing existing link for activity",
-                activity_id=activity_id,
-                old_planned_session_id=existing_activity_link.planned_session_id,
-            )
-            session.delete(existing_activity_link)
+    if existing_activity_link and existing_activity_link.planned_session_id != planned_session_id:
+        logger.debug(
+            "Removing existing link for activity",
+            activity_id=activity_id,
+            old_planned_session_id=existing_activity_link.planned_session_id,
+        )
+        session.delete(existing_activity_link)
 
     # Flush to ensure deletes are applied before insert
     session.flush()

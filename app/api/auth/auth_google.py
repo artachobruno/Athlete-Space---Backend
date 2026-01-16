@@ -100,8 +100,18 @@ def _encrypt_and_store_tokens(
         expires_at: Token expiration timestamp (timezone-aware datetime)
     """
     # Guard: Ensure expires_at is a timezone-aware datetime
-    assert isinstance(expires_at, datetime), f"expires_at must be datetime, got {type(expires_at)}"
-    assert expires_at.tzinfo is not None, "expires_at must be timezone-aware"
+    if not isinstance(expires_at, datetime):
+        logger.error(f"[GOOGLE_OAUTH] Invalid expires_at type: {type(expires_at)}, expected datetime")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Invalid token expiration type: expected datetime, got {type(expires_at).__name__}",
+        )
+    if expires_at.tzinfo is None:
+        logger.error("[GOOGLE_OAUTH] expires_at must be timezone-aware")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Token expiration must be timezone-aware",
+        )
     try:
         encrypted_access_token = encrypt_token(access_token)
         encrypted_refresh_token = encrypt_token(refresh_token)
@@ -437,7 +447,6 @@ def google_callback(
                     new_user = User(
                         id=resolved_user_id,
                         email=email,
-                        password_hash=None,  # OAuth users don't need passwords
                         auth_provider=AuthProvider.google.value,
                         google_sub=google_sub,
                         created_at=datetime.now(timezone.utc),

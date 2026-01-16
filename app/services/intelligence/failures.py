@@ -124,14 +124,14 @@ class IntelligenceFailureHandler:
 
     def get_daily_decision_with_fallback(
         self,
-        athlete_id: int,
+        user_id: str,
         decision_date: date,
         include_inactive: bool = False,
     ) -> DailyDecision | dict[str, Any] | None:
         """Get daily decision with fallback to last valid version.
 
         Args:
-            athlete_id: Athlete ID
+            user_id: User ID (schema v2: migrated from athlete_id)
             decision_date: Decision date
             include_inactive: If True, also check inactive decisions
 
@@ -140,7 +140,7 @@ class IntelligenceFailureHandler:
         """
         decision_date_dt = datetime.combine(decision_date, datetime.min.time()).replace(tzinfo=timezone.utc)
         decision_model = self.store.get_latest_daily_decision(
-            athlete_id,
+            user_id,
             decision_date_dt,
             active_only=not include_inactive,
         )
@@ -148,7 +148,7 @@ class IntelligenceFailureHandler:
         if decision_model is None:
             logger.warning(
                 "No daily decision found, returning unavailable message",
-                athlete_id=athlete_id,
+                user_id=user_id,
                 decision_date=decision_date.isoformat(),
             )
             return {
@@ -160,7 +160,7 @@ class IntelligenceFailureHandler:
             decision = DailyDecision(**decision_model.decision_data)
         except Exception:
             logger.exception(
-                f"Failed to parse daily decision, returning unavailable (decision_id={decision_model.id}, athlete_id={athlete_id})"
+                f"Failed to parse daily decision, returning unavailable (decision_id={decision_model.id}, user_id={user_id})"
             )
             return {
                 "unavailable": True,
@@ -170,7 +170,7 @@ class IntelligenceFailureHandler:
             logger.info(
                 "Returning daily decision (active or fallback)",
                 decision_id=decision_model.id,
-                athlete_id=athlete_id,
+                user_id=user_id,
                 is_active=decision_model.is_active,
             )
             return decision

@@ -37,7 +37,7 @@ async def _process_user_daily_decision(
     """
     # Check if decision already exists
     decision_date_dt = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
-    existing = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=True)
+    existing = store.get_latest_daily_decision(user_id, decision_date_dt, active_only=True)
 
     if existing:
         logger.debug(f"Daily decision already exists for user_id={user_id}, athlete_id={athlete_id}, skipping")

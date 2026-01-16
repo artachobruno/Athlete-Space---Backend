@@ -276,11 +276,11 @@ def _get_previous_week_intent(athlete_id: int, week_start: date) -> WeeklyIntent
     return None
 
 
-def _get_recent_decisions_for_context(athlete_id: int, decision_date: date) -> list[DailyDecision]:
+def _get_recent_decisions_for_context(user_id: str, decision_date: date) -> list[DailyDecision]:
     """Get recent daily decisions for context.
 
     Args:
-        athlete_id: Athlete ID
+        user_id: User ID (schema v2: migrated from athlete_id)
         decision_date: Decision date
 
     Returns:
@@ -291,7 +291,7 @@ def _get_recent_decisions_for_context(athlete_id: int, decision_date: date) -> l
     for days_ago in range(1, 4):
         check_date = decision_date - timedelta(days=days_ago)
         check_date_dt = datetime.combine(check_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        decision_model = store.get_latest_daily_decision(athlete_id, check_date_dt, active_only=True)
+        decision_model = store.get_latest_daily_decision(user_id, check_date_dt, active_only=True)
         if decision_model:
             try:
                 decision = DailyDecision(**decision_model.decision_data)
@@ -357,7 +357,7 @@ def build_daily_decision_context(
 
     # Get optional context components
     weekly_intent = _get_weekly_intent_for_context(athlete_id, decision_date)
-    recent_decisions = _get_recent_decisions_for_context(athlete_id, decision_date)
+    recent_decisions = _get_recent_decisions_for_context(user_id, decision_date)
 
     # Get reconciliation statistics (missed workouts, compliance)
     try:
@@ -489,7 +489,7 @@ def build_weekly_intent_context(
         check_date = week_start + timedelta(days=days_ago)
         if check_date <= today:
             check_date_dt = datetime.combine(check_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-            decision_model = store.get_latest_daily_decision(athlete_id, check_date_dt, active_only=True)
+            decision_model = store.get_latest_daily_decision(user_id, check_date_dt, active_only=True)
             if decision_model:
                 try:
                     decision = DailyDecision(**decision_model.decision_data)

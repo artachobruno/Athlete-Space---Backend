@@ -320,7 +320,6 @@ class IntentStore:
     @staticmethod
     def save_daily_decision(
         user_id: str,
-        athlete_id: int,
         decision: DailyDecision,
         weekly_intent_id: str | None,
         context_hash: str,
@@ -329,7 +328,6 @@ class IntentStore:
 
         Args:
             user_id: User ID
-            athlete_id: Athlete ID
             decision: DailyDecision to save
             weekly_intent_id: Optional reference to weekly intent
             context_hash: Hash of the context used to generate this decision
@@ -343,7 +341,7 @@ class IntentStore:
             existing = (
                 session.execute(
                     select(DailyDecisionModel).where(
-                        DailyDecisionModel.athlete_id == athlete_id,
+                        DailyDecisionModel.user_id == user_id,
                         DailyDecisionModel.decision_date == decision_date_dt,
                         DailyDecisionModel.is_active.is_(True),
                     )
@@ -360,7 +358,7 @@ class IntentStore:
             max_version = session.execute(
                 select(DailyDecisionModel.version)
                 .where(
-                    DailyDecisionModel.athlete_id == athlete_id,
+                    DailyDecisionModel.user_id == user_id,
                     DailyDecisionModel.decision_date == decision_date_dt,
                 )
                 .order_by(DailyDecisionModel.version.desc())
@@ -379,7 +377,6 @@ class IntentStore:
             decision_dict["_context_hash"] = context_hash
             new_decision = DailyDecisionModel(
                 user_id=user_id,
-                athlete_id=athlete_id,
                 recommendation_type=recommendation_type,
                 recommended_intensity=recommended_intensity,
                 has_workout=has_workout,
@@ -419,7 +416,6 @@ class IntentStore:
                 "Daily decision saved",
                 decision_id=decision_id,
                 user_id=user_id,
-                athlete_id=athlete_id,
                 decision_date=decision.decision_date.isoformat(),
                 version=next_version,
             )
@@ -448,14 +444,14 @@ class IntentStore:
 
     @staticmethod
     def get_latest_daily_decision(
-        athlete_id: int,
+        user_id: str,
         decision_date: datetime,
         active_only: bool = True,
     ) -> DailyDecisionModel | None:
         """Get the latest daily decision for a specific date.
 
         Args:
-            athlete_id: Athlete ID
+            user_id: User ID
             decision_date: Decision date
             active_only: If True, only return active decisions
 
@@ -464,7 +460,7 @@ class IntentStore:
         """
         with get_session() as session:
             query = select(DailyDecisionModel).where(
-                DailyDecisionModel.athlete_id == athlete_id,
+                DailyDecisionModel.user_id == user_id,
                 DailyDecisionModel.decision_date == decision_date,
             )
 

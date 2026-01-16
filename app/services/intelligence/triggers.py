@@ -77,14 +77,14 @@ class RegenerationTriggers:
 
     def should_regenerate_daily_decision(
         self,
-        athlete_id: int,
+        user_id: str,
         decision_date: date,
         current_context_hash: str,
     ) -> bool:
         """Check if daily decision should be regenerated.
 
         Args:
-            athlete_id: Athlete ID
+            user_id: User ID (schema v2: migrated from athlete_id)
             decision_date: Decision date
             current_context_hash: Hash of current context
 
@@ -92,12 +92,12 @@ class RegenerationTriggers:
             True if should regenerate, False otherwise
         """
         decision_date_dt = datetime.combine(decision_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        existing = self.store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=True)
+        existing = self.store.get_latest_daily_decision(user_id, decision_date_dt, active_only=True)
 
         if existing is None:
             logger.info(
                 "Daily decision does not exist, should regenerate",
-                athlete_id=athlete_id,
+                user_id=user_id,
                 decision_date=decision_date.isoformat(),
             )
             return True
@@ -107,7 +107,7 @@ class RegenerationTriggers:
         if stored_hash != current_context_hash:
             logger.info(
                 "Daily decision context changed, should regenerate",
-                athlete_id=athlete_id,
+                user_id=user_id,
                 decision_date=decision_date.isoformat(),
                 old_hash=stored_hash,
                 new_hash=current_context_hash,
@@ -116,7 +116,7 @@ class RegenerationTriggers:
 
         logger.debug(
             "Daily decision exists and context unchanged, no regeneration needed",
-            athlete_id=athlete_id,
+            user_id=user_id,
             decision_date=decision_date.isoformat(),
         )
         return False
@@ -202,7 +202,7 @@ class RegenerationTriggers:
         """
         context_hash = self.runtime.compute_context_hash(context)
 
-        if not self.should_regenerate_daily_decision(athlete_id, decision_date, context_hash):
+        if not self.should_regenerate_daily_decision(user_id, decision_date, context_hash):
             return None
 
         logger.info(
@@ -216,7 +216,6 @@ class RegenerationTriggers:
             decision = await self.runtime.run_daily_decision(user_id, athlete_id, context)
             decision_id = self.store.save_daily_decision(
                 user_id=user_id,
-                athlete_id=athlete_id,
                 decision=decision,
                 weekly_intent_id=weekly_intent_id,
                 context_hash=context_hash,

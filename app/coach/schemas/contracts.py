@@ -107,7 +107,6 @@ class DailyDecisionResponse(BaseModel):
 
     id: str
     user_id: str
-    athlete_id: int
     decision: DailyDecision
     weekly_intent_id: str | None
     version: int

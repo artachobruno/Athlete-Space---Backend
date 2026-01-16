@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -516,7 +517,6 @@ class DailyDecision(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
     # Metadata fields (for fast queries without JSON parsing)
     recommendation_type: Mapped[str | None] = mapped_column(String, nullable=True)  # e.g., "rest", "easy", "moderate", "hard"
@@ -545,7 +545,10 @@ class DailyDecision(Base):
     # Day identification
     decision_date: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
 
-    __table_args__ = (UniqueConstraint("athlete_id", "decision_date", "version", name="uq_daily_decision_athlete_date_version"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "decision_date", "version", name="uq_daily_decision_user_date_version"),
+        Index("idx_daily_decision_user_date_active", "user_id", "decision_date", postgresql_where=text("is_active IS true")),
+    )
 
 
 class WeeklyReport(Base):

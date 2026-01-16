@@ -22,7 +22,7 @@ from app.coach.schemas.contracts import (
     WeeklyReportListItem,
     WeeklyReportResponse,
 )
-from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
+from app.coach.schemas.intent_schemas import Confidence, DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.db.models import Activity, StravaAccount
 from app.db.models import DailyDecision as DailyDecisionModel
 from app.db.models import SeasonPlan as SeasonPlanModel
@@ -99,7 +99,7 @@ async def _generate_daily_decision_on_demand(
 
         # Fallback: try querying by date in case of timing issues
         logger.warning(f"Decision {decision_id} not found by ID, trying date query as fallback")
-        decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=True)
+        decision_model = store.get_latest_daily_decision(user_id, decision_date_dt, active_only=True)
         if decision_model is not None:
             logger.info(f"Successfully generated daily decision on-demand (via fallback), decision_id={decision_id}")
             return decision_model
@@ -294,55 +294,107 @@ async def get_daily_decision(
         decision_date: Decision date. If None, uses today.
 
     Returns:
-        Latest active DailyDecision for the date or 503 if unavailable
+        Latest active DailyDecision for the date or empty response if unavailable
 
-    Raises:
-        HTTPException: If decision not found or Strava account not connected
+    Always returns 200 - never raises errors for missing decisions.
     """
-    athlete_id = _get_athlete_id_from_user(user_id)
     if decision_date is None:
         decision_date = datetime.now(timezone.utc).date()
 
-    logger.info(f"Getting daily decision for user_id={user_id}, athlete_id={athlete_id}, decision_date={decision_date.isoformat()}")
+    logger.info(f"Getting daily decision for user_id={user_id}, decision_date={decision_date.isoformat()}")
+
+    # Check if user has any activities (graceful short-circuit)
+    with get_session() as session:
+        activity_count = session.execute(select(func.count()).select_from(Activity).where(Activity.user_id == user_id)).scalar() or 0
+        if activity_count == 0:
+            logger.debug(f"No activities found for user_id={user_id}, returning empty decision")
+            # Return empty but valid response
+            return DailyDecisionResponse(
+                id="",
+                user_id=user_id,
+                decision=DailyDecision(
+                    recommendation="rest",
+                    volume_hours=None,
+                    intensity_focus=None,
+                    session_type="Rest day",
+                    risk_level="none",
+                    risk_notes=None,
+                    confidence=Confidence(score=0.0, explanation="No training data available yet"),
+                    explanation="No training data available yet. The coach will provide recommendations once you start logging activities.",
+                    decision_date=decision_date,
+                    weekly_intent_id=None,
+                ),
+                weekly_intent_id=None,
+                version=0,
+                is_active=False,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
 
     decision_date_dt = datetime.combine(decision_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-    decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=True)
+    decision_model = store.get_latest_daily_decision(user_id, decision_date_dt, active_only=True)
 
     if decision_model is None:
         # Try fallback to inactive decision
-        decision_model = store.get_latest_daily_decision(athlete_id, decision_date_dt, active_only=False)
+        decision_model = store.get_latest_daily_decision(user_id, decision_date_dt, active_only=False)
         if decision_model is None:
-            # Generate on-demand if missing
-            decision_model = await _generate_daily_decision_on_demand(
+            logger.debug(f"No decision found for user_id={user_id}, date={decision_date.isoformat()}, returning empty response")
+            # Return empty but valid response instead of generating on-demand
+            # On-demand generation should happen via background jobs, not API calls
+            return DailyDecisionResponse(
+                id="",
                 user_id=user_id,
-                athlete_id=athlete_id,
-                decision_date=decision_date,
-                decision_date_dt=decision_date_dt,
+                decision=DailyDecision(
+                    recommendation="rest",
+                    volume_hours=None,
+                    intensity_focus=None,
+                    session_type="Rest day",
+                    risk_level="none",
+                    risk_notes=None,
+                    confidence=Confidence(score=0.0, explanation="Decision not yet generated"),
+                    explanation="The coach is still analyzing your training data. Recommendations will be available soon.",
+                    decision_date=decision_date,
+                    weekly_intent_id=None,
+                ),
+                weekly_intent_id=None,
+                version=0,
+                is_active=False,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
             )
-
-    # Final check - decision_model should never be None at this point
-    if decision_model is None:
-        logger.error(
-            f"decision_model is None after all attempts for user_id={user_id}, "
-            f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
-        )
-        _raise_unavailable_error(decision_date)
 
     try:
         decision = DailyDecision(**decision_model.decision_data)
-    except Exception as e:
-        logger.exception(
-            f"Failed to parse daily decision (decision_id={decision_model.id}, athlete_id={athlete_id})"
+    except Exception:
+        logger.warning(
+            f"Failed to parse daily decision (decision_id={decision_model.id}, user_id={user_id}), returning empty response"
         )
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to parse daily decision data",
-        ) from e
+        # Return empty response instead of raising 500
+        return DailyDecisionResponse(
+            id=decision_model.id,
+            user_id=user_id,
+            decision=DailyDecision(
+                recommendation="rest",
+                volume_hours=None,
+                intensity_focus=None,
+                session_type="Rest day",
+                risk_level="none",
+                risk_notes=None,
+                confidence=Confidence(score=0.0, explanation="Failed to parse decision data"),
+                explanation="Unable to load decision data. Please try again later.",
+                decision_date=decision_date,
+                weekly_intent_id=decision_model.weekly_intent_id,
+            ),
+            weekly_intent_id=decision_model.weekly_intent_id,
+            version=decision_model.version,
+            is_active=decision_model.is_active,
+            created_at=decision_model.created_at,
+            updated_at=decision_model.updated_at,
+        )
 
     return DailyDecisionResponse(
         id=decision_model.id,
         user_id=decision_model.user_id,
-        athlete_id=decision_model.athlete_id,
         decision=decision,
         weekly_intent_id=decision_model.weekly_intent_id,
         version=decision_model.version,
@@ -525,7 +577,7 @@ def list_daily_decisions(
     logger.info(f"Listing daily decisions for user_id={user_id}, athlete_id={athlete_id}, limit={limit}")
 
     with get_session() as session:
-        query = select(DailyDecisionModel).where(DailyDecisionModel.athlete_id == athlete_id)
+        query = select(DailyDecisionModel).where(DailyDecisionModel.user_id == user_id)
 
         if active_only:
             query = query.where(DailyDecisionModel.is_active.is_(True))

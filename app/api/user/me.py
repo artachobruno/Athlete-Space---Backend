@@ -18,7 +18,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from sqlalchemy import func, select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import InternalError, OperationalError, ProgrammingError
 
 from app.api.dependencies.auth import get_current_user_id, get_optional_user_id
 from app.api.schemas.schemas import (
@@ -405,11 +405,24 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                 else:
                     # It's a UserRole enum
                     user_role = user_role_obj.value
+            except (InternalError, OperationalError) as e:
+                # Database transaction errors - rollback immediately and re-raise
+                # These errors indicate the transaction is in a failed state
+                logger.error(f"[API] /me: Database transaction error for user_id={user_id}: {e!r}")
+                session.rollback()
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal server error: Database transaction failed. Please try again.",
+                ) from e
             except HTTPException:
                 # Re-raise HTTPExceptions from _get_user_info (will be 500, not 404)
                 raise
             except Exception as e:
                 # Catch any other unexpected errors in user lookup
+                # Check if it's a database error that requires rollback
+                if isinstance(e, (InternalError, OperationalError)):
+                    logger.error(f"[API] /me: Database error in user lookup for user_id={user_id}: {e!r}")
+                    session.rollback()
                 logger.exception(f"[API] /me: Unexpected error getting user info for user_id={user_id}: {e!r}")
                 raise HTTPException(
                     status_code=500,
@@ -417,18 +430,30 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                 ) from e
 
             # Get onboarding status from profile
-            onboarding_complete = _get_onboarding_status(session, user_id)
-            logger.info(f"[API] /me: user_id={user_id}, initial onboarding_complete={onboarding_complete}")
+            onboarding_complete = False
+            try:
+                onboarding_complete = _get_onboarding_status(session, user_id)
+                logger.info(f"[API] /me: user_id={user_id}, initial onboarding_complete={onboarding_complete}")
+            except (InternalError, OperationalError) as e:
+                # Database transaction errors - rollback and continue with False
+                logger.warning(f"[API] /me: Database transaction error getting onboarding status for user_id={user_id}: {e!r}")
+                session.rollback()
+                onboarding_complete = False
 
             # If not complete, try to infer from data
             if not onboarding_complete:
                 logger.info(f"[API] /me: user_id={user_id}, trying to infer completion from data")
-                inferred = _try_infer_completion_from_data(session, user_id)
-                if inferred:
-                    onboarding_complete = True
-                    logger.info(f"[API] /me: user_id={user_id}, inferred onboarding_complete=True")
-                else:
-                    logger.info(f"[API] /me: user_id={user_id}, could not infer completion, returning False")
+                try:
+                    inferred = _try_infer_completion_from_data(session, user_id)
+                    if inferred:
+                        onboarding_complete = True
+                        logger.info(f"[API] /me: user_id={user_id}, inferred onboarding_complete=True")
+                    else:
+                        logger.info(f"[API] /me: user_id={user_id}, could not infer completion, returning False")
+                except (InternalError, OperationalError) as e:
+                    # Database transaction errors - rollback and continue with False
+                    logger.warning(f"[API] /me: Database transaction error inferring completion for user_id={user_id}: {e!r}")
+                    session.rollback()
 
             # Build unified profile response (combines User, AthleteProfile, UserSettings)
             profile_response = None
@@ -445,6 +470,10 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                         profile=profile,
                         settings=settings,
                     )
+            except (InternalError, OperationalError) as e:
+                # Database transaction errors - rollback and log, but continue with None profile
+                logger.warning(f"[API] /me: Database transaction error loading profile for user_id={user_id}: {e!r}")
+                session.rollback()
             except Exception as e:
                 logger.warning(f"[API] /me: Failed to load profile: {e}")
 
@@ -465,6 +494,10 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                         consistency=settings.consistency,
                         goal=settings.goal,
                     ).model_dump()
+            except (InternalError, OperationalError) as e:
+                # Database transaction errors - rollback and log, but continue with None
+                logger.warning(f"[API] /me: Database transaction error loading training preferences for user_id={user_id}: {e!r}")
+                session.rollback()
             except Exception as e:
                 logger.warning(f"[API] /me: Failed to load training preferences: {e}")
 
@@ -483,6 +516,10 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                         goal_achievements=settings.goal_achievements if settings.goal_achievements is not None else True,
                         coach_messages=settings.coach_messages if settings.coach_messages is not None else True,
                     ).model_dump()
+            except (InternalError, OperationalError) as e:
+                # Database transaction errors - rollback and log, but continue with None
+                logger.warning(f"[API] /me: Database transaction error loading notifications for user_id={user_id}: {e!r}")
+                session.rollback()
             except Exception as e:
                 logger.warning(f"[API] /me: Failed to load notifications: {e}")
 
@@ -496,6 +533,10 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                         share_activity_data=settings.share_activity_data or False,
                         share_training_metrics=settings.share_training_metrics or False,
                     ).model_dump()
+            except (InternalError, OperationalError) as e:
+                # Database transaction errors - rollback and log, but continue with None
+                logger.warning(f"[API] /me: Database transaction error loading privacy settings for user_id={user_id}: {e!r}")
+                session.rollback()
             except Exception as e:
                 logger.warning(f"[API] /me: Failed to load privacy settings: {e}")
 
@@ -530,6 +571,13 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                 detail="Internal server error. Please try again or contact support.",
             ) from e
         raise
+    except (InternalError, OperationalError) as e:
+        # Catch database transaction errors that weren't handled above
+        logger.exception(f"[API] /me: Unhandled database transaction error for user_id={user_id}: {e!r}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: Database transaction failed. Please try again.",
+        ) from e
     except ProgrammingError as e:
         # Catch any ProgrammingError that wasn't handled above
         error_msg = str(e).lower()
@@ -560,6 +608,13 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
         ) from e
     except Exception as e:
         # Catch-all for any other unexpected errors
+        # Check if it's a database error that requires special handling
+        if isinstance(e, (InternalError, OperationalError)):
+            logger.exception(f"[API] /me: Unhandled database transaction error for user_id={user_id}: {e!r}")
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: Database transaction failed. Please try again.",
+            ) from e
         logger.exception(f"[API] /me: Unexpected error for user_id={user_id}")
         raise HTTPException(
             status_code=500,

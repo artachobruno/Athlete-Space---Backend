@@ -164,20 +164,26 @@ def _resolve_or_create_user_id(athlete_id: str, user_id: str) -> str:
                 detail="User must have an email address. Please sign up first.",
             )
 
-        # Update user with strava_athlete_id if not set
-        if not user.strava_athlete_id:
-            user.strava_athlete_id = athlete_id_int
-            session.commit()
-            logger.info(f"[STRAVA_OAUTH] Set strava_athlete_id={athlete_id_int} for user_id={user_id}")
-        # Verify this athlete_id matches the user's existing strava_athlete_id
-        elif user.strava_athlete_id != athlete_id_int:
-            logger.warning(
-                f"[STRAVA_OAUTH] Athlete ID mismatch: user_id={user_id}, existing={user.strava_athlete_id}, new={athlete_id_int}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This Strava account is already linked to another user",
-            )
+        # Schema v2: Check StravaAccount table instead of User.strava_athlete_id
+        existing_account = session.execute(
+            select(StravaAccount).where(StravaAccount.user_id == user_id)
+        ).first()
+
+        if existing_account:
+            # Verify this athlete_id matches the existing StravaAccount's athlete_id
+            existing_athlete_id = int(existing_account[0].athlete_id)
+            if existing_athlete_id != athlete_id_int:
+                logger.warning(
+                    f"[STRAVA_OAUTH] Athlete ID mismatch: user_id={user_id}, "
+                    f"existing={existing_athlete_id}, new={athlete_id_int}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This Strava account is already linked to another user",
+                )
+            # Account already exists and matches - nothing to do
+        # If no account exists, tokens will be stored later in _encrypt_and_store_tokens
+        # which creates the StravaAccount record
 
         return user_id
 

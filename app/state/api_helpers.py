@@ -59,9 +59,9 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
             select(DailyTrainingLoad)
             .where(
                 DailyTrainingLoad.user_id == user_id,
-                DailyTrainingLoad.date >= datetime.combine(since_date, datetime.min.time()).replace(tzinfo=timezone.utc),
+                DailyTrainingLoad.day >= since_date,
             )
-            .order_by(DailyTrainingLoad.date)
+            .order_by(DailyTrainingLoad.day)
         ).all()
 
         if not rows:
@@ -76,12 +76,13 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
 
         for row in rows:
             daily_load_record = row[0]
-            dates.append(daily_load_record.date.date().isoformat())
-            # Use pre-computed DTL (load_score) - normalized across all sports
-            daily_load.append(daily_load_record.load_score)
-            ctl_values.append(daily_load_record.ctl)
-            atl_values.append(daily_load_record.atl)
-            tsb_values.append(daily_load_record.tsb)
+            dates.append(daily_load_record.day.isoformat())
+            # Approximate daily load from CTL (CTL * 10 ≈ TSS, TSS/100 ≈ hours)
+            approximate_load = (daily_load_record.ctl or 0.0) * 10.0 / 100.0
+            daily_load.append(approximate_load)
+            ctl_values.append(daily_load_record.ctl or 0.0)
+            atl_values.append(daily_load_record.atl or 0.0)
+            tsb_values.append(daily_load_record.tsb or 0.0)
 
         # Get most recent values
         ctl = ctl_values[-1] if ctl_values else 0.0

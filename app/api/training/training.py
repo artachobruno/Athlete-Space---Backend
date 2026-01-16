@@ -42,18 +42,18 @@ def _get_current_metrics(user_id: str) -> dict[str, float]:
             select(DailyTrainingLoad)
             .where(
                 DailyTrainingLoad.user_id == user_id,
-                DailyTrainingLoad.date <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
+                DailyTrainingLoad.day <= today,
             )
-            .order_by(DailyTrainingLoad.date.desc())
+            .order_by(DailyTrainingLoad.day.desc())
             .limit(1)
         ).first()
 
         if result:
             daily_load = result[0]
             return {
-                "ctl": daily_load.ctl,
-                "atl": daily_load.atl,
-                "tsb": daily_load.tsb,
+                "ctl": daily_load.ctl or 0.0,
+                "atl": daily_load.atl or 0.0,
+                "tsb": daily_load.tsb or 0.0,
             }
 
         # No metrics found - return zeros
@@ -101,9 +101,9 @@ def get_training_state(user_id: str = Depends(get_current_user_id)):
     # Get trend from recent CTL values
     with get_session() as session:
         recent_ctl = session.execute(
-            select(DailyTrainingLoad.ctl).where(DailyTrainingLoad.user_id == user_id).order_by(DailyTrainingLoad.date.desc()).limit(14)
+            select(DailyTrainingLoad.ctl).where(DailyTrainingLoad.user_id == user_id).order_by(DailyTrainingLoad.day.desc()).limit(14)
         ).all()
-        ctl_values = [r[0] for r in recent_ctl] if recent_ctl else [current_metrics["ctl"]]
+        ctl_values = [r[0] or 0.0 for r in recent_ctl] if recent_ctl else [current_metrics["ctl"]]
         trend = _get_trend(ctl_values)
 
     # Get weekly volume and load
@@ -126,15 +126,15 @@ def get_training_state(user_id: str = Depends(get_current_user_id)):
         if week_summary:
             ws = week_summary[0]
             week_volume_hours = ws.total_duration / 3600.0
-            # Week load = sum of daily load scores for the week
+            # Week load = approximate from CTL (CTL * 10 ≈ TSS)
             week_daily_loads = session.execute(
-                select(DailyTrainingLoad.load_score).where(
+                select(DailyTrainingLoad.ctl).where(
                     DailyTrainingLoad.user_id == user_id,
-                    DailyTrainingLoad.date >= datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc),
-                    DailyTrainingLoad.date <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
+                    DailyTrainingLoad.day >= week_start,
+                    DailyTrainingLoad.day <= today,
                 )
             ).all()
-            week_load = sum(r[0] for r in week_daily_loads)
+            week_load = sum((r[0] or 0.0) * 10.0 for r in week_daily_loads)
 
         # Get this month's summary
         month_start = today.replace(day=1)
@@ -148,13 +148,13 @@ def get_training_state(user_id: str = Depends(get_current_user_id)):
 
         month_volume_hours = sum(a[0].duration_seconds for a in month_activities) / 3600.0
         month_daily_loads = session.execute(
-            select(DailyTrainingLoad.load_score).where(
+            select(DailyTrainingLoad.ctl).where(
                 DailyTrainingLoad.user_id == user_id,
-                DailyTrainingLoad.date >= datetime.combine(month_start, datetime.min.time()).replace(tzinfo=timezone.utc),
-                DailyTrainingLoad.date <= datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc),
+                DailyTrainingLoad.day >= month_start,
+                DailyTrainingLoad.day <= today,
             )
         ).all()
-        month_load = sum(r[0] for r in month_daily_loads)
+        month_load = sum((r[0] or 0.0) * 10.0 for r in month_daily_loads)
 
     return TrainingStateResponse(
         current=TrainingStateMetrics(
@@ -336,9 +336,9 @@ def get_training_signals(user_id: str = Depends(get_current_user_id)):
     # Signal 2: CTL trend
     with get_session() as session:
         recent_ctl = session.execute(
-            select(DailyTrainingLoad.ctl).where(DailyTrainingLoad.user_id == user_id).order_by(DailyTrainingLoad.date.desc()).limit(14)
+            select(DailyTrainingLoad.ctl).where(DailyTrainingLoad.user_id == user_id).order_by(DailyTrainingLoad.day.desc()).limit(14)
         ).all()
-        ctl_values = [r[0] for r in recent_ctl] if recent_ctl else []
+        ctl_values = [r[0] or 0.0 for r in recent_ctl] if recent_ctl else []
 
         if len(ctl_values) >= 7:
             recent_avg = sum(ctl_values[:7]) / 7

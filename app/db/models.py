@@ -324,31 +324,29 @@ class DailyTrainingLoad(Base):
 
     Schema:
     - user_id: Foreign key to users.id (Clerk user ID)
-    - date: Date (YYYY-MM-DD, indexed)
+    - day: Date (YYYY-MM-DD, part of composite primary key)
     - ctl: Chronic Training Load
     - atl: Acute Training Load
     - tsb: Training Stress Balance (CTL - ATL)
-    - load_score: Daily training load score
+    - load_model: Load model identifier (default: 'default')
     - created_at: Record creation timestamp
     - updated_at: Last update timestamp
 
     Constraints:
-    - Unique constraint: (user_id, date) prevents duplicates
+    - Composite primary key: (user_id, day) prevents duplicates
     - All dates are UTC (no timezone ambiguity)
     - Metrics are recomputable from raw activities
     """
 
     __tablename__ = "daily_training_load"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, primary_key=True, nullable=False, index=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False, index=True)
 
-    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    date: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-
-    ctl: Mapped[float] = mapped_column(Float, nullable=False)
-    atl: Mapped[float] = mapped_column(Float, nullable=False)
-    tsb: Mapped[float] = mapped_column(Float, nullable=False)
-    load_score: Mapped[float] = mapped_column(Float, nullable=False)
+    ctl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    atl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tsb: Mapped[float | None] = mapped_column(Float, nullable=True)
+    load_model: Mapped[str] = mapped_column(Text, nullable=False, default="default")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
@@ -356,11 +354,6 @@ class DailyTrainingLoad(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    __table_args__ = (
-        UniqueConstraint("user_id", "date", name="uq_daily_load_user_date"),
-        Index("idx_daily_load_user_date", "user_id", "date"),  # Already covered by unique constraint, but explicit for clarity
     )
 
 

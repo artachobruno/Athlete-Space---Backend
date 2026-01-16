@@ -187,7 +187,7 @@ def validate_user_metrics(user_id: str) -> dict[str, bool | float | int]:
         recent_records = session.execute(
             select(DailyTrainingLoad)
             .where(DailyTrainingLoad.user_id == user_id)
-            .order_by(DailyTrainingLoad.date.desc())
+            .order_by(DailyTrainingLoad.day.desc())
             .limit(14)
         ).all()
 
@@ -195,9 +195,9 @@ def validate_user_metrics(user_id: str) -> dict[str, bool | float | int]:
             return {"has_data": False, "record_count": 0}
 
         records = [r[0] for r in recent_records]
-        ctl_values = [r.ctl for r in records]
-        atl_values = [r.atl for r in records]
-        tsb_values = [r.tsb for r in records]
+        ctl_values = [r.ctl or 0.0 for r in records]
+        atl_values = [r.atl or 0.0 for r in records]
+        tsb_values = [r.tsb or 0.0 for r in records]
 
         # Basic validation checks
         ctl_not_constant = len(set(ctl_values)) > 1 if ctl_values else False
@@ -280,7 +280,7 @@ def migrate_all_users(user_ids: list[str] | None = None, dry_run: bool = False) 
     if dry_run:
         with get_session() as session:
             total_deleted = session.execute(
-                select(func.count(DailyTrainingLoad.id))
+                select(func.count()).select_from(DailyTrainingLoad)
             ).scalar() or 0
         logger.info(f"[DRY RUN] Would delete {total_deleted} DailyTrainingLoad records for all users")
     else:

@@ -239,17 +239,14 @@ def _fetch_load_metrics(
     end_date: date,
 ) -> dict[str, float]:
     """Fetch training load metrics (CTL, ATL, TSB) for date range."""
-    start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-    end_datetime = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
-
     result = session.execute(
         select(DailyTrainingLoad)
         .where(
             DailyTrainingLoad.user_id == user_id,
-            DailyTrainingLoad.date >= start_datetime,
-            DailyTrainingLoad.date <= end_datetime,
+            DailyTrainingLoad.day >= start_date,
+            DailyTrainingLoad.day <= end_date,
         )
-        .order_by(DailyTrainingLoad.date)
+        .order_by(DailyTrainingLoad.day)
     )
 
     rows = list(result.scalars().all())
@@ -268,11 +265,11 @@ def _fetch_load_metrics(
     earliest = rows[0]
 
     return {
-        "ctl_current": float(latest.ctl),
-        "atl_current": float(latest.atl),
-        "tsb_current": float(latest.tsb),
-        "ctl_start": float(earliest.ctl),
-        "atl_start": float(earliest.atl),
+        "ctl_current": float(latest.ctl) if latest.ctl is not None else 0.0,
+        "atl_current": float(latest.atl) if latest.atl is not None else 0.0,
+        "tsb_current": float(latest.tsb) if latest.tsb is not None else 0.0,
+        "ctl_start": float(earliest.ctl) if earliest.ctl is not None else 0.0,
+        "atl_start": float(earliest.atl) if earliest.atl is not None else 0.0,
     }
 
 

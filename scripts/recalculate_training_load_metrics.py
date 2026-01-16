@@ -170,7 +170,7 @@ def validate_user_metrics(user_id: str) -> dict[str, bool | float]:
     with get_session() as session:
         # Get recent metrics
         recent_records = session.execute(
-            select(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id).order_by(DailyTrainingLoad.date.desc()).limit(14)
+            select(DailyTrainingLoad).where(DailyTrainingLoad.user_id == user_id).order_by(DailyTrainingLoad.day.desc()).limit(14)
         ).all()
 
         if not recent_records:

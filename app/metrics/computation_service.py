@@ -74,14 +74,14 @@ def recompute_metrics_for_user(
         daily_created = 0
         daily_skipped = 0
 
-        for date_val, tss_load in daily_tss_loads.items():
+        for date_val in daily_tss_loads:
             metrics_for_date = metrics.get(date_val, {"ctl": 0.0, "atl": 0.0, "fsb": 0.0})
 
             # Check if record exists
             existing = session.execute(
                 select(DailyTrainingLoad).where(
                     DailyTrainingLoad.user_id == user_id,
-                    DailyTrainingLoad.date == datetime.combine(date_val, datetime.min.time()).replace(tzinfo=timezone.utc),
+                    DailyTrainingLoad.day == date_val,
                 )
             ).first()
 
@@ -102,11 +102,11 @@ def recompute_metrics_for_user(
             # Create new record (only for days that don't exist)
             daily_load = DailyTrainingLoad(
                 user_id=user_id,
-                date=datetime.combine(date_val, datetime.min.time()).replace(tzinfo=timezone.utc),
+                day=date_val,
                 ctl=ctl_val,
                 atl=atl_val,
                 tsb=form_value,  # Storing Form (FSB) in TSB column for backward compatibility
-                load_score=tss_load,  # Daily TSS load
+                load_model="default",
             )
             session.add(daily_load)
             daily_created += 1

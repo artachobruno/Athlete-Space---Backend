@@ -329,8 +329,7 @@ def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(ge
             db.close()
 
     since_date = (datetime.now(timezone.utc) - timedelta(days=days)).date()
-    since_datetime = datetime.combine(since_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-    logger.debug(f"Querying DailyTrainingLoad since: {since_datetime.isoformat()}")
+    logger.debug(f"Querying DailyTrainingLoad since: {since_date.isoformat()}")
 
     # Default empty response structure
     empty_response = {
@@ -352,9 +351,9 @@ def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(ge
             select(DailyTrainingLoad)
             .where(
                 DailyTrainingLoad.user_id == user_id,
-                DailyTrainingLoad.date >= since_datetime,
+                DailyTrainingLoad.day >= since_date,
             )
-            .order_by(DailyTrainingLoad.date)
+            .order_by(DailyTrainingLoad.day)
         ).all()
 
         logger.info(f"Found {len(daily_rows)} daily training load records for user {user_id}")
@@ -365,23 +364,28 @@ def training_load(days: int = 60, debug: bool = False, user_id: str = Depends(ge
 
         # Extract data from pre-computed DailyTrainingLoad table
         dates: list[str] = []
-        daily_load: list[float] = []  # Daily training hours (we'll need to compute this from activities for now)
-        daily_tss: list[float] = []  # Use load_score as TSS
+        daily_load: list[float] = []  # Daily training hours (approximated from CTL)
+        daily_tss: list[float] = []  # Approximate TSS from CTL (typical ratio CTL ~ TSS/10)
         ctl_raw: list[float] = []
         atl_raw: list[float] = []
         tsb_raw: list[float] = []
 
         for row in daily_rows:
             daily_load_record = row[0]  # Extract the model instance from the Row object
-            date_str = daily_load_record.date.date().isoformat()
+            date_str = daily_load_record.day.isoformat()
             dates.append(date_str)
-            daily_tss.append(daily_load_record.load_score)
-            ctl_raw.append(daily_load_record.ctl)
-            atl_raw.append(daily_load_record.atl)
-            tsb_raw.append(daily_load_record.tsb)
-            # For daily_load (hours), we'll approximate from load_score
-            # A typical TSS of 100 = ~1 hour at FTP, so hours ≈ load_score / 100
-            daily_load.append(daily_load_record.load_score / 100.0)
+            ctl_val = daily_load_record.ctl or 0.0
+            atl_val = daily_load_record.atl or 0.0
+            tsb_val = daily_load_record.tsb or 0.0
+            ctl_raw.append(ctl_val)
+            atl_raw.append(atl_val)
+            tsb_raw.append(tsb_val)
+            # Approximate TSS from CTL (typical relationship: CTL ≈ TSS/10 for steady state)
+            approximate_tss = ctl_val * 10.0
+            daily_tss.append(approximate_tss)
+            # For daily_load (hours), approximate from CTL
+            # A typical TSS of 100 = ~1 hour at FTP, so hours ≈ TSS / 100
+            daily_load.append(approximate_tss / 100.0)
 
         # Normalize metrics to -100 to 100 scale
         normalized_metrics = {

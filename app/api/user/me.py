@@ -1170,16 +1170,15 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
     try:
         end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=days)
-        start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
 
         with get_session() as session:
             daily_load_rows = session.execute(
                 select(DailyTrainingLoad)
                 .where(
                     DailyTrainingLoad.user_id == user_id,
-                    DailyTrainingLoad.date >= start_datetime,
+                    DailyTrainingLoad.day >= start_date,
                 )
-                .order_by(DailyTrainingLoad.date)
+                .order_by(DailyTrainingLoad.day)
             ).all()
 
         # Convert to (date, value) tuples format expected by frontend
@@ -1189,10 +1188,10 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
 
         for row in daily_load_rows:
             daily_load_record = row[0]  # Extract the model instance from the Row object
-            date_str = daily_load_record.date.date().isoformat()
-            ctl_data.append((date_str, daily_load_record.ctl))
-            atl_data.append((date_str, daily_load_record.atl))
-            tsb_data.append((date_str, daily_load_record.tsb))
+            date_str = daily_load_record.day.isoformat()
+            ctl_data.append((date_str, daily_load_record.ctl or 0.0))
+            atl_data.append((date_str, daily_load_record.atl or 0.0))
+            tsb_data.append((date_str, daily_load_record.tsb or 0.0))
 
         metrics_result = {
             "ctl": ctl_data,

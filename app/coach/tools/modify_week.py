@@ -12,6 +12,7 @@ from datetime import date, datetime, timezone
 from loguru import logger
 from sqlalchemy import update
 
+from app.coach.diff.confidence import compute_revision_confidence, requires_approval
 from app.coach.diff.plan_diff import build_plan_diff
 from app.coach.explainability import explain_plan_revision
 from app.coach.tools.modify_day import modify_day
@@ -541,7 +542,14 @@ def modify_week(
             scope="week",
         )
 
+        # Compute confidence and determine if approval is required
+        confidence = compute_revision_confidence(diff)
+        needs_approval = requires_approval("modify_week", confidence)
+
         revision = builder.finalize()
+
+        # Determine status based on approval requirement
+        final_status = "pending" if needs_approval else "applied"
 
         # Persist applied revision
         with get_session() as db:
@@ -550,7 +558,7 @@ def modify_week(
                 user_id=user_id,
                 athlete_id=athlete_id,
                 revision_type="modify_week",
-                status="applied",
+                status=final_status,
                 reason=modification.reason,
                 affected_start=start_date,
                 affected_end=end_date,
@@ -558,6 +566,8 @@ def modify_week(
                     "diff": diff.model_dump(),
                     "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
                 },
+                confidence=confidence,
+                requires_approval=needs_approval,
             )
             db.commit()
 

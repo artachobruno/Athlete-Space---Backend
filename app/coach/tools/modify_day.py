@@ -12,6 +12,7 @@ from datetime import date, datetime, timezone
 from loguru import logger
 from sqlalchemy import update
 
+from app.coach.diff.confidence import compute_revision_confidence, requires_approval
 from app.coach.diff.plan_diff import build_plan_diff
 from app.coach.explainability import explain_plan_revision
 from app.db.models import AthleteProfile, PlannedSession
@@ -616,7 +617,61 @@ def modify_day(
     # Note: Full validation would require converting to MaterializedSession
     # For now, basic validation
 
-    # 7. Persist as a new planned session
+    # 7. Generate diff and compute confidence BEFORE saving
+    # This allows us to check if approval is required before mutating
+    diff = build_plan_diff(
+        before_sessions=[original_session],
+        after_sessions=[new_session],  # Use new_session, not saved_session
+        scope="day",
+    )
+
+    # Compute confidence and determine if approval is required
+    confidence = compute_revision_confidence(diff)
+    needs_approval = requires_approval("modify_day", confidence)
+
+    # If approval required, don't save yet - create pending revision
+    if needs_approval:
+        revision = builder.finalize()
+
+        # Persist pending revision (without saving session)
+        with get_session() as db:
+            revision_record = create_plan_revision(
+                session=db,
+                user_id=user_id,
+                athlete_id=athlete_id,
+                revision_type="modify_day",
+                status="pending",
+                reason=modification.reason,
+                affected_start=target_date,
+                affected_end=target_date,
+                deltas={
+                    "diff": diff.model_dump(),
+                    "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
+                    "pending_session": {
+                        "original_id": original_session.id,
+                        "modified_data": {
+                            "distance_mi": new_session.distance_mi,
+                            "duration_minutes": new_session.duration_minutes,
+                            "intent": new_session.intent,
+                            "title": new_session.title,
+                            "type": new_session.type,
+                        },
+                    },
+                },
+                confidence=confidence,
+                requires_approval=True,
+            )
+            db.commit()
+
+        return {
+            "success": True,
+            "message": "Modification created, pending approval",
+            "revision": revision,
+            "requires_approval": True,
+            "revision_id": revision_record.id,
+        }
+
+    # 8. Approval not required - persist as a new planned session
     try:
         saved_session = save_modified_session(
             original_session=original_session,
@@ -640,13 +695,6 @@ def modify_day(
             new_id=saved_session.id,
         )
 
-        # Generate diff using diff engine
-        diff = build_plan_diff(
-            before_sessions=[original_session],
-            after_sessions=[saved_session],
-            scope="day",
-        )
-
         revision = builder.finalize()
 
         # Persist applied revision
@@ -664,6 +712,8 @@ def modify_day(
                     "diff": diff.model_dump(),
                     "revision": revision.model_dump() if hasattr(revision, "model_dump") else None,
                 },
+                confidence=confidence,
+                requires_approval=False,
             )
             db.commit()
 

@@ -4,7 +4,7 @@ Handles creating and querying plan revisions.
 Single responsibility: database operations only.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -28,6 +28,9 @@ def create_plan_revision(
     affected_start: date | None = None,
     affected_end: date | None = None,
     deltas: dict | None = None,
+    confidence: float | None = None,
+    requires_approval: bool = False,
+    parent_revision_id: str | None = None,
 ) -> PlanRevision:
     """Create a plan revision record.
 
@@ -35,17 +38,23 @@ def create_plan_revision(
         session: Database session
         user_id: User ID who made the modification
         athlete_id: Athlete ID whose plan was modified
-        revision_type: Type of revision (modify_day, modify_week, modify_season, modify_race)
-        status: Status of revision (applied, blocked)
+        revision_type: Type of revision (modify_day, modify_week, modify_season, modify_race, rollback)
+        status: Status of revision (applied, blocked, pending)
         reason: Optional reason for modification
         blocked_reason: Optional reason if blocked
         affected_start: Start date of affected range
         affected_end: End date of affected range
         deltas: JSON field storing before/after snapshots and changes
+        confidence: Confidence score (0.0-1.0) for this revision
+        requires_approval: Whether this revision requires user approval
+        parent_revision_id: ID of parent revision (for rollbacks)
 
     Returns:
         Created PlanRevision instance
     """
+    applied = status == "applied"
+    applied_at = datetime.now(timezone.utc) if applied else None
+
     revision = PlanRevision(
         user_id=user_id,
         athlete_id=athlete_id,
@@ -56,6 +65,11 @@ def create_plan_revision(
         affected_start=affected_start,
         affected_end=affected_end,
         deltas=deltas,
+        applied=applied,
+        applied_at=applied_at,
+        requires_approval=requires_approval,
+        confidence=confidence,
+        parent_revision_id=parent_revision_id,
     )
     session.add(revision)
     session.flush()

@@ -10,6 +10,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.coach.diff.confidence import compute_revision_confidence, requires_approval
 from app.coach.diff.plan_diff import build_plan_diff
 from app.coach.explainability import explain_plan_revision
 from app.db.models import AthleteProfile, PlannedSession, PlanRevision
@@ -168,6 +169,7 @@ def regenerate_plan(
         )
 
         # Step 3: Create PlanRevision(status="pending")
+        # Regeneration always requires approval
         revision = create_plan_revision(
             session=session,
             user_id=user_id,
@@ -181,6 +183,7 @@ def regenerate_plan(
                 "regeneration_mode": req.mode,
                 "allow_race_week": req.allow_race_week,
             },
+            requires_approval=True,  # Regeneration always requires approval
         )
         session.flush()
 
@@ -237,8 +240,23 @@ def regenerate_plan(
                 scope="plan",
             )
 
-            # Step 7: Update revision → status="regenerated"
-            revision.status = "regenerated"
+            # Compute confidence (regeneration always requires approval)
+            confidence = compute_revision_confidence(diff)
+            needs_approval = requires_approval("regenerate_plan", confidence)
+
+            # Step 7: Update revision → status="regenerated" or "pending"
+            # Regeneration always requires approval, so set to pending if not already applied
+            if needs_approval and revision.status == "pending":
+                # Keep as pending, don't apply yet
+                pass
+            else:
+                revision.status = "regenerated"
+                revision.applied = True
+                revision.applied_at = datetime.now(timezone.utc)
+
+            revision.requires_approval = needs_approval
+            revision.confidence = confidence
+
             if revision.deltas is None:
                 revision.deltas = {}
             revision.deltas["regenerated_sessions_count"] = len(new_sessions)

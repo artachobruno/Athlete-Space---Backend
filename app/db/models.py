@@ -1049,14 +1049,20 @@ class PlanRevision(Base):
     - id: UUID primary key
     - user_id: User ID who made the modification
     - athlete_id: Athlete ID whose plan was modified
-    - revision_type: Type of revision (modify_day, modify_week, modify_season, modify_race)
-    - status: Status of revision (applied, blocked)
+    - revision_type: Type of revision (modify_day, modify_week, modify_season, modify_race, rollback)
+    - status: Status of revision (applied, blocked, pending)
     - reason: Optional reason for modification
     - blocked_reason: Optional reason if blocked
     - affected_start: Start date of affected range (nullable)
     - affected_end: End date of affected range (nullable)
     - deltas: JSON field storing before/after snapshots and changes
     - created_at: Timestamp when revision was created
+    - applied: Whether revision was applied (True if status=applied)
+    - applied_at: Timestamp when revision was applied (nullable)
+    - approved_by_user: Whether user approved this revision (nullable)
+    - requires_approval: Whether this revision requires user approval
+    - confidence: Confidence score (0.0-1.0) for this revision
+    - parent_revision_id: ID of parent revision (for rollbacks)
     """
 
     __tablename__ = "plan_revisions"
@@ -1066,7 +1072,7 @@ class PlanRevision(Base):
     athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
     revision_type: Mapped[str] = mapped_column(String, nullable=False)
-    status: Mapped[str] = mapped_column(String, nullable=False)  # applied | blocked
+    status: Mapped[str] = mapped_column(String, nullable=False)  # applied | blocked | pending
 
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -1077,6 +1083,16 @@ class PlanRevision(Base):
     deltas: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    # New fields for approval and confidence
+    applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_by_user: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.0-1.0
+
+    # For rollbacks
+    parent_revision_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
     __table_args__ = (
         Index("idx_plan_revisions_athlete_created", "athlete_id", "created_at"),

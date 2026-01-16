@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
@@ -23,12 +23,23 @@ from app.api.schemas.schemas import (
 )
 from app.calendar.auto_match_service import auto_match_sessions
 from app.calendar.reconciliation_service import reconcile_calendar
+from app.calendar.view_helper import calendar_session_from_view_row, get_calendar_items_from_view
 from app.db.models import Activity, PlannedSession, StravaAccount, User
 from app.db.session import get_session
 from app.utils.timezone import now_user, to_utc
 from app.workouts.models import Workout, WorkoutStep
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
+
+# Schema v2: Use calendar_items view for unified querying
+SQL_CALENDAR_ITEMS = text("""
+SELECT kind, starts_at, ends_at, sport, title, status, payload
+FROM calendar_items
+WHERE user_id = :user_id
+  AND starts_at >= :start
+  AND starts_at < :end
+ORDER BY starts_at ASC
+""")
 
 
 def _raise_user_not_found() -> None:
@@ -73,18 +84,19 @@ def _get_planned_sessions_safe(
         List of planned sessions, empty list on schema errors
     """
     try:
+        # Schema v2: use starts_at instead of date
         planned_sessions = (
             session.execute(
                 select(PlannedSession)
                 .where(
                     PlannedSession.user_id == user_id,
-                    PlannedSession.date >= start_date,
-                    PlannedSession.date <= end_date,
+                    PlannedSession.starts_at >= start_date,
+                    PlannedSession.starts_at <= end_date,
                     # NULL-safe status filter: exclude only explicitly excluded statuses
                     # NULL statuses and "planned" statuses are included
                     func.coalesce(PlannedSession.status, "planned").notin_(["completed", "cancelled", "skipped"]),
                 )
-                .order_by(PlannedSession.date)
+                .order_by(PlannedSession.starts_at)
             )
             .scalars()
             .all()
@@ -120,15 +132,16 @@ def _get_activities_safe(
         List of activity sessions, empty list on schema errors
     """
     try:
+        # Schema v2: use starts_at instead of start_time
         activities = (
             session.execute(
                 select(Activity)
                 .where(
                     Activity.user_id == user_id,
-                    Activity.start_time >= start_date,
-                    Activity.start_time <= end_date,
+                    Activity.starts_at >= start_date,
+                    Activity.starts_at <= end_date,
                 )
-                .order_by(Activity.start_time)
+                .order_by(Activity.starts_at)
             )
             .scalars()
             .all()
@@ -237,20 +250,22 @@ def _planned_session_to_calendar(
     # Convert completed_at to ISO 8601 string (handles timezone-aware datetimes properly)
     completed_at_str = planned.completed_at.isoformat() if planned.completed_at else None
 
+    # Schema v2: use starts_at, duration_seconds, distance_meters
+    # CalendarSession schema may still expect old names in response (compatibility)
     return CalendarSession(
         id=planned.id,
-        date=planned.date.strftime("%Y-%m-%d"),
+        date=planned.starts_at.strftime("%Y-%m-%d") if planned.starts_at else "",
         time=time_str,
         type=session_type,
         title=planned.title,
-        duration_minutes=planned.duration_minutes,
-        distance_km=round(planned.distance_km, 2) if planned.distance_km else None,
+        duration_minutes=planned.duration_seconds // 60 if planned.duration_seconds else None,  # Convert seconds to minutes for response
+        distance_km=round(planned.distance_meters / 1000.0, 2) if planned.distance_meters else None,  # Convert meters to km
         intensity=planned.intensity,
         status=status,
         notes=planned.notes,
         workout_id=planned.workout_id,
-        completed_activity_id=planned.completed_activity_id,
-        completed=planned.completed,
+        completed_activity_id=None,  # Schema v2: removed, use session_links
+        completed=status == "completed",
         completed_at=completed_at_str,
     )
 
@@ -279,8 +294,9 @@ def _activity_to_session(activity: Activity) -> CalendarSession:
     else:
         intensity = "hard"
 
+    # Schema v2: use starts_at and sport instead of start_time and type
     # Format time
-    time_str = activity.start_time.strftime("%H:%M")
+    time_str = activity.starts_at.strftime("%H:%M") if activity.starts_at else ""
 
     # Determine distance in km
     if activity.distance_meters is not None and activity.distance_meters > 0:
@@ -288,11 +304,11 @@ def _activity_to_session(activity: Activity) -> CalendarSession:
     else:
         distance_km = None
 
-    activity_type = activity.type or "Activity"
+    activity_type = activity.sport or "Activity"  # Schema v2: sport instead of type
 
     return CalendarSession(
         id=activity.id,
-        date=activity.start_time.strftime("%Y-%m-%d"),
+        date=activity.starts_at.strftime("%Y-%m-%d") if activity.starts_at else "",  # Schema v2: starts_at
         time=time_str,
         type=activity_type,
         title=f"{activity_type} - {duration_minutes}min",
@@ -342,71 +358,32 @@ def get_season(user_id: str = Depends(get_current_user_id)):
             f"[CALENDAR] user={user_id} tz={user.timezone} season={start_date}-{end_date}"
         )
 
-        # Get athlete_id for reconciliation
-        athlete_id = _get_athlete_id(session, user_id)
-
-        # Get planned sessions
-        planned_sessions = session.execute(
-            select(PlannedSession)
-            .where(
-                PlannedSession.user_id == user_id,
-                PlannedSession.date >= season_start,
-                PlannedSession.date <= season_end,
-            )
-            .order_by(PlannedSession.date)
-        ).all()
-
-        planned_list = [p[0] for p in planned_sessions]
-
-        # Run reconciliation if we have athlete_id and planned sessions
-        # Use _run_reconciliation_safe to ensure auto-match is called
-        reconciliation_map, matched_activity_ids = (
-            _run_reconciliation_safe(user_id, athlete_id, start_date, end_date)
-            if athlete_id and planned_list
-            else ({}, set())
+        # Schema v2: Query calendar_items view directly (single unified query)
+        view_rows = get_calendar_items_from_view(session, user_id, season_start, season_end)
+        logger.info(
+            "[calendar_view] endpoint=/season user=%s start=%s end=%s rows=%s",
+            user_id,
+            season_start.isoformat() if season_start else None,
+            season_end.isoformat() if season_end else None,
+            len(view_rows),
         )
+        all_sessions = [calendar_session_from_view_row(row) for row in view_rows]
 
-        # Get completed activities
-        activities = session.execute(
-            select(Activity)
-            .where(
-                Activity.user_id == user_id,
-                Activity.start_time >= season_start,
-                Activity.start_time <= season_end,
-            )
-            .order_by(Activity.start_time)
-        ).all()
-
-        # Filter out activities that are matched to planned sessions
-        activity_sessions = [_activity_to_session(a[0]) for a in activities if a[0].id not in matched_activity_ids]
-
-        # Convert planned sessions with reconciliation status
-        planned_calendar_sessions = [_planned_session_to_calendar(p, reconciliation_map.get(p.id)) for p in planned_list]
-
-        # Combine and sort by date
-        all_sessions = activity_sessions + planned_calendar_sessions
+        # Sort by date
         all_sessions.sort(key=lambda s: s.date)
 
-        # Count sessions using DB status (raw from database)
-        db_planned = sum(1 for p in planned_list if p.status == "planned")
-        db_completed = sum(1 for p in planned_list if p.status == "completed")
+        # Compute stats from view rows
+        # Count by kind and status
+        db_planned = sum(1 for row in view_rows if row.get("kind") == "planned" and row.get("status") == "planned")
+        db_completed = sum(1 for row in view_rows if row.get("kind") == "planned" and row.get("status") == "completed")
 
-        # Count sessions using final status (after reconciliation)
-        # Reconciliation only overrides if there's a real matched activity
-        def get_final_status(session: CalendarSession) -> str:
-            """Get final status after reconciliation."""
-            return reconciliation_map.get(session.id) or session.status
+        # Count activities (all are "completed")
+        activity_count = sum(1 for row in view_rows if row.get("kind") == "activity")
 
-        # Map reconciliation statuses to final status for counting
-        def normalize_final_status(s: CalendarSession) -> str:
-            """Normalize final status for counting (partial/substituted -> completed)."""
-            final = get_final_status(s)
-            if final in {"partial", "substituted"}:
-                return "completed"
-            return final
-
-        final_planned = sum(1 for s in planned_calendar_sessions if normalize_final_status(s) == "planned")
-        final_completed = sum(1 for s in planned_calendar_sessions if normalize_final_status(s) == "completed") + len(activity_sessions)
+        # Final counts (activities always count as completed)
+        planned_sessions_from_view = [s for s in all_sessions if s.status == "planned"]
+        final_planned = len(planned_sessions_from_view)
+        final_completed = activity_count + sum(1 for s in all_sessions if s.status == "completed")
 
     return CalendarSeasonResponse(
         season_start=season_start_local.strftime("%Y-%m-%d"),
@@ -463,28 +440,18 @@ def get_week(user_id: str = Depends(get_current_user_id)):
                 f"[CALENDAR] user={user_id} tz={user.timezone} week={monday_local.date()}-{sunday_local.date()}"
             )
 
-            # Get athlete_id for reconciliation
-            athlete_id = _get_athlete_id(session, user_id)
+            # Schema v2: Query calendar_items view directly (single unified query)
+            view_rows = get_calendar_items_from_view(session, user_id, monday, sunday)
+            logger.info(
+                "[calendar_view] endpoint=/week user=%s start=%s end=%s rows=%s",
+                user_id,
+                monday.isoformat() if monday else None,
+                sunday.isoformat() if sunday else None,
+                len(view_rows),
+            )
+            sessions = [calendar_session_from_view_row(row) for row in view_rows]
 
-            # Get planned sessions
-            planned_list = _get_planned_sessions_safe(session, user_id, monday, sunday)
-
-            # Run reconciliation if we have athlete_id and planned sessions
-            if athlete_id and planned_list:
-                reconciliation_map, matched_activity_ids = _run_reconciliation_safe(
-                    user_id, athlete_id, monday_local.date(), sunday_local.date()
-                )
-            else:
-                reconciliation_map, matched_activity_ids = ({}, set())
-
-            # Get completed activities
-            activity_sessions = _get_activities_safe(session, user_id, monday, sunday, matched_activity_ids)
-
-            # Convert planned sessions with reconciliation status
-            planned_calendar_sessions = [_planned_session_to_calendar(p, reconciliation_map.get(p.id)) for p in planned_list]
-
-            # Combine and sort by date
-            sessions = activity_sessions + planned_calendar_sessions
+            # Sort by date and time
             sessions.sort(key=lambda s: (s.date, s.time or ""))
 
         return CalendarWeekResponse(
@@ -551,46 +518,18 @@ def get_today(user_id: str = Depends(get_current_user_id)):
 
             logger.info(f"[CALENDAR] user={user_id} tz={user.timezone} today={today_local.date()}")
 
-            # Get athlete_id for reconciliation
-            athlete_id = _get_athlete_id(session, user_id)
-
-            # Get planned sessions
-            try:
-                planned_sessions = session.execute(
-                    select(PlannedSession)
-                    .where(
-                        PlannedSession.user_id == user_id,
-                        PlannedSession.date >= today,
-                        PlannedSession.date <= today_end,
-                    )
-                    .order_by(PlannedSession.date, PlannedSession.time)
-                ).all()
-                planned_list = [p[0] for p in planned_sessions]
-            except Exception as e:
-                error_msg = str(e).lower()
-                if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
-                    logger.warning(f"[CALENDAR] Database schema issue querying planned sessions. Missing column. Returning empty: {e!r}")
-                    # Rollback the transaction to prevent "InFailedSqlTransaction" errors on subsequent queries
-                    session.rollback()
-                    planned_list = []
-                else:
-                    raise
-
-            # Run reconciliation if we have athlete_id and planned sessions
-            reconciliation_map, matched_activity_ids = (
-                _run_reconciliation_safe(user_id, athlete_id, today_local.date(), today_end_local.date())
-                if athlete_id and planned_list
-                else ({}, set())
+            # Schema v2: Query calendar_items view directly (single unified query)
+            view_rows = get_calendar_items_from_view(session, user_id, today, today_end)
+            logger.info(
+                "[calendar_view] endpoint=/today user=%s start=%s end=%s rows=%s",
+                user_id,
+                today.isoformat() if today else None,
+                today_end.isoformat() if today_end else None,
+                len(view_rows),
             )
+            sessions = [calendar_session_from_view_row(row) for row in view_rows]
 
-            # Get completed activities
-            activity_sessions = _get_activities_safe(session, user_id, today, today_end, matched_activity_ids)
-
-            # Convert planned sessions with reconciliation status
-            planned_calendar_sessions = [_planned_session_to_calendar(p, reconciliation_map.get(p.id)) for p in planned_list]
-
-            # Combine and sort by time
-            sessions = activity_sessions + planned_calendar_sessions
+            # Sort by time
             sessions.sort(key=lambda s: s.time or "23:59")
 
         return CalendarTodayResponse(
@@ -640,7 +579,8 @@ def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_cu
 
         # Get planned sessions
         planned_sessions = (
-            session.execute(select(PlannedSession).where(PlannedSession.user_id == user_id).order_by(PlannedSession.date.desc()))
+            # Schema v2: use starts_at instead of date
+            session.execute(select(PlannedSession).where(PlannedSession.user_id == user_id).order_by(PlannedSession.starts_at.desc()))
             .scalars()
             .all()
         )
@@ -654,9 +594,9 @@ def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_cu
         else:
             reconciliation_map, matched_activity_ids = {}, set()
 
-        # Get activities (optimized: uses composite index on user_id + start_time)
+        # Get activities (optimized: uses composite index on user_id + starts_at) (schema v2)
         activities = (
-            session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time.desc())).scalars().all()
+            session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.starts_at.desc())).scalars().all()
         )
         # Filter out activities that are matched to planned sessions
         activity_sessions = [_activity_to_session(a) for a in activities if a.id not in matched_activity_ids]
@@ -791,17 +731,15 @@ def update_session_status(
         # Update status
         planned_session.status = request.status
 
-        # If marking as completed, update completion fields
+        # Schema v2: completed_activity_id is removed, use session_links table instead
+        # If marking as completed, update status
         if request.status == "completed":
-            planned_session.completed = True
-            planned_session.completed_at = datetime.now(timezone.utc)
-            if request.completed_activity_id:
-                planned_session.completed_activity_id = request.completed_activity_id
+            # TODO: Create SessionLink if request.completed_activity_id is provided
+            # For now, just set status - session linking should be handled separately
+            planned_session.status = "completed"
         else:
-            # Reset completion fields if status changes from completed
-            planned_session.completed = False
-            planned_session.completed_at = None
-            planned_session.completed_activity_id = None
+            # Reset status if changing from completed
+            planned_session.status = request.status
 
         session.commit()
         session.refresh(planned_session)

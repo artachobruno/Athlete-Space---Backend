@@ -42,12 +42,10 @@ from app.core.password import hash_password, verify_password
 from app.db.models import (
     Activity,
     AthleteProfile,
-    AuthProvider,
     CoachMessage,
     DailyTrainingLoad,
     StravaAccount,
     User,
-    UserRole,
     UserSettings,
 )
 from app.db.session import get_session
@@ -122,7 +120,8 @@ def _get_user_info(session, user_id: str) -> tuple[str, str, str]:
 
     user = user_result[0]
     email = user.email
-    auth_provider = user.auth_provider.value if user.auth_provider else "password"
+    # Schema v2: auth_provider is already a string, not an enum
+    auth_provider = user.auth_provider if isinstance(user.auth_provider, str) else str(getattr(user, "auth_provider", "email"))
     timezone_str = getattr(user, "timezone", "UTC") or "UTC"
     return (email, auth_provider, timezone_str)
 
@@ -396,15 +395,15 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                 user = user_result[0]
                 user_first_name = user.first_name
                 user_last_name = user.last_name
-                # Get role, default to 'athlete' if not set (for existing users before migration)
+                # Get role, default to 'athlete' if not set (schema v2: role is string, but handle enum for compatibility)
                 user_role_obj = getattr(user, "role", None)
                 if user_role_obj is None:
                     user_role = "athlete"
                 elif isinstance(user_role_obj, str):
                     user_role = user_role_obj
                 else:
-                    # It's a UserRole enum
-                    user_role = user_role_obj.value
+                    # Compatibility: handle old enum format if present
+                    user_role = user_role_obj.value if hasattr(user_role_obj, "value") else str(user_role_obj)
             except (InternalError, OperationalError) as e:
                 # Database transaction errors - rollback immediately and re-raise
                 # These errors indicate the transaction is in a failed state
@@ -1155,12 +1154,13 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
         # Count activities in the requested date range
         end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=days)
+        # Schema v2: use starts_at instead of start_time
         activities_in_range = (
             session.execute(
                 select(func.count(Activity.id)).where(
                     Activity.user_id == user_id,
-                    func.date(Activity.start_time) >= start_date,
-                    func.date(Activity.start_time) <= end_date,
+                    func.date(Activity.starts_at) >= start_date,
+                    func.date(Activity.starts_at) <= end_date,
                 )
             ).scalar()
             or 0
@@ -1386,8 +1386,8 @@ def get_debug_data(user_id: str = Depends(get_current_user_id)):
             account = get_strava_account(user_id)
             last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None
 
-            # Get all activities
-            activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time)).scalars().all()
+            # Get all activities (schema v2: use starts_at instead of start_time)
+            activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.starts_at)).scalars().all()
 
             total_activities = len(activities)
             if total_activities == 0:
@@ -1401,22 +1401,22 @@ def get_debug_data(user_id: str = Depends(get_current_user_id)):
                     "gaps": [],
                 }
 
-            # Get date range
-            first_date = _parse_activity_date(activities[0].start_time)
-            last_date = _parse_activity_date(activities[-1].start_time)
+            # Get date range (schema v2: use starts_at instead of start_time)
+            first_date = _parse_activity_date(activities[0].starts_at)
+            last_date = _parse_activity_date(activities[-1].starts_at)
 
             # Group activities by date
             activities_by_date: dict[str, list[dict]] = {}
             for activity in activities:
-                activity_date = _parse_activity_date(activity.start_time)
+                activity_date = _parse_activity_date(activity.starts_at)
                 date_str = activity_date.isoformat()
                 if date_str not in activities_by_date:
                     activities_by_date[date_str] = []
                 activities_by_date[date_str].append({
                     "id": str(activity.id),
-                    "strava_id": activity.strava_activity_id,
-                    "type": activity.type,
-                    "start_time": _format_activity_time(activity.start_time),
+                    "strava_id": activity.source_activity_id if activity.source == "strava" else None,
+                    "type": activity.sport,  # Schema v2: sport instead of type
+                    "start_time": _format_activity_time(activity.starts_at),  # Schema v2: starts_at
                     "duration_s": activity.duration_seconds,
                     "distance_m": activity.distance_meters,
                     "elevation_m": activity.elevation_gain_meters,
@@ -2602,8 +2602,8 @@ def export_data(
             profile = session.query(AthleteProfile).filter_by(user_id=user_id).first()
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()
 
-            # Get activities
-            activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.start_time)).scalars().all()
+            # Get activities (schema v2: use starts_at instead of start_time)
+            activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.starts_at)).scalars().all()
 
             if format == "json":
                 # Build JSON export
@@ -2665,8 +2665,8 @@ def export_data(
                     "activities": [
                         {
                             "id": str(act.id),
-                            "type": act.type,
-                            "start_time": act.start_time.isoformat() if act.start_time else None,
+                            "type": act.sport,  # Schema v2: sport instead of type
+                            "start_time": act.starts_at.isoformat() if act.starts_at else None,  # Schema v2: starts_at
                             "duration_seconds": act.duration_seconds,
                             "distance_meters": act.distance_meters,
                             "elevation_gain_meters": act.elevation_gain_meters,
@@ -2688,8 +2688,8 @@ def export_data(
             # Write activities
             for act in activities:
                 writer.writerow([
-                    act.start_time.date().isoformat() if act.start_time else "",
-                    act.type or "",
+                    act.starts_at.date().isoformat() if act.starts_at else "",  # Schema v2: starts_at
+                    act.sport or "",  # Schema v2: sport instead of type
                     act.duration_seconds or "",
                     act.distance_meters or "",
                     act.elevation_gain_meters or "",
@@ -2816,8 +2816,8 @@ def change_password(request: ChangePasswordRequest, user_id: str = Depends(get_c
 
             user = user_result[0]
 
-            # Check if user has password auth
-            if user.auth_provider != AuthProvider.password:
+            # Check if user has password auth (schema v2: auth_provider is string, not enum)
+            if user.auth_provider != "password" and user.auth_provider != "email":
                 _raise_oauth_account()
 
             # Verify current password

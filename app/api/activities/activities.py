@@ -780,23 +780,23 @@ def unpair_activity(
                 detail="Activity does not belong to user",
             )
 
-        # Check if paired
-        if not activity.planned_session_id:
+        # Schema v2: Check if paired via SessionLink
+        from app.pairing.session_links import get_link_for_activity, unlink_by_activity
+
+        link = get_link_for_activity(session, activity_id)
+        if not link:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Activity is not paired",
             )
 
-        # Get planned session
-        planned = session.query(PlannedSession).filter(PlannedSession.id == activity.planned_session_id).first()
+        # Get planned session from link
+        planned_session_id = link.planned_session_id
+        planned = session.query(PlannedSession).filter(PlannedSession.id == planned_session_id).first()
 
         try:
-            # Unpair both sides
-            planned_session_id = activity.planned_session_id
-            activity.planned_session_id = None
-
-            if planned:
-                planned.completed_activity_id = None
+            # Schema v2: Unpair using SessionLink helper
+            unlink_by_activity(session, activity_id, reason="Manual unpair via API")
 
             # Log decision
             pairing_decision = PairingDecision(

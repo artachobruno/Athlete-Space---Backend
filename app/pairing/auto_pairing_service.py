@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PairingDecision, PlannedSession
+from app.pairing.session_links import get_link_for_activity, get_link_for_planned, upsert_link
 from app.plans.reconciliation.service import reconcile_activity_if_paired
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -116,7 +117,7 @@ def _get_unpaired_plans(
     Returns:
         List of unpaired planned sessions
     """
-    # Build query for unpaired plans on the same day
+    # Schema v2: Build query for unpaired plans on the same day (check SessionLink)
     day_start = datetime.combine(activity_date, datetime.min.time()).replace(tzinfo=timezone.utc)
     day_end = datetime.combine(activity_date, datetime.max.time()).replace(tzinfo=timezone.utc)
 
@@ -124,14 +125,22 @@ def _get_unpaired_plans(
         select(PlannedSession)
         .where(
             PlannedSession.user_id == user_id,
-            PlannedSession.completed_activity_id.is_(None),
-            PlannedSession.date >= day_start,
-            PlannedSession.date <= day_end,
+            PlannedSession.starts_at >= day_start,
+            PlannedSession.starts_at <= day_end,
         )
         .order_by(PlannedSession.created_at, PlannedSession.id)
     )
 
     plans = list(session.scalars(query).all())
+
+    # Schema v2: Filter out plans that already have SessionLink (already paired)
+    unpaired_plans = []
+    for plan in plans:
+        link = get_link_for_planned(session, plan.id)
+        if not link:
+            unpaired_plans.append(plan)
+
+    plans = unpaired_plans
 
     # Filter by type match
     return [plan for plan in plans if _types_match(plan.type, activity_type)]
@@ -155,7 +164,7 @@ def _get_unpaired_activities(
     Returns:
         List of unpaired activities
     """
-    # Build query for unpaired activities on the same day
+    # Schema v2: Build query for unpaired activities on the same day (check SessionLink)
     day_start = datetime.combine(planned_date, datetime.min.time()).replace(tzinfo=timezone.utc)
     day_end = datetime.combine(planned_date, datetime.max.time()).replace(tzinfo=timezone.utc)
 
@@ -163,14 +172,22 @@ def _get_unpaired_activities(
         select(Activity)
         .where(
             Activity.user_id == user_id,
-            Activity.planned_session_id.is_(None),
-            Activity.start_time >= day_start,
-            Activity.start_time <= day_end,
+            Activity.starts_at >= day_start,
+            Activity.starts_at <= day_end,
         )
         .order_by(Activity.created_at, Activity.id)
     )
 
     activities = list(session.scalars(query).all())
+
+    # Schema v2: Filter out activities that already have SessionLink (already paired)
+    unpaired_activities = []
+    for activity in activities:
+        link = get_link_for_activity(session, activity.id)
+        if not link:
+            unpaired_activities.append(activity)
+
+    activities = unpaired_activities
 
     # Filter by type match
     return [
@@ -222,15 +239,19 @@ def _pair_from_activity(activity: Activity, session: Session) -> None:
         activity: Activity to pair
         session: Database session
     """
-    # Skip if already paired
-    if activity.planned_session_id:
+    # Schema v2: Skip if already paired (check SessionLink)
+    link = get_link_for_activity(session, activity.id)
+    if link:
         logger.debug(
-            f"Activity {activity.id} already paired to planned session {activity.planned_session_id}",
+            f"Activity {activity.id} already paired to planned session {link.planned_session_id}",
         )
         return
 
-    # Get activity date
-    activity_date = activity.start_time.date()
+    # Schema v2: Get activity date from starts_at
+    activity_date = activity.starts_at.date() if activity.starts_at else None
+    if not activity_date:
+        logger.debug(f"Activity {activity.id} has no starts_at, cannot pair")
+        return
 
     # Get candidate planned sessions
     plans = _get_unpaired_plans(
@@ -313,15 +334,19 @@ def _pair_from_planned(planned: PlannedSession, session: Session) -> None:
         planned: Planned session to pair
         session: Database session
     """
-    # Skip if already paired
-    if planned.completed_activity_id:
+    # Schema v2: Skip if already paired (check SessionLink)
+    link = get_link_for_planned(session, planned.id)
+    if link:
         logger.debug(
-            f"Planned session {planned.id} already paired to activity {planned.completed_activity_id}",
+            f"Planned session {planned.id} already paired to activity {link.activity_id}",
         )
         return
 
-    # Get planned date
-    planned_date = planned.date.date()
+    # Schema v2: Get planned date from starts_at
+    planned_date = planned.starts_at.date() if planned.starts_at else None
+    if not planned_date:
+        logger.debug(f"Planned session {planned.id} has no starts_at, cannot pair")
+        return
 
     # Get candidate activities
     activities = _get_unpaired_activities(
@@ -417,8 +442,20 @@ def _persist_pairing(
         session: Database session
         duration_diff_pct: Duration difference percentage
     """
-    planned.completed_activity_id = activity.id
-    activity.planned_session_id = planned.id
+    # Schema v2: Create SessionLink with 'proposed' status (auto-pairing creates proposals)
+    confidence_score = 1.0 - duration_diff_pct  # Higher confidence = lower diff
+    confidence_score = max(0.0, min(1.0, confidence_score))  # Clamp to [0, 1]
+
+    upsert_link(
+        session=session,
+        user_id=activity.user_id,
+        planned_session_id=planned.id,
+        activity_id=activity.id,
+        status="proposed",  # Auto-pairing creates proposals (can be confirmed later)
+        method="auto",
+        confidence=confidence_score,
+        notes=f"Auto-paired: duration diff {duration_diff_pct:.2%}",
+    )
 
     _log_decision(
         user_id=activity.user_id,

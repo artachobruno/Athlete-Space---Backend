@@ -10,6 +10,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import AthleteProfile, PlannedSession
+from app.db.schema_v2_map import (
+    combine_date_time,
+    km_to_meters,
+    mi_to_meters,
+    minutes_to_seconds,
+    normalize_sport,
+)
 from app.plans.regenerate.types import RegenerationRequest
 from app.services.training_plan_service import plan_race
 
@@ -60,14 +67,14 @@ async def execute_regeneration(
     if req.end_date:
         end_datetime = datetime.combine(req.end_date, datetime.max.time()).replace(tzinfo=timezone.utc)
 
+    # Schema v2: use starts_at instead of date
     query = select(PlannedSession).where(
         PlannedSession.user_id == user_id,
-        PlannedSession.athlete_id == athlete_id,
-        PlannedSession.date >= start_datetime,
+        PlannedSession.starts_at >= start_datetime,
     )
 
     if end_datetime:
-        query = query.where(PlannedSession.date <= end_datetime)
+        query = query.where(PlannedSession.starts_at <= end_datetime)
 
     # Only replace non-completed sessions
     query = query.where(
@@ -100,10 +107,14 @@ async def execute_regeneration(
     )
 
     # Step 3: Determine plan context from existing sessions
-    # Use the first session to infer plan_type and plan_id
+    # Schema v2: plan_type is removed, use source and season_plan_id
     first_session = existing_sessions[0]
-    plan_type = first_session.plan_type
-    plan_id = first_session.plan_id
+    source = getattr(first_session, "source", "planner_v2")  # Default source
+    season_plan_id = getattr(first_session, "season_plan_id", None)  # Schema v2: season_plan_id instead of plan_id
+
+    # Infer plan_type from source for backward compatibility with plan generators
+    # TODO: Update plan generators to work with source instead of plan_type
+    plan_type = "race" if "race" in source.lower() or season_plan_id is None else "season"
 
     # Step 4: Call plan generator based on plan_type
     # For now, we only support race plan regeneration
@@ -113,11 +124,11 @@ async def execute_regeneration(
         if race_date is None:
             raise ValueError("Cannot regenerate race plan: no race_date in athlete profile")
 
-        # Extract distance from plan_id or use default
-        # plan_id format is typically "race_{distance}_{date}"
+        # Extract distance from season_plan_id or use default
+        # season_plan_id format may be "race_{distance}_{date}" (legacy) or UUID
         distance = "Marathon"  # Default
-        if plan_id:
-            parts = plan_id.split("_")
+        if season_plan_id:
+            parts = season_plan_id.split("_")
             if len(parts) >= 2:
                 distance = parts[1].replace("-", " ")
 
@@ -142,6 +153,7 @@ async def execute_regeneration(
         )
 
         # Step 5: Filter new sessions to only those in our range and create PlannedSession objects
+        # Schema v2: Convert to new field names
         new_sessions: list[PlannedSession] = []
         for session_dict in new_sessions_dict:
             session_date = session_dict.get("date")
@@ -167,32 +179,44 @@ async def execute_regeneration(
             if isinstance(session_date, date):
                 session_date = datetime.combine(session_date, datetime.min.time()).replace(tzinfo=timezone.utc)
 
-            # Create PlannedSession from dict (handle missing fields gracefully)
+            # Schema v2: Combine date and time into starts_at
+            session_time = session_dict.get("time")
+            starts_at = combine_date_time(session_date, session_time) if session_date else None
+            if starts_at is None:
+                continue
+
+            # Schema v2: Convert units and normalize sport
+            sport_raw = session_dict.get("type", "run")
+            normalized_sport = normalize_sport(sport_raw)
+            duration_minutes = session_dict.get("duration_minutes")
+            duration_seconds = minutes_to_seconds(duration_minutes)
+            distance_km = session_dict.get("distance_km")
+            distance_mi = session_dict.get("distance_mi")
+            distance_meters = None
+            if distance_km is not None:
+                distance_meters = km_to_meters(distance_km)
+            elif distance_mi is not None:
+                distance_meters = mi_to_meters(distance_mi)
+
+            # Create PlannedSession from dict (schema v2)
             new_session = PlannedSession(
                 user_id=user_id,
-                athlete_id=athlete_id,
-                date=session_date,
-                time=session_dict.get("time"),
-                type=session_dict.get("type", "Run"),
+                starts_at=starts_at,  # Schema v2: combined date + time
+                sport=normalized_sport,  # Schema v2: sport instead of type
                 title=session_dict.get("title", session_dict.get("description", "")),
-                duration_minutes=session_dict.get("duration_minutes"),
-                distance_km=session_dict.get("distance_km"),
+                duration_seconds=duration_seconds,  # Schema v2: duration_seconds instead of duration_minutes
+                distance_meters=distance_meters,  # Schema v2: distance_meters instead of distance_km/distance_mi
                 intensity=session_dict.get("intensity"),
                 notes=session_dict.get("notes") or session_dict.get("description"),
-                plan_type=plan_type,
-                plan_id=plan_id,
-                week_number=session_dict.get("week_number"),
-                session_order=session_dict.get("session_order"),
-                phase=session_dict.get("phase"),
-                source=session_dict.get("source", "planner_v2"),
-                philosophy_id=session_dict.get("philosophy_id"),
-                template_id=session_dict.get("template_id"),
+                season_plan_id=season_plan_id,  # Schema v2: season_plan_id instead of plan_id
+                revision_id=revision_id,  # Schema v2: revision_id links to plan_revisions
                 session_type=session_dict.get("session_type"),
                 intent=session_dict.get("intent"),
-                distance_mi=session_dict.get("distance_mi"),
-                tags=session_dict.get("tags"),
+                philosophy_id=session_dict.get("philosophy_id"),
+                template_id=session_dict.get("template_id"),
+                source=session_dict.get("source", "planner_v2"),
+                tags=session_dict.get("tags", []),  # Schema v2: tags is JSONB array
                 status="planned",
-                revision_id=revision_id,
             )
 
             new_sessions.append(new_session)

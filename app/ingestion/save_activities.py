@@ -75,15 +75,17 @@ def save_activity_record(
         strava_id = strava_id[7:]  # Remove "strava-" prefix
     logger.debug(f"[SAVE_ACTIVITIES] Extracted strava_id={strava_id} from activity_id={record.activity_id}")
 
-    # Check if activity already exists
-    logger.debug(f"[SAVE_ACTIVITIES] Checking for existing activity: user_id={user_id}, strava_activity_id={strava_id}")
+    # Check if activity already exists (schema v2: use source + source_activity_id)
+    logger.debug(f"[SAVE_ACTIVITIES] Checking for existing activity: user_id={user_id}, source=strava, source_activity_id={strava_id}")
     existing = (
-        session.query(Activity)
-        .filter_by(
-            user_id=user_id,
-            strava_activity_id=strava_id,
+        session.execute(
+            select(Activity).where(
+                Activity.user_id == user_id,
+                Activity.source == "strava",
+                Activity.source_activity_id == strava_id,
+            )
         )
-        .first()
+        .scalar_one_or_none()
     )
     logger.debug(f"[SAVE_ACTIVITIES] Existing activity check result: {existing is not None}")
 
@@ -108,6 +110,26 @@ def save_activity_record(
     )
 
 
+def _normalize_sport(sport: str) -> str:
+    """Normalize sport to schema v2 values: 'run', 'ride', 'swim', 'strength', 'walk', 'other'."""
+    sport_lower = sport.lower().strip()
+    # Map common variations to standard values
+    mapping = {
+        "running": "run",
+        "run": "run",
+        "cycling": "ride",
+        "bike": "ride",
+        "ride": "ride",
+        "swimming": "swim",
+        "swim": "swim",
+        "strength": "strength",
+        "weighttraining": "strength",
+        "walking": "walk",
+        "walk": "walk",
+    }
+    return mapping.get(sport_lower, "other")
+
+
 def _update_existing_activity(
     *,
     session: Session,
@@ -118,25 +140,30 @@ def _update_existing_activity(
     strava_id: str,
     user_id: str,
 ) -> Activity:
-    """Update existing activity record."""
+    """Update existing activity record (schema v2)."""
     logger.info(f"[SAVE_ACTIVITIES] Activity {strava_id} already exists for user {user_id}, updating")
-    existing.start_time = record.start_time
-    existing.type = record.sport.capitalize()
-    existing.duration_seconds = record.duration_sec
+    existing.starts_at = record.start_time
+    existing.sport = _normalize_sport(record.sport)
+    existing.duration_seconds = record.duration_sec or 0  # Required, >= 0
     existing.distance_meters = record.distance_m
     existing.elevation_gain_meters = record.elevation_m
 
+    # Update metrics dict (schema v2: raw_json and streams_data go into metrics)
     data_updated = False
+    if existing.metrics is None:
+        existing.metrics = {}
+    
     if raw_json is not None:
-        existing.raw_json = raw_json
+        existing.metrics["raw_json"] = raw_json
         data_updated = True
     elif record.avg_hr is not None:
-        if existing.raw_json is None:
-            existing.raw_json = {}
-        existing.raw_json["average_heartrate"] = record.avg_hr
+        if "raw_json" not in existing.metrics:
+            existing.metrics["raw_json"] = {}
+        existing.metrics["raw_json"]["average_heartrate"] = record.avg_hr
         data_updated = True
+    
     if streams_data is not None:
-        existing.streams_data = streams_data
+        existing.metrics["streams_data"] = streams_data
         data_updated = True
 
     # Recompute effort metrics and TSS if data was updated
@@ -187,42 +214,50 @@ def _create_new_activity(
         f"type={type(raw_json)}, is_dict={isinstance(raw_json, dict) if raw_json else False}"
     )
     prepared_raw_json = _prepare_raw_json(raw_json, record)
+    
+    # Build metrics dict (schema v2: raw_json and streams_data go here)
+    metrics_dict: dict = {}
+    if prepared_raw_json is not None:
+        metrics_dict["raw_json"] = prepared_raw_json
+    if streams_data is not None:
+        metrics_dict["streams_data"] = streams_data
+    
+    normalized_sport = _normalize_sport(record.sport)
     logger.debug(
-        f"[SAVE_ACTIVITIES] Creating Activity object: user_id={user_id}, "
-        f"strava_activity_id={strava_id}, type={record.sport.capitalize()}, "
-        f"start_time={record.start_time}, duration_seconds={record.duration_sec}, "
+        f"[SAVE_ACTIVITIES] Creating Activity object (schema v2): user_id={user_id}, "
+        f"source=strava, source_activity_id={strava_id}, sport={normalized_sport}, "
+        f"starts_at={record.start_time}, duration_seconds={record.duration_sec or 0}, "
         f"distance_meters={record.distance_m}, elevation_gain_meters={record.elevation_m}, "
-        f"raw_json_type={type(prepared_raw_json)}, raw_json_keys={len(prepared_raw_json) if isinstance(prepared_raw_json, dict) else 0}"
+        f"metrics_keys={list(metrics_dict.keys())}"
     )
     activity = Activity(
         user_id=user_id,
-        athlete_id=str(record.athlete_id),
-        strava_activity_id=strava_id,
-        source=record.source,
-        start_time=record.start_time,
-        type=record.sport.capitalize(),
-        duration_seconds=record.duration_sec,
+        source="strava",
+        source_activity_id=strava_id,
+        sport=normalized_sport,
+        starts_at=record.start_time,
+        duration_seconds=record.duration_sec or 0,  # Required, >= 0
         distance_meters=record.distance_m,
         elevation_gain_meters=record.elevation_m,
-        raw_json=prepared_raw_json,
-        streams_data=streams_data,
+        metrics=metrics_dict,
     )
     activity_id = getattr(activity, "id", None)
     logger.debug(
         f"[SAVE_ACTIVITIES] Activity object created: id={activity_id}, "
         f"id_type={type(activity_id)}, user_id={activity.user_id}, "
-        f"strava_activity_id={activity.strava_activity_id}, "
-        f"raw_json_present={activity.raw_json is not None}, "
-        f"raw_json_type={type(activity.raw_json) if activity.raw_json else None}"
+        f"source={activity.source}, source_activity_id={activity.source_activity_id}, "
+        f"metrics_present={bool(activity.metrics)}, "
+        f"metrics_keys={list(activity.metrics.keys()) if activity.metrics else []}"
     )
-    if activity.raw_json and isinstance(activity.raw_json, dict):
-        raw_json_keys = list(activity.raw_json.keys())
+    if activity.metrics and isinstance(activity.metrics, dict):
+        metrics_keys = list(activity.metrics.keys())
         logger.debug(
-            f"[SAVE_ACTIVITIES] raw_json has {len(raw_json_keys)} keys, "
-            f"has 'id': {'id' in raw_json_keys}, sample keys: {raw_json_keys[:10]}"
+            f"[SAVE_ACTIVITIES] metrics has {len(metrics_keys)} top-level keys: {metrics_keys}"
         )
-        if "id" in activity.raw_json:
-            logger.debug(f"[SAVE_ACTIVITIES] raw_json['id'] = {activity.raw_json.get('id')}, type: {type(activity.raw_json.get('id'))}")
+        if "raw_json" in activity.metrics and isinstance(activity.metrics["raw_json"], dict):
+            raw_json_keys = list(activity.metrics["raw_json"].keys())
+            if "id" in raw_json_keys:
+                logger.debug(f"[SAVE_ACTIVITIES] metrics.raw_json['id'] = {activity.metrics['raw_json'].get('id')}")
     logger.debug(f"[SAVE_ACTIVITIES] Adding activity to session: {strava_id}")
     session.add(activity)
     logger.debug(f"[SAVE_ACTIVITIES] Activity added to session, session.dirty: {len(session.dirty)}, session.new: {len(session.new)}")
@@ -259,7 +294,9 @@ def _compute_and_persist_effort(session: Session, activity: Activity) -> None:
         user_settings = session.query(UserSettings).filter_by(user_id=activity.user_id).first()
 
         # Compute effort metrics (requires streams_data for pace/power-based effort)
-        if activity.streams_data is not None:
+        # Schema v2: streams_data is now in metrics dict
+        streams_data = activity.metrics.get("streams_data") if activity.metrics else None
+        if streams_data is not None:
             normalized_effort, effort_source, intensity_factor = compute_activity_effort(activity, user_settings)
 
             # Persist effort metrics to activity
@@ -284,9 +321,10 @@ def _compute_and_persist_effort(session: Session, activity: Activity) -> None:
         activity.tss = tss
         activity.tss_version = "v2"
 
+        streams_data = activity.metrics.get("streams_data") if activity.metrics else None
         logger.debug(
             f"[SAVE_ACTIVITIES] Computed TSS for activity {activity.id}: "
-            f"tss={tss}, version=v2, streams_available={activity.streams_data is not None}"
+            f"tss={tss}, version=v2, streams_available={streams_data is not None}"
         )
     except Exception as e:
         logger.warning(f"[SAVE_ACTIVITIES] Failed to compute effort/TSS for activity {activity.id}: {e}")

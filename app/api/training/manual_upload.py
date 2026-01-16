@@ -17,6 +17,12 @@ from app.api.dependencies.auth import get_current_user_id
 from app.coach.tools.session_planner import save_sessions_to_database
 from app.core.observe import trace
 from app.db.models import PlannedSession, StravaAccount
+from app.db.schema_v2_map import (
+    combine_date_time,
+    km_to_meters,
+    minutes_to_seconds,
+    normalize_sport,
+)
 from app.db.session import get_session
 from app.upload.plan_handler import upload_plan_from_chat
 from app.upload.plan_parser import ParsedSessionUpload, parse_csv_plan, parse_text_plan
@@ -89,11 +95,18 @@ def _save_week_sessions_and_get_ids(
     session_ids: list[str] = []
     with get_session() as session:
         for session_dict in session_dicts:
-            # Check for duplicate
+            # Schema v2: Combine date and time into starts_at
+            session_date = session_dict.get("date")
+            session_time = session_dict.get("time")
+            starts_at = combine_date_time(session_date, session_time) if session_date else None
+            if starts_at is None:
+                continue
+
+            # Check for duplicate (schema v2: use starts_at instead of date)
             existing = session.execute(
                 select(PlannedSession)
                 .where(PlannedSession.user_id == user_id)
-                .where(PlannedSession.date == session_dict["date"])
+                .where(PlannedSession.starts_at == starts_at)
                 .where(PlannedSession.title == session_dict["title"])
             ).first()
 
@@ -109,24 +122,27 @@ def _save_week_sessions_and_get_ids(
             }
             intent = session_type_to_intent.get(session_dict.get("type", "").lower(), "easy")
 
-            # Create session
+            # Schema v2: Convert units and normalize sport
+            sport_raw = session_dict.get("sport", "run")
+            normalized_sport = normalize_sport(sport_raw)
+            duration_seconds = minutes_to_seconds(session_dict.get("duration_minutes"))
+            distance_km = session_dict.get("distance_km")
+            distance_meters = km_to_meters(distance_km) if distance_km is not None else None
+
+            # Create session (schema v2: use starts_at, sport, duration_seconds, distance_meters)
             planned_session = PlannedSession(
                 user_id=user_id,
-                athlete_id=athlete_id,
-                date=session_dict["date"],
-                time=session_dict.get("time"),
-                type=session_dict.get("sport", "Run"),  # Use sport field for PlannedSession.type
+                starts_at=starts_at,  # Schema v2: combined date + time
+                sport=normalized_sport,  # Schema v2: sport instead of type
                 title=session_dict["title"],
                 session_type=session_dict.get("type"),  # Store session type (easy/workout/long/rest)
-                intent=intent,  # Map to intent field,
-                duration_minutes=session_dict.get("duration_minutes"),
-                distance_km=session_dict.get("distance_km"),
+                intent=intent,  # Map to intent field
+                duration_seconds=duration_seconds,  # Schema v2: duration_seconds instead of duration_minutes
+                distance_meters=distance_meters,  # Schema v2: distance_meters instead of distance_km
                 intensity=session_dict.get("intensity"),
                 notes=session_dict.get("notes"),
-                plan_type="manual_upload",
-                plan_id=None,
-                status="planned",
-                completed=False,
+                status="planned",  # Schema v2: default status
+                tags=[],  # Schema v2: tags is JSONB array, default empty
             )
 
             session.add(planned_session)
@@ -134,19 +150,23 @@ def _save_week_sessions_and_get_ids(
 
         session.commit()
 
-        # Refresh to get IDs
+        # Refresh to get IDs (schema v2: use starts_at instead of date)
         for i, session_dict in enumerate(session_dicts):
             if i < len(session_ids) and session_ids[i] == "pending":
-                result = session.execute(
-                    select(PlannedSession)
-                    .where(PlannedSession.user_id == user_id)
-                    .where(PlannedSession.date == session_dict["date"])
-                    .where(PlannedSession.title == session_dict["title"])
-                    .order_by(PlannedSession.created_at.desc())
-                    .limit(1)
-                ).first()
-                if result:
-                    session_ids[i] = result[0].id
+                session_date = session_dict.get("date")
+                session_time = session_dict.get("time")
+                starts_at = combine_date_time(session_date, session_time) if session_date else None
+                if starts_at:
+                    result = session.execute(
+                        select(PlannedSession)
+                        .where(PlannedSession.user_id == user_id)
+                        .where(PlannedSession.starts_at == starts_at)
+                        .where(PlannedSession.title == session_dict["title"])
+                        .order_by(PlannedSession.created_at.desc())
+                        .limit(1)
+                    ).first()
+                    if result:
+                        session_ids[i] = result[0].id
 
     return session_ids
 
@@ -392,11 +412,14 @@ async def upload_manual_session(
         # CRITICAL INVARIANT: Create Workout FIRST, then PlannedSession with workout_id
         try:
             with get_session() as session:
-                # Check for duplicate
+                # Schema v2: Combine date and time into starts_at for duplicate check
+                starts_at = combine_date_time(request.date, request.time)
+
+                # Check for duplicate (schema v2: use starts_at instead of date)
                 existing = session.execute(
                     select(PlannedSession)
                     .where(PlannedSession.user_id == user_id)
-                    .where(PlannedSession.date == request.date)
+                    .where(PlannedSession.starts_at == starts_at)
                     .where(PlannedSession.title == request.title)
                 ).first()
 
@@ -473,28 +496,27 @@ async def upload_manual_session(
                 }
                 intent = session_type_to_intent.get(request.type.lower(), "easy")
 
-                # Step 4: Create PlannedSession WITH workout_id (correct order)
+                # Schema v2: Convert units and normalize sport
+                normalized_sport = normalize_sport(request.sport)
+                duration_seconds = minutes_to_seconds(request.duration_minutes)
+                distance_meters = km_to_meters(request.distance_km) if request.distance_km else None
+
+                # Step 4: Create PlannedSession WITH workout_id (correct order) (schema v2)
                 planned_session = PlannedSession(
                     user_id=user_id,
-                    athlete_id=athlete_id,
-                    date=request.date,
-                    time=request.time,
-                    type=request.sport,  # Use sport field for PlannedSession.type (Run, Bike, Swim, etc.)
+                    starts_at=starts_at,  # Schema v2: combined date + time (TIMESTAMPTZ)
+                    sport=normalized_sport,  # Schema v2: sport instead of type
                     title=request.title,  # Required NOT NULL
-                    duration_minutes=request.duration_minutes,
-                    distance_km=request.distance_km,
+                    duration_seconds=duration_seconds,  # Schema v2: duration_seconds instead of duration_minutes
+                    distance_meters=distance_meters,  # Schema v2: distance_meters instead of distance_km
                     intensity=request.intensity,
                     session_type=request.type,  # Store session type (easy/workout/long/rest)
                     intent=intent,  # Map to intent field
-                    notes_raw=request.notes,  # Raw user input (immutable)
-                    notes=request.notes,  # Keep for backward compatibility
-                    plan_type="manual",  # Required NOT NULL
-                    plan_id=None,
-                    week_number=None,
-                    status="planned",  # Required NOT NULL
-                    completed=False,
+                    notes=request.notes,  # Schema v2: single notes field (notes_raw removed)
+                    status="planned",  # Schema v2: default status
                     source="manual",
                     workout_id=workout.id,  # ✅ Set at creation time (NOT NULL constraint satisfied)
+                    tags=[],  # Schema v2: tags is JSONB array, default empty
                 )
 
                 session.add(planned_session)
@@ -609,25 +631,36 @@ async def upload_manual_week(
                 plan_id=None,
             )
 
-            # Get created session IDs (query by date range)
+            # Get created session IDs (query by starts_at range) (schema v2)
             session_ids: list[str] = []
             if saved_count > 0:
                 with get_session() as session:
-                    dates = [s["date"] for s in session_dicts]
-                    min_date = min(dates)
-                    max_date = max(dates)
+                    # Schema v2: Build starts_at timestamps for date range query
+                    starts_at_list: list[datetime] = []
+                    for s in session_dicts:
+                        session_date = s.get("date")
+                        session_time = s.get("time")
+                        if session_date:
+                            starts_at = combine_date_time(session_date, session_time)
+                            if starts_at:
+                                starts_at_list.append(starts_at)
 
-                    results = session.execute(
-                        select(PlannedSession)
-                        .where(PlannedSession.user_id == user_id)
-                        .where(PlannedSession.date >= min_date)
-                        .where(PlannedSession.date <= max_date)
-                        .where(PlannedSession.plan_type == "manual_upload")
-                        .order_by(PlannedSession.created_at.desc())
-                        .limit(saved_count)
-                    ).all()
+                    if starts_at_list:
+                        min_starts_at = min(starts_at_list)
+                        max_starts_at = max(starts_at_list)
 
-                    session_ids = [row[0].id for row in results[:saved_count]]
+                        # Schema v2: use starts_at instead of date, remove plan_type (not in schema v2)
+                        results = session.execute(
+                            select(PlannedSession)
+                            .where(PlannedSession.user_id == user_id)
+                            .where(PlannedSession.starts_at >= min_starts_at)
+                            .where(PlannedSession.starts_at <= max_starts_at)
+                            .where(PlannedSession.source == "manual")  # Schema v2: use source instead of plan_type
+                            .order_by(PlannedSession.created_at.desc())
+                            .limit(saved_count)
+                        ).all()
+
+                        session_ids = [row[0].id for row in results[:saved_count]]
 
             logger.info(
                 "Manual week uploaded successfully",
@@ -735,25 +768,36 @@ async def upload_manual_season(
                 plan_id=None,
             )
 
-            # Get created session IDs (query by date range)
+            # Get created session IDs (query by starts_at range) (schema v2)
             session_ids: list[str] = []
             if saved_count > 0:
-                dates = [s["date"] for s in all_sessions]
-                min_date = min(dates)
-                max_date = max(dates)
+                # Schema v2: Build starts_at timestamps for date range query
+                starts_at_list: list[datetime] = []
+                for s in all_sessions:
+                    session_date = s.get("date")
+                    session_time = s.get("time")
+                    if session_date:
+                        starts_at = combine_date_time(session_date, session_time)
+                        if starts_at:
+                            starts_at_list.append(starts_at)
 
-                with get_session() as session:
-                    results = session.execute(
-                        select(PlannedSession)
-                        .where(PlannedSession.user_id == user_id)
-                        .where(PlannedSession.date >= min_date)
-                        .where(PlannedSession.date <= max_date)
-                        .where(PlannedSession.plan_type == "manual_upload")
-                        .order_by(PlannedSession.created_at.desc())
-                        .limit(saved_count)
-                    ).all()
+                if starts_at_list:
+                    min_starts_at = min(starts_at_list)
+                    max_starts_at = max(starts_at_list)
 
-                    session_ids = [row[0].id for row in results[:saved_count]]
+                    with get_session() as session:
+                        # Schema v2: use starts_at instead of date, use source instead of plan_type
+                        results = session.execute(
+                            select(PlannedSession)
+                            .where(PlannedSession.user_id == user_id)
+                            .where(PlannedSession.starts_at >= min_starts_at)
+                            .where(PlannedSession.starts_at <= max_starts_at)
+                            .where(PlannedSession.source == "manual")  # Schema v2: use source instead of plan_type
+                            .order_by(PlannedSession.created_at.desc())
+                            .limit(saved_count)
+                        ).all()
+
+                        session_ids = [row[0].id for row in results[:saved_count]]
 
             logger.info(
                 "Manual season uploaded successfully",

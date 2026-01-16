@@ -14,6 +14,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import PlannedSession as DBPlannedSession
+from app.db.schema_v2_map import (
+    combine_date_time,
+    km_to_meters,
+    mi_to_meters,
+    minutes_to_seconds,
+    normalize_sport,
+)
 from app.domains.training_plan.enums import DayType, WeekFocus
 from app.domains.training_plan.models import PlanContext, PlannedSession, PlannedWeek, SessionTextOutput
 from app.plans.week_planner import assign_intent_from_day_type
@@ -191,7 +198,7 @@ def _extract_distance_mi(session: PlannedSession, text_output: SessionTextOutput
 
 
 def _extract_duration_min(_session: PlannedSession, text_output: SessionTextOutput | None) -> int | None:
-    """Extract duration in minutes from session.
+    """Extract duration in minutes from session (for conversion to seconds).
 
     Args:
         session: Planned session
@@ -216,18 +223,18 @@ def _extract_duration_min(_session: PlannedSession, text_output: SessionTextOutp
     return None
 
 
-def _convert_distance_to_km(distance_mi: float | None) -> float | None:
-    """Convert distance from miles to kilometers.
+def _convert_distance_to_meters(distance_mi: float | None) -> float | None:
+    """Convert distance from miles to meters (schema v2).
 
     Args:
         distance_mi: Distance in miles
 
     Returns:
-        Distance in kilometers or None
+        Distance in meters or None
     """
     if distance_mi is None:
         return None
-    return distance_mi * 1.60934
+    return mi_to_meters(distance_mi)
 
 
 def _get_tags(session: PlannedSession) -> list[str]:
@@ -367,8 +374,9 @@ def _upsert_session(
     title = text_output.title if text_output else f"{planned_session.day_type.value.title()} Run"
     description = text_output.description if text_output else ""
     distance_mi = _extract_distance_mi(planned_session, text_output)
-    distance_km = _convert_distance_to_km(distance_mi)
+    distance_meters = _convert_distance_to_meters(distance_mi)  # Schema v2: meters
     duration_min = _extract_duration_min(planned_session, text_output)
+    duration_seconds = minutes_to_seconds(duration_min)  # Schema v2: seconds
     time_str = _get_time_default(planned_session)
     phase = _determine_phase(week.focus)
     session_type = _map_session_type(planned_session.day_type)
@@ -377,31 +385,39 @@ def _upsert_session(
     philosophy_id = ctx.philosophy.philosophy_id if ctx.philosophy else None
     template_id = planned_session.template.template_id
 
-    # Build unique constraint key for lookup
-    # Using: user_id, athlete_id, plan_id, date, session_order
+    # Schema v2: Combine date + time into starts_at (TIMESTAMPTZ)
+    starts_at = combine_date_time(session_date, time_str)
+
+    # Schema v2: Normalize sport type
+    sport = normalize_sport("run")  # Default to "run", can be extended later
+
+    # Build unique constraint key for lookup (schema v2 dedupe key)
+    # Using: (user_id, starts_at, COALESCE(title,''), COALESCE(sport,''))
+    # Note: We use title and sport for additional uniqueness beyond just starts_at
     try:
-        # Build query conditions
+        # Build query conditions (schema v2: no athlete_id, use starts_at, season_plan_id)
         conditions = [
             DBPlannedSession.user_id == user_id,
-            DBPlannedSession.athlete_id == athlete_id,
-            DBPlannedSession.date == session_datetime,
-            DBPlannedSession.session_order == session_order,
+            DBPlannedSession.starts_at == starts_at,
+            DBPlannedSession.title == title,
+            DBPlannedSession.sport == sport,
         ]
 
-        # Handle plan_id (can be None for some plans)
+        # Handle season_plan_id (can be None for some plans)
+        # Schema v2: plan_id -> season_plan_id
         if plan_id is not None:
-            conditions.append(DBPlannedSession.plan_id == plan_id)
+            conditions.append(DBPlannedSession.season_plan_id == plan_id)
         else:
-            conditions.append(DBPlannedSession.plan_id.is_(None))
+            conditions.append(DBPlannedSession.season_plan_id.is_(None))
 
         query = select(DBPlannedSession).where(and_(*conditions))
         existing = db_session.execute(query).scalar_one_or_none()
     except Exception as e:
-        date_str = session_datetime.isoformat() if session_datetime else None
+        starts_at_str = starts_at.isoformat() if starts_at else None
         error_msg = (
             f"B7: Failed to persist session "
-            f"(user_id={user_id}, athlete_id={athlete_id}, "
-            f"plan_id={plan_id}, date={date_str}, "
+            f"(user_id={user_id}, "
+            f"season_plan_id={plan_id}, starts_at={starts_at_str}, "
             f"error_type={type(e).__name__})"
         )
         logger.error(
@@ -413,53 +429,50 @@ def _upsert_session(
         raise
 
     if existing:
-        # Update existing session
+        # Update existing session (schema v2 fields)
         db_session_obj = existing
         db_session_obj.title = title
         db_session_obj.notes = description
-        db_session_obj.distance_km = distance_km
-        db_session_obj.distance_mi = distance_mi
-        db_session_obj.duration_minutes = duration_min
-        db_session_obj.time = time_str
+        db_session_obj.distance_meters = distance_meters  # Schema v2: distance_meters
+        db_session_obj.duration_seconds = duration_seconds  # Schema v2: duration_seconds
+        db_session_obj.starts_at = starts_at  # Schema v2: starts_at (ensure time is updated if changed)
+        db_session_obj.sport = sport  # Schema v2: sport
         db_session_obj.intensity = session_type
         db_session_obj.session_type = session_type
         db_session_obj.intent = intent  # Authoritative field
-        db_session_obj.tags = tags if tags else None
+        db_session_obj.tags = tags if tags else []  # Schema v2: tags is list
         db_session_obj.phase = phase
         db_session_obj.philosophy_id = philosophy_id
         db_session_obj.template_id = template_id
         db_session_obj.week_number = week.week_index
+        # Schema v2: season_plan_id already matched in query, no need to update
 
         return "updated"
 
-    # Create new session
+    # Create new session (schema v2)
     try:
         db_session_obj = DBPlannedSession(
             id=str(uuid.uuid4()),
             user_id=user_id,
-            athlete_id=athlete_id,
-            plan_id=plan_id,
-            date=session_datetime,
-            time=time_str,
-            type="Run",  # Default to Run, can be extended later
+            starts_at=starts_at,  # Schema v2: starts_at instead of date + time
+            sport=sport,  # Schema v2: sport instead of type
             title=title,
-            duration_minutes=duration_min,
-            distance_km=distance_km,
-            distance_mi=distance_mi,
+            duration_seconds=duration_seconds,  # Schema v2: duration_seconds instead of duration_minutes
+            distance_meters=distance_meters,  # Schema v2: distance_meters instead of distance_km/distance_mi
             intensity=session_type,
             session_type=session_type,
             intent=intent,  # Authoritative field
             notes=description,
-            plan_type=ctx.plan_type.value,
+            season_plan_id=plan_id,  # Schema v2: season_plan_id instead of plan_id
             week_number=week.week_index,
             session_order=session_order,
             phase=phase,
             source="planner_v2",
             philosophy_id=philosophy_id,
             template_id=template_id,
-            tags=tags if tags else None,
-            status="planned",
-            completed=False,
+            tags=tags if tags else [],  # Schema v2: tags is list, not None
+            status="planned",  # Schema v2: status field
+            # Schema v2: removed athlete_id, plan_type, completed
         )
 
         db_session.add(db_session_obj)

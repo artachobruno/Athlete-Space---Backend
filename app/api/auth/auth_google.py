@@ -401,7 +401,7 @@ def google_callback(
                     resolved_user_id = existing_user.id
                     # Link Google account to existing user
                     existing_user.google_sub = google_sub
-                    existing_user.auth_provider = AuthProvider.google
+                    existing_user.auth_provider = AuthProvider.google.value
                     # If user had password auth, keep it (allow both)
                     # But if they're logging in with Google, we'll update auth_provider
                     logger.info(f"[GOOGLE_OAUTH] Linking Google account to existing user_id={resolved_user_id}")
@@ -414,7 +414,7 @@ def google_callback(
                     resolved_user_id = user_id
                     user = user_result[0]
                     user.google_sub = google_sub
-                    user.auth_provider = AuthProvider.google
+                    user.auth_provider = AuthProvider.google.value
                     logger.info(f"[GOOGLE_OAUTH] Linking Google account to existing user_id={resolved_user_id}")
                 else:
                     # Unauthenticated flow: create new user
@@ -423,7 +423,7 @@ def google_callback(
                         id=resolved_user_id,
                         email=email,
                         password_hash=None,  # OAuth users don't need passwords
-                        auth_provider=AuthProvider.google,
+                        auth_provider=AuthProvider.google.value,
                         google_sub=google_sub,
                         strava_athlete_id=None,
                         created_at=datetime.now(timezone.utc),
@@ -445,6 +445,9 @@ def google_callback(
             user_result = session.execute(select(User).where(User.id == resolved_user_id)).first()
             if user_result:
                 user = user_result[0]
+                # Hardening: Ensure auth_provider is a string, not an enum object
+                if isinstance(user.auth_provider, AuthProvider):
+                    user.auth_provider = user.auth_provider.value
                 user.last_login_at = datetime.now(timezone.utc)
                 session.commit()
                 logger.debug(f"[GOOGLE_OAUTH] Updated last_login_at for user_id={resolved_user_id}")

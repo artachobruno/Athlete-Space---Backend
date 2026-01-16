@@ -60,12 +60,7 @@ class CalendarWriteService:
         Returns:
             Athlete ID or None if not found
         """
-        # Try AthleteProfile first
-        profile = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
-        if profile and profile[0].athlete_id:
-            return int(profile[0].athlete_id)
-
-        # Fallback to StravaAccount
+        # Get athlete_id from StravaAccount (canonical source)
         account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
         if account:
             return int(account[0].athlete_id)

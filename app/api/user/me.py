@@ -751,7 +751,7 @@ def _create_new_profile(session, user_id: str) -> AthleteProfile:
     except Exception as e:
         logger.debug(f"Could not get athlete_id for user {user_id}: {e}")
 
-    profile = AthleteProfile(user_id=user_id, athlete_id=athlete_id, sources={})
+    profile = AthleteProfile(user_id=user_id, sources={})
     session.add(profile)
     return profile
 

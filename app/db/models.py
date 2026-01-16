@@ -817,7 +817,6 @@ class AthleteProfile(Base):
     __tablename__ = "athlete_profiles"
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
-    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
     # Basic info
     name: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -889,40 +888,7 @@ class UserSettings(Base):
     __tablename__ = "user_settings"
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
-    units: Mapped[str] = mapped_column(String, nullable=False, default="metric")
-    timezone: Mapped[str] = mapped_column(String, nullable=False, default="UTC")
-    notifications_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    email_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    weekly_summary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-    # Training preferences
-    years_of_training: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    primary_sports: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    available_days: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    weekly_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
-    training_focus: Mapped[str | None] = mapped_column(String, nullable=True)
-    injury_history: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    injury_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    consistency: Mapped[str | None] = mapped_column(String, nullable=True)
-    goal: Mapped[str | None] = mapped_column(String, nullable=True)
-
-    # Threshold configuration (for IF and TSS computation)
-    ftp_watts: Mapped[float | None] = mapped_column(Float, nullable=True)
-    threshold_pace_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
-    threshold_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
-    # Privacy settings
-    profile_visibility: Mapped[str] = mapped_column(String, nullable=False, default="private")
-    share_activity_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    share_training_metrics: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-    # Notification preferences
-    push_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    workout_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    training_load_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    race_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    goal_achievements: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    coach_messages: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    preferences: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(

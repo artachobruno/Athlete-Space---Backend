@@ -35,11 +35,12 @@ from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
 from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
-from app.db.models import PlannedSession, SeasonPlan
+from app.db.models import AthleteProfile, PlannedSession, SeasonPlan
 from app.db.session import get_session
 from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
 from app.plans.modify.types import DayModification
+from app.plans.revision import PlanRevisionRegistry, build_explanation_payload
 
 
 def serialize_for_mcp(obj: Any) -> Any:
@@ -953,6 +954,11 @@ class CoachActionExecutor:
                 if not existing_session:
                     return f"No planned session found for {target_date.isoformat()}. Please plan a session first."
 
+                # Fetch athlete profile for race day protection (orchestrator owns DB access)
+                athlete_profile = db_session.execute(
+                    select(AthleteProfile).where(AthleteProfile.athlete_id == deps.athlete_id)
+                ).scalar_one_or_none()
+
                 # Build structured DayModification from context
                 modification = CoachActionExecutor._build_day_modification_from_context(
                     structured_data=structured_data,
@@ -960,18 +966,29 @@ class CoachActionExecutor:
                     existing_session=existing_session,
                 )
 
-                # Call structured modify_day()
+                # Get user request from decision message
+                user_request = decision.message or f"Modify session on {target_date.isoformat()}"
+
+                # Call structured modify_day() (pass athlete_profile from orchestrator)
                 result = modify_day(
                     context={
                         "user_id": deps.user_id,
                         "athlete_id": deps.athlete_id,
                         "target_date": target_date.isoformat(),
                         "modification": modification.model_dump(),
-                    }
+                        "user_request": user_request,
+                    },
+                    athlete_profile=athlete_profile,
                 )
+
+                # Save revision to registry
+                if "revision" in result:
+                    registry = PlanRevisionRegistry()
+                    registry.save(result["revision"])
 
                 if not result.get("success"):
                     error_msg = result.get("error", "Unknown error")
+                    # If revision exists, could use it for explanation, but for now return error
                     return f"Could not modify session: {error_msg}"
 
                 # Commit changes (modify_day creates new session via save_modified_session)
@@ -1050,15 +1067,30 @@ class CoachActionExecutor:
             # Convert extracted to structured WeekModification
             week_modification = to_week_modification(extracted, today)
 
-            # Call structured modify_week()
+            # Fetch athlete profile for race/taper protection (orchestrator owns DB access)
+            athlete_profile: AthleteProfile | None = None
+            with get_session() as db:
+                athlete_profile = db.execute(
+                    select(AthleteProfile).where(AthleteProfile.athlete_id == deps.athlete_id)
+                ).scalar_one_or_none()
+
+            # Call structured modify_week() (pass athlete_profile from orchestrator)
             result = modify_week(
                 user_id=deps.user_id,
                 athlete_id=deps.athlete_id,
                 modification=week_modification,
+                user_request=user_message,
+                athlete_profile=athlete_profile,
             )
+
+            # Save revision to registry
+            if "revision" in result:
+                registry = PlanRevisionRegistry()
+                registry.save(result["revision"])
 
             if not result.get("success"):
                 error_msg = result.get("error", "Unknown error")
+                # If revision exists, could use it for explanation, but for now return error
                 return f"Could not modify week: {error_msg}"
 
             if conversation_id and step_info:

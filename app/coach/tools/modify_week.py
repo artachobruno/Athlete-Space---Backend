@@ -9,11 +9,10 @@ import copy
 from datetime import date, datetime, timezone
 
 from loguru import logger
-from sqlalchemy import select
 
 from app.coach.tools.modify_day import modify_day
 from app.db.models import AthleteProfile, PlannedSession
-from app.db.session import get_session
+from app.db.session import get_session as _get_session
 from app.plans.modify.repository import get_planned_session_by_date
 from app.plans.modify.types import DayModification
 from app.plans.modify.week_repository import (
@@ -23,6 +22,11 @@ from app.plans.modify.week_repository import (
 )
 from app.plans.modify.week_types import WeekModification
 from app.plans.modify.week_validators import validate_week_modification
+from app.plans.race.utils import is_race_week, is_taper_week
+from app.plans.revision import PlanRevisionBuilder
+
+# Re-export for testability
+get_session = _get_session
 
 MIN_LONG_DISTANCE_MILES = 8.0  # Minimum long run distance
 
@@ -32,6 +36,8 @@ def modify_week(
     user_id: str,
     athlete_id: int,
     modification: WeekModification,
+    user_request: str | None = None,
+    athlete_profile: AthleteProfile | None = None,
 ) -> dict:
     """Modify a week range of planned workouts.
 
@@ -47,17 +53,30 @@ def modify_week(
         user_id: User ID
         athlete_id: Athlete ID
         modification: WeekModification object
+        user_request: Optional user request text for revision tracking
+        athlete_profile: Optional athlete profile for race/taper protection.
+            If None, race/taper protection is skipped. Should be fetched by
+            orchestrator and passed down (tools do not access DB).
 
     Returns:
         Dictionary with:
             - success: bool
             - message: str
             - modified_sessions: list[str] (session IDs if successful)
+            - revision: PlanRevision (canonical truth of changes)
             - error: str (if failed)
 
     Raises:
         ValueError: If required fields missing or invalid modification
     """
+    # Get user request from parameter or use default
+    if user_request is None:
+        user_request = f"Modify week {modification.start_date} to {modification.end_date}"
+
+    # Initialize PlanRevision builder
+    builder = PlanRevisionBuilder(scope="week", user_request=user_request)
+    builder.set_reason(modification.reason)
+
     logger.info(
         "modify_week_started",
         user_id=user_id,
@@ -72,10 +91,13 @@ def modify_week(
     try:
         start_date = date.fromisoformat(modification.start_date)
         end_date = date.fromisoformat(modification.end_date)
+        builder.set_range(modification.start_date, modification.end_date)
     except ValueError as e:
+        revision = builder.finalize()
         return {
             "success": False,
             "error": f"Invalid date format: {e}",
+            "revision": revision,
         }
 
     # Fetch sessions in range
@@ -86,20 +108,85 @@ def modify_week(
         user_id=user_id,
     )
 
-    # Fetch athlete profile for race/taper protection
-    athlete_profile: AthleteProfile | None = None
-    with get_session() as db:
-        athlete_profile = db.execute(
-            select(AthleteProfile).where(AthleteProfile.athlete_id == athlete_id)
-        ).scalar_one_or_none()
-
-    # Validate modification
+    # Validate modification and record rules (athlete_profile passed from orchestrator)
     try:
         validate_week_modification(modification, original_sessions, athlete_profile=athlete_profile)
+        # Record rule checks based on validation
+        if athlete_profile and athlete_profile.race_date:
+            race_date = athlete_profile.race_date
+            taper_weeks = athlete_profile.taper_weeks or 2
+
+            # Check race week rule
+            if is_race_week(start_date, end_date, race_date):
+                if modification.change_type == "increase_volume":
+                    builder.add_rule(
+                        rule_id="RACE_WEEK_NO_INCREASE",
+                        description="Cannot increase volume during race week",
+                        severity="block",
+                        triggered=False,  # Validation passed, so not triggered
+                    )
+                else:
+                    builder.add_rule(
+                        rule_id="RACE_WEEK_NO_INCREASE",
+                        description="Cannot increase volume during race week",
+                        severity="block",
+                        triggered=False,
+                    )
+
+            # Check taper week rule
+            if is_taper_week(start_date, race_date, taper_weeks):
+                if modification.change_type not in {"reduce_volume"}:
+                    # This should have been caught by validation, but record it
+                    builder.add_rule(
+                        rule_id="TAPER_ONLY_REDUCTIONS",
+                        description="Cannot add volume or quality sessions during taper",
+                        severity="block",
+                        triggered=False,  # Validation passed
+                    )
+                else:
+                    builder.add_rule(
+                        rule_id="TAPER_ONLY_REDUCTIONS",
+                        description="Cannot add volume or quality sessions during taper",
+                        severity="block",
+                        triggered=False,
+                    )
     except ValueError as e:
+        # Record blocking rule
+        error_msg = str(e)
+        if "race week" in error_msg.lower():
+            builder.add_rule(
+                rule_id="RACE_WEEK_NO_INCREASE",
+                description="Cannot increase volume during race week",
+                severity="block",
+                triggered=True,
+            )
+        elif "taper" in error_msg.lower():
+            builder.add_rule(
+                rule_id="TAPER_ONLY_REDUCTIONS",
+                description="Cannot add volume or quality sessions during taper",
+                severity="block",
+                triggered=True,
+            )
+        elif "race day" in error_msg.lower():
+            builder.add_rule(
+                rule_id="RACE_DAY_NO_SHIFT",
+                description="Race day cannot be shifted unless explicitly requested",
+                severity="block",
+                triggered=True,
+            )
+        else:
+            # Generic validation error
+            builder.add_rule(
+                rule_id="WEEK_VALIDATION",
+                description=error_msg,
+                severity="block",
+                triggered=True,
+            )
+        revision = builder.finalize()
         return {
             "success": False,
             "error": f"Invalid modification: {e}",
+            "revision": revision,
         }
 
     # Apply modification based on change_type
@@ -120,12 +207,44 @@ def modify_week(
                 user_id=user_id,
                 athlete_id=athlete_id,
                 modification=modification,
+                athlete_profile=athlete_profile,
             )
 
             # Normalize response - replace_day returns from modify_day directly
             # but we still want consistent logging and response shape
             if not result.get("success"):
-                return result
+                # Merge revision from modify_day if present
+                if "revision" in result:
+                    # Merge deltas from modify_day revision into week revision
+                    day_revision = result["revision"]
+                    for delta in day_revision.deltas:
+                        builder.add_delta(
+                            entity_type=delta.entity_type,
+                            entity_id=delta.entity_id,
+                            date=delta.date,
+                            field=delta.field,
+                            old=delta.old,
+                            new=delta.new,
+                        )
+                revision = builder.finalize()
+                return {
+                    "success": False,
+                    "error": result.get("error", "Unknown error"),
+                    "revision": revision,
+                }
+
+            # Merge revision from modify_day
+            if "revision" in result:
+                day_revision = result["revision"]
+                for delta in day_revision.deltas:
+                    builder.add_delta(
+                        entity_type=delta.entity_type,
+                        entity_id=delta.entity_id,
+                        date=delta.date,
+                        field=delta.field,
+                        old=delta.old,
+                        new=delta.new,
+                    )
 
             # Log the modification (modify_day already saved the session)
             logger.info(
@@ -143,18 +262,67 @@ def modify_week(
             # Normalize to: {success, message, modified_sessions: [...]}
             modified_session_id = result.get("modified_session_id")
             if modified_session_id:
+                revision = builder.finalize()
                 return {
                     "success": True,
                     "message": result.get("message", "Session modified successfully"),
                     "modified_sessions": [modified_session_id],
+                    "revision": revision,
                 }
 
-            return result
+            revision = builder.finalize()
+            return {
+                **result,
+                "revision": revision,
+            }
         else:
+            revision = builder.finalize()
             return {
                 "success": False,
                 "error": f"Unknown change_type: {modification.change_type}",
+                "revision": revision,
             }
+
+        # Record deltas for all modified sessions
+        for original, modified in zip(original_sessions, modified_sessions, strict=False):
+            # Record session creation
+            builder.add_delta(
+                entity_type="session",
+                entity_id=modified.id,
+                date=modified.date.date().isoformat(),
+                field="session_created",
+                old=original.id,
+                new=modified.id,
+            )
+
+            # Record field changes
+            if original.distance_mi != modified.distance_mi:
+                builder.add_delta(
+                    entity_type="session",
+                    entity_id=modified.id,
+                    date=modified.date.date().isoformat(),
+                    field="distance_mi",
+                    old=original.distance_mi,
+                    new=modified.distance_mi,
+                )
+            if original.duration_minutes != modified.duration_minutes:
+                builder.add_delta(
+                    entity_type="session",
+                    entity_id=modified.id,
+                    date=modified.date.date().isoformat(),
+                    field="duration_minutes",
+                    old=original.duration_minutes,
+                    new=modified.duration_minutes,
+                )
+            if original.intent != modified.intent:
+                builder.add_delta(
+                    entity_type="session",
+                    entity_id=modified.id,
+                    date=modified.date.date().isoformat(),
+                    field="intent",
+                    old=original.intent,
+                    new=modified.intent,
+                )
 
         # Save modified sessions
         saved_sessions = save_modified_sessions(
@@ -173,17 +341,21 @@ def modify_week(
             reason=modification.reason,
         )
 
+        revision = builder.finalize()
         return {
             "success": True,
             "message": f"Modified {len(saved_sessions)} sessions",
             "modified_sessions": [s.id for s in saved_sessions],
+            "revision": revision,
         }
 
     except Exception as e:
         logger.exception("MODIFY → week: Failed to apply modification")
+        revision = builder.finalize()
         return {
             "success": False,
             "error": f"Failed to apply modification: {e}",
+            "revision": revision,
         }
 
 
@@ -366,6 +538,8 @@ def _apply_replace_day_modification(
     user_id: str,
     athlete_id: int,
     modification: WeekModification,
+    *,
+    athlete_profile: AthleteProfile | None = None,
 ) -> dict:
     """Apply replace_day by delegating to modify_day.
 
@@ -373,6 +547,7 @@ def _apply_replace_day_modification(
         user_id: User ID
         athlete_id: Athlete ID
         modification: WeekModification with target_date and day_modification
+        athlete_profile: Optional athlete profile for race day protection
 
     Returns:
         Result dictionary from modify_day
@@ -398,12 +573,13 @@ def _apply_replace_day_modification(
             "error": f"Invalid day_modification: {e}",
         }
 
-    # Call modify_day
+    # Call modify_day (pass athlete_profile through)
     return modify_day(
         context={
             "user_id": user_id,
             "athlete_id": athlete_id,
             "target_date": modification.target_date,
             "modification": day_mod.model_dump(),
-        }
+        },
+        athlete_profile=athlete_profile,
     )

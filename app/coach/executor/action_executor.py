@@ -12,6 +12,7 @@ from typing import Any, NoReturn
 from loguru import logger
 from sqlalchemy import select
 
+from app.coach.adapters.season_modification_adapter import adapt_extracted_season_modification
 from app.coach.adapters.week_modification_adapter import to_week_modification
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.clarification import (
@@ -19,11 +20,13 @@ from app.coach.clarification import (
     generate_slot_clarification,
 )
 from app.coach.errors import ToolContractViolationError
+from app.coach.extraction.modify_season_extractor import extract_modify_season
 from app.coach.extraction.modify_week_extractor import extract_week_modification_llm
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import get_conversation_progress
 from app.coach.tools.modify_day import modify_day
+from app.coach.tools.modify_season import modify_season
 from app.coach.tools.modify_week import modify_week
 from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
@@ -608,6 +611,11 @@ class CoachActionExecutor:
                 deps.execution_guard.mark_executed("modify_week")
             return await CoachActionExecutor._execute_modify_week(decision, deps, conversation_id)
 
+        if intent == "modify" and horizon == "season":
+            if deps.execution_guard:
+                deps.execution_guard.mark_executed("modify_season")
+            return await CoachActionExecutor._execute_modify_season(decision, deps, conversation_id)
+
         if intent == "adjust":
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("adjust_training_load")
@@ -1077,6 +1085,93 @@ class CoachActionExecutor:
                 error=str(e),
             )
             return "Something went wrong while modifying your week. Please try again."
+
+    @staticmethod
+    async def _execute_modify_season(
+        decision: OrchestratorAgentResponse,
+        deps: CoachDeps,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Execute season modification using structured modify_season().
+
+        Uses LLM extraction to get structured intent, then applies modifications
+        following structured principles (preserve intent, non-destructive, deterministic).
+
+        Args:
+            decision: Orchestrator decision
+            deps: Dependencies with athlete state and context
+            conversation_id: Optional conversation ID
+
+        Returns:
+            Success message with modification details
+        """
+        tool_name = "modify_season"
+        step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
+
+        if conversation_id and step_info:
+            step_id, label = step_info
+            await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
+
+        if not deps.user_id or not isinstance(deps.user_id, str):
+            return "I need your user ID to modify a season. Please check your account settings."
+        if deps.athlete_id is None:
+            return "I need your athlete ID to modify a season. Please check your account settings."
+
+        try:
+            # Extract structured season modification via LLM
+            user_message = decision.message or ""
+
+            extracted = await extract_modify_season(user_message)
+
+            # Convert extracted to structured SeasonModification
+            season_modification = adapt_extracted_season_modification(
+                extracted,
+                athlete_id=deps.athlete_id,
+            )
+
+            # Call structured modify_season()
+            result = modify_season(
+                user_id=deps.user_id,
+                athlete_id=deps.athlete_id,
+                modification=season_modification,
+            )
+
+            if not result.get("success"):
+                error_msg = result.get("error", "Unknown error")
+                return f"Could not modify season: {error_msg}"
+
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+
+            logger.info(
+                "Season modification successful (structured path)",
+                change_type=season_modification.change_type,
+                session_count=len(result.get("modified_sessions", [])),
+                conversation_id=conversation_id,
+            )
+
+            # Trigger summarization after successful tool execution (B34)
+            await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
+
+            # Return success message
+            change_type_label = season_modification.change_type.replace("_", " ").title()
+            message = result.get("message", "Season modified successfully")
+            return f"{message}. Change: {change_type_label}."
+
+        except Exception as e:
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(
+                    conversation_id, step_id, label, "failed", message=str(e)
+                )
+            logger.exception(
+                "Season modification failed",
+                tool=tool_name,
+                conversation_id=conversation_id,
+                error=str(e),
+            )
+            return "Something went wrong while modifying your season. Please try again."
 
     @staticmethod
     async def _execute_plan_week(

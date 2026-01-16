@@ -19,6 +19,57 @@ from loguru import logger
 from app.coach.schemas.athlete_state import AthleteState
 from app.planner.plan_race_simple import plan_race_simple
 
+VALID_DISTANCES = {"5K", "10K", "Half Marathon", "Marathon", "Ultra"}
+
+DISTANCE_ALIASES = {
+    "5k": "5K",
+    "10k": "10K",
+    "half": "Half Marathon",
+    "half marathon": "Half Marathon",
+    "half-marathon": "Half Marathon",
+    "halfmarathon": "Half Marathon",
+    "marathon": "Marathon",
+    "full": "Marathon",
+    "full marathon": "Marathon",
+    "full-marathon": "Marathon",
+    "fullmarathon": "Marathon",
+    "ultra": "Ultra",
+    "ultramarathon": "Ultra",
+    "ultra marathon": "Ultra",
+    "ultra-marathon": "Ultra",
+}
+
+
+def normalize_distance(distance: str) -> str:
+    """Normalize distance string to valid format.
+
+    Accepts various formats (lowercase, with/without spaces, etc.) and
+    converts them to the canonical format expected by plan_race.
+
+    Args:
+        distance: Distance string in any format
+
+    Returns:
+        Normalized distance string (one of VALID_DISTANCES)
+    """
+    if not distance:
+        return distance
+
+    d = distance.strip()
+
+    # If already in valid format, return as-is
+    if d in VALID_DISTANCES:
+        return d
+
+    # Try to normalize via aliases
+    key = d.lower()
+    normalized = DISTANCE_ALIASES.get(key)
+    if normalized:
+        return normalized
+
+    # Return original if no match (will fail validation later)
+    return d
+
 
 async def plan_race(
     race_date: datetime,
@@ -61,9 +112,11 @@ async def plan_race(
     if not race_date:
         raise ValueError("race_date is required")
 
-    valid_distances = {"5K", "10K", "Half Marathon", "Marathon", "Ultra"}
-    if distance not in valid_distances:
-        raise ValueError(f"Invalid distance: {distance}. Must be one of {valid_distances}")
+    # Normalize distance (e.g., "marathon" -> "Marathon")
+    distance = normalize_distance(distance)
+
+    if distance not in VALID_DISTANCES:
+        raise ValueError(f"Invalid distance: {distance}. Must be one of {VALID_DISTANCES}")
 
     if race_date < datetime.now(race_date.tzinfo):
         raise ValueError("race_date must be in the future")

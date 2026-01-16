@@ -59,9 +59,15 @@ def regenerate_plan(
 
     with get_session() as session:
         # Step 1: Load athlete profile
+        # Use order_by + first() instead of scalar_one_or_none() to handle cases
+        # where multiple profiles exist with the same athlete_id (e.g., in tests).
+        # Pick the most recently created one.
         athlete_profile = session.execute(
-            select(AthleteProfile).where(AthleteProfile.athlete_id == athlete_id)
-        ).scalar_one_or_none()
+            select(AthleteProfile)
+            .where(AthleteProfile.athlete_id == athlete_id)
+            .order_by(AthleteProfile.created_at.desc())
+            .limit(1)
+        ).scalars().first()
 
         if athlete_profile is None:
             raise ValueError(f"Athlete profile not found for athlete_id={athlete_id}")

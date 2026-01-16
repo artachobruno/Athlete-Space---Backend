@@ -121,14 +121,15 @@ async def execute_regeneration(
             if len(parts) >= 2:
                 distance = parts[1].replace("-", " ")
 
-        # Convert race_date to datetime for plan_race
-        race_datetime = datetime.combine(race_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        # Normalize race_date to date, then convert to datetime for plan_race
+        race_date_normalized = race_date.date() if hasattr(race_date, "date") else race_date
+        race_datetime = datetime.combine(race_date_normalized, datetime.min.time()).replace(tzinfo=timezone.utc)
 
         # Call the same generator used in initial plan creation
         logger.info(
             "Calling plan generator for regeneration",
             plan_type=plan_type,
-            race_date=race_date.isoformat(),
+            race_date=race_date_normalized.isoformat(),
             distance=distance,
         )
 

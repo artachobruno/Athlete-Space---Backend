@@ -29,6 +29,7 @@ def athlete_profile() -> AthleteProfile:
         athlete_id=1,
         race_date=date(2026, 6, 15),
         taper_weeks=TAPER_WEEKS_DEFAULT,
+        sources={},
     )
 
 

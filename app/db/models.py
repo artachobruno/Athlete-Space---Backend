@@ -61,7 +61,7 @@ class User(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
     auth_provider: Mapped[str] = mapped_column(String, nullable=False)  # CHECK constraint in DB: 'google', 'email', 'apple'
-    google_sub: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    google_sub: Mapped[str | None] = mapped_column(String, nullable=True, unique=True, index=True)
     role: Mapped[str] = mapped_column(String, nullable=False, default="athlete")  # CHECK constraint in DB: 'athlete', 'coach', 'admin'
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")  # CHECK constraint in DB: 'active', 'disabled', 'deleted'
     timezone: Mapped[str] = mapped_column(String, nullable=False, default="UTC")

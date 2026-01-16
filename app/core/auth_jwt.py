@@ -18,14 +18,19 @@ def create_access_token(user_id: str) -> str:
     """Create a JWT access token for a user.
 
     Args:
-        user_id: User ID (string) to encode in token
+        user_id: User ID (string or UUID) to encode in token
 
     Returns:
         JWT token string
     """
+    # Ensure user_id is a string (handle UUID objects from database)
+    user_id_str = str(user_id) if user_id is not None else ""
+    if not user_id_str:
+        raise ValueError("user_id cannot be None or empty")
+    
     now = datetime.now(timezone.utc)
     payload = {
-        "sub": user_id,
+        "sub": user_id_str,
         "exp": now + timedelta(days=settings.auth_token_expire_days),
         "iat": now,
         "iss": "virtus-backend",

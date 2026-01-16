@@ -304,7 +304,7 @@ class GoogleAccount(Base):
     - google_sub: Google user ID (sub claim from OAuth token, string)
     - access_token: Encrypted access token (encrypted at rest)
     - refresh_token: Encrypted refresh token (encrypted at rest)
-    - expires_at: Token expiration timestamp (Unix epoch seconds)
+    - expires_at: Token expiration timestamp (TIMESTAMPTZ, timezone-aware datetime)
     - created_at: Account creation timestamp
     """
 
@@ -314,7 +314,7 @@ class GoogleAccount(Base):
     google_sub: Mapped[str] = mapped_column(String, nullable=False, index=True, unique=True)
     access_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
     refresh_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
-    expires_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 

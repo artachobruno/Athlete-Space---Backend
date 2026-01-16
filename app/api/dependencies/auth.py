@@ -148,7 +148,7 @@ def get_current_user_id(request: Request, token: str | None = Depends(oauth2_sch
                 _raise_user_not_found_auth(request, user_id)
 
             user = user_result[0]
-            if not user.is_active:
+            if user.status != "active":
                 _raise_inactive_user(request, user_id)
     except HTTPException:
         # Re-raise HTTP exceptions as-is
@@ -212,7 +212,7 @@ def get_optional_user_id(request: Request, token: str | None = Depends(oauth2_sc
             return None
 
         user = user_result[0]
-        if not user.is_active:
+        if user.status != "active":
             logger.debug(f"Optional auth: Inactive user user_id={user_id}, Path: {request.url.path}")
             return None
 

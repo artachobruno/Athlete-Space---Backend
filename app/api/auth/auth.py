@@ -233,7 +233,7 @@ def login(request: LoginRequest, http_request: Request):
         user = user_result[0]
 
         # Check if user is active
-        if not user.is_active:
+        if user.status != "active":
             logger.warning(f"[AUTH] Login failed: inactive user for email={normalized_email}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

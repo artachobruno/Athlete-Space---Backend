@@ -695,6 +695,10 @@ class AthleteProfile(Base):
     extracted_race_attributes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     extracted_injury_attributes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Race and taper
+    race_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    taper_weeks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Health and constraints
     injury_history: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     current_injuries: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)

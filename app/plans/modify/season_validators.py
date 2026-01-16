@@ -7,10 +7,15 @@ Enforces invariants to prevent silent corruption:
 - No increase during taper
 - No quality reduction during peak
 - Phase exists
+- Race/taper protection (delegates to week validators when dates available)
+
+Note: Season modifications work with week numbers. For full race/taper protection,
+week validators should be called per week when date ranges are available.
 """
 
 from loguru import logger
 
+from app.db.models import AthleteProfile
 from app.plans.modify.season_types import SeasonModification
 
 
@@ -18,14 +23,19 @@ def validate_season_modification(
     modification: SeasonModification,
     *,
     season_weeks: list[int],
+    athlete_profile: AthleteProfile | None = None,
 ) -> None:
     """Validate season modification against season weeks.
 
     This is the main validation entry point. It enforces all invariants.
 
+    Note: For full race/taper protection, week validators should be called
+    per week when date ranges are computed from week numbers.
+
     Args:
         modification: Season modification to validate
         season_weeks: All week numbers in the season
+        athlete_profile: Optional athlete profile for race/taper protection
 
     Raises:
         ValueError: If validation fails
@@ -68,9 +78,36 @@ def validate_season_modification(
         if modification.phase:
             phase_lower = modification.phase.lower()
             if phase_lower == "taper" and modification.change_type == "increase_volume":
+                logger.warning(
+                    "modify_blocked_by_race_rules",
+                    change_type=modification.change_type,
+                    phase=modification.phase,
+                    start_week=modification.start_week,
+                    end_week=modification.end_week,
+                )
                 raise ValueError("Cannot increase volume during taper phase")
             if phase_lower == "peak" and modification.change_type == "reduce_volume":
                 logger.warning("Reducing volume during peak phase - this may impact race performance")
+
+        # Race/taper protection based on phase
+        # Note: Full protection requires converting week numbers to dates and calling
+        # week validators per week. This is a basic check based on phase field.
+        if (
+            athlete_profile
+            and athlete_profile.race_date
+            and modification.phase
+            and modification.phase.lower() == "taper"
+            and modification.change_type not in {"reduce_volume"}
+        ):
+            logger.warning(
+                "modify_blocked_by_race_rules",
+                change_type=modification.change_type,
+                phase=modification.phase,
+                start_week=modification.start_week,
+                end_week=modification.end_week,
+                race_date=athlete_profile.race_date,
+            )
+            raise ValueError("Only volume reductions are allowed during taper.")
 
     elif modification.change_type in {"extend_phase", "reduce_phase"}:
         if modification.weeks is None:

@@ -49,3 +49,6 @@ class WeekModification(BaseModel):
     # Delegate to day modification
     target_date: str | None = None  # YYYY-MM-DD
     day_modification: dict | None = None
+
+    # Race day shift override
+    allow_race_day_shift: bool = False

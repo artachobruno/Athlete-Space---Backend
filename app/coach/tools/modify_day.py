@@ -16,7 +16,7 @@ from app.db.models import AthleteProfile, PlannedSession
 from app.db.session import get_session
 from app.plans.modify.repository import get_planned_session_by_date, save_modified_session
 from app.plans.modify.types import DayModification
-from app.plans.modify.validators import validate_pace_for_intent
+from app.plans.modify.validators import validate_pace_for_intent, validate_race_day_modification
 from app.plans.pace import estimate_pace
 from app.plans.types import WorkoutMetrics
 from app.plans.validators import validate_workout_metrics
@@ -73,6 +73,26 @@ def modify_day(context: dict) -> dict:
         target_date=target_date.isoformat(),
         change_type=modification.change_type,
     )
+
+    # Fetch athlete profile for race day protection
+    athlete_profile: AthleteProfile | None = None
+    with get_session() as db:
+        athlete_profile = db.execute(
+            select(AthleteProfile).where(AthleteProfile.athlete_id == athlete_id)
+        ).scalar_one_or_none()
+
+    # Validate race day protection
+    try:
+        validate_race_day_modification(
+            target_date=target_date,
+            modification=modification,
+            athlete_profile=athlete_profile,
+        )
+    except ValueError as e:
+        return {
+            "success": False,
+            "error": f"Invalid modification: {e}",
+        }
 
     # 2. Fetch the target session deterministically
     original_session = get_planned_session_by_date(

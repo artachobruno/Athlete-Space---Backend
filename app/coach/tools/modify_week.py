@@ -9,9 +9,11 @@ import copy
 from datetime import date, datetime, timezone
 
 from loguru import logger
+from sqlalchemy import select
 
 from app.coach.tools.modify_day import modify_day
-from app.db.models import PlannedSession
+from app.db.models import AthleteProfile, PlannedSession
+from app.db.session import get_session
 from app.plans.modify.repository import get_planned_session_by_date
 from app.plans.modify.types import DayModification
 from app.plans.modify.week_repository import (
@@ -84,9 +86,16 @@ def modify_week(
         user_id=user_id,
     )
 
+    # Fetch athlete profile for race/taper protection
+    athlete_profile: AthleteProfile | None = None
+    with get_session() as db:
+        athlete_profile = db.execute(
+            select(AthleteProfile).where(AthleteProfile.athlete_id == athlete_id)
+        ).scalar_one_or_none()
+
     # Validate modification
     try:
-        validate_week_modification(modification, original_sessions)
+        validate_week_modification(modification, original_sessions, athlete_profile=athlete_profile)
     except ValueError as e:
         return {
             "success": False,

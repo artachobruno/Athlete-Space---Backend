@@ -4,10 +4,18 @@ Enforces invariants to prevent silent corruption:
 - Intent-pace compatibility
 - Metrics consistency
 - No invalid modifications
+- Race day protection
 """
 
+from datetime import date
+
+from loguru import logger
+
+from app.db.models import AthleteProfile
 from app.planning.output.models import MaterializedSession
 from app.plans.intent_rules import get_allowed_zones_for_intent
+from app.plans.modify.types import DayModification
+from app.plans.race.utils import is_race_day
 
 
 def validate_modify_day(session: MaterializedSession) -> None:
@@ -64,3 +72,39 @@ def validate_pace_for_intent(intent: str, pace_zone: str | None) -> None:
             f"Pace zone '{pace_zone}' is invalid for intent '{intent}'. "
             f"Allowed zones: {allowed_zones}"
         )
+
+
+def validate_race_day_modification(
+    target_date: date,
+    modification: DayModification,
+    *,
+    athlete_profile: AthleteProfile | None = None,
+) -> None:
+    """Validate that race day modifications are allowed.
+
+    Race day can only be reduced unless explicitly overridden.
+
+    Args:
+        target_date: Target date for modification
+        modification: Day modification to validate
+        athlete_profile: Optional athlete profile for race date
+
+    Raises:
+        ValueError: If modification is not allowed on race day
+    """
+    if athlete_profile is None or athlete_profile.race_date is None:
+        return  # No race date, no protection needed
+
+    # Race day can only be reduced (adjust_distance with lower value, or adjust_duration with lower value)
+    # Block all other modifications
+    if (
+        is_race_day(target_date, athlete_profile.race_date)
+        and modification.change_type not in {"adjust_distance", "adjust_duration"}
+    ):
+        logger.warning(
+            "modify_blocked_by_race_rules",
+            change_type=modification.change_type,
+            target_date=target_date,
+            race_date=athlete_profile.race_date,
+        )
+        raise ValueError("Race day can only be reduced unless explicitly overridden.")

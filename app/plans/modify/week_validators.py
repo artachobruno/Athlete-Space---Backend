@@ -6,14 +6,17 @@ Enforces invariants to prevent silent corruption:
 - Exactly one long run in range
 - No duplicate days after shift
 - Volume bounds (0 < percent <= 0.6)
+- Race week/taper protection
 """
 
 from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
 
-from app.db.models import PlannedSession
+from app.db.models import AthleteProfile, PlannedSession
 from app.plans.modify.week_types import WeekModification
+from app.plans.race.constants import TAPER_WEEKS_DEFAULT
+from app.plans.race.utils import is_race_week, is_taper_week
 
 
 def validate_week_range(start_date: date, end_date: date) -> None:
@@ -110,6 +113,8 @@ def validate_shift_no_collisions(shift_map: dict[str, str], existing_sessions: l
 def validate_week_modification(
     modification: WeekModification,
     sessions: list[PlannedSession],
+    *,
+    athlete_profile: AthleteProfile | None = None,
 ) -> None:
     """Validate week modification against sessions.
 
@@ -118,6 +123,7 @@ def validate_week_modification(
     Args:
         modification: Week modification to validate
         sessions: Sessions in the modification range
+        athlete_profile: Optional athlete profile for race/taper protection
 
     Raises:
         ValueError: If validation fails
@@ -134,6 +140,55 @@ def validate_week_modification(
 
     # Validate sessions exist (warning only)
     validate_sessions_exist(sessions, start_date, end_date)
+
+    # Fetch athlete race context for protection
+    race_date: date | None = None
+    taper_weeks: int = TAPER_WEEKS_DEFAULT
+    if athlete_profile:
+        if athlete_profile.race_date:
+            race_date = athlete_profile.race_date
+        if athlete_profile.taper_weeks is not None:
+            taper_weeks = athlete_profile.taper_weeks
+
+    # Race and taper protection
+    if race_date:
+        # Rule: No volume increase in race week
+        if is_race_week(start_date, end_date, race_date) and modification.change_type == "increase_volume":
+            logger.warning(
+                "modify_blocked_by_race_rules",
+                change_type=modification.change_type,
+                range_start=start_date,
+                range_end=end_date,
+                race_date=race_date,
+            )
+            raise ValueError("Cannot increase volume during race week.")
+
+        # Rule: No shifting race day (unless explicit override)
+        if modification.change_type == "shift_days" and modification.shift_map:
+            race_date_str = race_date.isoformat()
+            if race_date_str in modification.shift_map and not modification.allow_race_day_shift:
+                logger.warning(
+                    "modify_blocked_by_race_rules",
+                    change_type=modification.change_type,
+                    range_start=start_date,
+                    range_end=end_date,
+                    race_date=race_date,
+                )
+                raise ValueError("Race day cannot be shifted unless explicitly requested.")
+
+        # Rule: Only reductions allowed in taper
+        if (
+            is_taper_week(start_date, race_date, taper_weeks)
+            and modification.change_type not in {"reduce_volume"}
+        ):
+            logger.warning(
+                "modify_blocked_by_race_rules",
+                change_type=modification.change_type,
+                range_start=start_date,
+                range_end=end_date,
+                race_date=race_date,
+            )
+            raise ValueError("Cannot add volume or quality sessions during taper.")
 
     # Validate change_type-specific invariants
     if modification.change_type in {"reduce_volume", "increase_volume"}:

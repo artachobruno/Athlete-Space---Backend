@@ -201,7 +201,13 @@ def google_login(
         )
 
     # Get redirect URI from environment variable (NO FALLBACKS)
-    redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
+    if not redirect_uri:
+        logger.error("[GOOGLE_OAUTH] GOOGLE_REDIRECT_URI environment variable not set")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google redirect URI not configured",
+        )
 
     # Validate redirect URI format
     if "/auth/google/callback" not in redirect_uri:
@@ -259,7 +265,13 @@ def google_connect(user_id: str | None = Depends(get_optional_user_id)):
         )
 
     # Get redirect URI from environment variable (NO FALLBACKS)
-    redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
+    if not redirect_uri:
+        logger.error("[GOOGLE_OAUTH] GOOGLE_REDIRECT_URI environment variable not set")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google redirect URI not configured",
+        )
 
     # Validate redirect URI format
     if "/auth/google/callback" not in redirect_uri:
@@ -345,7 +357,10 @@ def google_callback(
         # Exchange code for tokens
         logger.info("[GOOGLE_OAUTH] Exchanging code for tokens")
         # Get redirect URI from environment variable (NO FALLBACKS)
-        redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+        redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
+        if not redirect_uri:
+            logger.error("[GOOGLE_OAUTH] GOOGLE_REDIRECT_URI environment variable not set")
+            return _create_error_html(redirect_url, "Google redirect URI not configured")
         token_data = exchange_code_for_token(
             client_id=settings.google_client_id,
             client_secret=settings.google_client_secret,

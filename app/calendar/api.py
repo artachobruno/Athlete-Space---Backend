@@ -27,6 +27,7 @@ from app.calendar.view_helper import calendar_session_from_view_row, get_calenda
 from app.db.models import Activity, PlannedSession, StravaAccount, User
 from app.db.session import get_session
 from app.utils.timezone import now_user, to_utc
+from app.workouts.execution_models import WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
@@ -317,7 +318,7 @@ def _activity_to_session(activity: Activity) -> CalendarSession:
         intensity=intensity,
         status="completed",  # All activities from Strava are completed
         notes=None,
-        workout_id=activity.workout_id,
+        workout_id=None,  # Schema v2: activity.workout_id does not exist - relationships through session_links/executions
     )
 
 
@@ -935,8 +936,9 @@ def delete_planned_session(
         workout_id = planned_session.workout_id
         if workout_id:
             # Check if workout is referenced by any activities
+            # Schema v2: activity.workout_id does not exist - check through workout_executions instead
             activity_count = session.execute(
-                select(func.count(Activity.id)).where(Activity.workout_id == workout_id)
+                select(func.count(WorkoutExecution.id)).where(WorkoutExecution.workout_id == workout_id)
             ).scalar() or 0
 
             # Check if workout is referenced by any other planned sessions

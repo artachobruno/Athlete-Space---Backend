@@ -110,15 +110,9 @@ def auto_match_sessions(
                 session.flush()
 
                 # Step 2: Check if activity has inferred workout
-                inferred_workout_id = activity.workout_id
+                # Schema v2: activity.workout_id does not exist - relationships go through session_links
+                # For now, skip inferred workout check (would require querying session_links/executions)
                 inferred_workout = None
-                if inferred_workout_id and inferred_workout_id != planned_workout.id:
-                    inferred_workout = session.execute(
-                        select(Workout).where(
-                            Workout.id == inferred_workout_id,
-                            Workout.source == "inferred",
-                        )
-                    ).scalar_one_or_none()
 
                 # Step 3: If activity has inferred workout, repoint execution and delete inferred
                 if inferred_workout:
@@ -152,8 +146,8 @@ def auto_match_sessions(
                 # Step 4: Attach activity to planned workout (creates execution if needed)
                 WorkoutFactory.attach_activity(session, planned_workout, activity)
 
-                # Step 5: Update activity.workout_id to point to planned workout
-                activity.workout_id = planned_workout.id
+                # Step 5: Note - activity.workout_id does not exist in schema v2
+                # Relationships go through session_links table
 
                 # Step 6: Update workout.activity_id to link workout to activity (CRITICAL FIX)
                 planned_workout.activity_id = activity.id

@@ -37,18 +37,20 @@ def assert_calendar_session_does_not_exist() -> None:
 def assert_activity_has_workout(activity: Activity) -> None:
     """Assert that activity has a workout_id.
 
-    Fails loudly in logs if invariant is violated.
+    DEPRECATED: Schema v2 removes activity.workout_id column.
+    Activities are linked to workouts through session_links table.
+    This guard is disabled to match schema.
 
     Args:
         activity: Activity instance
 
     Raises:
-        AssertionError: If activity.workout_id is None
+        AssertionError: Never (function disabled for schema v2)
     """
-    if activity.workout_id is None:
-        error_msg = f"INVARIANT VIOLATION: Activity {activity.id} has no workout_id"
-        logger.error(error_msg, extra={"activity_id": activity.id, "user_id": activity.user_id})
-        raise AssertionError(error_msg)
+    # Schema v2: activity.workout_id does not exist
+    # Relationships go through session_links table
+    # This guard is disabled to match schema
+    pass
 
 
 def assert_activity_has_execution(session: Session, activity: Activity) -> None:
@@ -73,7 +75,6 @@ def assert_activity_has_execution(session: Session, activity: Activity) -> None:
             error_msg,
             activity_id=activity.id,
             user_id=activity.user_id,
-            workout_id=activity.workout_id,
         )
         raise AssertionError(error_msg)
 

@@ -167,9 +167,6 @@ class Activity(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # JSONB: HR, pace, power, raw_json, streams_data, etc.
 
-    # Workout relationship (mandatory invariant)
-    workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
-
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

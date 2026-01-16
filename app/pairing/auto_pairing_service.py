@@ -486,10 +486,9 @@ def _persist_pairing(
         # Continue even if workout creation fails - pairing still succeeds
         workout = None
 
-    # Update activity.workout_id to point to planned workout
+    # Note: activity.workout_id does not exist in schema v2
+    # Relationships go through session_links table (planned_sessions <-> session_links <-> activities)
     if workout:
-        activity.workout_id = workout.id
-
         # Create WorkoutExecution (triggers compliance calculation)
         try:
             WorkoutFactory.attach_activity(session, workout, activity)

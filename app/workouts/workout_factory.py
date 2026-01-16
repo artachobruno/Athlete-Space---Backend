@@ -232,10 +232,14 @@ class WorkoutFactory:
         Note:
             Commits are handled by the caller. This method only flushes.
         """
-        # Check if workout_id already exists
-        if activity.workout_id:
+        # Schema v2: activity.workout_id does not exist
+        # Check if workout already exists through workout_executions
+        existing_execution = session.execute(
+            select(WorkoutExecution).where(WorkoutExecution.activity_id == activity.id).limit(1)
+        ).scalar_one_or_none()
+        if existing_execution:
             existing_workout = session.execute(
-                select(Workout).where(Workout.id == activity.workout_id)
+                select(Workout).where(Workout.id == existing_execution.workout_id)
             ).scalar_one_or_none()
             if existing_workout:
                 logger.debug(
@@ -266,8 +270,8 @@ class WorkoutFactory:
         # Create single main step
         _create_main_step_from_activity(session, workout, activity)
 
-        # Set workout_id on activity
-        activity.workout_id = workout.id
+        # Schema v2: activity.workout_id does not exist - relationships go through workout_executions
+        # The workout is already linked via workout.activity_id and execution is created separately
 
         logger.info(
             "Created workout for activity",

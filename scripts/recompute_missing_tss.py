@@ -18,15 +18,13 @@ def recompute_missing_tss(dry_run: bool = True) -> None:
     session: Session = SessionLocal()
 
     try:
-        activities = (
-            session.query(Activity)
-            .filter(
-                Activity.tss.is_(None),
-                Activity.streams_data.isnot(None),
-            )
-            .order_by(Activity.start_time.desc())
-            .all()
-        )
+        # Filter activities with missing TSS and check if metrics contains streams_data
+        all_activities = session.query(Activity).filter(Activity.tss.is_(None)).all()
+        activities = [
+            a for a in all_activities
+            if a.metrics and isinstance(a.metrics, dict) and a.metrics.get("streams_data")
+        ]
+        activities.sort(key=lambda a: a.starts_at, reverse=True)
 
         logger.info(f"Found {len(activities)} activities missing TSS")
 
@@ -37,7 +35,7 @@ def recompute_missing_tss(dry_run: bool = True) -> None:
             try:
                 logger.info(
                     f"Recomputing TSS for activity={activity.id} "
-                    f"start_time={activity.start_time} "
+                    f"starts_at={activity.starts_at} "
                     f"duration={activity.duration_seconds}s "
                     f"distance={activity.distance_meters}m"
                 )

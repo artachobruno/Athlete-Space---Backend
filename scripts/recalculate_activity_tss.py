@@ -49,7 +49,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
     total_unchanged = 0
 
     with get_session() as db:
-        query = db.query(Activity).filter(Activity.duration_seconds.isnot(None)).order_by(Activity.start_time.asc())
+        query = db.query(Activity).filter(Activity.duration_seconds.isnot(None)).order_by(Activity.starts_at.asc())
 
         for i, activity in enumerate(query.yield_per(BATCH_SIZE), 1):
             total_processed += 1

@@ -7,6 +7,7 @@ recomputes the last 60 days to handle updates and corrections.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import cast
 
@@ -62,8 +63,8 @@ def aggregate_daily_training(user_id: str) -> None:
                 """
                 DELETE FROM daily_training_summary
                 WHERE user_id = :user_id
-                AND date >= :start_date
-                AND date <= :end_date
+                AND day >= :start_date
+                AND day <= :end_date
                 """
             ),
             {
@@ -78,16 +79,16 @@ def aggregate_daily_training(user_id: str) -> None:
             text(
                 """
                 SELECT
-                    DATE(start_time) as date,
+                    DATE(starts_at) as day,
                     SUM(duration_seconds) as duration_seconds,
                     SUM(distance_meters) as distance_meters,
                     SUM(elevation_gain_meters) as elevation_gain_meters
                 FROM activities
                 WHERE user_id = :user_id
-                AND DATE(start_time) >= :start_date
-                AND DATE(start_time) <= :end_date
-                GROUP BY DATE(start_time)
-                ORDER BY date
+                AND DATE(starts_at) >= :start_date
+                AND DATE(starts_at) <= :end_date
+                GROUP BY DATE(starts_at)
+                ORDER BY day
                 """
             ),
             {
@@ -97,9 +98,9 @@ def aggregate_daily_training(user_id: str) -> None:
             },
         ).fetchall()
 
-        # Insert aggregated rows
+        # Insert aggregated rows (storing data in summary JSONB)
         for row in rows:
-            date_str = row.date if isinstance(row.date, str) else row.date.isoformat()
+            day_str = row.day if isinstance(row.day, str) else row.day.isoformat()
             duration_seconds = int(row.duration_seconds) if row.duration_seconds else 0
             distance_meters = float(row.distance_meters) if row.distance_meters else 0.0
             elevation_gain_meters = float(row.elevation_gain_meters) if row.elevation_gain_meters else 0.0
@@ -107,21 +108,25 @@ def aggregate_daily_training(user_id: str) -> None:
             # Calculate load_score (duration in hours for v1)
             load_score = duration_seconds / 3600.0
 
+            # Serialize summary dict to JSON string for PostgreSQL JSONB
+            summary_json = json.dumps({
+                "duration_s": duration_seconds,
+                "distance_m": distance_meters,
+                "elevation_m": elevation_gain_meters,
+                "load_score": load_score,
+            })
             session.execute(
                 text(
                     """
                     INSERT INTO daily_training_summary
-                    (user_id, date, duration_s, distance_m, elevation_m, load_score)
-                    VALUES (:user_id, :date, :duration_s, :distance_m, :elevation_m, :load_score)
+                    (user_id, day, summary)
+                    VALUES (:user_id, :day, :summary::jsonb)
                     """
                 ),
                 {
                     "user_id": user_id,
-                    "date": date_str,
-                    "duration_s": duration_seconds,
-                    "distance_m": distance_meters,
-                    "elevation_m": elevation_gain_meters,
-                    "load_score": load_score,
+                    "day": day_str,
+                    "summary": summary_json,
                 },
             )
 
@@ -146,16 +151,21 @@ def get_daily_rows(session: Session, user_id: str, days: int = 60) -> list[Daily
     end_date = datetime.now(timezone.utc).date()
     start_date = end_date - timedelta(days=days)
 
-    # Fetch existing rows from database
+    # Fetch existing rows from database (extract from summary JSONB)
     rows = session.execute(
         text(
             """
-            SELECT date, duration_s, distance_m, elevation_m, load_score
+            SELECT
+                day,
+                (summary->>'duration_s')::double precision AS duration_s,
+                (summary->>'distance_m')::double precision AS distance_m,
+                (summary->>'elevation_m')::double precision AS elevation_m,
+                (summary->>'load_score')::double precision AS load_score
             FROM daily_training_summary
             WHERE user_id = :user_id
-            AND date >= :start_date
-            AND date <= :end_date
-            ORDER BY date
+            AND day >= :start_date
+            AND day <= :end_date
+            ORDER BY day
             """
         ),
         {
@@ -168,13 +178,13 @@ def get_daily_rows(session: Session, user_id: str, days: int = 60) -> list[Daily
     # Create a map of date -> row data for quick lookup
     data_map: dict[date, DailyTrainingRow] = {}
     for row in rows:
-        row_date = row.date if isinstance(row.date, date) else datetime.fromisoformat(row.date).date()
+        row_date = row.day if isinstance(row.day, date) else datetime.fromisoformat(row.day).date()
         data_map[row_date] = {
             "date": row_date.isoformat(),
-            "duration_s": int(row.duration_s),
-            "distance_m": float(row.distance_m),
-            "elevation_m": float(row.elevation_m),
-            "load_score": float(row.load_score),
+            "duration_s": int(row.duration_s) if row.duration_s else 0,
+            "distance_m": float(row.distance_m) if row.distance_m else 0.0,
+            "elevation_m": float(row.elevation_m) if row.elevation_m else 0.0,
+            "load_score": float(row.load_score) if row.load_score else 0.0,
         }
 
     # Build complete list for all days in range, filling missing days with zeros

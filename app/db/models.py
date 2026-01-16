@@ -301,7 +301,7 @@ class GoogleAccount(Base):
 
     Fields:
     - user_id: Foreign key to users.id
-    - google_id: Google user ID (string)
+    - google_sub: Google user ID (sub claim from OAuth token, string)
     - access_token: Encrypted access token (encrypted at rest)
     - refresh_token: Encrypted refresh token (encrypted at rest)
     - expires_at: Token expiration timestamp (Unix epoch seconds)
@@ -311,7 +311,7 @@ class GoogleAccount(Base):
     __tablename__ = "google_accounts"
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
-    google_id: Mapped[str] = mapped_column(String, nullable=False, index=True, unique=True)
+    google_sub: Mapped[str] = mapped_column(String, nullable=False, index=True, unique=True)
     access_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
     refresh_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
     expires_at: Mapped[int] = mapped_column(Integer, nullable=False)

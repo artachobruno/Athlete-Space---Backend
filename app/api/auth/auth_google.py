@@ -116,7 +116,7 @@ def _encrypt_and_store_tokens(
         if existing:
             account = existing[0]
             logger.info(f"[GOOGLE_OAUTH] Updating existing Google account for user_id={user_id}")
-            account.google_id = google_id
+            account.google_sub = google_id
             account.access_token = encrypted_access_token
             account.refresh_token = encrypted_refresh_token
             account.expires_at = expires_at
@@ -124,7 +124,7 @@ def _encrypt_and_store_tokens(
             logger.info(f"[GOOGLE_OAUTH] Creating new Google account for user_id={user_id}")
             account = GoogleAccount(
                 user_id=user_id,
-                google_id=google_id,
+                google_sub=google_id,
                 access_token=encrypted_access_token,
                 refresh_token=encrypted_refresh_token,
                 expires_at=expires_at,
@@ -519,7 +519,7 @@ def google_disconnect(user_id: str = Depends(get_current_user_id)):
                 detail="Google account not connected",
             )
 
-        google_id = account[0].google_id
+        google_id = account[0].google_sub
         session.delete(account[0])
         session.commit()
         logger.info(f"[GOOGLE_OAUTH] Disconnected Google account for user_id={user_id}, google_id={google_id}")

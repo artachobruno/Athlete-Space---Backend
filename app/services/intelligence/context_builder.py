@@ -132,7 +132,7 @@ def _format_training_history(activities: list[Activity], days: int = 7) -> str:
         return "No recent training history"
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    recent = [a for a in activities if _normalize_datetime(a.start_time) >= since]
+    recent = [a for a in activities if _normalize_datetime(a.starts_at) >= since]
 
     if not recent:
         return f"No activities in the last {days} days"
@@ -182,7 +182,7 @@ def _get_yesterday_training(activities: list[Activity]) -> str:
     yesterday_start = datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=timezone.utc)
     yesterday_end = datetime.combine(yesterday, datetime.max.time()).replace(tzinfo=timezone.utc)
 
-    yesterday_activities = [a for a in activities if yesterday_start <= _normalize_datetime(a.start_time) <= yesterday_end]
+    yesterday_activities = [a for a in activities if yesterday_start <= _normalize_datetime(a.starts_at) <= yesterday_end]
 
     if not yesterday_activities:
         return "Rest day"

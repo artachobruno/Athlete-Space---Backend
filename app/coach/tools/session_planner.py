@@ -325,12 +325,25 @@ def save_sessions_to_database(
                 session_date_raw = session_data.get("date")
                 parsed_date = _parse_session_date(session_date_raw)
                 if parsed_date is None:
+                    logger.warning(
+                        "Skipping session due to unparseable date",
+                        user_id=user_id,
+                        date_raw=session_date_raw,
+                        title=session_data.get("title"),
+                    )
                     continue
 
                 # Schema v2: Combine date and time into starts_at
                 time_str = session_data.get("time")
                 starts_at = combine_date_time(parsed_date, time_str) if parsed_date else None
                 if starts_at is None:
+                    logger.warning(
+                        "Skipping session due to invalid starts_at",
+                        user_id=user_id,
+                        parsed_date=parsed_date.isoformat() if parsed_date else None,
+                        time_str=time_str,
+                        title=session_data.get("title"),
+                    )
                     continue
 
                 # Check if session already exists (same user, starts_at, and title)

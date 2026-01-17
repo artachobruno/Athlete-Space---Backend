@@ -627,10 +627,20 @@ async def upload_manual_session(
 
                 # Update workout.planned_session_id now that PlannedSession exists
                 workout.planned_session_id = planned_session.id
-                # No need to flush again - context manager will commit at the end
-
+                # Mark workout as dirty to ensure commit happens
+                # After flush(), objects are no longer in session.new, so we need to ensure
+                # the workout update is tracked for the commit check
+                
                 session_id = planned_session.id
                 workout_id = workout.id
+                
+                # Explicit commit to ensure data is persisted
+                # After flush(), _handle_session_commit may not detect changes
+                logger.debug(
+                    f"Before explicit commit: dirty={len(session.dirty)}, new={len(session.new)}, deleted={len(session.deleted)}"
+                )
+                session.commit()
+                logger.debug("Explicit commit completed")
 
             logger.info(
                 "manual_planned_session_created",
@@ -733,6 +743,20 @@ async def upload_manual_week(
                 plan_type="manual_upload",
                 plan_id=None,
             )
+
+            # Check if no sessions were saved despite having sessions to save
+            if saved_count == 0 and len(session_dicts) > 0:
+                logger.warning(
+                    "No sessions were saved despite having sessions to save",
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    requested_count=len(request.sessions),
+                    session_dicts_preview=[{"date": str(s.get("date")), "title": s.get("title"), "sport": s.get("sport")} for s in session_dicts[:3]],
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No sessions were created. Please check your session data and try again.",
+                )
 
             # Get created session IDs (query by starts_at range) (schema v2)
             session_ids = _get_session_ids_for_upload(session_dicts, user_id, saved_count)

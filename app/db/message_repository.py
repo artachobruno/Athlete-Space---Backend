@@ -7,12 +7,46 @@ Postgres is NEVER used for prompts - Redis remains the only short-term working m
 """
 
 from datetime import datetime, timezone
+from uuid import UUID
 
 from loguru import logger
 
 from app.core.message import Message
 from app.db.models import ConversationMessage
 from app.db.session import SessionLocal
+
+
+def _normalize_conversation_id(conversation_id: str) -> str:
+    """Normalize conversation_id for database storage.
+
+    Strips the 'c_' prefix if present, leaving only the UUID portion.
+    The database stores conversation_id as UUID type, not as a prefixed string.
+
+    Args:
+        conversation_id: Conversation ID in format c_<UUID> or <UUID>
+
+    Returns:
+        UUID string without prefix (e.g., "2423eccd-17be-406b-b48e-0d71399a762a")
+
+    Raises:
+        ValueError: If the ID (after stripping prefix) is not a valid UUID
+    """
+    raw_id = conversation_id
+
+    # Strip 'c_' prefix if present
+    if isinstance(raw_id, str) and raw_id.startswith("c_"):
+        raw_id = raw_id[2:]
+
+    # Validate it's a valid UUID
+    try:
+        UUID(raw_id)
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid conversation_id format: {conversation_id}. "
+            f"Expected format: c_<UUID> or <UUID>. Error: {e}"
+        ) from e
+
+    return raw_id
 
 
 def persist_message(message: Message) -> None:
@@ -53,9 +87,13 @@ def persist_message(message: Message) -> None:
         # Using SessionLocal directly since we're in a background task
         session = SessionLocal()  # pyright: ignore[reportGeneralTypeIssues]
         try:
+            # Normalize conversation_id: strip 'c_' prefix for database storage
+            # Database stores conversation_id as UUID, not as prefixed string
+            normalized_conversation_id = _normalize_conversation_id(message.conversation_id)
+
             # Create ConversationMessage record
             db_message = ConversationMessage(
-                conversation_id=message.conversation_id,
+                conversation_id=normalized_conversation_id,
                 user_id=message.user_id,
                 role=message.role,
                 content=message.content,

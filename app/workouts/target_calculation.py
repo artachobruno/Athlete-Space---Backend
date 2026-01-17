@@ -54,10 +54,10 @@ def calculate_target_from_intensity(
 
     # Running: Calculate pace targets from threshold_pace_ms
     if sport_lower == "run":
-        if not user_settings.threshold_pace_ms or user_settings.threshold_pace_ms <= 0:
+        # Defensive access: handle missing attribute (partial load) or None
+        threshold_pace_ms = getattr(user_settings, "threshold_pace_ms", None)
+        if not threshold_pace_ms or threshold_pace_ms <= 0:
             return (StepTargetType.NONE, None, None, None)
-
-        threshold_pace_ms = user_settings.threshold_pace_ms
 
         if intensity == StepIntensity.EASY:
             # Easy: 60-70% of threshold pace (slower = higher pace value)
@@ -97,10 +97,10 @@ def calculate_target_from_intensity(
 
     # Cycling: Calculate power targets from FTP
     if sport_lower in {"bike", "ride", "cycling"}:
-        if not user_settings.ftp_watts or user_settings.ftp_watts <= 0:
+        # Defensive access: handle missing attribute (partial load) or None
+        ftp = getattr(user_settings, "ftp_watts", None)
+        if not ftp or ftp <= 0:
             return (StepTargetType.NONE, None, None, None)
-
-        ftp = user_settings.ftp_watts
 
         if intensity == StepIntensity.EASY:
             # Easy: 50-65% of FTP
@@ -127,10 +127,12 @@ def calculate_target_from_intensity(
             return (StepTargetType.POWER, ftp * 1.05, ftp * 1.20, None)
 
     # Other sports: Calculate HR targets from threshold_hr
-    if not user_settings.threshold_hr or user_settings.threshold_hr <= 0:
+    # Defensive access: handle missing attribute (partial load) or None
+    threshold_hr_raw = getattr(user_settings, "threshold_hr", None)
+    if not threshold_hr_raw or threshold_hr_raw <= 0:
         return (StepTargetType.NONE, None, None, None)
 
-    threshold_hr = float(user_settings.threshold_hr)
+    threshold_hr = float(threshold_hr_raw)
 
     if intensity == StepIntensity.EASY:
         # Easy: 60-70% of threshold HR

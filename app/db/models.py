@@ -859,6 +859,11 @@ class UserSettings(Base):
     user_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
     preferences: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
+    # Threshold configuration fields (added by migration)
+    ftp_watts: Mapped[float | None] = mapped_column(Float, nullable=True)
+    threshold_pace_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    threshold_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

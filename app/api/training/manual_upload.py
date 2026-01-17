@@ -210,7 +210,6 @@ def _get_session_ids_for_upload(
             .where(PlannedSession.user_id == user_id)
             .where(PlannedSession.starts_at >= min_starts_at)
             .where(PlannedSession.starts_at <= max_starts_at)
-            .where(PlannedSession.source == "manual")
             .order_by(PlannedSession.created_at.desc())
             .limit(saved_count)
         ).all()
@@ -606,7 +605,6 @@ async def upload_manual_session(
                     intent=intent,  # Map to intent field
                     notes=request.notes,  # Schema v2: single notes field (notes_raw removed)
                     status="planned",  # Schema v2: default status
-                    source="manual",
                     workout_id=workout.id,  # ✅ Set at creation time (NOT NULL constraint satisfied)
                     tags=[],  # Schema v2: tags is JSONB array, default empty
                 )

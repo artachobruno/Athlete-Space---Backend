@@ -1,10 +1,11 @@
-"""Migration script to add intent column to conversation_progress table.
+"""Migration script to add missing columns to conversation_progress table.
 
 This migration adds:
 - intent: String column (nullable, indexed) for storing conversation intent
+- slots: JSON/JSONB column (NOT NULL, default '{}') for slot values
+- awaiting_slots: JSON/JSONB column (NOT NULL, default '[]') for awaited slot names
 
-This column is used to track the current intent (e.g., "race_plan", "season_plan")
-during conversation progress tracking.
+These columns are required for conversation progress tracking and slot extraction.
 """
 
 import sys
@@ -27,85 +28,137 @@ def _is_postgresql() -> bool:
 
 
 def migrate_add_conversation_progress_intent() -> None:
-    """Add intent column to conversation_progress table if it doesn't exist."""
-    logger.info("Starting intent column migration for conversation_progress table")
+    """Add missing columns (intent, slots, awaiting_slots) to conversation_progress table if they don't exist."""
+    logger.info("Starting conversation_progress columns migration")
     db_type = "PostgreSQL" if _is_postgresql() else "SQLite"
     logger.info(f"Database type: {db_type}")
 
     with engine.begin() as conn:
         try:
-            # Check if column already exists
+            # Check which columns already exist
             if _is_postgresql():
                 result = conn.execute(
                     text(
                         """
-                        SELECT EXISTS (
-                            SELECT FROM information_schema.columns
-                            WHERE table_schema = 'public'
-                            AND table_name = 'conversation_progress'
-                            AND column_name = 'intent'
-                        )
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                        AND table_name = 'conversation_progress'
                         """
                     )
                 )
-                intent_column_exists = result.scalar() is True
+                existing_columns = {row[0] for row in result.fetchall()}
             else:
                 result = conn.execute(text("PRAGMA table_info(conversation_progress)"))
-                columns = [row[1] for row in result.fetchall()]
-                intent_column_exists = "intent" in columns
+                existing_columns = {row[1] for row in result.fetchall()}
 
-            if intent_column_exists:
+            intent_exists = "intent" in existing_columns
+            slots_exists = "slots" in existing_columns
+            awaiting_slots_exists = "awaiting_slots" in existing_columns
+
+            if intent_exists and slots_exists and awaiting_slots_exists:
                 logger.info(
-                    "intent column already exists in conversation_progress table, skipping migration"
+                    "All required columns (intent, slots, awaiting_slots) already exist in conversation_progress table, skipping migration"
                 )
                 return
 
-            logger.info("Adding intent column to conversation_progress table...")
+            logger.info("Adding missing columns to conversation_progress table...")
 
-            # Add intent column (nullable, String)
             if _is_postgresql():
-                conn.execute(
-                    text(
-                        """
-                        ALTER TABLE conversation_progress
-                        ADD COLUMN intent VARCHAR NULL
-                        """
+                # Add intent column if missing
+                if not intent_exists:
+                    conn.execute(
+                        text(
+                            """
+                            ALTER TABLE conversation_progress
+                            ADD COLUMN intent VARCHAR NULL
+                            """
+                        )
                     )
-                )
-                # Create index on intent column
-                conn.execute(
-                    text(
-                        """
-                        CREATE INDEX IF NOT EXISTS idx_conversation_progress_intent
-                        ON conversation_progress(intent)
-                        """
+                    logger.info("Added intent column")
+                    # Create index on intent column
+                    conn.execute(
+                        text(
+                            """
+                            CREATE INDEX IF NOT EXISTS idx_conversation_progress_intent
+                            ON conversation_progress(intent)
+                            """
+                        )
                     )
-                )
+
+                # Add slots column if missing
+                if not slots_exists:
+                    conn.execute(
+                        text(
+                            """
+                            ALTER TABLE conversation_progress
+                            ADD COLUMN slots JSONB NOT NULL DEFAULT '{}'::jsonb
+                            """
+                        )
+                    )
+                    logger.info("Added slots column")
+
+                # Add awaiting_slots column if missing
+                if not awaiting_slots_exists:
+                    conn.execute(
+                        text(
+                            """
+                            ALTER TABLE conversation_progress
+                            ADD COLUMN awaiting_slots JSONB NOT NULL DEFAULT '[]'::jsonb
+                            """
+                        )
+                    )
+                    logger.info("Added awaiting_slots column")
             else:
-                conn.execute(
-                    text(
-                        """
-                        ALTER TABLE conversation_progress
-                        ADD COLUMN intent TEXT NULL
-                        """
+                # SQLite
+                # Add intent column if missing
+                if not intent_exists:
+                    conn.execute(
+                        text(
+                            """
+                            ALTER TABLE conversation_progress
+                            ADD COLUMN intent TEXT NULL
+                            """
+                        )
                     )
-                )
-                # SQLite creates index separately
-                conn.execute(
-                    text(
-                        """
-                        CREATE INDEX IF NOT EXISTS idx_conversation_progress_intent
-                        ON conversation_progress(intent)
-                        """
+                    logger.info("Added intent column")
+                    conn.execute(
+                        text(
+                            """
+                            CREATE INDEX IF NOT EXISTS idx_conversation_progress_intent
+                            ON conversation_progress(intent)
+                            """
+                        )
                     )
-                )
 
-            logger.info("Added intent column to conversation_progress table")
+                # Add slots column if missing
+                if not slots_exists:
+                    conn.execute(
+                        text(
+                            """
+                            ALTER TABLE conversation_progress
+                            ADD COLUMN slots TEXT NOT NULL DEFAULT '{}'
+                            """
+                        )
+                    )
+                    logger.info("Added slots column")
 
-            logger.info("Conversation progress intent migration completed successfully")
+                # Add awaiting_slots column if missing
+                if not awaiting_slots_exists:
+                    conn.execute(
+                        text(
+                            """
+                            ALTER TABLE conversation_progress
+                            ADD COLUMN awaiting_slots TEXT NOT NULL DEFAULT '[]'
+                            """
+                        )
+                    )
+                    logger.info("Added awaiting_slots column")
+
+            logger.info("Conversation progress columns migration completed successfully")
 
         except Exception as e:
-            logger.error(f"Error during conversation progress intent migration: {e}", exc_info=True)
+            logger.error(f"Error during conversation progress columns migration: {e}", exc_info=True)
             raise
 
 

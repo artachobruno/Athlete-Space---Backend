@@ -139,17 +139,18 @@ def canonical_workout_to_db_workout(
     Returns:
         Tuple of (Workout model, list of WorkoutStep models)
     """
+    workout_name = f"{canonical_workout.sport.capitalize()} Workout"
     db_workout = DBWorkout(
         id=workout_id,
         user_id=user_id,
         sport=canonical_workout.sport,
+        name=workout_name,
+        description=None,
+        structure=canonical_workout.model_dump() if llm_output_json is None else llm_output_json,
+        tags={},
         source=source,
         source_ref=None,
-        total_duration_seconds=canonical_workout.total_duration_seconds,
-        total_distance_meters=canonical_workout.total_distance_meters,
-        status="matched" if parse_status == "success" else "parse_failed",
         raw_notes=raw_notes,
-        llm_output_json=llm_output_json,
         parse_status=parse_status,
     )
 

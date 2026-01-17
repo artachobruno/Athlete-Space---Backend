@@ -512,19 +512,18 @@ async def upload_manual_session(
                     }
                     sport = sport_map.get(request.type.lower(), "run")
 
+                    workout_name = request.title if request.title else f"{sport.capitalize()} Workout"
                     workout = Workout(
                         id=workout_id,
                         user_id=user_id,
                         sport=sport,
+                        name=workout_name,
+                        description=request.notes,
+                        structure={},
+                        tags={},
                         source="manual",
                         source_ref=None,
-                        total_duration_seconds=int(request.duration_minutes * 60) if request.duration_minutes else None,
-                        total_distance_meters=int(request.distance_km * 1000) if request.distance_km else None,
-                        status="matched",
-                        activity_id=None,
-                        planned_session_id=None,  # Will be set after PlannedSession is created
                         raw_notes=request.notes,
-                        llm_output_json=None,
                         parse_status=None,
                     )
                     session.add(workout)

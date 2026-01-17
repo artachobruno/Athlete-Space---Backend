@@ -16,26 +16,25 @@ from app.db.models import Base
 
 
 class Workout(Base):
-    """Workout table - single source of truth for all workouts.
+    """Workout table - template for workouts.
 
-    Stores workouts from planner, uploads, or manual entry.
-    All workouts share the same structure regardless of source.
+    Stores workout templates (intent/plan), not executions.
+    Execution data belongs in workout_executions table.
 
     Schema:
     - id: UUID primary key
     - user_id: Foreign key to users.id
     - sport: Sport type (run, bike, swim)
-    - source: Source system (planner, upload, manual)
+    - name: Workout name/title
+    - description: Workout description
+    - structure: JSONB structure with intervals, targets, etc.
+    - tags: JSONB tags
+    - source: Source system (planner, upload, manual, inferred)
     - source_ref: Optional reference to source system (e.g., template ID, file name)
-    - total_duration_seconds: Total workout duration (nullable)
-    - total_distance_meters: Total workout distance (nullable)
-    - status: Workout status (matched, analyzed, failed, parse_failed)
-    - activity_id: Foreign key to activities.id (for matched workouts)
-    - planned_session_id: Foreign key to planned_sessions.id (for matched workouts)
     - raw_notes: Original notes from user input (for auditability)
-    - llm_output_json: LLM-generated structured workout JSON (for reproducibility)
-    - parse_status: Parse status (success, parse_failed)
+    - parse_status: Parse status (success, parse_failed, pending)
     - created_at: Record creation timestamp
+    - updated_at: Record update timestamp
     """
 
     __tablename__ = "workouts"
@@ -43,17 +42,18 @@ class Workout(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     sport: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    structure: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    tags: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     source: Mapped[str] = mapped_column(String, nullable=False)
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
-    total_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    total_distance_meters: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    status: Mapped[str] = mapped_column(String, nullable=False, default="matched")
-    activity_id: Mapped[str | None] = mapped_column(String, ForeignKey("activities.id"), nullable=True, index=True)
-    planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)
     raw_notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Original notes from user input")
-    llm_output_json: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="LLM-generated structured workout JSON")
-    parse_status: Mapped[str | None] = mapped_column(String, nullable=True, comment="Parse status: success, parse_failed")
+    parse_status: Mapped[str | None] = mapped_column(String, nullable=True, comment="Parse status: success, parse_failed, pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
 
     steps: Mapped[list[WorkoutStep]] = relationship("WorkoutStep", back_populates="workout")
 

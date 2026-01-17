@@ -161,16 +161,6 @@ class WorkoutFactory:
 
         sport = _map_sport_type(session_type)
 
-        duration_minutes = getattr(planned_session, "duration_minutes", None)
-        total_duration_seconds = (
-            int(duration_minutes * 60) if duration_minutes else None
-        )
-
-        distance_km = getattr(planned_session, "distance_km", None)
-        total_distance_meters = (
-            int(distance_km * 1000) if distance_km else None
-        )
-
         session_id = getattr(planned_session, "id", None)
         if session_id is None:
             raise ValueError("planned_session.id is required but is None")
@@ -179,15 +169,21 @@ class WorkoutFactory:
         if user_id is None:
             raise ValueError("planned_session.user_id is required but is None")
 
+        title = getattr(planned_session, "title", None)
+        workout_name = title if title else f"{sport.capitalize()} Workout"
+        description = getattr(planned_session, "notes", None)
+
         workout = Workout(
             user_id=user_id,
             sport=sport,
+            name=workout_name,
+            description=description,
+            structure={},
+            tags={},
             source="planned",
             source_ref=None,
-            total_duration_seconds=total_duration_seconds,
-            total_distance_meters=total_distance_meters,
-            planned_session_id=session_id,
-            activity_id=None,
+            raw_notes=None,
+            parse_status=None,
         )
         session.add(workout)
         session.flush()
@@ -249,20 +245,22 @@ class WorkoutFactory:
                 )
                 return existing_workout
 
-        # Create workout
+        # Create workout template
         sport = _map_sport_type(activity.type)
-        total_duration_seconds = int(activity.duration_seconds) if activity.duration_seconds else None
-        total_distance_meters = int(activity.distance_meters) if activity.distance_meters else None
+        activity_title = getattr(activity, "title", None)
+        workout_name = activity_title if activity_title else f"{sport.capitalize()} Activity"
 
         workout = Workout(
             user_id=activity.user_id,
             sport=sport,
+            name=workout_name,
+            description=None,
+            structure={},
+            tags={},
             source="inferred",
             source_ref=None,
-            total_duration_seconds=total_duration_seconds,
-            total_distance_meters=total_distance_meters,
-            activity_id=activity.id,
-            planned_session_id=None,
+            raw_notes=None,
+            parse_status=None,
         )
         session.add(workout)
         session.flush()
@@ -270,12 +268,25 @@ class WorkoutFactory:
         # Create single main step
         _create_main_step_from_activity(session, workout, activity)
 
-        # Schema v2: activity.workout_id does not exist - relationships go through workout_executions
-        # The workout is already linked via workout.activity_id and execution is created separately
+        # Create workout execution with execution data
+        duration_seconds = int(activity.duration_seconds) if activity.duration_seconds else None
+        distance_meters = int(activity.distance_meters) if activity.distance_meters else None
+
+        execution = WorkoutExecution(
+            workout_id=workout.id,
+            activity_id=activity.id,
+            planned_session_id=None,
+            duration_seconds=duration_seconds,
+            distance_meters=distance_meters,
+            status="matched",
+        )
+        session.add(execution)
+        session.flush()
 
         logger.info(
-            "Created workout for activity",
+            "Created workout and execution for activity",
             workout_id=workout.id,
+            execution_id=execution.id,
             activity_id=activity.id,
             user_id=activity.user_id,
         )
@@ -318,10 +329,17 @@ class WorkoutFactory:
             )
             return existing_execution
 
-        # Create execution
+        # Create execution with execution data
+        duration_seconds = int(activity.duration_seconds) if activity.duration_seconds else None
+        distance_meters = int(activity.distance_meters) if activity.distance_meters else None
+
         execution = WorkoutExecution(
             workout_id=workout.id,
             activity_id=activity.id,
+            planned_session_id=None,
+            duration_seconds=duration_seconds,
+            distance_meters=distance_meters,
+            status="matched",
         )
         session.add(execution)
         session.flush()
@@ -381,23 +399,36 @@ class WorkoutFactory:
         """
         workout_id = str(uuid.uuid4())
 
-        # Create workout
+        # Create workout template
+        workout_name = f"{structured.sport.capitalize()} Workout"
         workout = Workout(
             id=workout_id,
             user_id=user_id,
             sport=structured.sport,
+            name=workout_name,
+            description=None,
+            structure=structured.model_dump(),
+            tags={},
             source=source,
             source_ref=None,
-            total_duration_seconds=structured.total_duration_seconds,
-            total_distance_meters=structured.total_distance_meters,
-            planned_session_id=planned_session_id,
-            activity_id=activity_id,
             raw_notes=raw_notes,
-            llm_output_json=structured.model_dump(),
             parse_status="success",
         )
         session.add(workout)
         session.flush()
+
+        # Create workout execution if activity_id is provided
+        if activity_id:
+            execution = WorkoutExecution(
+                workout_id=workout_id,
+                activity_id=activity_id,
+                planned_session_id=planned_session_id,
+                duration_seconds=structured.total_duration_seconds,
+                distance_meters=structured.total_distance_meters,
+                status="matched",
+            )
+            session.add(execution)
+            session.flush()
 
         # Create steps (expand repeats and break down long steps)
         current_order = 0

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PlannedSession
 from app.db.session import get_session
+from app.workouts.execution_models import WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
 from app.workouts.parsing_service import ensure_workout_steps
 from app.workouts.schemas import WorkoutInputSchema
@@ -52,14 +53,28 @@ def ensure_workout(
         raise ValueError("Either planned_session_id or activity_id must be provided")
 
     with get_session() as session:
-        # Check if workout already exists
+        # Check if workout already exists through workout_executions
         existing_workout: Workout | None = None
         if planned_session_id:
-            stmt = select(Workout).where(Workout.planned_session_id == planned_session_id)
-            existing_workout = session.execute(stmt).scalar_one_or_none()
+            # Check if planned session has a workout
+            planned_stmt = select(PlannedSession).where(
+                PlannedSession.id == planned_session_id,
+                PlannedSession.user_id == user_id,
+            )
+            planned_session = session.execute(planned_stmt).scalar_one_or_none()
+            if planned_session and planned_session.workout_id:
+                existing_workout = session.execute(
+                    select(Workout).where(Workout.id == planned_session.workout_id)
+                ).scalar_one_or_none()
         elif activity_id:
-            stmt = select(Workout).where(Workout.activity_id == activity_id)
-            existing_workout = session.execute(stmt).scalar_one_or_none()
+            # Check if activity has a workout execution
+            execution = session.execute(
+                select(WorkoutExecution).where(WorkoutExecution.activity_id == activity_id).limit(1)
+            ).scalar_one_or_none()
+            if execution:
+                existing_workout = session.execute(
+                    select(Workout).where(Workout.id == execution.workout_id)
+                ).scalar_one_or_none()
 
         if existing_workout:
             logger.debug(
@@ -77,6 +92,8 @@ def ensure_workout(
         total_duration_seconds: int | None = None
         raw_notes: str | None = None
         source = "planned"
+        workout_name = "Workout"
+        description: str | None = None
 
         if planned_session_id:
             # Fetch planned session
@@ -108,8 +125,10 @@ def ensure_workout(
             if planned_session.duration_minutes:
                 total_duration_seconds = int(planned_session.duration_minutes * 60)
 
-            # Get raw_notes from planned session (preferred)
+            # Get raw_notes and description from planned session
             raw_notes = planned_session.notes
+            description = planned_session.notes
+            workout_name = planned_session.title if planned_session.title else f"{sport.capitalize()} Workout"
 
             source = "planned"
 
@@ -143,28 +162,44 @@ def ensure_workout(
             if activity.duration_seconds:
                 total_duration_seconds = activity.duration_seconds
 
-            # Get raw_notes from activity description (fallback)
+            # Get raw_notes and description from activity
+            activity_title = getattr(activity, "title", None)
+            workout_name = activity_title if activity_title else f"{sport.capitalize()} Activity"
             if activity.raw_json and isinstance(activity.raw_json, dict):
                 raw_notes = activity.raw_json.get("description") or activity.raw_json.get("name")
+                description = raw_notes
 
-            source = "strava"
+            source = "inferred"
 
-        # Create workout
+        # Create workout template
         workout = Workout(
             id=str(uuid.uuid4()),
             user_id=user_id,
             sport=sport,
+            name=workout_name,
+            description=description,
+            structure={},
+            tags={},
             source=source,
             source_ref=None,
-            planned_session_id=planned_session_id,
-            activity_id=activity_id,
-            total_distance_meters=total_distance_meters,
-            total_duration_seconds=total_duration_seconds,
             raw_notes=raw_notes,
             parse_status="pending",
         )
         session.add(workout)
         session.flush()
+
+        # Create workout execution if activity_id is provided
+        if activity_id:
+            execution = WorkoutExecution(
+                workout_id=workout.id,
+                activity_id=activity_id,
+                planned_session_id=planned_session_id,
+                duration_seconds=total_duration_seconds,
+                distance_meters=total_distance_meters,
+                status="matched",
+            )
+            session.add(execution)
+            session.flush()
 
         logger.info(
             "Workout created",
@@ -209,17 +244,25 @@ class WorkoutService:
         Returns:
             Created Workout model instance
         """
+        # Create workout template
+        workout_name = f"{workout_schema.sport.capitalize()} Workout"
         workout = Workout(
             id=str(uuid.uuid4()),
             user_id=user_id,
             sport=workout_schema.sport,
+            name=workout_name,
+            description=None,
+            structure={},
+            tags={},
             source=workout_schema.source,
             source_ref=source_ref,
-            total_duration_seconds=workout_schema.total_duration_seconds,
-            total_distance_meters=workout_schema.total_distance_meters,
+            raw_notes=None,
+            parse_status=None,
         )
         db.add(workout)
         db.flush()
+
+        # Note: WorkoutExecution should be created separately if activity_id is known
 
         for step_schema in workout_schema.steps:
             db.add(

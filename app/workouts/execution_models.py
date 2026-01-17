@@ -19,12 +19,17 @@ class WorkoutExecution(Base):
     """Workout execution table - links workouts to executed activities.
 
     Tracks which activity was executed for a given workout plan.
+    Stores execution-specific data (duration, distance, status, etc.).
     One workout can have multiple executions (if user repeats the workout).
 
     Schema:
     - id: UUID primary key
     - workout_id: Foreign key to workouts.id
     - activity_id: Foreign key to activities.id
+    - planned_session_id: Foreign key to planned_sessions.id (if matched to planned session)
+    - duration_seconds: Actual duration of execution (nullable)
+    - distance_meters: Actual distance of execution (nullable)
+    - status: Execution status (matched, analyzed, failed)
     - created_at: Record creation timestamp
     """
 
@@ -33,6 +38,11 @@ class WorkoutExecution(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     workout_id: Mapped[str] = mapped_column(String, ForeignKey("workouts.id"), nullable=False, index=True)
     activity_id: Mapped[str] = mapped_column(String, ForeignKey("activities.id"), nullable=False, index=True)
+    planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    distance_meters: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="matched")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class StepCompliance(Base):

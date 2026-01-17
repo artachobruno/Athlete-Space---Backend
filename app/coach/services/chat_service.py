@@ -129,10 +129,11 @@ async def process_coach_chat(
         if profile:
             # Calculate age from date_of_birth
             age = None
-            if profile.date_of_birth:
+            dob = getattr(profile, "date_of_birth", None)
+            if dob:
                 today = datetime.now(timezone.utc).date()
-                dob = profile.date_of_birth.date()
-                age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+                dob_date = dob.date()
+                age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
 
             # Round weight_lbs and height_in to 1 decimal place
             weight_lbs_rounded = None
@@ -340,10 +341,11 @@ def dispatch_coach_chat(
             profile = db.query(AthleteProfile).filter_by(user_id=user_id).first()
             if profile:
                 age = None
-                if profile.date_of_birth:
+                dob = getattr(profile, "date_of_birth", None)
+                if dob:
                     today = datetime.now(timezone.utc).date()
-                    dob = profile.date_of_birth.date()
-                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+                    dob_date = dob.date()
+                    age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
 
                 weight_lbs_rounded = None
                 if profile.weight_lbs is not None:

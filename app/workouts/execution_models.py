@@ -25,7 +25,7 @@ class WorkoutExecution(Base):
     - id: UUID primary key
     - workout_id: Foreign key to workouts.id
     - activity_id: Foreign key to activities.id
-    - attached_at: Timestamp when activity was attached
+    - created_at: Record creation timestamp
     """
 
     __tablename__ = "workout_executions"
@@ -33,7 +33,6 @@ class WorkoutExecution(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     workout_id: Mapped[str] = mapped_column(String, ForeignKey("workouts.id"), nullable=False, index=True)
     activity_id: Mapped[str] = mapped_column(String, ForeignKey("activities.id"), nullable=False, index=True)
-    attached_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class StepCompliance(Base):

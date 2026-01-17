@@ -322,7 +322,6 @@ class WorkoutFactory:
         execution = WorkoutExecution(
             workout_id=workout.id,
             activity_id=activity.id,
-            attached_at=datetime.now(timezone.utc),
         )
         session.add(execution)
         session.flush()

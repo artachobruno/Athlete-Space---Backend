@@ -31,7 +31,7 @@ class ComplianceService:
         Returns:
             WorkoutExecution if found, None otherwise
         """
-        stmt = select(WorkoutExecution).where(WorkoutExecution.workout_id == workout_id).order_by(WorkoutExecution.attached_at.desc())
+        stmt = select(WorkoutExecution).where(WorkoutExecution.workout_id == workout_id).order_by(WorkoutExecution.created_at.desc())
         result = session.execute(stmt)
         return result.scalar_one_or_none()
 

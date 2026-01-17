@@ -1,5 +1,9 @@
 """Migration script to create workout execution and compliance tables.
 
+⚠️ DEPRECATED — do not run (schema v1 only, does not match production schema v2).
+This script creates tables with `attached_at` field which does not exist in schema v2.
+Production schema uses `created_at` instead.
+
 This migration creates:
 - workout_executions: Links workouts to executed activities
   - id: UUID primary key (VARCHAR)

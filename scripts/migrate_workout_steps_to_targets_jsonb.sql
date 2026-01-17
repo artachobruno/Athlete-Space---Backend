@@ -2,8 +2,8 @@
 --
 -- This migration:
 -- 1. Adds targets JSONB column (if not exists)
--- 2. Migrates data from individual columns to targets JSONB
--- 3. Drops old columns (optional, can be done later for safety)
+-- 2. Migrates data from individual columns to targets JSONB (if old columns exist)
+-- 3. Renames 'type' to 'step_type' if needed
 --
 -- IMPORTANT: Test this on a backup first!
 
@@ -13,28 +13,81 @@ BEGIN;
 ALTER TABLE workout_steps
 ADD COLUMN IF NOT EXISTS targets JSONB NOT NULL DEFAULT '{}'::jsonb;
 
--- Step 2: Migrate existing data to targets JSONB
--- This converts duration_seconds/distance_meters and target_* columns to JSONB
-UPDATE workout_steps
-SET targets = (
-    SELECT jsonb_build_object(
-        'duration', CASE
-            WHEN duration_seconds IS NOT NULL THEN
-                jsonb_build_object('type', 'time', 'seconds', duration_seconds)
-            WHEN distance_meters IS NOT NULL THEN
-                jsonb_build_object('type', 'distance', 'meters', distance_meters)
-            ELSE NULL
-        END,
-        'target', CASE
-            WHEN target_metric IS NOT NULL AND target_min IS NOT NULL AND target_max IS NOT NULL THEN
-                jsonb_build_object('metric', target_metric, 'min', target_min, 'max', target_max)
-            WHEN target_metric IS NOT NULL AND target_value IS NOT NULL THEN
-                jsonb_build_object('metric', target_metric, 'value', target_value)
-            ELSE NULL
-        END
-    )
-)
-WHERE targets = '{}'::jsonb;
+-- Step 2: Migrate existing data to targets JSONB (only if old columns exist)
+-- This step is skipped if old columns don't exist (schema already migrated or different)
+DO $$
+DECLARE
+    has_duration_seconds BOOLEAN;
+    has_distance_meters BOOLEAN;
+    has_target_metric BOOLEAN;
+    has_target_min BOOLEAN;
+    has_target_max BOOLEAN;
+    has_target_value BOOLEAN;
+    sql_text TEXT;
+BEGIN
+    -- Check which columns exist
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'workout_steps' AND column_name = 'duration_seconds'
+    ) INTO has_duration_seconds;
+    
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'workout_steps' AND column_name = 'distance_meters'
+    ) INTO has_distance_meters;
+    
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'workout_steps' AND column_name = 'target_metric'
+    ) INTO has_target_metric;
+    
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'workout_steps' AND column_name = 'target_min'
+    ) INTO has_target_min;
+    
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'workout_steps' AND column_name = 'target_max'
+    ) INTO has_target_max;
+    
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'workout_steps' AND column_name = 'target_value'
+    ) INTO has_target_value;
+    
+    -- Only migrate if old columns exist
+    IF has_duration_seconds OR has_distance_meters OR has_target_metric THEN
+        -- Build dynamic SQL based on what columns exist
+        sql_text := 'UPDATE workout_steps SET targets = jsonb_build_object(';
+        
+        -- Build duration part
+        sql_text := sql_text || '''duration'', CASE ';
+        IF has_duration_seconds THEN
+            sql_text := sql_text || 'WHEN duration_seconds IS NOT NULL THEN jsonb_build_object(''type'', ''time'', ''seconds'', duration_seconds) ';
+        END IF;
+        IF has_distance_meters THEN
+            sql_text := sql_text || 'WHEN distance_meters IS NOT NULL THEN jsonb_build_object(''type'', ''distance'', ''meters'', distance_meters) ';
+        END IF;
+        sql_text := sql_text || 'ELSE NULL END, ';
+        
+        -- Build target part
+        sql_text := sql_text || '''target'', CASE ';
+        IF has_target_metric AND has_target_min AND has_target_max THEN
+            sql_text := sql_text || 'WHEN target_metric IS NOT NULL AND target_min IS NOT NULL AND target_max IS NOT NULL THEN jsonb_build_object(''metric'', target_metric, ''min'', target_min, ''max'', target_max) ';
+        END IF;
+        IF has_target_metric AND has_target_value THEN
+            sql_text := sql_text || 'WHEN target_metric IS NOT NULL AND target_value IS NOT NULL THEN jsonb_build_object(''metric'', target_metric, ''value'', target_value) ';
+        END IF;
+        sql_text := sql_text || 'ELSE NULL END) WHERE targets = ''{}''::jsonb';
+        
+        EXECUTE sql_text;
+        
+        RAISE NOTICE 'Migrated data from old columns to targets JSONB';
+    ELSE
+        RAISE NOTICE 'Old columns do not exist - skipping data migration (schema may already be migrated)';
+    END IF;
+END $$;
 
 -- Step 3: Rename 'type' to 'step_type' if needed
 -- (Check if step_type column exists first)

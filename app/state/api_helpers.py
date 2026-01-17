@@ -31,7 +31,9 @@ def get_user_id_from_athlete_id(athlete_id: int) -> str | None:
     with get_session() as session:
         result = session.execute(select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id))).first()
         if result:
-            return result[0].user_id
+            user_id = result[0].user_id
+            # Ensure we return a string (not UUID object) for compatibility with VARCHAR columns
+            return str(user_id) if user_id is not None else None
         return None
 
 

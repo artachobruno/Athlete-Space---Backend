@@ -14,6 +14,8 @@ This is the ONLY place where LLM is called for manual planned sessions.
 
 from __future__ import annotations
 
+import contextlib
+
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, InternalError, OperationalError, ProgrammingError, SQLAlchemyError
@@ -134,13 +136,30 @@ async def create_structured_workout_from_manual_session(
     # Step 3.5: Fetch user settings for target calculation
     # Defensive query: handle schema drift (missing ftp_watts column)
     # target_calculation.py already uses getattr() defensively for missing attributes
+    # Use savepoint to isolate errors and prevent transaction abortion
     user_settings = None
+    savepoint = session.begin_nested()
     try:
         user_settings_result = session.execute(
             select(UserSettings).where(UserSettings.user_id == user_id)
         ).first()
         user_settings = user_settings_result[0] if user_settings_result else None
+        savepoint.commit()
     except ProgrammingError as e:
+        try:
+            savepoint.rollback()
+        except Exception as rollback_error:
+            # If savepoint rollback fails, rollback main transaction
+            logger.error(
+                f"Savepoint rollback failed during ProgrammingError handling: {rollback_error!r}",
+                user_id=user_id,
+                original_error=str(e),
+            )
+            session.rollback()
+            raise RuntimeError(
+                "Database transaction was aborted during user settings query. "
+                "The transaction has been rolled back."
+            ) from rollback_error
         error_msg = str(e).lower()
         if "ftp_watts" in error_msg or "does not exist" in error_msg:
             logger.warning(
@@ -151,21 +170,40 @@ async def create_structured_workout_from_manual_session(
             # user_settings remains None, which is handled gracefully downstream
         else:
             # Re-raise if it's a different programming error
-            # This will abort the transaction, which is correct - the caller will handle rollback
+            # Savepoint rollback prevents main transaction abortion
             raise
-    except SQLAlchemyError as e:
-        # ANY SQLAlchemy database error (except the specific ProgrammingError case above)
-        # may abort the transaction - must re-raise so caller can handle rollback
-        # Otherwise, subsequent operations will fail with "current transaction is aborted"
+    except (SQLAlchemyError, InternalError, OperationalError) as e:
+        # Rollback savepoint to prevent main transaction abortion
+        # This allows subsequent operations to continue even if user_settings query fails
+        try:
+            savepoint.rollback()
+        except Exception as rollback_error:
+            # If savepoint rollback itself fails, the main transaction may be aborted
+            # Rollback the main transaction to ensure clean state
+            logger.error(
+                f"Savepoint rollback failed - rolling back main transaction: {rollback_error!r}",
+                user_id=user_id,
+                original_error=str(e),
+            )
+            session.rollback()
+            # Re-raise to prevent continuing with an aborted transaction
+            raise RuntimeError(
+                "Database transaction was aborted while fetching user settings. "
+                "The transaction has been rolled back."
+            ) from rollback_error
         logger.warning(
-            f"Database error while fetching user settings (transaction will be aborted): {e!r}",
+            f"Database error while fetching user settings (savepoint rolled back): {e!r}. "
+            f"Continuing without user settings.",
             user_id=user_id,
             error_type=type(e).__name__,
         )
-        raise
+        # Don't re-raise - continue without user_settings to avoid aborting the main transaction
+        # user_settings remains None, which is handled gracefully downstream
     except Exception as e:
         # Catch any other non-database errors that won't abort the transaction
-        # Log the error but continue without user settings
+        # Rollback savepoint for consistency, even though these errors typically don't abort the transaction
+        with contextlib.suppress(Exception):
+            savepoint.rollback()
         logger.warning(
             f"Failed to fetch user settings for target calculation: {e!r}. "
             f"Continuing without user settings.",

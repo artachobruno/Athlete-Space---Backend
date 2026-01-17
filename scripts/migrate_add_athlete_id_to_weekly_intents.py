@@ -56,17 +56,38 @@ def migrate_add_athlete_id_to_weekly_intents() -> None:
             print("   This migration is designed for PostgreSQL")
             return
 
-        # Track what needs to be added
+        # Track what needs to be added (based on SQLAlchemy WeeklyIntent model)
         columns_to_add = []
 
+        # Required columns with defaults (can be added with NOT NULL DEFAULT)
+        if not _column_exists(conn, "weekly_intents", "intent_data"):
+            columns_to_add.append(("intent_data", "JSONB", False, "NOT NULL DEFAULT '{}'::jsonb"))
+        if not _column_exists(conn, "weekly_intents", "version"):
+            columns_to_add.append(("version", "INTEGER", False, "NOT NULL DEFAULT 1"))
+        if not _column_exists(conn, "weekly_intents", "is_active"):
+            columns_to_add.append(("is_active", "BOOLEAN", False, "NOT NULL DEFAULT true"))
+        if not _column_exists(conn, "weekly_intents", "created_at"):
+            columns_to_add.append(("created_at", "TIMESTAMPTZ", False, "NOT NULL DEFAULT NOW()"))
+        if not _column_exists(conn, "weekly_intents", "updated_at"):
+            columns_to_add.append(("updated_at", "TIMESTAMPTZ", False, "NOT NULL DEFAULT NOW()"))
+
+        # Required columns without defaults (will be handled separately if athlete_id, nullable for others)
         if not _column_exists(conn, "weekly_intents", "athlete_id"):
-            columns_to_add.append(("athlete_id", "INTEGER"))
+            columns_to_add.append(("athlete_id", "INTEGER", True, None))  # Handled separately
+        if not _column_exists(conn, "weekly_intents", "week_start"):
+            columns_to_add.append(("week_start", "TIMESTAMPTZ", False, None))  # Assume nullable for migration safety
+        if not _column_exists(conn, "weekly_intents", "week_number"):
+            columns_to_add.append(("week_number", "INTEGER", False, None))  # Assume nullable for migration safety
+
+        # Optional/nullable columns
         if not _column_exists(conn, "weekly_intents", "primary_focus"):
-            columns_to_add.append(("primary_focus", "VARCHAR"))
+            columns_to_add.append(("primary_focus", "VARCHAR", False, None))
         if not _column_exists(conn, "weekly_intents", "total_sessions"):
-            columns_to_add.append(("total_sessions", "INTEGER"))
+            columns_to_add.append(("total_sessions", "INTEGER", False, None))
         if not _column_exists(conn, "weekly_intents", "target_volume_hours"):
-            columns_to_add.append(("target_volume_hours", "FLOAT"))
+            columns_to_add.append(("target_volume_hours", "DOUBLE PRECISION", False, None))
+        if not _column_exists(conn, "weekly_intents", "season_plan_id"):
+            columns_to_add.append(("season_plan_id", "VARCHAR", False, None))
 
         if not columns_to_add:
             print("✅ All columns already exist in weekly_intents table")
@@ -78,17 +99,22 @@ def migrate_add_athlete_id_to_weekly_intents() -> None:
         athlete_id_was_added = False
 
         # Add all missing columns
-        for column_name, column_type in columns_to_add:
-            print(f"  Adding column: {column_name}")
+        for column_info in columns_to_add:
+            column_name, column_type, is_athlete_id, constraints = column_info
+
+            print(f"  Adding column: {column_name} ({column_type})")
+
+            constraint_sql = f" {constraints}" if constraints else ""
             conn.execute(
                 text(
                     f"""
                     ALTER TABLE weekly_intents
-                    ADD COLUMN {column_name} {column_type}
+                    ADD COLUMN {column_name} {column_type}{constraint_sql}
                     """
                 )
             )
-            if column_name == "athlete_id":
+
+            if is_athlete_id:
                 athlete_id_was_added = True
 
         # Special handling for athlete_id: populate and make NOT NULL

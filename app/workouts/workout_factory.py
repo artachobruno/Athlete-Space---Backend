@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import InternalError
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PlannedSession, UserSettings
@@ -433,7 +434,26 @@ class WorkoutFactory:
             parse_status="success",
         )
         session.add(workout)
-        session.flush()
+        try:
+            session.flush()
+        except InternalError as e:
+            # Check if this is an aborted transaction error
+            error_str = str(e.orig) if hasattr(e, "orig") else str(e)
+            if "current transaction is aborted" in error_str.lower() or "in failed sql transaction" in error_str.lower():
+                # Transaction was aborted by a previous operation
+                # This should be handled by the caller (rollback required)
+                logger.error(
+                    "Transaction is in aborted state - previous operation failed",
+                    user_id=user_id,
+                    workout_id=workout_id,
+                    error=str(e),
+                )
+                raise RuntimeError(
+                    "Database transaction is in aborted state. "
+                    "A previous database operation failed and aborted the transaction. "
+                    "The transaction must be rolled back before continuing."
+                ) from e
+            raise
 
         # Create workout execution if activity_id is provided
         if activity_id:

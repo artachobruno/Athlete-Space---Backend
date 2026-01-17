@@ -3,8 +3,6 @@
 Phase 2 & 3: Fallback endpoints for manual uploads (non-chat).
 """
 
-from __future__ import annotations
-
 import os
 import uuid
 from datetime import date as date_type
@@ -336,7 +334,7 @@ async def _create_workout_for_manual_session(
     session: Session,
     user_id: str,
     athlete_id: int,
-    request: ManualSessionRequest,
+    request: "ManualSessionRequest",
 ) -> Workout:
     """Create a workout for a manual session upload.
 

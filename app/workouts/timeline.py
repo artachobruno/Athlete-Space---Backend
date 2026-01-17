@@ -24,7 +24,7 @@ def build_workout_timeline(workout: Workout, steps: list[WorkoutStep]) -> Workou
     """Build workout timeline from workout and steps.
 
     Creates contiguous time-aligned segments from duration-based steps.
-    Steps are sorted by order and accumulated using a cursor.
+    Steps are sorted by step_index and accumulated using a cursor.
 
     Args:
         workout: Workout model instance
@@ -39,8 +39,8 @@ def build_workout_timeline(workout: Workout, steps: list[WorkoutStep]) -> Workou
     segments: list[WorkoutTimelineSegment] = []
     cursor = 0
 
-    # Sort steps by order to ensure correct sequence
-    sorted_steps = sorted(steps, key=lambda s: s.order)
+    # Sort steps by step_index to ensure correct sequence
+    sorted_steps = sorted(steps, key=lambda s: s.step_index)
 
     for step in sorted_steps:
         if step.duration_seconds is None:
@@ -53,7 +53,7 @@ def build_workout_timeline(workout: Workout, steps: list[WorkoutStep]) -> Workou
         segments.append(
             WorkoutTimelineSegment(
                 step_id=UUID(step.id),
-                order=step.order,
+                order=step.step_index,
                 step_type=step.type,
                 step_color=step_color,
                 start_second=start,

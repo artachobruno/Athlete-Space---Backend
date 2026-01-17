@@ -87,7 +87,7 @@ def compute_workout_comparison(workout_id: str) -> None:
                 return
 
             # Load steps
-            steps_stmt = select(WorkoutStep).where(WorkoutStep.workout_id == workout_id).order_by(WorkoutStep.order)
+            steps_stmt = select(WorkoutStep).where(WorkoutStep.workout_id == workout_id).order_by(WorkoutStep.step_index)
             steps = list(session.execute(steps_stmt).scalars().all())
 
             if not steps:
@@ -184,7 +184,7 @@ def compute_workout_comparison(workout_id: str) -> None:
                 step_comparisons.append(
                     {
                         "step_id": step.id,
-                        "step_order": step.order,
+                        "step_order": step.step_index,
                         "planned_distance": step_planned_distance,
                         "executed_distance": step_executed_distance,
                         "delta_pct": delta_pct,

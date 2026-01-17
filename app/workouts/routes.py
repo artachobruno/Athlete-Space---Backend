@@ -83,19 +83,19 @@ def get_workout_or_404(session: Session, workout_id: UUID, user_id: str) -> Work
 
 
 def get_workout_steps(session: Session, workout_id: UUID) -> list[WorkoutStep]:
-    """Get workout steps ordered by order.
+    """Get workout steps ordered by step_index.
 
     Args:
         session: Database session
         workout_id: Workout UUID
 
     Returns:
-        List of WorkoutStep model instances ordered by order
+        List of WorkoutStep model instances ordered by step_index
     """
     stmt = (
         select(WorkoutStep)
         .where(WorkoutStep.workout_id == str(workout_id))
-        .order_by(WorkoutStep.order)
+        .order_by(WorkoutStep.step_index)
     )
     result = session.execute(stmt)
     return list(result.scalars().all())
@@ -224,7 +224,7 @@ def get_structured_workout(
 
             step_dict = {
                 "id": step.id,
-                "order": step.order,
+                "order": step.step_index,
                 "name": step_name,
                 "type": step.type,
                 "kind": step_kind,
@@ -333,7 +333,7 @@ def update_workout_steps(
         for idx, step in enumerate(request.steps):
             # Must have either duration or distance
             if step.duration_seconds is None and step.distance_meters is None:
-                errors.append(f"Step {idx + 1} (order {step.order}): must have either duration_seconds or distance_meters")
+                errors.append(f"Step {idx + 1} (order {step.step_index}): must have either duration_seconds or distance_meters")
 
             # Target validation
             if (
@@ -342,7 +342,7 @@ def update_workout_steps(
                 and step.target.max is not None
                 and step.target.min > step.target.max
             ):
-                errors.append(f"Step {idx + 1} (order {step.order}): target min ({step.target.min}) > max ({step.target.max})")
+                errors.append(f"Step {idx + 1} (order {step.step_index}): target min ({step.target.min}) > max ({step.target.max})")
 
             # Legacy target validation
             if (
@@ -350,7 +350,7 @@ def update_workout_steps(
                 and step.target_max is not None
                 and step.target_min > step.target_max
             ):
-                errors.append(f"Step {idx + 1} (order {step.order}): target_min ({step.target_min}) > target_max ({step.target_max})")
+                errors.append(f"Step {idx + 1} (order {step.step_index}): target_min ({step.target_min}) > target_max ({step.target_max})")
 
         if errors:
             raise HTTPException(
@@ -377,7 +377,7 @@ def update_workout_steps(
             new_step = WorkoutStep(
                 id=str(step_update.id),
                 workout_id=str(workout_id),
-                order=step_update.order,
+                step_index=step_update.order,
                 type=step_update.type,
                 duration_seconds=step_update.duration_seconds,
                 distance_meters=step_update.distance_meters,
@@ -443,7 +443,7 @@ def update_workout_steps(
 
             step_dict = {
                 "id": step.id,
-                "order": step.order,
+                "order": step.step_index,
                 "name": step_name,
                 "type": step.type,
                 "kind": step_kind,
@@ -499,7 +499,7 @@ def get_workout(
 ) -> WorkoutSchema:
     """Get a workout by ID.
 
-    Returns workout with steps ordered by step.order.
+    Returns workout with steps ordered by step_index.
     Only returns workouts belonging to the authenticated user.
     """
     with get_session() as session:
@@ -518,11 +518,11 @@ def get_workout(
                 detail=f"Workout {workout_id} not found",
             )
 
-        # Query steps ordered by order
+        # Query steps ordered by step_index
         steps_stmt = (
             select(WorkoutStep)
             .where(WorkoutStep.workout_id == str(workout_id))
-            .order_by(WorkoutStep.order)
+            .order_by(WorkoutStep.step_index)
         )
         steps_result = session.execute(steps_stmt)
         steps = steps_result.scalars().all()
@@ -531,7 +531,7 @@ def get_workout(
         step_schemas = [
             WorkoutStepSchema(
                 id=UUID(step.id),
-                order=step.order,
+                order=step.step_index,
                 type=step.type,
                 duration_seconds=step.duration_seconds,
                 distance_meters=step.distance_meters,
@@ -895,7 +895,7 @@ def get_workout_compliance(
             if compliance:
                 step_schemas.append(
                     StepComplianceSchema(
-                        order=step.order,
+                        order=step.step_index,
                         compliance_pct=compliance.compliance_pct,
                         time_in_range_seconds=compliance.time_in_range_seconds,
                         overshoot_seconds=compliance.overshoot_seconds,
@@ -1015,7 +1015,7 @@ def get_workout_interpretation(
             if compliance:
                 step_schemas.append(
                     StepInterpretationSchema(
-                        order=step.order,
+                        order=step.step_index,
                         rating=compliance.llm_rating,
                         summary=compliance.llm_summary,
                         coaching_tip=compliance.llm_tip,

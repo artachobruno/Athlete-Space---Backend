@@ -67,7 +67,7 @@ class WorkoutStep(Base):
     Schema:
     - id: UUID primary key
     - workout_id: Foreign key to workouts.id
-    - order: Step order within workout (0-indexed or 1-indexed, must be contiguous)
+    - step_index: Step order within workout (0-indexed or 1-indexed, must be contiguous)
     - type: Step type (warmup, steady, interval, recovery, cooldown, free)
     - duration_seconds: Step duration (nullable, but either duration or distance required)
     - distance_meters: Step distance (nullable, but either duration or distance required)
@@ -90,7 +90,7 @@ class WorkoutStep(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     workout_id: Mapped[str] = mapped_column(String, ForeignKey("workouts.id"), nullable=False, index=True)
-    order: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
     type: Mapped[str] = mapped_column(String, nullable=False)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     distance_meters: Mapped[int | None] = mapped_column(Integer, nullable=True)

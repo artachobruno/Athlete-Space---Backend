@@ -146,7 +146,7 @@ def _persist_workout_steps(
 
         workout_step = WorkoutStep(
             workout_id=workout_id,
-            order=parsed_step.order,
+            step_index=parsed_step.order,
             type=parsed_step.type,
             distance_meters=parsed_step.distance_meters,
             duration_seconds=parsed_step.duration_seconds,

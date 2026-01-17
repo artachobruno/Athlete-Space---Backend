@@ -67,7 +67,7 @@ class FitWorkoutExporter(WorkoutExporter):
 
         Args:
             workout: Workout model instance
-            steps: List of WorkoutStep instances (ordered by step.order)
+            steps: List of WorkoutStep instances (ordered by step.step_index)
 
         Returns:
             FIT file data as bytes
@@ -79,8 +79,8 @@ class FitWorkoutExporter(WorkoutExporter):
         if not steps:
             raise ValueError("Workout must have at least one step")
 
-        # Sort steps by order to ensure correct sequence
-        sorted_steps = sorted(steps, key=lambda s: s.order)
+        # Sort steps by step_index to ensure correct sequence
+        sorted_steps = sorted(steps, key=lambda s: s.step_index)
 
         # Filter out invalid steps and warn
         valid_steps: list[WorkoutStep] = []
@@ -88,14 +88,14 @@ class FitWorkoutExporter(WorkoutExporter):
             # Skip steps with neither distance nor duration
             if step.distance_meters is None and step.duration_seconds is None:
                 logger.warning(
-                    f"Skipping step {step.id} (order {step.order}): missing both distance_meters and duration_seconds"
+                    f"Skipping step {step.id} (order {step.step_index}): missing both distance_meters and duration_seconds"
                 )
                 continue
 
             # Check for distance-based steps (not supported in MVP, but handle gracefully)
             if step.distance_meters is not None and step.duration_seconds is None:
                 logger.warning(
-                    f"Step {step.id} (order {step.order}) is distance-based only, which may not be fully supported"
+                    f"Step {step.id} (order {step.step_index}) is distance-based only, which may not be fully supported"
                 )
                 # Continue processing - will be handled in step creation
 
@@ -152,7 +152,7 @@ class FitWorkoutExporter(WorkoutExporter):
                 step_msg.duration_distance = float(step.distance_meters)
             else:
                 # This should not happen due to filtering above, but handle gracefully
-                logger.warning(f"Skipping step {step.id} (order {step.order}): missing both distance and duration")
+                logger.warning(f"Skipping step {step.id} (order {step.step_index}): missing both distance and duration")
                 continue
 
             # Set intensity from step type

@@ -90,7 +90,7 @@ def canonical_step_to_db_step(
         temp_step = DBWorkoutStep(
             id="",
             workout_id="",
-            order=0,
+            step_index=0,
             type=step_type,
             intensity_zone=canonical_step.intensity.value,
             purpose=None,
@@ -101,7 +101,7 @@ def canonical_step_to_db_step(
     return DBWorkoutStep(
         id=step_id,
         workout_id=workout_id,
-        order=canonical_step.order,
+        step_index=canonical_step.order,
         type=step_type,
         duration_seconds=canonical_step.duration_seconds,
         distance_meters=canonical_step.distance_meters,

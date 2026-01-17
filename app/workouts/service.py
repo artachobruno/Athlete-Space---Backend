@@ -272,7 +272,7 @@ class WorkoutService:
                 WorkoutStep(
                     id=str(uuid.uuid4()),
                     workout_id=workout.id,
-                    order=step_schema.order,
+                    step_index=step_schema.order,
                     type=step_schema.type,
                     duration_seconds=step_schema.duration_seconds,
                     distance_meters=step_schema.distance_meters,

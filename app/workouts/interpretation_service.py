@@ -70,7 +70,7 @@ class InterpretationService:
             raise ValueError(f"No compliance data found for workout {workout_id}. Compute compliance first.")
 
         # Get step compliance records with their steps
-        steps_stmt = select(WorkoutStep).where(WorkoutStep.workout_id == workout_id).order_by(WorkoutStep.order)
+        steps_stmt = select(WorkoutStep).where(WorkoutStep.workout_id == workout_id).order_by(WorkoutStep.step_index)
         steps_result = session.execute(steps_stmt)
         steps = list(steps_result.scalars().all())
 
@@ -122,7 +122,7 @@ class InterpretationService:
                 compliance.llm_tip = interpretation.coaching_tip
                 compliance.llm_confidence = interpretation.confidence
 
-                step_summaries.append(f"Step {step.order} ({step.type}): {interpretation.summary}")
+                step_summaries.append(f"Step {step.step_index} ({step.type}): {interpretation.summary}")
 
         # Generate workout-level interpretation
         workout_interpretation = await self.evaluator.evaluate_workout(

@@ -56,7 +56,7 @@ class ComplianceService:
         if workout is None:
             raise ValueError(f"Workout {workout_id} not found")
 
-        steps_stmt = select(WorkoutStep).where(WorkoutStep.workout_id == workout_id).order_by(WorkoutStep.order)
+        steps_stmt = select(WorkoutStep).where(WorkoutStep.workout_id == workout_id).order_by(WorkoutStep.step_index)
         steps_result = session.execute(steps_stmt)
         steps = list(steps_result.scalars().all())
 

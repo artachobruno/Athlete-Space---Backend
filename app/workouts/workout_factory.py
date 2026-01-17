@@ -467,7 +467,7 @@ class WorkoutFactory:
                         sport=structured.sport,
                         user_settings=user_settings,
                     )
-                    db_step.order = current_order
+                    db_step.step_index = current_order
                     current_order += 1
                     session.add(db_step)
 
@@ -512,7 +512,7 @@ def _create_steps_from_planned_session(
 
     step = WorkoutStep(
         workout_id=workout.id,
-        order=0,
+        step_index=0,
         type=step_type,
         duration_seconds=step_duration_seconds,
         distance_meters=step_distance_meters,
@@ -545,7 +545,7 @@ def _create_main_step_from_activity(
 
     step = WorkoutStep(
         workout_id=workout.id,
-        order=0,
+        step_index=0,
         type="free",
         duration_seconds=step_duration_seconds,
         distance_meters=step_distance_meters,

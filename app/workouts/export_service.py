@@ -61,8 +61,8 @@ def load_workout_with_steps(session: Session, workout_id: str) -> tuple[Workout,
     if workout is None:
         raise ValueError(f"Workout {workout_id} not found")
 
-    # Load steps ordered by order
-    steps_stmt = select(WorkoutStep).where(WorkoutStep.workout_id == workout_id).order_by(WorkoutStep.order)
+    # Load steps ordered by step_index
+    steps_stmt = select(WorkoutStep).where(WorkoutStep.workout_id == workout_id).order_by(WorkoutStep.step_index)
     steps_result = session.execute(steps_stmt)
     steps = list(steps_result.scalars().all())
 

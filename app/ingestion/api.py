@@ -256,21 +256,23 @@ def ingest_activities(
                     date_string = date_string.replace("Z", "+00:00")
                 start_time = datetime.fromisoformat(date_string)
 
-            # Store raw JSON
+            # Store raw JSON in metrics
             raw_json = strava_activity.raw if strava_activity.raw else {}
+            metrics_dict: dict = {}
+            if raw_json:
+                metrics_dict["raw_json"] = raw_json
 
             # Create new activity record
             activity = Activity(
                 user_id=user_id,
-                athlete_id=account.athlete_id,
-                strava_activity_id=strava_id,
                 source="strava",
-                start_time=start_time,
-                type=strava_activity.type,
+                source_activity_id=strava_id,
+                sport=strava_activity.type.lower(),
+                starts_at=start_time,
                 duration_seconds=strava_activity.elapsed_time,
                 distance_meters=strava_activity.distance,
                 elevation_gain_meters=strava_activity.total_elevation_gain,
-                raw_json=raw_json,
+                metrics=metrics_dict,
             )
             session.add(activity)
             session.flush()  # Ensure ID is generated
@@ -348,18 +350,20 @@ def ingest_activities(
                         date_string = date_string.replace("Z", "+00:00")
                     start_time = datetime.fromisoformat(date_string)
                 raw_json = strava_activity.raw if strava_activity.raw else {}
+                metrics_dict: dict = {}
+                if raw_json:
+                    metrics_dict["raw_json"] = raw_json
                 try:
                     activity = Activity(
                         user_id=user_id,
-                        athlete_id=account.athlete_id,
-                        strava_activity_id=strava_id,
                         source="strava",
-                        start_time=start_time,
-                        type=strava_activity.type,
+                        source_activity_id=strava_id,
+                        sport=strava_activity.type.lower(),
+                        starts_at=start_time,
                         duration_seconds=strava_activity.elapsed_time,
                         distance_meters=strava_activity.distance,
                         elevation_gain_meters=strava_activity.total_elevation_gain,
-                        raw_json=raw_json,
+                        metrics=metrics_dict,
                     )
                     session.add(activity)
                     session.flush()  # Ensure ID is generated

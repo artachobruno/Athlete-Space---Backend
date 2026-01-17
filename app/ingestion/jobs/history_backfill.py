@@ -245,14 +245,13 @@ def _build_raw_json(activity) -> dict | None:
     return None
 
 
-def _save_activities_batch(session, activities: list, user_id: str, athlete_id: str) -> int:
+def _save_activities_batch(session, activities: list, user_id: str) -> int:
     """Save activities to database (idempotent).
 
     Args:
         session: Database session
         activities: List of StravaActivity objects
         user_id: User ID
-        athlete_id: Strava athlete ID (string)
 
     Returns:
         Number of activities saved
@@ -263,18 +262,29 @@ def _save_activities_batch(session, activities: list, user_id: str, athlete_id: 
             strava_id = str(activity.id)
             raw_json = _build_raw_json(activity)
 
+            # Store raw_json and streams_data in metrics dict
+            metrics_dict: dict = {}
+            if raw_json:
+                metrics_dict["raw_json"] = raw_json
+
+            # Convert start_date to datetime if needed
+            start_time = activity.start_date
+            if not isinstance(start_time, datetime):
+                date_string = str(start_time)
+                if "Z" in date_string:
+                    date_string = date_string.replace("Z", "+00:00")
+                start_time = datetime.fromisoformat(date_string)
+
             activity_obj = Activity(
                 user_id=user_id,
-                athlete_id=athlete_id,
-                strava_activity_id=strava_id,
                 source="strava",
-                start_time=activity.start_date,
-                type=activity.type.capitalize(),
+                source_activity_id=strava_id,
+                sport=activity.type.lower(),
+                starts_at=start_time,
                 duration_seconds=activity.elapsed_time,
                 distance_meters=activity.distance,
                 elevation_gain_meters=activity.total_elevation_gain,
-                raw_json=raw_json,
-                streams_data=None,  # Streams can be fetched separately if needed
+                metrics=metrics_dict,
             )
             session.add(activity_obj)
             saved_count += 1
@@ -380,7 +390,7 @@ def backfill_user_history(user_id: str) -> None:
         logger.info(f"[HISTORY_BACKFILL] Fetched {len(activities)} activities for user_id={user_id}")
 
         # Save activities (idempotent - insert blindly, let DB enforce uniqueness)
-        saved_count = _save_activities_batch(session, activities, user_id, account.athlete_id)
+        saved_count = _save_activities_batch(session, activities, user_id)
         logger.info(f"[HISTORY_BACKFILL] Saved {saved_count}/{len(activities)} activities for user_id={user_id}")
 
         # Update cursor after successful batch

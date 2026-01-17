@@ -12,6 +12,13 @@ Changes:
 - Update constraints and indexes
 """
 
+import sys
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from sqlalchemy import text
 
 from app.db.session import engine
@@ -235,10 +242,49 @@ def migrate_daily_decisions_schema_v2() -> None:
             row = result.fetchone()
             if row and row[0] == "uuid":
                 print("Converting user_id from UUID to VARCHAR...")
+                # First, find and drop all foreign key constraints on user_id
+                print("Finding foreign key constraints on user_id...")
+                fk_result = conn.execute(
+                    text(
+                        """
+                        SELECT constraint_name
+                        FROM information_schema.table_constraints
+                        WHERE table_schema = 'public'
+                        AND table_name = 'daily_decisions'
+                        AND constraint_type = 'FOREIGN KEY'
+                        AND constraint_name IN (
+                            SELECT constraint_name
+                            FROM information_schema.key_column_usage
+                            WHERE table_schema = 'public'
+                            AND table_name = 'daily_decisions'
+                            AND column_name = 'user_id'
+                        )
+                        """
+                    )
+                )
+                fk_rows = fk_result.fetchall()
+                for fk_row in fk_rows:
+                    constraint_name = fk_row[0]
+                    print(f"Dropping foreign key constraint: {constraint_name}")
+                    conn.execute(
+                        text(f"ALTER TABLE daily_decisions DROP CONSTRAINT IF EXISTS {constraint_name}")
+                    )
+                    print(f"✅ Dropped foreign key constraint: {constraint_name}")
+                
+                # Also try the common constraint name
+                conn.execute(
+                    text("ALTER TABLE daily_decisions DROP CONSTRAINT IF EXISTS daily_decisions_user_id_fkey")
+                )
+                
+                # Now change the type
                 conn.execute(
                     text("ALTER TABLE daily_decisions ALTER COLUMN user_id TYPE VARCHAR USING user_id::text")
                 )
                 print("✅ Converted user_id to VARCHAR")
+                
+                # Note: We don't recreate the FK constraint because:
+                # 1. The model doesn't define a ForeignKey relationship for user_id
+                # 2. users.id is VARCHAR, so if we wanted to add it back, we could, but it's not in the model
 
         # Step 4: Set NOT NULL constraints after data migration
         if _is_postgresql():

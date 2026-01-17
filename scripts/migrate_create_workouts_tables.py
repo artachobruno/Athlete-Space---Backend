@@ -109,6 +109,66 @@ def _update_existing_workouts_table(conn) -> None:
             conn.execute(text(f"ALTER TABLE workouts ADD COLUMN {col_name} VARCHAR"))
             logger.info(f"✓ Added {col_name} column")
 
+    # Check for source column
+    result = conn.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'workouts' AND column_name = 'source'
+            """
+        )
+    )
+    if result.fetchone() is None:
+        logger.info("Adding missing source column to workouts table...")
+        conn.execute(text("ALTER TABLE workouts ADD COLUMN source VARCHAR NOT NULL DEFAULT 'inferred'"))
+        logger.info("✓ Added source column")
+
+    # Check for source_ref column
+    result = conn.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'workouts' AND column_name = 'source_ref'
+            """
+        )
+    )
+    if result.fetchone() is None:
+        logger.info("Adding missing source_ref column to workouts table...")
+        conn.execute(text("ALTER TABLE workouts ADD COLUMN source_ref VARCHAR"))
+        logger.info("✓ Added source_ref column")
+
+    # Check for raw_notes column
+    result = conn.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'workouts' AND column_name = 'raw_notes'
+            """
+        )
+    )
+    if result.fetchone() is None:
+        logger.info("Adding missing raw_notes column to workouts table...")
+        conn.execute(text("ALTER TABLE workouts ADD COLUMN raw_notes TEXT"))
+        logger.info("✓ Added raw_notes column")
+
+    # Check for parse_status column
+    result = conn.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'workouts' AND column_name = 'parse_status'
+            """
+        )
+    )
+    if result.fetchone() is None:
+        logger.info("Adding missing parse_status column to workouts table...")
+        conn.execute(text("ALTER TABLE workouts ADD COLUMN parse_status VARCHAR"))
+        logger.info("✓ Added parse_status column")
+
     # Create indexes if they don't exist
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_workouts_activity_id ON workouts(activity_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_workouts_planned_session_id ON workouts(planned_session_id)"))

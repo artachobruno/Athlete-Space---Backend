@@ -358,14 +358,17 @@ def save_sessions_to_database(
                 # Phase 6: Persist exactly what LLM returns - no field mutation, no auto-fill
                 # Only extract fields that exist in session_data - no defaults
                 # Intent: Set from session_data if provided, otherwise infer from session_type
-                session_type = session_data.get("session_type") or session_data.get("intensity")
+                # session_type can come from "session_type", "type" (session type like easy/workout/long/rest), or "intensity"
+                session_type = session_data.get("session_type") or session_data.get("type") or session_data.get("intensity")
                 intent = session_data.get("intent")
                 if not intent and session_type:
                     intent = infer_intent_from_session_type(session_type)
 
-                # Schema v2: Normalize sport (type -> sport, use normalize_sport helper)
-                type_raw = session_data.get("type")
-                normalized_sport = normalize_sport(type_raw or "run")  # Default to "run" if None
+                # Schema v2: Normalize sport (use sport field if present, otherwise default to "run")
+                # Note: Don't use "type" field as fallback because "type" is session type (easy/workout/long/rest),
+                # not sport (Run/Bike/Swim). Modern format always includes "sport" field.
+                sport_raw = session_data.get("sport")
+                normalized_sport = normalize_sport(sport_raw or "run")  # Default to "run" if None
 
                 # Schema v2: Convert units and combine date+time
                 duration_seconds = minutes_to_seconds(session_data.get("duration_minutes"))

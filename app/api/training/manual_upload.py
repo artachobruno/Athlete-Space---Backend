@@ -709,6 +709,7 @@ async def upload_manual_week(
             session_dict = {
                 "date": session_req.date,
                 "time": session_req.time,
+                "sport": session_req.sport,
                 "type": session_req.type,
                 "title": session_req.title,
                 "duration_minutes": session_req.duration_minutes,
@@ -812,6 +813,7 @@ async def upload_manual_season(
                 session_dict = {
                     "date": session_req.date,
                     "time": session_req.time,
+                    "sport": session_req.sport,
                     "type": session_req.type,
                     "title": session_req.title,
                     "duration_minutes": session_req.duration_minutes,

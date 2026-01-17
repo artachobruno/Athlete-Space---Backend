@@ -77,7 +77,7 @@ def _table_exists(conn, table_name: str) -> bool:
 def migrate_daily_decisions_schema_v2() -> None:
     """Update daily_decisions table to match SQLAlchemy model."""
     print("Starting migration: daily_decisions schema v2")
-    
+
     with engine.begin() as conn:
         if not _table_exists(conn, "daily_decisions"):
             print("Table daily_decisions does not exist. Creating it...")
@@ -127,11 +127,10 @@ def migrate_daily_decisions_schema_v2() -> None:
                 )
                 print("✅ Created daily_decisions table with schema v2")
                 return
-            else:
-                # SQLite
-                conn.execute(
-                    text(
-                        """
+            # SQLite
+            conn.execute(
+                text(
+                    """
                         CREATE TABLE daily_decisions (
                             id VARCHAR PRIMARY KEY,
                             user_id VARCHAR NOT NULL,
@@ -147,10 +146,10 @@ def migrate_daily_decisions_schema_v2() -> None:
                             decision_date TIMESTAMP NOT NULL
                         )
                         """
-                    )
                 )
-                print("✅ Created daily_decisions table with schema v2 (SQLite)")
-                return
+            )
+            print("✅ Created daily_decisions table with schema v2 (SQLite)")
+            return
 
         print("Table daily_decisions exists. Updating schema...")
 
@@ -172,7 +171,7 @@ def migrate_daily_decisions_schema_v2() -> None:
                 print(f"Adding column: {column_name}")
                 nullable_clause = "" if not nullable else ""
                 default_clause = ""
-                
+
                 if column_name == "version":
                     default_clause = " DEFAULT 1"
                 elif column_name == "is_active":
@@ -181,7 +180,7 @@ def migrate_daily_decisions_schema_v2() -> None:
                     default_clause = " DEFAULT now()"
                 elif column_name == "decision_data":
                     default_clause = " DEFAULT '{}'::jsonb"
-                
+
                 if _is_postgresql():
                     conn.execute(
                         text(
@@ -270,18 +269,18 @@ def migrate_daily_decisions_schema_v2() -> None:
                         text(f"ALTER TABLE daily_decisions DROP CONSTRAINT IF EXISTS {constraint_name}")
                     )
                     print(f"✅ Dropped foreign key constraint: {constraint_name}")
-                
+
                 # Also try the common constraint name
                 conn.execute(
                     text("ALTER TABLE daily_decisions DROP CONSTRAINT IF EXISTS daily_decisions_user_id_fkey")
                 )
-                
+
                 # Now change the type
                 conn.execute(
                     text("ALTER TABLE daily_decisions ALTER COLUMN user_id TYPE VARCHAR USING user_id::text")
                 )
                 print("✅ Converted user_id to VARCHAR")
-                
+
                 # Note: We don't recreate the FK constraint because:
                 # 1. The model doesn't define a ForeignKey relationship for user_id
                 # 2. users.id is VARCHAR, so if we wanted to add it back, we could, but it's not in the model
@@ -322,7 +321,7 @@ def migrate_daily_decisions_schema_v2() -> None:
             conn.execute(
                 text("ALTER TABLE daily_decisions DROP CONSTRAINT IF EXISTS daily_decisions_user_id_day_key")
             )
-            
+
             # Create new unique constraint
             conn.execute(
                 text("ALTER TABLE daily_decisions DROP CONSTRAINT IF EXISTS uq_daily_decision_user_date_version")

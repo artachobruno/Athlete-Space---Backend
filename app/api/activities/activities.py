@@ -9,22 +9,21 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 
+import requests
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_user_id
+from app.config.settings import settings
+from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
 from app.db.models import Activity, PairingDecision, PlannedSession, StravaAccount
 from app.db.session import get_session
 from app.ingestion.fetch_streams import fetch_and_save_streams
 from app.ingestion.file_parser import parse_activity_file
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
-from app.core.encryption import decrypt_token, encrypt_token
-from app.core.encryption import EncryptionError, EncryptionKeyError
-from app.config.settings import settings
-import requests
 from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.pairing.auto_pairing_service import try_auto_pair
 from app.pairing.session_links import get_link_for_activity, unlink_by_activity
@@ -359,7 +358,7 @@ def fetch_activity_streams(
                     detail="Strava account not connected",
                 )
             account = account_result[0]
-            
+
             # Decrypt refresh token
             try:
                 refresh_token = decrypt_token(account.refresh_token)
@@ -375,7 +374,7 @@ def fetch_activity_streams(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to decrypt refresh token",
                 ) from e
-            
+
             # Refresh token to get new access token
             try:
                 token_data = refresh_access_token(
@@ -395,7 +394,7 @@ def fetch_activity_streams(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to refresh Strava token: {e!s}",
                 ) from e
-            
+
             # Extract access token
             access_token = token_data.get("access_token")
             if not isinstance(access_token, str):
@@ -403,7 +402,7 @@ def fetch_activity_streams(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Invalid access_token type from Strava",
                 )
-            
+
             # Update refresh token if provided (token rotation)
             new_refresh_token = token_data.get("refresh_token")
             new_expires_at = token_data.get("expires_at")
@@ -417,7 +416,7 @@ def fetch_activity_streams(
                 except EncryptionError as e:
                     logger.error(f"[ACTIVITIES] Failed to encrypt new refresh token: {e}")
                     # Continue with old refresh token - not critical
-            
+
             return StravaClient(access_token=access_token)
 
         try:
@@ -452,7 +451,7 @@ def fetch_activity_streams(
                     data_points = len(time_stream["data"])
                 elif isinstance(time_stream, list):
                     data_points = len(time_stream)
-            
+
             logger.info(f"[ACTIVITIES] Successfully fetched streams for activity {activity_id}: {data_points} data points")
             return {
                 "success": True,

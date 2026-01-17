@@ -65,6 +65,7 @@ from app.internal.ops.latency import record_latency_ms
 from app.internal.ops.router import router as ops_router
 from app.internal.ops.summary import set_process_start_time
 from app.internal.ops.traffic import record_request
+from app.metrics.scheduled_recompute import recompute_metrics_for_all_users
 from app.services.intelligence.scheduler import generate_daily_decisions_for_all_users
 from app.services.intelligence.weekly_report_metrics import update_all_recent_weekly_reports_for_all_users
 from app.webhooks.strava import router as webhooks_router
@@ -642,6 +643,14 @@ async def deferred_heavy_init():
                 name="Weekly Report Metrics Update",
                 replace_existing=True,
             )
+            # Run daily training load metrics recomputation daily at 4 AM UTC
+            scheduler.add_job(
+                recompute_metrics_for_all_users,
+                trigger=CronTrigger(hour=4, minute=0),  # Daily at 4 AM UTC
+                id="daily_training_load_recompute",
+                name="Daily Training Load Metrics Recomputation",
+                replace_existing=True,
+            )
             scheduler.start()
             app.state.scheduler = scheduler
             app.state.scheduler_ready = True
@@ -652,6 +661,7 @@ async def deferred_heavy_init():
             )
             logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
             logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
+            logger.info("[SCHEDULER] Started daily training load metrics recomputation scheduler (runs daily at 4 AM UTC)")
         except Exception as e:
             logger.exception("[SCHEDULER] Failed to start scheduler: {}", e)
             app.state.scheduler_ready = False

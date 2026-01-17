@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, StravaAccount, UserSettings
+from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.metrics.effort_service import compute_activity_effort
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 from app.pairing.auto_pairing_service import try_auto_pair
@@ -275,6 +276,14 @@ def _create_new_activity(
         logger.warning(f"[SAVE_ACTIVITIES] Auto-pairing failed for activity {strava_id}: {e}")
 
     logger.info(f"[SAVE_ACTIVITIES] Added new activity: {strava_id} for user {user_id}")
+
+    # Trigger automatic daily training load recomputation (non-blocking)
+    try:
+        trigger_recompute_on_new_activities(user_id)
+    except Exception as e:
+        # Don't fail activity save if recomputation fails - just log the error
+        logger.warning(f"[SAVE_ACTIVITIES] Failed to trigger metrics recomputation for user {user_id}: {e}")
+
     return activity
 
 

@@ -22,7 +22,7 @@ from app.db.session import engine
 def backfill_daily_decisions_metadata() -> None:
     """Backfill metadata fields from decision_data JSON."""
     print("Starting backfill: daily_decisions metadata fields")
-    
+
     with engine.begin() as conn:
         # Check if there are rows with NULL metadata but non-empty decision_data
         result = conn.execute(
@@ -41,13 +41,13 @@ def backfill_daily_decisions_metadata() -> None:
             )
         )
         count = result.scalar() or 0
-        
+
         if count == 0:
             print("✅ No rows need backfilling. All metadata fields are already populated.")
             return
-        
+
         print(f"Found {count} rows that need metadata backfilling")
-        
+
         # Update metadata fields from decision_data JSON
         # Extract recommendation -> recommendation_type
         # Extract intensity_focus -> recommended_intensity
@@ -83,7 +83,7 @@ def backfill_daily_decisions_metadata() -> None:
                 """
             )
         )
-        
+
         # Verify the update
         result = conn.execute(
             text(
@@ -101,7 +101,7 @@ def backfill_daily_decisions_metadata() -> None:
             )
         )
         remaining = result.scalar() or 0
-        
+
         if remaining == 0:
             print(f"✅ Successfully backfilled metadata for {count} rows")
         else:

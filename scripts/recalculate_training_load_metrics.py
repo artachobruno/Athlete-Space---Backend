@@ -135,11 +135,10 @@ def recompute_user_training_load(user_id: str, start_date: date, end_date: date)
             # Create new record (we deleted all existing ones, so this is always a new record)
             daily_load = DailyTrainingLoad(
                 user_id=user_id,
-                date=datetime.combine(date_val, datetime.min.time()).replace(tzinfo=UTC),
+                day=date_val,
                 ctl=metrics_for_date["ctl"],
                 atl=metrics_for_date["atl"],
                 tsb=form_value,  # Storing Form (FSB) in TSB column for backward compatibility
-                load_score=tss_load,  # Daily TSS load
             )
             session.add(daily_load)
             daily_created += 1

@@ -148,11 +148,10 @@ def migrate_user_training_load(user_id: str) -> dict[str, int | str]:
 
             daily_load = DailyTrainingLoad(
                 user_id=user_id,
-                date=datetime.combine(date_val, datetime.min.time()).replace(tzinfo=UTC),
+                day=date_val,
                 ctl=ctl_val,
                 atl=atl_val,
                 tsb=form_value,  # Storing Form (FSB) in TSB column for backward compatibility
-                load_score=tss_load,  # Daily TSS load
             )
             session.add(daily_load)
             daily_created += 1

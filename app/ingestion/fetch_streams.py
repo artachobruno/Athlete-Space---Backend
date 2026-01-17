@@ -120,7 +120,7 @@ def fetch_and_save_streams(
                 data_points = len(time_stream["data"])
             elif isinstance(time_stream, list):
                 data_points = len(time_stream)
-        
+
         logger.info(
             f"[FETCH_STREAMS] Successfully saved streams for activity {strava_activity_id}: "
             f"{len(streams)} stream types, {data_points} data points"

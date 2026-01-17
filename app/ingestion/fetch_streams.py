@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.models import Activity, UserSettings
 from app.integrations.strava.client import StravaClient
@@ -76,6 +77,8 @@ def fetch_and_save_streams(
         if activity.metrics is None:
             activity.metrics = {}
         activity.metrics["streams_data"] = streams
+        # Mark JSONB column as modified so SQLAlchemy detects the change
+        flag_modified(activity, "metrics")
         session.add(activity)
 
         # TSS MUST be computed after streams_data is present.
@@ -109,7 +112,15 @@ def fetch_and_save_streams(
 
         session.commit()
 
-        data_points = len(streams.get("time", [])) if streams else 0
+        # Count data points correctly (streams format: {"time": {"data": [...]}, ...})
+        data_points = 0
+        if streams and "time" in streams:
+            time_stream = streams["time"]
+            if isinstance(time_stream, dict) and "data" in time_stream:
+                data_points = len(time_stream["data"])
+            elif isinstance(time_stream, list):
+                data_points = len(time_stream)
+        
         logger.info(
             f"[FETCH_STREAMS] Successfully saved streams for activity {strava_activity_id}: "
             f"{len(streams)} stream types, {data_points} data points"

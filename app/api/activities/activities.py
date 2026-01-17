@@ -444,7 +444,15 @@ def fetch_activity_streams(
         if success:
             # Refresh activity to get updated streams_data
             session.refresh(activity)
-            data_points = len(activity.streams_data.get("time", [])) if activity.streams_data else 0
+            # Count data points correctly (streams format: {"time": {"data": [...]}, ...})
+            data_points = 0
+            if activity.streams_data and "time" in activity.streams_data:
+                time_stream = activity.streams_data["time"]
+                if isinstance(time_stream, dict) and "data" in time_stream:
+                    data_points = len(time_stream["data"])
+                elif isinstance(time_stream, list):
+                    data_points = len(time_stream)
+            
             logger.info(f"[ACTIVITIES] Successfully fetched streams for activity {activity_id}: {data_points} data points")
             return {
                 "success": True,
@@ -529,14 +537,18 @@ def get_activity_streams(
 
         activity = activity_result[0]
 
-        if not activity.streams_data:
+        # Check if streams_data exists (reads from metrics JSONB via property)
+        streams_data = activity.streams_data
+        if not streams_data:
+            logger.debug(f"[ACTIVITIES] No streams_data found for activity {activity_id}, metrics keys: {list(activity.metrics.keys()) if activity.metrics else 'None'}")
             fetch_endpoint = f"/activities/{activity_id}/fetch-streams"
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Streams data not available for activity {activity_id}. Use POST {fetch_endpoint} to fetch it first.",
             )
 
-        formatted_streams = _format_streams_for_frontend(activity.streams_data)
+        logger.debug(f"[ACTIVITIES] Found streams_data for activity {activity_id}, stream types: {list(streams_data.keys()) if isinstance(streams_data, dict) else 'not a dict'}")
+        formatted_streams = _format_streams_for_frontend(streams_data)
 
         if not formatted_streams:
             raise HTTPException(

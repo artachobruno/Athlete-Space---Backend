@@ -1006,7 +1006,8 @@ def _determine_sync_state(account: StravaAccount) -> str:
 
     # Check if last sync exists and is within SLA
     if account.last_sync_at:
-        age_seconds = now - account.last_sync_at
+        age_delta = now - account.last_sync_at
+        age_seconds = int(age_delta.total_seconds())
         age_minutes = age_seconds // 60
         if age_seconds <= SYNC_SLA_SECONDS:
             logger.info(f"Sync state for user_id={account.user_id}: ok (last_sync {age_minutes} minutes ago, within SLA)")
@@ -1048,7 +1049,7 @@ def get_status(user_id: str = Depends(get_current_user_id)):
 
         last_sync = None
         if account.last_sync_at:
-            last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat()
+            last_sync = account.last_sync_at.isoformat()
 
         # Get activity count to track data retrieval
         with get_session() as session:
@@ -1105,7 +1106,7 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
     # Get StravaAccount for user - handle missing account gracefully
     try:
         account = get_strava_account(user_id)
-        last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None
+        last_sync = account.last_sync_at.isoformat() if account.last_sync_at else None
         strava_connected = True
     except HTTPException as e:
         # Strava account not connected - return graceful response, not an error
@@ -1354,7 +1355,7 @@ def get_debug_data(user_id: str = Depends(get_current_user_id)):
         with get_session() as session:
             # Get account info
             account = get_strava_account(user_id)
-            last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None
+            last_sync = account.last_sync_at.isoformat() if account.last_sync_at else None
 
             # Get all activities (schema v2: use starts_at instead of start_time)
             activities = session.execute(select(Activity).where(Activity.user_id == user_id).order_by(Activity.starts_at)).scalars().all()
@@ -1475,7 +1476,7 @@ def check_recent_activities(
             "success": True,
             "message": "Checking for recent activities (last 48 hours). Sync running in background.",
             "user_id": user_id,
-            "last_sync": datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None,
+            "last_sync": account.last_sync_at.isoformat() if account.last_sync_at else None,
         }
     except HTTPException:
         raise
@@ -1528,7 +1529,7 @@ def trigger_sync_now(
             "success": True,
             "message": "Sync started in background. This will fetch activities from the last 48 hours or since your last sync.",
             "user_id": user_id,
-            "last_sync": datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None,
+            "last_sync": account.last_sync_at.isoformat() if account.last_sync_at else None,
         }
     except HTTPException:
         raise
@@ -1567,7 +1568,7 @@ def trigger_history_sync(
             "success": True,
             "message": "Historical sync started in background. This may take several minutes.",
             "user_id": user_id,
-            "last_sync": datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat() if account.last_sync_at else None,
+            "last_sync": account.last_sync_at.isoformat() if account.last_sync_at else None,
         }
     except HTTPException:
         raise

@@ -226,7 +226,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
     # Calculate date range (use last_sync_at if available, otherwise last 90 days)
     now = datetime.now(timezone.utc)
     if account.last_sync_at:
-        after_date = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc)
+        after_date = account.last_sync_at
         # Add 1 second buffer to avoid missing activities
         after_date += timedelta(seconds=1)
 
@@ -357,7 +357,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         imported_count += 1
 
     # Update last_sync_at and success tracking on success
-    account.last_sync_at = int(now.timestamp())
+    account.last_sync_at = now
     account.sync_success_count = (account.sync_success_count or 0) + 1
     account.last_sync_error = None
 
@@ -457,7 +457,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         duplicate_count = retry_duplicate
         skipped_count = 0  # Reset since we're retrying everything
         # Update last_sync_at
-        account.last_sync_at = int(now.timestamp())
+        account.last_sync_at = now
         session.commit()
 
     logger.info(

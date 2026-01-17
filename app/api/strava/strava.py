@@ -81,7 +81,7 @@ def strava_sync_progress(user_id: str = Depends(get_current_user_id)):
             # Format last_sync timestamp
             last_sync = None
             if account.last_sync_at:
-                last_sync = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc).isoformat()
+                last_sync = account.last_sync_at.isoformat()
 
             logger.info(
                 f"Sync progress for user_id={user_id}: "

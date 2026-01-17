@@ -168,7 +168,7 @@ def ingest_activities(
         # Use last_sync_at if available and more recent than requested date
         # This ensures we only fetch new activities incrementally
         if account.last_sync_at:
-            last_sync_date = datetime.fromtimestamp(account.last_sync_at, tz=timezone.utc)
+            last_sync_date = account.last_sync_at
             # Use the more recent of the two dates (only fetch new activities)
             after_date = max(last_sync_date, requested_after_date)
             logger.debug(
@@ -300,7 +300,7 @@ def ingest_activities(
         # Update last_sync_at in StravaAccount only if we successfully fetched activities
         # This ensures we track incremental progress
         if len(strava_activities) > 0 or imported_count > 0:
-            account.last_sync_at = int(now.timestamp())
+            account.last_sync_at = now
             logger.info(f"[INGESTION] Updated last_sync_at to {now.isoformat()} for user_id={user_id}")
 
         # Commit all activities and last_sync_at update
@@ -396,7 +396,7 @@ def ingest_activities(
             duplicate_count = retry_duplicate
             skipped_count = 0  # Reset since we're retrying everything
             # Update last_sync_at
-            account.last_sync_at = int(now.timestamp())
+            account.last_sync_at = now
             session.commit()
 
         logger.info(

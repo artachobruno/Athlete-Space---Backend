@@ -1,9 +1,16 @@
 -- Migration: Convert workout_steps to use targets JSONB
 --
--- This migration:
--- 1. Adds targets JSONB column (if not exists)
--- 2. Migrates data from individual columns to targets JSONB (if old columns exist)
--- 3. Renames 'type' to 'step_type' if needed
+-- ⚠️ DEPRECATED: This migration assumes an old schema that doesn't exist.
+-- 
+-- If your schema already has:
+--   - step_type (not 'type')
+--   - targets (JSONB)
+--   - step_index
+--
+-- Then DO NOT run this script. Instead, run:
+--   scripts/migrate_workout_steps_finalize.sql
+--
+-- This script is kept for reference only.
 --
 -- IMPORTANT: Test this on a backup first!
 

@@ -499,23 +499,26 @@ async def coach_chat(
 
             # Round weight_lbs and height_in to 1 decimal place
             weight_lbs_rounded = None
-            if profile.weight_lbs is not None:
-                weight_lbs_rounded = round(float(profile.weight_lbs), 1)
+            weight_lbs = getattr(profile, "weight_lbs", None)
+            if weight_lbs is not None:
+                weight_lbs_rounded = round(float(weight_lbs), 1)
             height_in_rounded = None
-            if profile.height_in is not None:
-                height_in_rounded = round(float(profile.height_in), 1)
+            height_in = getattr(profile, "height_in", None)
+            if height_in is not None:
+                height_in_rounded = round(float(height_in), 1)
 
             athlete_profile = AthleteProfileData(
-                gender=profile.gender,
+                gender=getattr(profile, "gender", None),
                 age=age,
                 weight_lbs=weight_lbs_rounded,
                 height_in=height_in_rounded,
-                unit_system=profile.unit_system or "imperial",
+                unit_system=getattr(profile, "unit_system", None) or "imperial",
             )
 
             # Load race profile from extracted_race_attributes
-            if profile.extracted_race_attributes and isinstance(profile.extracted_race_attributes, dict):
-                race_attrs = profile.extracted_race_attributes
+            extracted_race_attributes = getattr(profile, "extracted_race_attributes", None)
+            if extracted_race_attributes and isinstance(extracted_race_attributes, dict):
+                race_attrs = extracted_race_attributes
                 race_profile = RaceProfileData(
                     event_name=race_attrs.get("event_name"),
                     event_type=race_attrs.get("event_type"),

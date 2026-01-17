@@ -20,7 +20,11 @@ from app.db.session import get_session
 from app.ingestion.fetch_streams import fetch_and_save_streams
 from app.ingestion.file_parser import parse_activity_file
 from app.integrations.strava.client import StravaClient
-from app.integrations.strava.service import get_strava_client
+from app.integrations.strava.tokens import refresh_access_token
+from app.core.encryption import decrypt_token, encrypt_token
+from app.core.encryption import EncryptionError, EncryptionKeyError
+from app.config.settings import settings
+import requests
 from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.pairing.auto_pairing_service import try_auto_pair
 from app.pairing.session_links import get_link_for_activity, unlink_by_activity
@@ -347,14 +351,74 @@ def fetch_activity_streams(
 
         # Get Strava client
         def _get_client() -> StravaClient:
-            """Get Strava client for user."""
-            account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
-            if not account:
+            """Get Strava client for user from StravaAccount."""
+            account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+            if not account_result:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Strava account not connected",
                 )
-            return get_strava_client(int(account[0].athlete_id))
+            account = account_result[0]
+            
+            # Decrypt refresh token
+            try:
+                refresh_token = decrypt_token(account.refresh_token)
+            except EncryptionKeyError as e:
+                logger.error(f"[ACTIVITIES] Encryption key mismatch: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Token decryption failed: ENCRYPTION_KEY not set or changed. Please reconnect your Strava account.",
+                ) from e
+            except EncryptionError as e:
+                logger.error(f"[ACTIVITIES] Failed to decrypt refresh token: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to decrypt refresh token",
+                ) from e
+            
+            # Refresh token to get new access token
+            try:
+                token_data = refresh_access_token(
+                    client_id=settings.strava_client_id,
+                    client_secret=settings.strava_client_secret,
+                    refresh_token=refresh_token,
+                )
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code in {400, 401}:
+                    logger.warning(f"[ACTIVITIES] Invalid refresh token for user_id={user_id}")
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Strava token invalid. Please reconnect your Strava account.",
+                    ) from e
+                logger.error(f"[ACTIVITIES] Token refresh failed: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to refresh Strava token: {e!s}",
+                ) from e
+            
+            # Extract access token
+            access_token = token_data.get("access_token")
+            if not isinstance(access_token, str):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Invalid access_token type from Strava",
+                )
+            
+            # Update refresh token if provided (token rotation)
+            new_refresh_token = token_data.get("refresh_token")
+            new_expires_at = token_data.get("expires_at")
+            if new_refresh_token and isinstance(new_refresh_token, str) and isinstance(new_expires_at, int):
+                try:
+                    account.refresh_token = encrypt_token(new_refresh_token)
+                    expires_at_dt = datetime.fromtimestamp(new_expires_at, tz=timezone.utc)
+                    account.expires_at = expires_at_dt
+                    session.commit()
+                    logger.info(f"[ACTIVITIES] Rotated refresh token for user_id={user_id}")
+                except EncryptionError as e:
+                    logger.error(f"[ACTIVITIES] Failed to encrypt new refresh token: {e}")
+                    # Continue with old refresh token - not critical
+            
+            return StravaClient(access_token=access_token)
 
         try:
             client = _get_client()

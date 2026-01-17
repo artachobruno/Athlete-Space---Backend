@@ -510,20 +510,20 @@ def _create_steps_from_planned_session(
         elif intensity_lower in {"hard", "race", "interval"}:
             step_type = "interval"
 
+    from app.workouts.targets_utils import legacy_to_targets
+
+    targets = legacy_to_targets(
+        duration_seconds=step_duration_seconds,
+        distance_meters=step_distance_meters,
+    )
+
     step = WorkoutStep(
         workout_id=workout.id,
         step_index=0,
-        type=step_type,
-        duration_seconds=step_duration_seconds,
-        distance_meters=step_distance_meters,
-        target_metric=None,
-        target_min=None,
-        target_max=None,
-        target_value=None,
-        intensity_zone=planned_session.intensity,
+        step_type=step_type,
+        targets=targets,
         instructions=planned_session.notes,
         purpose=planned_session.title,
-        inferred=False,
     )
     session.add(step)
 
@@ -543,20 +543,20 @@ def _create_main_step_from_activity(
     step_duration_seconds = int(activity.duration_seconds) if activity.duration_seconds else None
     step_distance_meters = int(activity.distance_meters) if activity.distance_meters else None
 
+    from app.workouts.targets_utils import legacy_to_targets
+
+    targets = legacy_to_targets(
+        duration_seconds=step_duration_seconds,
+        distance_meters=step_distance_meters,
+    )
+
     step = WorkoutStep(
         workout_id=workout.id,
         step_index=0,
-        type="free",
-        duration_seconds=step_duration_seconds,
-        distance_meters=step_distance_meters,
-        target_metric=None,
-        target_min=None,
-        target_max=None,
-        target_value=None,
-        intensity_zone=None,
+        step_type="free",
+        targets=targets,
         instructions=None,
         purpose=f"{activity.type or 'Activity'}",
-        inferred=True,
     )
     session.add(step)
 

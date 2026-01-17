@@ -9,7 +9,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.models import Base
@@ -68,20 +69,28 @@ class WorkoutStep(Base):
     - id: UUID primary key
     - workout_id: Foreign key to workouts.id
     - step_index: Step order within workout (0-indexed or 1-indexed, must be contiguous)
-    - type: Step type (warmup, steady, interval, recovery, cooldown, free)
-    - duration_seconds: Step duration (nullable, but either duration or distance required)
-    - distance_meters: Step distance (nullable, but either duration or distance required)
-    - target_metric: Target metric type (pace, hr, power, rpe)
-    - target_min: Minimum target value (nullable)
-    - target_max: Maximum target value (nullable)
-    - target_value: Single target value (nullable)
-    - intensity_zone: Intensity zone (nullable)
-    - instructions: Step instructions (nullable)
-    - purpose: Step purpose/description (nullable)
-    - inferred: Whether step was inferred vs explicitly defined (default: False)
+    - step_type: Step type (warmup, steady, interval, recovery, cooldown, free)
+    - targets: JSONB containing duration and target definition (see targets_schema.py)
+    - instructions: Step instructions (nullable, free text)
+    - purpose: Step purpose/description (nullable, semantic label)
+
+    The `targets` JSONB structure:
+    {
+      "duration": {
+        "type": "time" | "distance" | "open",
+        "seconds": <int> (if type="time"),
+        "meters": <int> (if type="distance")
+      },
+      "target": {
+        "metric": "pace" | "hr" | "power" | "rpe" | "zone",
+        "value": <str|float> (if single value),
+        "min": <str|float>, "max": <str|float> (if range),
+        "unit": <str> (optional)
+      }
+    }
 
     Rules:
-    - Either duration_seconds OR distance_meters must be set
+    - targets.duration must specify either time or distance (or open)
     - Steps are ordered and contiguous
     - "Free run" still has one step
     """
@@ -91,17 +100,10 @@ class WorkoutStep(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     workout_id: Mapped[str] = mapped_column(String, ForeignKey("workouts.id"), nullable=False, index=True)
     step_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    type: Mapped[str] = mapped_column(String, nullable=False)
-    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    distance_meters: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    target_metric: Mapped[str | None] = mapped_column(String, nullable=True)
-    target_min: Mapped[float | None] = mapped_column(Float, nullable=True)
-    target_max: Mapped[float | None] = mapped_column(Float, nullable=True)
-    target_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    intensity_zone: Mapped[str | None] = mapped_column(String, nullable=True)
+    step_type: Mapped[str] = mapped_column(String, nullable=False)
+    targets: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
-    inferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     workout: Mapped[Workout] = relationship("Workout", back_populates="steps")
 

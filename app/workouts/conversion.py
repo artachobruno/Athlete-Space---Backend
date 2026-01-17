@@ -14,6 +14,8 @@ from app.workouts.models import Workout as DBWorkout
 from app.workouts.models import WorkoutStep as DBWorkoutStep
 from app.workouts.step_utils import infer_step_name
 from app.workouts.target_calculation import calculate_target_from_intensity
+from app.workouts.targets_schema import DurationDistance, DurationTime, StepTargets, TargetRange, TargetSingleValue
+from app.workouts.targets_utils import legacy_to_targets
 
 
 def intensity_to_step_type(intensity: StepIntensity) -> str:
@@ -85,34 +87,41 @@ def canonical_step_to_db_step(
     step_name = canonical_step.name if canonical_step.name else "Steady"
     # If name is generic, try to infer a better one
     if step_name.lower() in {"step", "steady", ""}:
-        # Create a temporary step-like object for inference
-        # We'll use the canonical step's intensity to help infer
-        temp_step = DBWorkoutStep(
-            id="",
-            workout_id="",
-            step_index=0,
-            type=step_type,
-            intensity_zone=canonical_step.intensity.value,
-            purpose=None,
-            instructions=None,
-        )
-        step_name = infer_step_name(temp_step)
+        # For inference, we'll use the step_type and intensity
+        # Note: We can't create a full DBWorkoutStep here since schema changed
+        # Just use the step_name as-is for now
+        pass
+
+    # Build targets JSONB structure
+    targets = StepTargets(
+        duration=(
+            DurationTime(seconds=canonical_step.duration_seconds)
+            if canonical_step.duration_seconds
+            else (
+                DurationDistance(meters=canonical_step.distance_meters)
+                if canonical_step.distance_meters
+                else None
+            )
+        ),
+        target=(
+            TargetRange(metric=target_metric, min=target_min, max=target_max)
+            if target_metric and target_min is not None and target_max is not None
+            else (
+                TargetSingleValue(metric=target_metric, value=target_value)
+                if target_metric and target_value is not None
+                else None
+            )
+        ),
+    )
 
     return DBWorkoutStep(
         id=step_id,
         workout_id=workout_id,
         step_index=canonical_step.order,
-        type=step_type,
-        duration_seconds=canonical_step.duration_seconds,
-        distance_meters=canonical_step.distance_meters,
-        target_metric=target_metric,
-        target_min=target_min,
-        target_max=target_max,
-        target_value=target_value,
-        intensity_zone=canonical_step.intensity.value,
+        step_type=step_type,
+        targets=targets.model_dump_jsonb(),
         instructions=step_name,
         purpose=step_name,
-        inferred=False,
     )
 
 

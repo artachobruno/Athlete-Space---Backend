@@ -39,6 +39,40 @@ class RateLimitError(SyncError):
     """Raised when rate limit is hit."""
 
 
+def _normalize_sport_type(strava_type: str) -> str:
+    """Normalize Strava activity type to allowed database values.
+
+    Maps Strava activity types to: 'run', 'ride', 'swim', 'strength', 'walk', 'other'
+
+    Args:
+        strava_type: Strava activity type (e.g., 'Run', 'Ride', 'VirtualRide', etc.)
+
+    Returns:
+        Normalized sport type
+    """
+    type_lower = strava_type.lower() if strava_type else "other"
+
+    # Map Strava types to normalized values
+    sport_map: dict[str, str] = {
+        "run": "run",
+        "running": "run",
+        "ride": "ride",
+        "bike": "ride",
+        "cycling": "ride",
+        "virtualride": "ride",
+        "ebikeride": "ride",
+        "swim": "swim",
+        "swimming": "swim",
+        "walk": "walk",
+        "walking": "walk",
+        "weighttraining": "strength",
+        "workout": "strength",
+        "strength": "strength",
+    }
+
+    return sport_map.get(type_lower, "other")
+
+
 def _decrypt_refresh_token(account: StravaAccount) -> str:
     """Decrypt refresh token from account.
 
@@ -284,12 +318,15 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         if raw_json:
             metrics_dict["raw_json"] = raw_json
 
+        # Normalize sport type to allowed values
+        sport_type = _normalize_sport_type(strava_activity.type)
+
         # Create new activity record
         activity = Activity(
             user_id=user_id,
             source="strava",
             source_activity_id=strava_id,
-            sport=strava_activity.type.lower(),
+            sport=sport_type,
             starts_at=start_time,
             duration_seconds=strava_activity.elapsed_time,
             distance_meters=strava_activity.distance,
@@ -375,11 +412,14 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
             if raw_json:
                 metrics_dict["raw_json"] = raw_json
             try:
+                # Normalize sport type to allowed values
+                sport_type = _normalize_sport_type(strava_activity.type)
+
                 activity = Activity(
                     user_id=user_id,
                     source="strava",
                     source_activity_id=strava_id,
-                    sport=strava_activity.type.lower(),
+                    sport=sport_type,
                     starts_at=start_time,
                     duration_seconds=strava_activity.elapsed_time,
                     distance_meters=strava_activity.distance,

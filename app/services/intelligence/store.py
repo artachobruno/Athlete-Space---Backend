@@ -9,6 +9,7 @@ from datetime import date, datetime, timezone
 from dateutil import parser as date_parser
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
 from app.coach.utils.date_extraction import extract_date_from_text, extract_session_count_from_text
@@ -307,9 +308,8 @@ class IntentStore:
             Latest WeeklyIntentModel or None
 
         Note:
-            Weekly intent is optional. If the athlete_id column doesn't exist yet
-            (migration pending), this will raise an exception which should be handled
-            by the caller.
+            Weekly intent is optional. If columns are missing (migration pending),
+            this will return None gracefully.
         """
         with get_session() as session:
             query = select(WeeklyIntentModel).where(
@@ -320,7 +320,18 @@ class IntentStore:
             if active_only:
                 query = query.where(WeeklyIntentModel.is_active.is_(True))
 
-            return session.execute(query.order_by(WeeklyIntentModel.version.desc())).scalar_one_or_none()
+            try:
+                return session.execute(query.order_by(WeeklyIntentModel.version.desc())).scalar_one_or_none()
+            except ProgrammingError as e:
+                # Handle missing version column (migration pending)
+                if "version" in str(e).lower() or "does not exist" in str(e).lower():
+                    logger.warning(
+                        f"weekly_intents.version column does not exist (migration pending). "
+                        f"Returning None for athlete_id={athlete_id}, week_start={week_start.isoformat()}"
+                    )
+                    return None
+                # Re-raise if it's a different programming error
+                raise
 
     @staticmethod
     def save_daily_decision(

@@ -403,7 +403,7 @@ async def get_daily_decision(
         )
         # Return empty response instead of raising 500
         return DailyDecisionResponse(
-            id=decision_model.id,
+            id=str(decision_model.id),
             user_id=user_id,
             decision=DailyDecision(
                 recommendation="rest",
@@ -415,9 +415,9 @@ async def get_daily_decision(
                 confidence=Confidence(score=0.0, explanation="Failed to parse decision data"),
                 explanation="Unable to load decision data. Please try again later.",
                 decision_date=decision_date,
-                weekly_intent_id=decision_model.weekly_intent_id,
+                weekly_intent_id=str(decision_model.weekly_intent_id) if decision_model.weekly_intent_id else None,
             ),
-            weekly_intent_id=decision_model.weekly_intent_id,
+            weekly_intent_id=str(decision_model.weekly_intent_id) if decision_model.weekly_intent_id else None,
             version=decision_model.version,
             is_active=decision_model.is_active,
             created_at=decision_model.created_at,
@@ -425,10 +425,10 @@ async def get_daily_decision(
         )
 
     return DailyDecisionResponse(
-        id=decision_model.id,
+        id=str(decision_model.id),
         user_id=decision_model.user_id,
         decision=decision,
-        weekly_intent_id=decision_model.weekly_intent_id,
+        weekly_intent_id=str(decision_model.weekly_intent_id) if decision_model.weekly_intent_id else None,
         version=decision_model.version,
         is_active=decision_model.is_active,
         created_at=decision_model.created_at,

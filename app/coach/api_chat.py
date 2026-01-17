@@ -185,8 +185,9 @@ async def coach_chat(
         conversation_id=conversation_id,
     )
 
-    # Get athlete ID
-    athlete_id = _get_athlete_id()
+    # Get athlete ID from user_id
+    with get_session() as db:
+        athlete_id = get_or_create_athlete_id(db, user_id)
     athlete_id_type: str = type(athlete_id).__name__ if athlete_id is not None else "None"
     logger.debug(
         "Retrieved athlete_id for coach chat",

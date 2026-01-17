@@ -110,10 +110,11 @@ def ensure_workout(
             sport_map: dict[str, str] = {
                 "run": "run",
                 "running": "run",
-                "ride": "bike",
-                "bike": "bike",
-                "cycling": "bike",
-                "virtualride": "bike",
+                "ride": "ride",
+                "bike": "ride",
+                "cycling": "ride",
+                "virtualride": "ride",
+                "ebikeride": "ride",
                 "swim": "swim",
                 "swimming": "swim",
             }
@@ -147,10 +148,11 @@ def ensure_workout(
             sport_map: dict[str, str] = {
                 "run": "run",
                 "running": "run",
-                "ride": "bike",
-                "bike": "bike",
-                "cycling": "bike",
-                "virtualride": "bike",
+                "ride": "ride",
+                "bike": "ride",
+                "cycling": "ride",
+                "virtualride": "ride",
+                "ebikeride": "ride",
                 "swim": "swim",
                 "swimming": "swim",
             }

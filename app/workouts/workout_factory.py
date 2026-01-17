@@ -96,7 +96,7 @@ def _map_sport_type(activity_type: str | None) -> str:
         activity_type: Activity type (Run, Ride, Bike, Swim, etc.)
 
     Returns:
-        Workout sport type (run, bike, swim)
+        Workout sport type (run, ride, swim) - matches database CHECK constraint
     """
     if not activity_type:
         return "run"
@@ -105,10 +105,11 @@ def _map_sport_type(activity_type: str | None) -> str:
     sport_map: dict[str, str] = {
         "run": "run",
         "running": "run",
-        "ride": "bike",
-        "bike": "bike",
-        "cycling": "bike",
-        "virtualride": "bike",
+        "ride": "ride",
+        "bike": "ride",
+        "cycling": "ride",
+        "virtualride": "ride",
+        "ebikeride": "ride",
         "swim": "swim",
         "swimming": "swim",
     }

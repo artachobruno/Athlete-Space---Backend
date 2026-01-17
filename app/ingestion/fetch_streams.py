@@ -72,8 +72,10 @@ def fetch_and_save_streams(
             )
             return False
 
-        # Update activity with streams data
-        activity.streams_data = streams
+        # Update activity with streams data (store in metrics JSONB, not the read-only property)
+        if activity.metrics is None:
+            activity.metrics = {}
+        activity.metrics["streams_data"] = streams
         session.add(activity)
 
         # TSS MUST be computed after streams_data is present.

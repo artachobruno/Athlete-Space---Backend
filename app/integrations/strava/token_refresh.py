@@ -6,6 +6,8 @@ Tokens are encrypted at rest and decrypted only when needed for refresh.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -80,13 +82,15 @@ def refresh_user_tokens(session: Session, user_id: str) -> tuple[str, int]:
     if not isinstance(new_refresh_token_raw, str):
         raise TokenRefreshError(f"Invalid refresh_token type: {type(new_refresh_token_raw)}")
 
-    # Ensure expires_at is an integer
+    # Ensure expires_at is an integer (epoch seconds)
     if not isinstance(new_expires_at_raw, int):
         raise TokenRefreshError(f"Invalid expires_at type: {type(new_expires_at_raw)}, expected int")
 
     new_access_token = new_access_token_raw
     new_refresh_token = new_refresh_token_raw
-    new_expires_at = new_expires_at_raw
+
+    # Convert epoch seconds to datetime (database expects TIMESTAMPTZ)
+    expires_at_dt = datetime.fromtimestamp(new_expires_at_raw, tz=timezone.utc)
 
     # Encrypt new tokens
     try:
@@ -100,8 +104,8 @@ def refresh_user_tokens(session: Session, user_id: str) -> tuple[str, int]:
     # Update database
     account_obj.access_token = encrypted_access_token
     account_obj.refresh_token = encrypted_refresh_token
-    account_obj.expires_at = new_expires_at
+    account_obj.expires_at = expires_at_dt
     session.commit()
 
     logger.info(f"[TOKEN_REFRESH] Tokens refreshed successfully for user_id={user_id}")
-    return new_access_token, new_expires_at
+    return new_access_token, new_expires_at_raw

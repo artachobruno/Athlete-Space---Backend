@@ -125,12 +125,14 @@ def _rotate_refresh_token(account: StravaAccount, new_refresh_token: str, new_ex
     Args:
         account: StravaAccount object
         new_refresh_token: New refresh token to store
-        new_expires_at: New expiration timestamp
+        new_expires_at: New expiration timestamp (epoch seconds)
         session: Database session
     """
     try:
         account.refresh_token = encrypt_token(new_refresh_token)
-        account.expires_at = new_expires_at
+        # Convert epoch seconds to datetime (database expects TIMESTAMPTZ)
+        expires_at_dt = datetime.fromtimestamp(new_expires_at, tz=timezone.utc)
+        account.expires_at = expires_at_dt
         session.commit()
         logger.info(f"[SYNC] Rotated refresh token for user_id={account.user_id}")
     except EncryptionError as e:

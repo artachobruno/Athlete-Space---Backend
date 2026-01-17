@@ -123,7 +123,9 @@ def _get_access_token_from_account(account: StravaAccount, session) -> str:
     if new_refresh_token and isinstance(new_refresh_token, str):
         try:
             account.refresh_token = encrypt_token(new_refresh_token)
-            account.expires_at = new_expires_at
+            # Convert epoch seconds to datetime (database expects TIMESTAMPTZ)
+            expires_at_dt = datetime.fromtimestamp(new_expires_at, tz=timezone.utc)
+            account.expires_at = expires_at_dt
             session.commit()
             logger.info(f"[INGESTION] Rotated refresh token for user_id={account.user_id}")
         except EncryptionError as e:

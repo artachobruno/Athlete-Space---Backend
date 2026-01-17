@@ -23,6 +23,7 @@ from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
+from app.utils.sport_utils import normalize_sport_type
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -37,40 +38,6 @@ class TokenRefreshError(SyncError):
 
 class RateLimitError(SyncError):
     """Raised when rate limit is hit."""
-
-
-def _normalize_sport_type(strava_type: str) -> str:
-    """Normalize Strava activity type to allowed database values.
-
-    Maps Strava activity types to: 'run', 'ride', 'swim', 'strength', 'walk', 'other'
-
-    Args:
-        strava_type: Strava activity type (e.g., 'Run', 'Ride', 'VirtualRide', etc.)
-
-    Returns:
-        Normalized sport type
-    """
-    type_lower = strava_type.lower() if strava_type else "other"
-
-    # Map Strava types to normalized values
-    sport_map: dict[str, str] = {
-        "run": "run",
-        "running": "run",
-        "ride": "ride",
-        "bike": "ride",
-        "cycling": "ride",
-        "virtualride": "ride",
-        "ebikeride": "ride",
-        "swim": "swim",
-        "swimming": "swim",
-        "walk": "walk",
-        "walking": "walk",
-        "weighttraining": "strength",
-        "workout": "strength",
-        "strength": "strength",
-    }
-
-    return sport_map.get(type_lower, "other")
 
 
 def _decrypt_refresh_token(account: StravaAccount) -> str:
@@ -319,7 +286,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
             metrics_dict["raw_json"] = raw_json
 
         # Normalize sport type to allowed values
-        sport_type = _normalize_sport_type(strava_activity.type)
+        sport_type = normalize_sport_type(strava_activity.type)
 
         # Create new activity record
         activity = Activity(
@@ -413,7 +380,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
                 metrics_dict["raw_json"] = raw_json
             try:
                 # Normalize sport type to allowed values
-                sport_type = _normalize_sport_type(strava_activity.type)
+                sport_type = normalize_sport_type(strava_activity.type)
 
                 activity = Activity(
                     user_id=user_id,

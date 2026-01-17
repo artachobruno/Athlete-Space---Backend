@@ -539,14 +539,18 @@ def get_activity_streams(
         # Check if streams_data exists (reads from metrics JSONB via property)
         streams_data = activity.streams_data
         if not streams_data:
-            logger.debug(f"[ACTIVITIES] No streams_data found for activity {activity_id}, metrics keys: {list(activity.metrics.keys()) if activity.metrics else 'None'}")
+            metrics_keys = list(activity.metrics.keys()) if activity.metrics else "None"
+            logger.debug(
+                f"[ACTIVITIES] No streams_data found for activity {activity_id}, metrics keys: {metrics_keys}"
+            )
             fetch_endpoint = f"/activities/{activity_id}/fetch-streams"
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Streams data not available for activity {activity_id}. Use POST {fetch_endpoint} to fetch it first.",
             )
 
-        logger.debug(f"[ACTIVITIES] Found streams_data for activity {activity_id}, stream types: {list(streams_data.keys()) if isinstance(streams_data, dict) else 'not a dict'}")
+        stream_types = list(streams_data.keys()) if isinstance(streams_data, dict) else "not a dict"
+        logger.debug(f"[ACTIVITIES] Found streams_data for activity {activity_id}, stream types: {stream_types}")
         formatted_streams = _format_streams_for_frontend(streams_data)
 
         if not formatted_streams:

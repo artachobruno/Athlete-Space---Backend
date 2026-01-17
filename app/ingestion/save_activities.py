@@ -16,6 +16,7 @@ from app.metrics.effort_service import compute_activity_effort
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 from app.pairing.auto_pairing_service import try_auto_pair
 from app.state.models import ActivityRecord
+from app.utils.sport_utils import normalize_sport_type
 
 
 def _get_user_id_from_athlete_id(session: Session, athlete_id: int) -> str | None:
@@ -112,23 +113,11 @@ def save_activity_record(
 
 
 def _normalize_sport(sport: str) -> str:
-    """Normalize sport to schema v2 values: 'run', 'ride', 'swim', 'strength', 'walk', 'other'."""
-    sport_lower = sport.lower().strip()
-    # Map common variations to standard values
-    mapping = {
-        "running": "run",
-        "run": "run",
-        "cycling": "ride",
-        "bike": "ride",
-        "ride": "ride",
-        "swimming": "swim",
-        "swim": "swim",
-        "strength": "strength",
-        "weighttraining": "strength",
-        "walking": "walk",
-        "walk": "walk",
-    }
-    return mapping.get(sport_lower, "other")
+    """Normalize sport to schema v2 values: 'run', 'ride', 'swim', 'strength', 'walk', 'other'.
+
+    This is a wrapper around the shared normalize_sport_type utility.
+    """
+    return normalize_sport_type(sport)
 
 
 def _update_existing_activity(

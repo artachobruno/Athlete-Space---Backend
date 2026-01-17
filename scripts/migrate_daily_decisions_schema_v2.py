@@ -109,8 +109,8 @@ def migrate_daily_decisions_schema_v2() -> None:
                 conn.execute(
                     text(
                         """
-                        CREATE INDEX IF NOT EXISTS idx_daily_decision_user_date_active 
-                        ON daily_decisions(user_id, decision_date) 
+                        CREATE INDEX IF NOT EXISTS idx_daily_decision_user_date_active
+                        ON daily_decisions(user_id, decision_date)
                         WHERE is_active IS TRUE
                         """
                     )
@@ -120,7 +120,7 @@ def migrate_daily_decisions_schema_v2() -> None:
                     text(
                         """
                         ALTER TABLE daily_decisions
-                        ADD CONSTRAINT uq_daily_decision_user_date_version 
+                        ADD CONSTRAINT uq_daily_decision_user_date_version
                         UNIQUE (user_id, decision_date, version)
                         """
                     )
@@ -169,14 +169,14 @@ def migrate_daily_decisions_schema_v2() -> None:
         for column_name, column_type, nullable in columns_to_add:
             if not _column_exists(conn, "daily_decisions", column_name):
                 print(f"Adding column: {column_name}")
-                nullable_clause = "" if not nullable else ""
+                nullable_clause = "" if nullable else " NOT NULL"
                 default_clause = ""
 
                 if column_name == "version":
                     default_clause = " DEFAULT 1"
                 elif column_name == "is_active":
                     default_clause = " DEFAULT TRUE"
-                elif column_name in ("created_at", "updated_at"):
+                elif column_name in {"created_at", "updated_at"}:
                     default_clause = " DEFAULT now()"
                 elif column_name == "decision_data":
                     default_clause = " DEFAULT '{}'::jsonb"
@@ -217,8 +217,8 @@ def migrate_daily_decisions_schema_v2() -> None:
                         """
                         UPDATE daily_decisions
                         SET decision_data = decision
-                        WHERE decision_data = '{}'::jsonb 
-                        AND decision IS NOT NULL 
+                        WHERE decision_data = '{}'::jsonb
+                        AND decision IS NOT NULL
                         AND decision != '{}'::jsonb
                         """
                     )
@@ -330,7 +330,7 @@ def migrate_daily_decisions_schema_v2() -> None:
                 text(
                     """
                     ALTER TABLE daily_decisions
-                    ADD CONSTRAINT uq_daily_decision_user_date_version 
+                    ADD CONSTRAINT uq_daily_decision_user_date_version
                     UNIQUE (user_id, decision_date, version)
                     """
                 )
@@ -346,8 +346,8 @@ def migrate_daily_decisions_schema_v2() -> None:
             conn.execute(
                 text(
                     """
-                    CREATE INDEX IF NOT EXISTS idx_daily_decision_user_date_active 
-                    ON daily_decisions(user_id, decision_date) 
+                    CREATE INDEX IF NOT EXISTS idx_daily_decision_user_date_active
+                    ON daily_decisions(user_id, decision_date)
                     WHERE is_active IS TRUE
                     """
                 )

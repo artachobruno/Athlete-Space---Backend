@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.state.models import ActivityRecord
+from app.utils.sport_utils import normalize_sport_type
 
 
 class StravaActivity(BaseModel):
@@ -35,7 +36,7 @@ def map_strava_activity(activity: StravaActivity, athlete_id: int) -> ActivityRe
         athlete_id=athlete_id,
         activity_id=f"strava-{activity.id}",
         source="strava",
-        sport=activity.type.lower(),
+        sport=normalize_sport_type(activity.type),
         start_time=activity.start_date,
         duration_sec=activity.elapsed_time,
         distance_m=activity.distance,

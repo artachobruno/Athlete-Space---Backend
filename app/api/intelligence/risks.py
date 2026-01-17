@@ -14,6 +14,7 @@ from app.db.models import Activity, StravaAccount
 from app.db.session import get_session
 from app.state.builder import build_training_state
 from app.state.models import ActivityRecord
+from app.utils.sport_utils import normalize_sport_type
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
 
@@ -182,7 +183,7 @@ def get_risk_flags(user_id: str = Depends(get_current_user_id)):
                 athlete_id=athlete_id,
                 activity_id=str(act.id),
                 source="strava",
-                sport=act.type or "unknown",
+                sport=normalize_sport_type(act.type) if act.type else "other",
                 start_time=act.start_time,
                 duration_sec=act.duration_seconds or 0,
                 distance_m=act.distance_meters or 0.0,

@@ -126,7 +126,7 @@ def recompute_user_training_load(user_id: str, start_date: date, end_date: date)
         # Store results in daily_training_load table
         daily_created = 0
 
-        for date_val, tss_load in daily_tss_loads.items():
+        for date_val in daily_tss_loads:
             metrics_for_date = metrics.get(date_val, {"ctl": 0.0, "atl": 0.0, "fsb": 0.0})
 
             # Note: TSB column stores Form (FSB) value for backward compatibility

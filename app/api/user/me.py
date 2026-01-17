@@ -997,7 +997,7 @@ def _determine_sync_state(account: StravaAccount) -> str:
     Returns:
         Sync state string: "ok" | "syncing" | "stale"
     """
-    now = int(time.time())
+    now = datetime.now(timezone.utc)
 
     # Check if backfill is in progress
     if not account.full_history_synced:

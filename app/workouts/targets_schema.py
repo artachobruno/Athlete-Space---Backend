@@ -7,7 +7,7 @@ without requiring database migrations.
 
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -32,7 +32,7 @@ class DurationOpen(BaseModel):
     type: Literal["open"] = "open"
 
 
-Duration = Union[DurationTime, DurationDistance, DurationOpen]
+Duration = DurationTime | DurationDistance | DurationOpen
 
 
 class TargetSingleValue(BaseModel):
@@ -52,7 +52,7 @@ class TargetRange(BaseModel):
     unit: str | None = Field(None, description="Unit (e.g., 'bpm', 'w', 'km/h')")
 
 
-Target = Union[TargetSingleValue, TargetRange, None]
+Target = TargetSingleValue | TargetRange | None
 
 
 class StepTargets(BaseModel):

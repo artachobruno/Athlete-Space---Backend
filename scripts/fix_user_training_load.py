@@ -91,7 +91,7 @@ def fix_user_training_load(user_id: str) -> dict[str, int | str]:
         # Insert rows once, in chronological order
         daily_created = 0
 
-        for date_val, tss_load in daily_tss_loads.items():
+        for date_val in daily_tss_loads:
             metrics_for_date = metrics.get(date_val, {"ctl": 0.0, "atl": 0.0, "fsb": 0.0})
 
             form_value = metrics_for_date.get("fsb", 0.0)

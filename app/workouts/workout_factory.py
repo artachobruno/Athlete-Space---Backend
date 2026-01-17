@@ -22,6 +22,7 @@ from app.workouts.compliance_service import ComplianceService
 from app.workouts.conversion import canonical_step_to_db_step
 from app.workouts.execution_models import MatchType, WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
+from app.workouts.targets_utils import legacy_to_targets
 
 # One mile in meters (exact conversion)
 MILE_IN_METERS = 1609.34
@@ -511,8 +512,6 @@ def _create_steps_from_planned_session(
         elif intensity_lower in {"hard", "race", "interval"}:
             step_type = "interval"
 
-    from app.workouts.targets_utils import legacy_to_targets
-
     targets = legacy_to_targets(
         duration_seconds=step_duration_seconds,
         distance_meters=step_distance_meters,
@@ -543,8 +542,6 @@ def _create_main_step_from_activity(
     """
     step_duration_seconds = int(activity.duration_seconds) if activity.duration_seconds else None
     step_distance_meters = int(activity.distance_meters) if activity.distance_meters else None
-
-    from app.workouts.targets_utils import legacy_to_targets
 
     targets = legacy_to_targets(
         duration_seconds=step_duration_seconds,

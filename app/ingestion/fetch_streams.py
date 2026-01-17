@@ -117,7 +117,9 @@ def fetch_and_save_streams(
         if streams and "time" in streams:
             time_stream = streams["time"]
             if isinstance(time_stream, dict) and "data" in time_stream:
-                data_points = len(time_stream["data"])
+                data_value = time_stream.get("data")
+                if isinstance(data_value, list):
+                    data_points = len(data_value)
             elif isinstance(time_stream, list):
                 data_points = len(time_stream)
 

@@ -21,6 +21,7 @@ from app.db.session import get_session
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
+from app.utils.sport_utils import normalize_sport_type
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -267,7 +268,7 @@ def ingest_activities(
                 user_id=user_id,
                 source="strava",
                 source_activity_id=strava_id,
-                sport=strava_activity.type.lower(),
+                sport=normalize_sport_type(strava_activity.type),
                 starts_at=start_time,
                 duration_seconds=strava_activity.elapsed_time,
                 distance_meters=strava_activity.distance,
@@ -358,7 +359,7 @@ def ingest_activities(
                         user_id=user_id,
                         source="strava",
                         source_activity_id=strava_id,
-                        sport=strava_activity.type.lower(),
+                        sport=normalize_sport_type(strava_activity.type),
                         starts_at=start_time,
                         duration_seconds=strava_activity.elapsed_time,
                         distance_meters=strava_activity.distance,

@@ -967,16 +967,17 @@ class ConversationMessage(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     conversation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    role: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=True, index=True)  # Temporarily nullable until migration completes
+    role: Mapped[str] = mapped_column("sender", String, nullable=False)  # Maps to 'sender' column for backward compatibility
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    ts: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    tokens: Mapped[int] = mapped_column(Integer, nullable=True)  # Temporarily nullable until migration completes
+    ts: Mapped[datetime] = mapped_column(DateTime, nullable=True, index=True)  # Temporarily nullable until migration completes
     message_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
-        CheckConstraint("role IN ('user', 'assistant', 'system')", name="check_role_valid"),
+        # Note: Constraint on 'sender' column (mapped from 'role') allows 'user','assistant','coach','system'
+        # The model uses 'role' but maps to 'sender' column for backward compatibility
         Index("idx_messages_conversation_ts", "conversation_id", "ts"),  # Common query: messages by conversation ordered by time
         Index("idx_messages_user_ts", "user_id", "ts"),  # Common query: messages by user ordered by time
     )

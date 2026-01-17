@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.exc import InternalError, OperationalError, ProgrammingError
+from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id, get_optional_user_id
 from app.api.schemas.schemas import (
@@ -409,6 +410,15 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                 session.rollback()
                 onboarding_complete = False
 
+            # Check Strava connection from strava_accounts table (source of truth)
+            strava_connected = False
+            try:
+                strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+                strava_connected = strava_account is not None
+            except Exception as e:
+                logger.warning(f"[API] /me: Failed to check Strava connection for user_id={user_id}: {e}")
+                strava_connected = False
+
             # Build unified profile response (combines User, AthleteProfile, UserSettings)
             profile_response = None
             try:
@@ -423,6 +433,7 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                         user_timezone=user_timezone,
                         profile=profile,
                         settings=settings,
+                        strava_connected=strava_connected,
                     )
             except (InternalError, OperationalError) as e:
                 # Database transaction errors - rollback and log, but continue with None profile
@@ -1582,6 +1593,15 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                 # Get email from auth user
                 user_result = session.execute(select(User).where(User.id == user_id)).first()
                 user_email = user_result[0].email if user_result else None
+                # Check Strava connection from strava_accounts table (source of truth)
+                strava_connected = False
+                try:
+                    strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+                    strava_connected = strava_account is not None
+                except Exception as e:
+                    logger.warning(f"[API] /me/profile: Failed to check Strava connection for user_id={user_id}: {e}")
+                    strava_connected = False
+
                 return AthleteProfileResponse(
                     full_name=None,
                     email=user_email,
@@ -1593,7 +1613,7 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                     height_inches=None,
                     location=None,
                     unit_system="imperial",
-                    strava_connected=False,
+                    strava_connected=strava_connected,
                     target_event=None,
                     goals=[],
                 )
@@ -1617,6 +1637,15 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
             user_result = session.execute(select(User).where(User.id == user_id)).first()
             user_email = user_result[0].email if user_result else None
 
+            # Check Strava connection from strava_accounts table (source of truth)
+            strava_connected = False
+            try:
+                strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+                strava_connected = strava_account is not None
+            except Exception as e:
+                logger.warning(f"[API] /me/profile: Failed to check Strava connection for user_id={user_id}: {e}")
+                strava_connected = False
+
             # Convert height_in (float) to height_inches (int) for API
             height_inches_int = None
             if profile.height_in is not None:
@@ -1633,7 +1662,7 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                 height_inches=height_inches_int,  # Converted to int
                 location=profile.location,
                 unit_system=profile.unit_system or "imperial",
-                strava_connected=profile.strava_connected,
+                strava_connected=strava_connected,
                 target_event=target_event_obj,
                 goals=profile.goals or [],
             )
@@ -1815,7 +1844,8 @@ def _build_unified_profile_response(
     user_timezone: str,
     profile: AthleteProfile | None,  # noqa: ARG001
     settings: UserSettings | None,
-) -> dict[str, str | int | float | None]:
+    strava_connected: bool = False,
+) -> dict[str, str | int | float | bool | None]:
     """Build unified profile response from User, AthleteProfile, and UserSettings.
 
     This returns the profile in the format expected by the frontend:
@@ -1830,6 +1860,7 @@ def _build_unified_profile_response(
         "availability_hours_per_week": float | None,  # From weekly_hours
         "injury_status": str | None,  # Derived from injury_history
         "injury_notes": str | None,
+        "strava_connected": bool,  # Whether Strava is connected (from strava_accounts table)
     }
 
     Args:
@@ -1838,6 +1869,7 @@ def _build_unified_profile_response(
         user_timezone: Timezone from User table
         profile: AthleteProfile instance (optional, currently unused but kept for API compatibility)
         settings: UserSettings instance (optional)
+        strava_connected: Whether Strava is connected (checked from strava_accounts table)
 
     Returns:
         Dictionary with unified profile data
@@ -1885,14 +1917,35 @@ def _build_unified_profile_response(
         "availability_hours_per_week": prefs.get("weekly_hours"),
         "injury_status": injury_status,
         "injury_notes": injury_notes,
+        "strava_connected": strava_connected,
     }
 
 
-def _build_response_from_profile(profile: AthleteProfile, user_email: str | None = None) -> AthleteProfileResponse:
+def _get_strava_connected_from_db(session: Session, user_id: str) -> bool:
+    """Check if Strava is connected by querying strava_accounts table.
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        True if Strava account exists, False otherwise
+    """
+    try:
+        strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+    except Exception as e:
+        logger.warning(f"[API] Failed to check Strava connection for user_id={user_id}: {e}")
+        return False
+    else:
+        return strava_account is not None
+
+
+def _build_response_from_profile(profile: AthleteProfile, session: Session, user_email: str | None = None) -> AthleteProfileResponse:
     """Build response from profile object.
 
     Args:
         profile: AthleteProfile instance
+        session: Database session for checking Strava connection
         user_email: Email from auth user (optional, will fetch if not provided)
 
     Returns:
@@ -1910,9 +1963,12 @@ def _build_response_from_profile(profile: AthleteProfile, user_email: str | None
             logger.warning(f"Failed to parse target_event: {e}")
 
     # Convert height_in (float) to height_inches (int)
-    height_inches_int = None
+    height_inches_int: int | None = None
     if profile.height_in is not None:
         height_inches_int = round(float(profile.height_in))
+
+    # Check Strava connection from strava_accounts table (source of truth)
+    strava_connected = _get_strava_connected_from_db(session, profile.user_id)
 
     return AthleteProfileResponse(
         full_name=profile.name,  # Map name -> full_name
@@ -1925,7 +1981,7 @@ def _build_response_from_profile(profile: AthleteProfile, user_email: str | None
         height_inches=height_inches_int,  # Converted to int
         location=profile.location,
         unit_system=profile.unit_system or "imperial",
-        strava_connected=profile.strava_connected,
+        strava_connected=strava_connected,
         target_event=target_event_obj,
         goals=profile.goals or [],
     )
@@ -1933,14 +1989,18 @@ def _build_response_from_profile(profile: AthleteProfile, user_email: str | None
 
 def _build_response_from_request(
     request: AthleteProfileUpdateRequest,
-    profile: AthleteProfile | None = None,
+    session: Session,
+    user_id: str,
+    profile: AthleteProfile | None = None,  # noqa: ARG001
     user_email: str | None = None,
 ) -> AthleteProfileResponse:
     """Build response from request, with fallback to profile if available.
 
     Args:
         request: Update request
-        profile: Optional profile for fallback values
+        session: Database session for checking Strava connection
+        user_id: User ID for checking Strava connection
+        profile: Optional profile for fallback values (currently unused)
         user_email: Email from auth user
 
     Returns:
@@ -1963,7 +2023,7 @@ def _build_response_from_request(
         height_inches=height_inches_val,  # Integer
         location=request.location,
         unit_system=request.unit_system or "imperial",
-        strava_connected=profile.strava_connected if profile and hasattr(profile, "strava_connected") else False,
+        strava_connected=_get_strava_connected_from_db(session, user_id),
         target_event=target_event_obj,
         goals=request.goals or [],
     )
@@ -1994,14 +2054,14 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
                 # Get email from auth user
                 user_result = session.execute(select(User).where(User.id == user_id)).first()
                 user_email = user_result[0].email if user_result else None
-                return _build_response_from_profile(profile, user_email)
+                return _build_response_from_profile(profile, session, user_email)
             except Exception as refresh_error:
                 error_msg = str(refresh_error).lower()
                 if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
                     logger.warning(f"[API] Cannot refresh profile after update due to missing columns: {refresh_error!r}")
                     user_result = session.execute(select(User).where(User.id == user_id)).first()
                     user_email = user_result[0].email if user_result else None
-                    return _build_response_from_request(request, profile, user_email)
+                    return _build_response_from_request(request, session, user_id, profile, user_email)
                 raise
 
     except HTTPException:
@@ -2013,7 +2073,7 @@ def update_profile(request: AthleteProfileUpdateRequest, user_id: str = Depends(
             with get_session() as session:
                 user_result = session.execute(select(User).where(User.id == user_id)).first()
                 user_email = user_result[0].email if user_result else None
-            return _build_response_from_request(request, None, user_email)
+                return _build_response_from_request(request, session, user_id, None, user_email)
         logger.exception(f"Error updating profile: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to update profile: {e!s}") from e
 
@@ -2572,7 +2632,7 @@ def export_data(
                         "email": user.email,
                         "created_at": user.created_at.isoformat() if user.created_at else None,
                     },
-                    "profile": _build_response_from_profile(profile, user.email).model_dump() if profile else None,
+                    "profile": _build_response_from_profile(profile, session, user.email).model_dump() if profile else None,
                     "settings": {
                         "training_preferences": (
                             TrainingPreferencesResponse(

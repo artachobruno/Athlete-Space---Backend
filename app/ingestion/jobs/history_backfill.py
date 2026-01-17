@@ -354,6 +354,9 @@ def backfill_user_history(user_id: str) -> None:
     - Cursor is monotonic decreasing
     - Cursor is persisted after every successful chunk
 
+    NOTE: This function creates its own database session and is safe to call
+    from background threads. It does not reuse request-scoped session context.
+
     Args:
         user_id: Clerk user ID (string)
 
@@ -364,6 +367,7 @@ def backfill_user_history(user_id: str) -> None:
     """
     logger.info(f"[HISTORY_BACKFILL] Starting history backfill for user_id={user_id}")
 
+    # NOTE: Creates isolated session - safe for background threads
     with get_session() as session:
         account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
 

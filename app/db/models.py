@@ -21,7 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 
 class Base(DeclarativeBase):
@@ -986,6 +986,40 @@ class ConversationMessage(Base):
         Index("idx_messages_conversation_ts", "conversation_id", "ts"),  # Common query: messages by conversation ordered by time
         Index("idx_messages_user_ts", "user_id", "ts"),  # Common query: messages by user ordered by time
     )
+
+    @validates("conversation_id")
+    def _validate_conversation_id(self, key: str, value: str) -> str:
+        """Normalize conversation_id by stripping 'c_' prefix if present.
+        
+        Database stores conversation_id as UUID type, but the model uses String.
+        SQLAlchemy will convert the string to UUID on insert. This validation
+        ensures all code paths (including direct model instantiation) normalize
+        the conversation_id, making it safe even if repository normalization is skipped.
+        
+        Args:
+            key: Field name (always 'conversation_id')
+            value: Conversation ID value (may have 'c_' prefix)
+            
+        Returns:
+            UUID string without prefix (e.g., "2423eccd-17be-406b-b48e-0d71399a762a")
+            
+        Raises:
+            ValueError: If the ID (after stripping prefix) is not a valid UUID
+        """
+        # Strip 'c_' prefix if present
+        if isinstance(value, str) and value.startswith("c_"):
+            value = value[2:]
+        
+        # Validate it's a valid UUID (SQLAlchemy will convert string to UUID for DB)
+        try:
+            uuid.UUID(value)
+        except (ValueError, AttributeError, TypeError) as e:
+            raise ValueError(
+                f"Invalid conversation_id format. Expected format: c_<UUID> or <UUID>. "
+                f"Received: {value}. Error: {e}"
+            ) from e
+        
+        return value
 
 
 class ConversationSummary(Base):

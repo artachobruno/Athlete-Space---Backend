@@ -212,7 +212,7 @@ def get_activities(
         for row in activities_result:
             activity = row[0]
             # Log what the database actually has (after all transformations)
-            logger.info(
+            logger.debug(
                 f"[API OUT] activity_id={activity.id} db_tss={activity.tss} version={getattr(activity, 'tss_version', None)}"
             )
             activities.append({
@@ -276,7 +276,7 @@ def get_activity(
         activity = activity_result[0]
 
         # Log what the database actually has (after all transformations)
-        logger.info(
+        logger.debug(
             "[API OUT] activity_id=%s db_tss=%s version=%s",
             activity.id,
             activity.tss,

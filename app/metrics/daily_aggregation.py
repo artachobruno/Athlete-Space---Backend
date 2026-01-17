@@ -11,7 +11,8 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from typing import cast
 
-from sqlalchemy import func, select, text
+from sqlalchemy import bindparam, func, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, StravaAccount
@@ -108,25 +109,28 @@ def aggregate_daily_training(user_id: str) -> None:
             # Calculate load_score (duration in hours for v1)
             load_score = duration_seconds / 3600.0
 
-            # Serialize summary dict to JSON string for PostgreSQL JSONB
-            summary_json = json.dumps({
+            # Serialize summary dict for PostgreSQL JSONB
+            summary_dict = {
                 "duration_s": duration_seconds,
                 "distance_m": distance_meters,
                 "elevation_m": elevation_gain_meters,
                 "load_score": load_score,
-            })
+            }
+            stmt = text(
+                """
+                INSERT INTO daily_training_summary
+                (user_id, day, summary)
+                VALUES (:user_id, :day, :summary)
+                """
+            ).bindparams(
+                bindparam("summary", type_=JSONB)
+            )
             session.execute(
-                text(
-                    """
-                    INSERT INTO daily_training_summary
-                    (user_id, day, summary)
-                    VALUES (:user_id, :day, :summary::jsonb)
-                    """
-                ),
+                stmt,
                 {
                     "user_id": user_id,
                     "day": day_str,
-                    "summary": summary_json,
+                    "summary": summary_dict,
                 },
             )
 

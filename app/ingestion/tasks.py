@@ -134,6 +134,13 @@ def history_backfill_task(user_id: str) -> None:
     """History backfill task with backward-moving cursor.
 
     Uses StravaAccount model and user_id (string).
+    
+    NOTE: This function is designed to run in background threads. It creates
+    its own database session via get_session() to avoid sharing request-scoped
+    session context. This is safe because:
+    - get_session() creates a new session per call (not reused across threads)
+    - No request-scoped objects are accessed
+    - All database operations use this isolated session
     """
     task_start = time.time()
     logger.info(f"[INGESTION] History backfill task STARTED for user_id={user_id}")
@@ -144,6 +151,7 @@ def history_backfill_task(user_id: str) -> None:
             logger.warning(f"[INGESTION] Could not acquire lock for history backfill: user_id={user_id}")
             return
 
+        # NOTE: Background thread - must use isolated session (not request-scoped)
         with get_session() as session:
             account = session.query(StravaAccount).filter_by(user_id=user_id).first()
             if not account:

@@ -341,20 +341,22 @@ def build_daily_decision_context(
         logger.warning(f"Failed to get overview data: {e}, using minimal context")
         overview = {"today": {}, "metrics": {"ctl": [], "atl": [], "tsb": []}, "data_quality": "insufficient"}
 
-    # Get training summary (canonical source)
+    # Get ALL activities for training history (not just matched ones)
+    # This ensures the LLM sees complete activity history, not just activities matched to planned sessions
+    activities_list = _get_activities_for_context(user_id)
+    training_history = _format_training_history(activities_list, days=14)
+    yesterday_training = _get_yesterday_training(activities_list)
+
+    # Get training summary (canonical source) for other metrics (volume, compliance, etc.)
+    # Note: This is only used for other context fields, not training_history
     try:
         training_summary = build_training_summary(
             user_id=user_id,
             athlete_id=athlete_id,
             window_days=14,
         )
-        training_history = _format_training_history_from_summary(training_summary)
-        yesterday_training = _get_yesterday_training_from_summary(training_summary)
     except Exception as e:
-        logger.warning(f"Failed to get training summary: {e!r}, falling back to activities")
-        activities_list = _get_activities_for_context(user_id)
-        training_history = _format_training_history(activities_list, days=7)
-        yesterday_training = _get_yesterday_training(activities_list)
+        logger.warning(f"Failed to get training summary: {e!r}, continuing without summary metrics")
 
     athlete_state = _build_athlete_state_from_overview(overview)
 

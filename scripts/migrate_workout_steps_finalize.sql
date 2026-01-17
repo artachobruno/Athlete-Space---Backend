@@ -40,6 +40,10 @@ WHERE step_index = 0 AND step_order IS NOT NULL;
 ALTER TABLE workout_steps
 DROP CONSTRAINT IF EXISTS workout_steps_workout_id_step_order_key;
 
+-- Step 5: Make step_order nullable (code no longer sets it)
+ALTER TABLE workout_steps
+ALTER COLUMN step_order DROP NOT NULL;
+
 COMMIT;
 
 -- Verify migration

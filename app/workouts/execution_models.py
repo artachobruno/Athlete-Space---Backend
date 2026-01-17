@@ -11,7 +11,6 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
-from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.models import Base
@@ -56,7 +55,7 @@ class WorkoutExecution(Base):
     distance_meters: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="completed")
     match_type: Mapped[str] = mapped_column(
-        SQLEnum(MatchType, name="workout_match_type", create_constraint=True),
+        String,
         nullable=False,
         default=MatchType.UNMATCHED.value,
     )

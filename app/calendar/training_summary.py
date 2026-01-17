@@ -130,7 +130,7 @@ def build_training_summary(
         planned_sessions = _fetch_planned_sessions(
             session=session,
             user_id=user_id,
-            athlete_id=athlete_id,
+            _athlete_id=athlete_id,
             start_date=window_start,
             end_date=end_date,
         )

@@ -60,7 +60,7 @@ def reconcile_calendar(
         planned_sessions = _fetch_planned_sessions(
             session=session,
             user_id=user_id,
-            athlete_id=athlete_id,
+            _athlete_id=athlete_id,
             start_date=start_date,
             end_date=end_date,
         )

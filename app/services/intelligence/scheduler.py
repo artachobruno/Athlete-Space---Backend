@@ -169,11 +169,16 @@ async def trigger_daily_decision_for_user(
 
         context = build_daily_decision_context(user_id, athlete_id, decision_date)
 
-        # Get weekly intent ID if available
-        week_start = decision_date - timedelta(days=decision_date.weekday())
-        week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
-        weekly_intent_model = store.get_latest_weekly_intent(athlete_id, week_start_dt, active_only=True)
-        weekly_intent_id = weekly_intent_model.id if weekly_intent_model else None
+        # Get weekly intent ID if available (optional - daily decisions work without it)
+        weekly_intent_id = None
+        try:
+            week_start = decision_date - timedelta(days=decision_date.weekday())
+            week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+            weekly_intent_model = store.get_latest_weekly_intent(athlete_id, week_start_dt, active_only=True)
+            weekly_intent_id = weekly_intent_model.id if weekly_intent_model else None
+        except Exception as e:
+            # Weekly intent is optional - log but don't fail
+            logger.debug(f"Weekly intent not available (optional): {e}")
 
         # Generate decision (will regenerate if context changed)
         decision_id = await triggers.maybe_regenerate_daily_decision(

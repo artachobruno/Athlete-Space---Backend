@@ -305,6 +305,11 @@ class IntentStore:
 
         Returns:
             Latest WeeklyIntentModel or None
+
+        Note:
+            Weekly intent is optional. If the athlete_id column doesn't exist yet
+            (migration pending), this will raise an exception which should be handled
+            by the caller.
         """
         with get_session() as session:
             query = select(WeeklyIntentModel).where(

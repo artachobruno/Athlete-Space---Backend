@@ -234,6 +234,9 @@ def _get_activities_for_context(user_id: str) -> list[Activity]:
 def _get_weekly_intent_for_context(athlete_id: int, decision_date: date) -> WeeklyIntent | None:
     """Get weekly intent for context if available.
 
+    Weekly intent is optional - if it's not available or if there's an error,
+    this function returns None and the context will be built without it.
+
     Args:
         athlete_id: Athlete ID
         decision_date: Decision date
@@ -241,15 +244,20 @@ def _get_weekly_intent_for_context(athlete_id: int, decision_date: date) -> Week
     Returns:
         WeeklyIntent if available, None otherwise
     """
-    store = IntentStore()
-    week_start = decision_date - timedelta(days=decision_date.weekday())
-    week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
-    weekly_intent_model = store.get_latest_weekly_intent(athlete_id, week_start_dt, active_only=True)
-    if weekly_intent_model:
-        try:
-            return WeeklyIntent(**weekly_intent_model.intent_data)
-        except Exception as e:
-            logger.warning(f"Failed to parse weekly intent: {e}")
+    try:
+        store = IntentStore()
+        week_start = decision_date - timedelta(days=decision_date.weekday())
+        week_start_dt = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+        weekly_intent_model = store.get_latest_weekly_intent(athlete_id, week_start_dt, active_only=True)
+        if weekly_intent_model:
+            try:
+                return WeeklyIntent(**weekly_intent_model.intent_data)
+            except Exception as e:
+                logger.warning(f"Failed to parse weekly intent: {e}")
+    except Exception as e:
+        # Weekly intent is optional - log but don't fail if there's an error
+        # This can happen if the athlete_id column doesn't exist yet (migration pending)
+        logger.debug(f"Weekly intent not available (optional): {e}")
     return None
 
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from loguru import logger
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, InternalError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.models import UserSettings
@@ -151,9 +151,20 @@ async def create_structured_workout_from_manual_session(
             # user_settings remains None, which is handled gracefully downstream
         else:
             # Re-raise if it's a different programming error
+            # This will abort the transaction, which is correct - the caller will handle rollback
             raise
+    except SQLAlchemyError as e:
+        # ANY SQLAlchemy database error (except the specific ProgrammingError case above)
+        # may abort the transaction - must re-raise so caller can handle rollback
+        # Otherwise, subsequent operations will fail with "current transaction is aborted"
+        logger.warning(
+            f"Database error while fetching user settings (transaction will be aborted): {e!r}",
+            user_id=user_id,
+            error_type=type(e).__name__,
+        )
+        raise
     except Exception as e:
-        # Catch any other database errors to prevent transaction abortion
+        # Catch any other non-database errors that won't abort the transaction
         # Log the error but continue without user settings
         logger.warning(
             f"Failed to fetch user settings for target calculation: {e!r}. "

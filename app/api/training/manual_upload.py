@@ -3,6 +3,8 @@
 Phase 2 & 3: Fallback endpoints for manual uploads (non-chat).
 """
 
+from __future__ import annotations
+
 import os
 import uuid
 from datetime import date as date_type
@@ -12,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
 from app.coach.tools.session_planner import save_sessions_to_database
@@ -329,6 +332,101 @@ class ManualSessionResponse(BaseModel):
     message: str
 
 
+async def _create_workout_for_manual_session(
+    session: Session,
+    user_id: str,
+    athlete_id: int,
+    request: ManualSessionRequest,
+) -> Workout:
+    """Create a workout for a manual session upload.
+
+    Args:
+        session: Database session
+        user_id: User ID
+        athlete_id: Athlete ID
+        request: Manual session request
+
+    Returns:
+        Created Workout instance
+
+    Raises:
+        HTTPException: If workout creation fails
+    """
+    if request.notes and request.notes.strip():
+        try:
+            return await create_structured_workout_from_manual_session(
+                session=session,
+                user_id=user_id,
+                _athlete_id=athlete_id,
+                notes_raw=request.notes,
+                session_type=request.type,
+                distance_km=request.distance_km,
+                duration_minutes=request.duration_minutes,
+            )
+        except Exception as orchestration_error:
+            logger.exception(
+                "Manual session orchestration failed",
+                user_id=user_id,
+                error_type=type(orchestration_error).__name__,
+                error_message=str(orchestration_error),
+            )
+            # Rollback the transaction to clear any aborted state
+            try:
+                session.rollback()
+            except Exception as rollback_error:
+                logger.warning(
+                    f"Error during rollback (non-fatal): {rollback_error}",
+                    user_id=user_id,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Manual session orchestration failed: {type(orchestration_error).__name__}: {orchestration_error}",
+            ) from orchestration_error
+
+    # If no notes, create simple workout (fallback)
+    workout_id = str(uuid.uuid4())
+    sport_map: dict[str, str] = {
+        "run": "run",
+        "running": "run",
+        "ride": "bike",
+        "bike": "bike",
+        "cycling": "bike",
+        "swim": "swim",
+        "swimming": "swim",
+    }
+    sport = sport_map.get(request.type.lower(), "run")
+    workout_name = request.title if request.title else f"{sport.capitalize()} Workout"
+    workout = Workout(
+        id=workout_id,
+        user_id=user_id,
+        sport=sport,
+        name=workout_name,
+        description=request.notes,
+        structure={},
+        tags={},
+        source="manual",
+        source_ref=None,
+        raw_notes=request.notes,
+        parse_status=None,
+    )
+    session.add(workout)
+    try:
+        session.flush()
+    except Exception as flush_error:
+        logger.exception(
+            "Failed to flush workout",
+            user_id=user_id,
+            error_type=type(flush_error).__name__,
+            error_message=str(flush_error),
+        )
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create workout: {type(flush_error).__name__}: {flush_error}",
+        ) from flush_error
+    return workout
+
+
 class ManualWeekRequest(BaseModel):
     """Request model for manual week upload."""
 
@@ -473,82 +571,12 @@ async def upload_manual_session(
                     _raise_duplicate_session_error()
 
                 # Step 1-3: Create Workout FIRST (extract → LLM → create structured workout)
-                # Only create structured workout if notes_raw exists
-                if request.notes and request.notes.strip():
-                    try:
-                        workout = await create_structured_workout_from_manual_session(
-                            session=session,
-                            user_id=user_id,
-                            _athlete_id=athlete_id,
-                            notes_raw=request.notes,
-                            session_type=request.type,
-                            distance_km=request.distance_km,
-                            duration_minutes=request.duration_minutes,
-                        )
-                    except Exception as orchestration_error:
-                        logger.exception(
-                            "Manual session orchestration failed",
-                            user_id=user_id,
-                            error_type=type(orchestration_error).__name__,
-                            error_message=str(orchestration_error),
-                        )
-                        # Rollback the transaction to clear any aborted state
-                        # This ensures the transaction is clean before we exit
-                        try:
-                            session.rollback()
-                        except Exception as rollback_error:
-                            logger.warning(
-                                f"Error during rollback (non-fatal): {rollback_error}",
-                                user_id=user_id,
-                            )
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Manual session orchestration failed: {type(orchestration_error).__name__}: {orchestration_error}",
-                        ) from orchestration_error
-                else:
-                    # If no notes, create simple workout (fallback)
-                    # Create a minimal workout without structured steps
-                    workout_id = str(uuid.uuid4())
-                    sport_map: dict[str, str] = {
-                        "run": "run",
-                        "running": "run",
-                        "ride": "bike",
-                        "bike": "bike",
-                        "cycling": "bike",
-                        "swim": "swim",
-                        "swimming": "swim",
-                    }
-                    sport = sport_map.get(request.type.lower(), "run")
-
-                    workout_name = request.title if request.title else f"{sport.capitalize()} Workout"
-                    workout = Workout(
-                        id=workout_id,
-                        user_id=user_id,
-                        sport=sport,
-                        name=workout_name,
-                        description=request.notes,
-                        structure={},
-                        tags={},
-                        source="manual",
-                        source_ref=None,
-                        raw_notes=request.notes,
-                        parse_status=None,
-                    )
-                    session.add(workout)
-                    try:
-                        session.flush()
-                    except Exception as flush_error:
-                        logger.exception(
-                            "Failed to flush workout",
-                            user_id=user_id,
-                            error_type=type(flush_error).__name__,
-                            error_message=str(flush_error),
-                        )
-                        session.rollback()
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to create workout: {type(flush_error).__name__}: {flush_error}",
-                        ) from flush_error
+                workout = await _create_workout_for_manual_session(
+                    session=session,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    request=request,
+                )
 
                 # HARD GUARD: Ensure workout.id exists before creating PlannedSession
                 _ensure_workout_id_exists(workout)

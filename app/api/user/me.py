@@ -413,8 +413,12 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
             # Check Strava connection from strava_accounts table (source of truth)
             strava_connected = False
             try:
-                strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
-                strava_connected = strava_account is not None
+                strava_account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+                strava_connected = strava_account_result is not None
+                if strava_connected:
+                    logger.info(f"[API] /me: Strava connected for user_id={user_id}")
+                else:
+                    logger.debug(f"[API] /me: Strava not connected for user_id={user_id}")
             except Exception as e:
                 logger.warning(f"[API] /me: Failed to check Strava connection for user_id={user_id}: {e}")
                 strava_connected = False
@@ -519,6 +523,7 @@ def get_me(request: Request, user_id: str | None = Depends(get_optional_user_id)
                 "timezone": user_timezone,
                 "role": user_role if isinstance(user_role, str) else user_role.value if hasattr(user_role, "value") else str(user_role),
                 "onboarding_complete": onboarding_complete,
+                "strava_connected": strava_connected,  # Top-level field for frontend convenience
                 "profile": profile_response,
                 "training_preferences": training_prefs_response,
                 "notifications": notifications_response,
@@ -1621,8 +1626,8 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
             session.expunge(profile)
 
             date_of_birth_str = None
-            if profile.date_of_birth:
-                date_of_birth_str = profile.date_of_birth.date().isoformat()
+            if profile.birthdate:
+                date_of_birth_str = profile.birthdate.isoformat() if isinstance(profile.birthdate, date) else profile.birthdate
 
             # Convert target_event from dict to TargetEvent model if present
             target_event_obj = None
@@ -1640,8 +1645,12 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
             # Check Strava connection from strava_accounts table (source of truth)
             strava_connected = False
             try:
-                strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
-                strava_connected = strava_account is not None
+                strava_account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+                strava_connected = strava_account_result is not None
+                if strava_connected:
+                    logger.info(f"[API] /me/profile: Strava connected for user_id={user_id}")
+                else:
+                    logger.debug(f"[API] /me/profile: Strava not connected for user_id={user_id}")
             except Exception as e:
                 logger.warning(f"[API] /me/profile: Failed to check Strava connection for user_id={user_id}: {e}")
                 strava_connected = False
@@ -1734,14 +1743,14 @@ def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdat
 
     if request.date_of_birth is not None:
         try:
-            parsed_date = datetime.strptime(request.date_of_birth, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            profile.date_of_birth = parsed_date
+            parsed_date = date.fromisoformat(request.date_of_birth)
+            profile.birthdate = parsed_date
         except ValueError as e:
             logger.warning(f"Failed to parse date_of_birth: {e}")
             raise HTTPException(status_code=400, detail=f"Invalid date format: {request.date_of_birth}. Expected YYYY-MM-DD") from e
     elif request.date_of_birth is None and hasattr(request, "date_of_birth"):
         # Explicit None clears the field
-        profile.date_of_birth = None
+        profile.birthdate = None
 
     profile.weight_kg = request.weight_kg
     if request.weight_kg is not None:
@@ -1804,10 +1813,10 @@ def _parse_date_of_birth_from_profile(profile: AthleteProfile, request: AthleteP
     if request.date_of_birth:
         return request.date_of_birth
 
-    if hasattr(profile, "date_of_birth") and profile.date_of_birth:
-        if hasattr(profile.date_of_birth, "date"):
-            return profile.date_of_birth.date().isoformat()
-        return str(profile.date_of_birth)
+    if hasattr(profile, "birthdate") and profile.birthdate:
+        if isinstance(profile.birthdate, date):
+            return profile.birthdate.isoformat()
+        return str(profile.birthdate)
 
     return None
 
@@ -1932,12 +1941,15 @@ def _get_strava_connected_from_db(session: Session, user_id: str) -> bool:
         True if Strava account exists, False otherwise
     """
     try:
-        strava_account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+        strava_account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+        connected = strava_account_result is not None
+        if connected:
+            logger.debug(f"[API] Strava connected for user_id={user_id}")
     except Exception as e:
         logger.warning(f"[API] Failed to check Strava connection for user_id={user_id}: {e}")
         return False
     else:
-        return strava_account is not None
+        return connected
 
 
 def _build_response_from_profile(profile: AthleteProfile, session: Session, user_email: str | None = None) -> AthleteProfileResponse:
@@ -1952,8 +1964,8 @@ def _build_response_from_profile(profile: AthleteProfile, session: Session, user
         AthleteProfileResponse
     """
     date_of_birth_str = None
-    if profile.date_of_birth:
-        date_of_birth_str = profile.date_of_birth.date().isoformat()
+    if profile.birthdate:
+        date_of_birth_str = profile.birthdate.isoformat() if isinstance(profile.birthdate, date) else str(profile.birthdate)
 
     target_event_obj = None
     if profile.target_event:

@@ -191,6 +191,7 @@ def ensure_workout(
         # Create workout execution if activity_id is provided
         if activity_id:
             execution = WorkoutExecution(
+                user_id=user_id,
                 workout_id=workout.id,
                 activity_id=activity_id,
                 planned_session_id=planned_session_id,

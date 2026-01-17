@@ -24,6 +24,7 @@ class WorkoutExecution(Base):
 
     Schema:
     - id: UUID primary key
+    - user_id: Foreign key to users.id (required, NOT NULL)
     - workout_id: Foreign key to workouts.id
     - activity_id: Foreign key to activities.id
     - planned_session_id: Foreign key to planned_sessions.id (if matched to planned session)
@@ -36,6 +37,7 @@ class WorkoutExecution(Base):
     __tablename__ = "workout_executions"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, index=True)
     workout_id: Mapped[str] = mapped_column(String, ForeignKey("workouts.id"), nullable=False, index=True)
     activity_id: Mapped[str] = mapped_column(String, ForeignKey("activities.id"), nullable=False, index=True)
     planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)

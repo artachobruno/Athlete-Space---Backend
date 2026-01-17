@@ -273,6 +273,7 @@ class WorkoutFactory:
         distance_meters = int(activity.distance_meters) if activity.distance_meters else None
 
         execution = WorkoutExecution(
+            user_id=workout.user_id,
             workout_id=workout.id,
             activity_id=activity.id,
             planned_session_id=None,
@@ -334,6 +335,7 @@ class WorkoutFactory:
         distance_meters = int(activity.distance_meters) if activity.distance_meters else None
 
         execution = WorkoutExecution(
+            user_id=workout.user_id,
             workout_id=workout.id,
             activity_id=activity.id,
             planned_session_id=None,
@@ -420,6 +422,7 @@ class WorkoutFactory:
         # Create workout execution if activity_id is provided
         if activity_id:
             execution = WorkoutExecution(
+                user_id=user_id,
                 workout_id=workout_id,
                 activity_id=activity_id,
                 planned_session_id=planned_session_id,

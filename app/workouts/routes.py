@@ -791,6 +791,7 @@ def attach_activity(
 
         # Create execution
         execution = WorkoutExecution(
+            user_id=user_id,
             workout_id=str(workout_id),
             activity_id=str(request.activity_id),
         )

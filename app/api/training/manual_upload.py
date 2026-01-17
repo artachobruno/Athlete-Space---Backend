@@ -492,7 +492,15 @@ async def upload_manual_session(
                             error_type=type(orchestration_error).__name__,
                             error_message=str(orchestration_error),
                         )
-                        session.rollback()
+                        # Rollback the transaction to clear any aborted state
+                        # This ensures the transaction is clean before we exit
+                        try:
+                            session.rollback()
+                        except Exception as rollback_error:
+                            logger.warning(
+                                f"Error during rollback (non-fatal): {rollback_error}",
+                                user_id=user_id,
+                            )
                         raise HTTPException(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"Manual session orchestration failed: {type(orchestration_error).__name__}: {orchestration_error}",
@@ -527,7 +535,20 @@ async def upload_manual_session(
                         parse_status=None,
                     )
                     session.add(workout)
-                    session.flush()
+                    try:
+                        session.flush()
+                    except Exception as flush_error:
+                        logger.exception(
+                            "Failed to flush workout",
+                            user_id=user_id,
+                            error_type=type(flush_error).__name__,
+                            error_message=str(flush_error),
+                        )
+                        session.rollback()
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to create workout: {type(flush_error).__name__}: {flush_error}",
+                        ) from flush_error
 
                 # HARD GUARD: Ensure workout.id exists before creating PlannedSession
                 _ensure_workout_id_exists(workout)
@@ -565,12 +586,24 @@ async def upload_manual_session(
                 )
 
                 session.add(planned_session)
-                session.commit()
-                session.refresh(planned_session)
+                try:
+                    session.flush()  # Flush to get planned_session.id
+                except Exception as flush_error:
+                    logger.exception(
+                        "Failed to flush planned session",
+                        user_id=user_id,
+                        error_type=type(flush_error).__name__,
+                        error_message=str(flush_error),
+                    )
+                    session.rollback()
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to create planned session: {type(flush_error).__name__}: {flush_error}",
+                    ) from flush_error
 
                 # Update workout.planned_session_id now that PlannedSession exists
                 workout.planned_session_id = planned_session.id
-                session.commit()
+                # No need to flush again - context manager will commit at the end
 
                 session_id = planned_session.id
                 workout_id = workout.id

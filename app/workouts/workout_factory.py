@@ -473,6 +473,10 @@ class WorkoutFactory:
                     current_order += 1
                     session.add(db_step)
 
+        # Flush after adding all steps to detect any errors early
+        # This ensures we catch constraint violations or other errors before commit
+        session.flush()
+
         logger.info(
             "Created workout from structured workout",
             workout_id=workout_id,

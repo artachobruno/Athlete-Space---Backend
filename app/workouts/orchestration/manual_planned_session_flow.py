@@ -152,6 +152,15 @@ async def create_structured_workout_from_manual_session(
         else:
             # Re-raise if it's a different programming error
             raise
+    except Exception as e:
+        # Catch any other database errors to prevent transaction abortion
+        # Log the error but continue without user settings
+        logger.warning(
+            f"Failed to fetch user settings for target calculation: {e!r}. "
+            f"Continuing without user settings.",
+            user_id=user_id,
+        )
+        # user_settings remains None, which is handled gracefully downstream
 
     # Step 4: WorkoutFactory.create_from_structured_workout()
     # NOTE: planned_session_id is None here - it will be set when PlannedSession is created

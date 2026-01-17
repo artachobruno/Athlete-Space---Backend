@@ -20,7 +20,7 @@ from app.calendar.reconciliation import ReconciliationResult, SessionStatus
 from app.db.models import Activity, PlannedSession
 from app.db.session import get_session
 from app.pairing.session_links import get_link_for_planned, upsert_link
-from app.workouts.execution_models import WorkoutExecution
+from app.workouts.execution_models import MatchType, WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -144,7 +144,10 @@ def auto_match_sessions(
                     )
 
                 # Step 4: Attach activity to planned workout (creates execution if needed)
-                WorkoutFactory.attach_activity(session, planned_workout, activity)
+                # Pass planned_session_id and match_type='auto' for auto-matched executions
+                WorkoutFactory.attach_activity(
+                    session, planned_workout, activity, planned_session_id=planned_session.id, match_type=MatchType.AUTO.value
+                )
 
                 # Step 5: Note - activity.workout_id does not exist in schema v2
                 # Relationships go through session_links table

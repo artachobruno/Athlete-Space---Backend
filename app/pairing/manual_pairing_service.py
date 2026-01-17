@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Activity, PairingDecision, PlannedSession
 from app.pairing.session_links import get_link_for_activity, unlink_by_activity, upsert_link
 from app.plans.reconciliation.service import reconcile_activity_if_paired
+from app.workouts.execution_models import MatchType
 from app.workouts.workout_factory import WorkoutFactory
 
 
@@ -148,8 +149,15 @@ def manual_pair(
         # Relationships go through session_links table (planned_sessions <-> session_links <-> activities)
         if workout:
             # Create WorkoutExecution (triggers compliance calculation)
+            # Pass match_type='manual' for manually paired executions
             try:
-                WorkoutFactory.attach_activity(session, workout, activity)
+                WorkoutFactory.attach_activity(
+                    session,
+                    workout,
+                    activity,
+                    planned_session_id=planned_session_id,
+                    match_type=MatchType.MANUAL.value,
+                )
                 logger.debug(
                     f"Created execution and compliance for workout {workout.id}",
                 )

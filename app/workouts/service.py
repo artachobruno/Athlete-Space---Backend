@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PlannedSession
 from app.db.session import get_session
-from app.workouts.execution_models import WorkoutExecution
+from app.workouts.execution_models import MatchType, WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
 from app.workouts.parsing_service import ensure_workout_steps
 from app.workouts.schemas import WorkoutInputSchema
@@ -190,6 +190,7 @@ def ensure_workout(
 
         # Create workout execution if activity_id is provided
         if activity_id:
+            match_type = MatchType.UNMATCHED.value if planned_session_id is None else MatchType.AUTO.value
             execution = WorkoutExecution(
                 user_id=user_id,
                 workout_id=workout.id,
@@ -197,7 +198,8 @@ def ensure_workout(
                 planned_session_id=planned_session_id,
                 duration_seconds=total_duration_seconds,
                 distance_meters=total_distance_meters,
-                status="matched",
+                status="completed",
+                match_type=match_type,
             )
             session.add(execution)
             session.flush()

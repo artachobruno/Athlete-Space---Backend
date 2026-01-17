@@ -6,13 +6,23 @@ computing compliance metrics between planned workouts and executed activities.
 
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.models import Base
+
+
+class MatchType(enum.Enum):
+    """Match type for workout executions - planner-level semantics."""
+
+    UNMATCHED = "unmatched"
+    AUTO = "auto"
+    MANUAL = "manual"
 
 
 class WorkoutExecution(Base):
@@ -30,7 +40,8 @@ class WorkoutExecution(Base):
     - planned_session_id: Foreign key to planned_sessions.id (if matched to planned session)
     - duration_seconds: Actual duration of execution (nullable)
     - distance_meters: Actual distance of execution (nullable)
-    - status: Execution status (matched, analyzed, failed)
+    - status: Execution status (completed, partial, aborted, failed) - execution outcome only
+    - match_type: Match type (unmatched, auto, manual) - planner-level semantics
     - created_at: Record creation timestamp
     """
 
@@ -43,7 +54,12 @@ class WorkoutExecution(Base):
     planned_session_id: Mapped[str | None] = mapped_column(String, ForeignKey("planned_sessions.id"), nullable=True, index=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     distance_meters: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    status: Mapped[str] = mapped_column(String, nullable=False, default="matched")
+    status: Mapped[str] = mapped_column(String, nullable=False, default="completed")
+    match_type: Mapped[str] = mapped_column(
+        SQLEnum(MatchType, name="workout_match_type", create_constraint=True),
+        nullable=False,
+        default=MatchType.UNMATCHED.value,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 

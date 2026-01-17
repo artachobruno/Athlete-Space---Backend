@@ -20,7 +20,7 @@ from app.workouts.canonical import StructuredWorkout
 from app.workouts.canonical import WorkoutStep as CanonicalWorkoutStep
 from app.workouts.compliance_service import ComplianceService
 from app.workouts.conversion import canonical_step_to_db_step
-from app.workouts.execution_models import WorkoutExecution
+from app.workouts.execution_models import MatchType, WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
 
 # One mile in meters (exact conversion)
@@ -279,7 +279,8 @@ class WorkoutFactory:
             planned_session_id=None,
             duration_seconds=duration_seconds,
             distance_meters=distance_meters,
-            status="matched",
+            status="completed",
+            match_type=MatchType.UNMATCHED.value,
         )
         session.add(execution)
         session.flush()
@@ -295,7 +296,13 @@ class WorkoutFactory:
         return workout
 
     @staticmethod
-    def attach_activity(session: Session, workout: Workout, activity: Activity) -> WorkoutExecution:
+    def attach_activity(
+        session: Session,
+        workout: Workout,
+        activity: Activity,
+        planned_session_id: str | None = None,
+        match_type: str | None = None,
+    ) -> WorkoutExecution:
         """Attach activity to workout by creating workout execution.
 
         Creates a WorkoutExecution linking workout to activity.
@@ -306,6 +313,8 @@ class WorkoutFactory:
             session: Database session (must be in transaction)
             workout: Workout instance
             activity: Activity instance
+            planned_session_id: Optional planned session ID if execution is matched to a planned session
+            match_type: Match type (unmatched, auto, manual). If None, inferred from planned_session_id
 
         Returns:
             WorkoutExecution instance
@@ -334,14 +343,19 @@ class WorkoutFactory:
         duration_seconds = int(activity.duration_seconds) if activity.duration_seconds else None
         distance_meters = int(activity.distance_meters) if activity.distance_meters else None
 
+        # Infer match_type if not provided
+        if match_type is None:
+            match_type = MatchType.UNMATCHED.value if planned_session_id is None else MatchType.AUTO.value
+
         execution = WorkoutExecution(
             user_id=workout.user_id,
             workout_id=workout.id,
             activity_id=activity.id,
-            planned_session_id=None,
+            planned_session_id=planned_session_id,
             duration_seconds=duration_seconds,
             distance_meters=distance_meters,
-            status="matched",
+            status="completed",
+            match_type=match_type,
         )
         session.add(execution)
         session.flush()
@@ -421,6 +435,7 @@ class WorkoutFactory:
 
         # Create workout execution if activity_id is provided
         if activity_id:
+            match_type = MatchType.UNMATCHED.value if planned_session_id is None else MatchType.AUTO.value
             execution = WorkoutExecution(
                 user_id=user_id,
                 workout_id=workout_id,
@@ -428,7 +443,8 @@ class WorkoutFactory:
                 planned_session_id=planned_session_id,
                 duration_seconds=structured.total_duration_seconds,
                 distance_meters=structured.total_distance_meters,
-                status="matched",
+                status="completed",
+                match_type=match_type,
             )
             session.add(execution)
             session.flush()

@@ -171,14 +171,14 @@ async def process_coach_chat(
         settings = db.query(UserSettings).filter_by(user_id=user_id).first()
         if settings:
             training_preferences = TrainingPreferencesData(
-                training_consistency=settings.consistency,
-                years_structured=settings.years_of_training,
-                primary_sports=settings.primary_sports or [],
-                available_days=settings.available_days or [],
-                weekly_training_hours=settings.weekly_hours,
-                primary_training_goal=settings.goal,
-                training_focus=settings.training_focus,
-                injury_flag=settings.injury_history or False,
+                training_consistency=getattr(settings, "consistency", None),
+                years_structured=getattr(settings, "years_of_training", None),
+                primary_sports=getattr(settings, "primary_sports", None) or [],
+                available_days=getattr(settings, "available_days", None) or [],
+                weekly_training_hours=getattr(settings, "weekly_hours", None),
+                primary_training_goal=getattr(settings, "goal", None),
+                training_focus=getattr(settings, "training_focus", None),
+                injury_flag=getattr(settings, "injury_history", None) or False,
             )
 
     # Create turn-scoped execution guard (prevents duplicate tool execution within a turn)
@@ -383,14 +383,14 @@ def dispatch_coach_chat(
             settings = db.query(UserSettings).filter_by(user_id=user_id).first()
             if settings:
                 training_preferences = TrainingPreferencesData(
-                    training_consistency=settings.consistency,
-                    years_structured=settings.years_of_training,
-                    primary_sports=settings.primary_sports or [],
-                    available_days=settings.available_days or [],
-                    weekly_training_hours=settings.weekly_hours,
-                    primary_training_goal=settings.goal,
-                    training_focus=settings.training_focus,
-                    injury_flag=settings.injury_history or False,
+                    training_consistency=getattr(settings, "consistency", None),
+                    years_structured=getattr(settings, "years_of_training", None),
+                    primary_sports=getattr(settings, "primary_sports", None) or [],
+                    available_days=getattr(settings, "available_days", None) or [],
+                    weekly_training_hours=getattr(settings, "weekly_hours", None),
+                    primary_training_goal=getattr(settings, "goal", None),
+                    training_focus=getattr(settings, "training_focus", None),
+                    injury_flag=getattr(settings, "injury_history", None) or False,
                 )
 
         # Create turn-scoped execution guard (prevents duplicate tool execution within a turn)

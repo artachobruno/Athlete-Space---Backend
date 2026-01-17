@@ -188,8 +188,9 @@ def _determine_before_parameter(account: StravaAccount, session) -> int:
         before = oldest_activity_timestamp
     elif account.oldest_synced_at is not None:
         # Fallback to cursor if no activities in DB yet
-        before = account.oldest_synced_at
-        logger.info(f"[HISTORY_BACKFILL] No activities in DB, using cursor: before={before}")
+        # Convert datetime to epoch seconds for API call
+        before = int(account.oldest_synced_at.timestamp())
+        logger.info(f"[HISTORY_BACKFILL] No activities in DB, using cursor: before={before} ({account.oldest_synced_at.isoformat()})")
     else:
         # First time: start from current time
         before = int(time.time())
@@ -319,17 +320,29 @@ def _update_cursor(session, account: StravaAccount, activities: list, user_id: s
     Raises:
         HistoryBackfillError: If cursor validation fails
     """
-    new_oldest = min(int(act.start_date.timestamp()) for act in activities)
-    logger.info(f"[HISTORY_BACKFILL] Updating cursor: oldest_synced_at={account.oldest_synced_at} -> {new_oldest}")
+    # Convert to datetime (UTC) - database expects TIMESTAMPTZ, not epoch seconds
+    new_oldest_datetime = min(act.start_date for act in activities)
+    # Ensure timezone-aware
+    if new_oldest_datetime.tzinfo is None:
+        new_oldest_datetime = new_oldest_datetime.replace(tzinfo=timezone.utc)
+    
+    new_oldest_epoch = int(new_oldest_datetime.timestamp())
+    logger.info(
+        f"[HISTORY_BACKFILL] Updating cursor: oldest_synced_at={account.oldest_synced_at} -> {new_oldest_datetime.isoformat()} (epoch: {new_oldest_epoch})"
+    )
 
-    if account.oldest_synced_at is not None and new_oldest >= account.oldest_synced_at:
-        logger.error(f"[HISTORY_BACKFILL] Cursor violation: new_oldest={new_oldest} >= current={account.oldest_synced_at}")
-        raise HistoryBackfillError("Cursor moved forward - this should never happen")
+    if account.oldest_synced_at is not None:
+        current_epoch = int(account.oldest_synced_at.timestamp())
+        if new_oldest_epoch >= current_epoch:
+            logger.error(
+                f"[HISTORY_BACKFILL] Cursor violation: new_oldest={new_oldest_epoch} >= current={current_epoch}"
+            )
+            raise HistoryBackfillError("Cursor moved forward - this should never happen")
 
-    account.oldest_synced_at = new_oldest
+    account.oldest_synced_at = new_oldest_datetime
     session.add(account)
     session.commit()
-    logger.info(f"[HISTORY_BACKFILL] Cursor updated successfully for user_id={user_id}, oldest_synced_at={new_oldest}")
+    logger.info(f"[HISTORY_BACKFILL] Cursor updated successfully for user_id={user_id}, oldest_synced_at={new_oldest_datetime.isoformat()}")
 
 
 def backfill_user_history(user_id: str) -> None:

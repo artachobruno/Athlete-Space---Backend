@@ -267,7 +267,7 @@ class StravaAccount(Base):
     - refresh_token: Encrypted refresh token (encrypted at rest)
     - expires_at: Token expiration timestamp (Unix epoch seconds)
     - last_sync_at: Last successful sync timestamp (datetime with timezone, nullable)
-    - oldest_synced_at: Earliest activity timestamp synced (Unix epoch seconds, nullable)
+    - oldest_synced_at: Earliest activity timestamp synced (TIMESTAMPTZ, nullable)
     - full_history_synced: Whether full history backfill is complete (default: False)
     - sync_success_count: Number of successful syncs (for reliability tracking)
     - sync_failure_count: Number of failed syncs (for reliability tracking)
@@ -283,7 +283,7 @@ class StravaAccount(Base):
     refresh_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
     expires_at: Mapped[int] = mapped_column(Integer, nullable=False)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    oldest_synced_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    oldest_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     full_history_synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sync_success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sync_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

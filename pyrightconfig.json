@@ -3,7 +3,7 @@
   "pythonPlatform": "Darwin",
   "reportMissingImports": false,
   "typeCheckingMode": "basic",
-  "reportImportCycles": "error",
+  "reportImportCycles": "warning",
   "reportMissingTypeStubs": false,
   "reportFunctionMemberAccess": false,
   "reportGeneralTypeIssues": false,

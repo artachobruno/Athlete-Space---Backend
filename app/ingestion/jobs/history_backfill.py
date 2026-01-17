@@ -9,6 +9,8 @@ Implements a safe backward-moving cursor that:
 
 from __future__ import annotations
 
+import asyncio
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -25,6 +27,7 @@ from app.db.session import get_session
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.daily_aggregation import aggregate_daily_training
+from app.services.intelligence.scheduler import trigger_daily_decision_for_user
 from app.utils.sport_utils import normalize_sport_type
 
 
@@ -305,6 +308,38 @@ def _save_activities_batch(session, activities: list, user_id: str) -> int:
         session.rollback()
         raise HistoryBackfillError(f"Failed to commit activities: {e}") from e
 
+    # Trigger daily decision regeneration if any activity is for today
+    try:
+        today = datetime.now(timezone.utc).date()
+        has_today_activity = any(
+            (act.start_date.date() if hasattr(act.start_date, "date") else act.start_date) == today
+            for act in activities
+        )
+        if has_today_activity and saved_count > 0:
+            # Get athlete_id from user_id
+            account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+            if account:
+                athlete_id = int(account[0].athlete_id)
+                # Trigger asynchronously in background thread (fire and forget)
+                # Capture today in closure to avoid B023
+                today_date = today
+
+                def _trigger_decision():
+                    try:
+                        asyncio.run(trigger_daily_decision_for_user(user_id, athlete_id, today_date))
+                    except Exception as e:
+                        logger.warning(f"[HISTORY_BACKFILL] Background daily decision trigger failed: {e}")
+
+                thread = threading.Thread(target=_trigger_decision, daemon=True)
+                thread.start()
+                logger.debug(
+                    f"[HISTORY_BACKFILL] Triggered daily decision regeneration for user_id={user_id}, "
+                    f"athlete_id={athlete_id}, activity_date={today.isoformat()}"
+                )
+    except Exception as e:
+        # Don't fail batch save if decision trigger fails - just log the error
+        logger.warning(f"[HISTORY_BACKFILL] Failed to trigger daily decision for user {user_id}: {e}")
+
     return saved_count
 
 
@@ -325,10 +360,11 @@ def _update_cursor(session, account: StravaAccount, activities: list, user_id: s
     # Ensure timezone-aware
     if new_oldest_datetime.tzinfo is None:
         new_oldest_datetime = new_oldest_datetime.replace(tzinfo=timezone.utc)
-    
+
     new_oldest_epoch = int(new_oldest_datetime.timestamp())
     logger.info(
-        f"[HISTORY_BACKFILL] Updating cursor: oldest_synced_at={account.oldest_synced_at} -> {new_oldest_datetime.isoformat()} (epoch: {new_oldest_epoch})"
+        f"[HISTORY_BACKFILL] Updating cursor: oldest_synced_at={account.oldest_synced_at} -> "
+        f"{new_oldest_datetime.isoformat()} (epoch: {new_oldest_epoch})"
     )
 
     if account.oldest_synced_at is not None:

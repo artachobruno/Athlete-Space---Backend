@@ -338,30 +338,62 @@ async def get_daily_decision(
         # Try fallback to inactive decision
         decision_model = store.get_latest_daily_decision(user_id, decision_date_dt, active_only=False)
         if decision_model is None:
-            logger.debug(f"No decision found for user_id={user_id}, date={decision_date.isoformat()}, returning empty response")
-            # Return empty but valid response instead of generating on-demand
-            # On-demand generation should happen via background jobs, not API calls
-            return DailyDecisionResponse(
-                id="",
-                user_id=user_id,
-                decision=DailyDecision(
-                    recommendation="rest",
-                    volume_hours=None,
-                    intensity_focus=None,
-                    session_type="Rest day",
-                    risk_level="none",
-                    risk_notes=None,
-                    confidence=Confidence(score=0.0, explanation="Decision not yet generated"),
-                    explanation="The coach is still analyzing your training data. Recommendations will be available soon.",
-                    decision_date=decision_date,
+            # For today's date, attempt on-demand generation for better UX
+            # Historical dates still rely on background jobs
+            today = datetime.now(timezone.utc).date()
+            if decision_date == today:
+                try:
+                    athlete_id = _get_athlete_id_from_user(user_id)
+                    logger.info(
+                        f"No decision found for today, attempting on-demand generation "
+                        f"for user_id={user_id}, athlete_id={athlete_id}"
+                    )
+                    decision_model = await _generate_daily_decision_on_demand(
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                        decision_date=decision_date,
+                        decision_date_dt=decision_date_dt,
+                    )
+                except HTTPException:
+                    # If generation fails, fall through to return placeholder
+                    logger.warning(
+                        f"On-demand generation failed for user_id={user_id}, "
+                        f"decision_date={decision_date.isoformat()}, returning placeholder"
+                    )
+                except Exception as e:
+                    # Log but don't fail - return placeholder instead
+                    logger.exception(
+                        f"Unexpected error during on-demand generation for user_id={user_id}, "
+                        f"decision_date={decision_date.isoformat()}: {e}"
+                    )
+
+            # If still no decision (either not today, or generation failed), return placeholder
+            if decision_model is None:
+                logger.debug(
+                    f"No decision found for user_id={user_id}, date={decision_date.isoformat()}, "
+                    f"returning placeholder (is_today={decision_date == today})"
+                )
+                return DailyDecisionResponse(
+                    id="",
+                    user_id=user_id,
+                    decision=DailyDecision(
+                        recommendation="rest",
+                        volume_hours=None,
+                        intensity_focus=None,
+                        session_type="Rest day",
+                        risk_level="none",
+                        risk_notes=None,
+                        confidence=Confidence(score=0.0, explanation="Decision not yet generated"),
+                        explanation="The coach is still analyzing your training data. Recommendations will be available soon.",
+                        decision_date=decision_date,
+                        weekly_intent_id=None,
+                    ),
                     weekly_intent_id=None,
-                ),
-                weekly_intent_id=None,
-                version=0,
-                is_active=False,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            )
+                    version=0,
+                    is_active=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
 
     try:
         decision = DailyDecision(**decision_model.decision_data)

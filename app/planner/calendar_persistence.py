@@ -4,6 +4,8 @@ This module persists fully validated, text-complete plans into the calendar syst
 Input is FINAL. No mutation. No regeneration. No retries that change content.
 """
 
+import asyncio
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -14,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import PlannedSession as DBPlannedSession
+from app.db.models import StravaAccount
 from app.db.schema_v2_map import (
     combine_date_time,
     km_to_meters,
@@ -24,6 +27,7 @@ from app.db.schema_v2_map import (
 from app.domains.training_plan.enums import DayType, WeekFocus
 from app.domains.training_plan.models import PlanContext, PlannedSession, PlannedWeek, SessionTextOutput
 from app.plans.week_planner import assign_intent_from_day_type
+from app.services.intelligence.scheduler import trigger_daily_decision_for_user
 
 
 @dataclass
@@ -551,6 +555,32 @@ def persist_plan(
                 skipped += week_skipped
                 warnings.extend(week_warnings)
                 db_session.commit()
+
+            # Trigger daily decision regeneration if any session is for today
+            # Moved outside the with block to reduce nesting
+            try:
+                today = datetime.now(timezone.utc).date()
+                has_today_session = any(
+                    (session.starts_at.date() if session.starts_at else None) == today
+                    for session in week.sessions
+                )
+                if has_today_session and (week_created > 0 or week_updated > 0):
+                    # Capture today in closure to avoid B023 - use default argument
+                    def _trigger_decision(today_arg=today):
+                        try:
+                            asyncio.run(trigger_daily_decision_for_user(user_id, athlete_id, today_arg))
+                        except Exception as e:
+                            logger.warning(f"[CALENDAR_PERSISTENCE] Background daily decision trigger failed: {e}")
+
+                    thread = threading.Thread(target=_trigger_decision, daemon=True)
+                    thread.start()
+                    logger.debug(
+                        f"[CALENDAR_PERSISTENCE] Triggered daily decision regeneration for user_id={user_id}, "
+                        f"athlete_id={athlete_id}, session_date={today.isoformat()}"
+                    )
+            except Exception as e:
+                # Don't fail plan persistence if decision trigger fails - just log the error
+                logger.warning(f"[CALENDAR_PERSISTENCE] Failed to trigger daily decision for user {user_id}: {e}")
 
         except Exception as e:
             # Week-level rollback (transaction already rolled back by context manager)

@@ -134,7 +134,7 @@ def history_backfill_task(user_id: str) -> None:
     """History backfill task with backward-moving cursor.
 
     Uses StravaAccount model and user_id (string).
-    
+
     NOTE: This function is designed to run in background threads. It creates
     its own database session via get_session() to avoid sharing request-scoped
     session context. This is safe because:

@@ -12,7 +12,7 @@ from uuid import UUID
 from loguru import logger
 
 from app.core.message import Message
-from app.db.models import ConversationMessage
+from app.db.models import Conversation, ConversationMessage
 from app.db.session import SessionLocal
 
 
@@ -47,6 +47,34 @@ def _normalize_conversation_id(conversation_id: str) -> str:
         ) from e
 
     return raw_id
+
+
+def _ensure_conversation(session, conversation_id: str, user_id: str) -> None:
+    """Ensure a conversation exists in the database.
+
+    This is a get-or-create operation that ensures the conversation
+    row exists before inserting messages. This is required to satisfy
+    the foreign key constraint on conversation_messages.
+
+    Args:
+        session: SQLAlchemy session
+        conversation_id: Normalized conversation ID (UUID string without 'c_' prefix)
+        user_id: User ID who owns the conversation
+
+    Returns:
+        None (creates conversation if it doesn't exist)
+    """
+    # Check if conversation exists
+    conversation = session.get(Conversation, conversation_id)
+    if conversation is None:
+        # Create the conversation
+        conversation = Conversation(
+            id=conversation_id,
+            user_id=user_id,
+            status="active",
+        )
+        session.add(conversation)
+        session.flush()  # Ensures FK is visible for subsequent inserts
 
 
 def persist_message(message: Message) -> None:
@@ -90,6 +118,9 @@ def persist_message(message: Message) -> None:
             # Normalize conversation_id: strip 'c_' prefix for database storage
             # Database stores conversation_id as UUID, not as prefixed string
             normalized_conversation_id = _normalize_conversation_id(message.conversation_id)
+
+            # Ensure conversation exists before inserting message (FK constraint)
+            _ensure_conversation(session, normalized_conversation_id, message.user_id)
 
             # Create ConversationMessage record
             db_message = ConversationMessage(

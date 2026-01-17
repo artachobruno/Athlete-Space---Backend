@@ -628,6 +628,7 @@ async def deferred_heavy_init():
                 replace_existing=True,
             )
             # Run daily decision generation overnight at 2 AM UTC
+            # Additional triggers: on-demand when user opens app, and when activities/sessions are created/updated
             scheduler.add_job(
                 generate_daily_decisions_for_all_users,
                 trigger=CronTrigger(hour=2, minute=0),
@@ -659,7 +660,10 @@ async def deferred_heavy_init():
                 "[SCHEDULER] Started ingestion tick scheduler "
                 "(runs every 30 minutes, dynamic quota allocation for history backfill)"
             )
-            logger.info("[SCHEDULER] Started daily decision generation scheduler (runs daily at 2 AM UTC)")
+            logger.info(
+                "[SCHEDULER] Started daily decision generation scheduler "
+                "(runs daily at 2 AM UTC, also triggered on-demand and when activities/sessions change)"
+            )
             logger.info("[SCHEDULER] Started weekly report metrics update scheduler (runs Sundays at 3 AM UTC)")
             logger.info("[SCHEDULER] Started daily training load metrics recomputation scheduler (runs daily at 4 AM UTC)")
         except Exception as e:

@@ -6,6 +6,10 @@ The new ingestion system (ingestion_strava.py, background_sync.py) directly uses
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from datetime import date, datetime, timezone
+
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +19,7 @@ from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.metrics.effort_service import compute_activity_effort
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 from app.pairing.auto_pairing_service import try_auto_pair
+from app.services.intelligence.scheduler import trigger_daily_decision_for_user
 from app.state.models import ActivityRecord
 from app.utils.sport_utils import normalize_sport_type
 
@@ -272,6 +277,34 @@ def _create_new_activity(
     except Exception as e:
         # Don't fail activity save if recomputation fails - just log the error
         logger.warning(f"[SAVE_ACTIVITIES] Failed to trigger metrics recomputation for user {user_id}: {e}")
+
+    # Trigger daily decision regeneration if activity is for today
+    # This ensures the coach's explanation reflects the latest completed activity
+    try:
+        activity_date = activity.starts_at.date() if activity.starts_at else None
+        today = datetime.now(timezone.utc).date()
+        if activity_date == today:
+            # Get athlete_id from user_id
+            account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
+            if account:
+                athlete_id = int(account[0].athlete_id)
+                # Trigger asynchronously in background thread (fire and forget)
+
+                def _trigger_decision():
+                    try:
+                        asyncio.run(trigger_daily_decision_for_user(user_id, athlete_id, activity_date))
+                    except Exception as e:
+                        logger.warning(f"[SAVE_ACTIVITIES] Background daily decision trigger failed: {e}")
+
+                thread = threading.Thread(target=_trigger_decision, daemon=True)
+                thread.start()
+                logger.debug(
+                    f"[SAVE_ACTIVITIES] Triggered daily decision regeneration for user_id={user_id}, "
+                    f"athlete_id={athlete_id}, activity_date={activity_date.isoformat()}"
+                )
+    except Exception as e:
+        # Don't fail activity save if decision trigger fails - just log the error
+        logger.warning(f"[SAVE_ACTIVITIES] Failed to trigger daily decision for user {user_id}: {e}")
 
     return activity
 

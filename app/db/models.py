@@ -939,6 +939,37 @@ class ConversationProgress(Base):
     )
 
 
+class Conversation(Base):
+    """Conversation metadata storage.
+
+    Each conversation has a unique ID and is owned by a user.
+    This is the parent table for conversation_messages, conversation_summaries,
+    and conversation_progress tables.
+
+    Schema:
+    - id: UUID primary key (matches conversation_id in other tables after stripping 'c_' prefix)
+    - user_id: Foreign key to users.id
+    - title: Optional conversation title
+    - status: Conversation status ('active' or 'archived')
+    - created_at: Conversation creation timestamp
+    - updated_at: Last update timestamp
+    """
+
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active")  # CHECK: 'active', 'archived'
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class ConversationMessage(Base):
     """Long-term message persistence (B29).
 
@@ -988,28 +1019,28 @@ class ConversationMessage(Base):
     )
 
     @validates("conversation_id")
-    def _validate_conversation_id(self, key: str, value: str) -> str:
+    def _validate_conversation_id(self, _key: str, value: str) -> str:  # noqa: PLR6301
         """Normalize conversation_id by stripping 'c_' prefix if present.
-        
+
         Database stores conversation_id as UUID type, but the model uses String.
         SQLAlchemy will convert the string to UUID on insert. This validation
         ensures all code paths (including direct model instantiation) normalize
         the conversation_id, making it safe even if repository normalization is skipped.
-        
+
         Args:
-            key: Field name (always 'conversation_id')
+            _key: Field name (always 'conversation_id') - unused but required by SQLAlchemy
             value: Conversation ID value (may have 'c_' prefix)
-            
+
         Returns:
             UUID string without prefix (e.g., "2423eccd-17be-406b-b48e-0d71399a762a")
-            
+
         Raises:
             ValueError: If the ID (after stripping prefix) is not a valid UUID
         """
         # Strip 'c_' prefix if present
         if isinstance(value, str) and value.startswith("c_"):
             value = value[2:]
-        
+
         # Validate it's a valid UUID (SQLAlchemy will convert string to UUID for DB)
         try:
             uuid.UUID(value)
@@ -1018,7 +1049,7 @@ class ConversationMessage(Base):
                 f"Invalid conversation_id format. Expected format: c_<UUID> or <UUID>. "
                 f"Received: {value}. Error: {e}"
             ) from e
-        
+
         return value
 
 

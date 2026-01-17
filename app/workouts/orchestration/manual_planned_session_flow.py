@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.db.models import UserSettings
@@ -131,10 +132,26 @@ async def create_structured_workout_from_manual_session(
     structured_workout = await generate_steps_from_notes(activity_input)
 
     # Step 3.5: Fetch user settings for target calculation
-    user_settings_result = session.execute(
-        select(UserSettings).where(UserSettings.user_id == user_id)
-    ).first()
-    user_settings = user_settings_result[0] if user_settings_result else None
+    # Defensive query: handle schema drift (missing ftp_watts column)
+    # target_calculation.py already uses getattr() defensively for missing attributes
+    user_settings = None
+    try:
+        user_settings_result = session.execute(
+            select(UserSettings).where(UserSettings.user_id == user_id)
+        ).first()
+        user_settings = user_settings_result[0] if user_settings_result else None
+    except ProgrammingError as e:
+        error_msg = str(e).lower()
+        if "ftp_watts" in error_msg or "does not exist" in error_msg:
+            logger.warning(
+                f"Schema drift detected: user_settings.ftp_watts column missing. "
+                f"Continuing without user settings. Run migration to fix: {e!r}",
+                user_id=user_id,
+            )
+            # user_settings remains None, which is handled gracefully downstream
+        else:
+            # Re-raise if it's a different programming error
+            raise
 
     # Step 4: WorkoutFactory.create_from_structured_workout()
     # NOTE: planned_session_id is None here - it will be set when PlannedSession is created

@@ -275,14 +275,6 @@ def get_activity(
 
         activity = activity_result[0]
 
-        # Log what the database actually has (after all transformations)
-        logger.debug(
-            "[API OUT] activity_id=%s db_tss=%s version=%s",
-            activity.id,
-            activity.tss,
-            getattr(activity, "tss_version", None),
-        )
-
         # Return full activity including raw_json and streams_data
         return {
             "id": activity.id,

@@ -18,7 +18,7 @@ from app.core.redis_conversation_store import write_message
 from app.db.message_repository import persist_message
 from app.db.models import CoachMessage, StravaAccount
 from app.db.session import get_session
-from mcp.db_server.errors import MCPError
+from mcp.db_server.errors import MCPError  # pyright: ignore[reportMissingImports] # dynamically registered at runtime
 
 
 def _get_user_id_from_athlete_id(athlete_id: int) -> str | None:
@@ -31,9 +31,13 @@ def _get_user_id_from_athlete_id(athlete_id: int) -> str | None:
         User ID (Clerk user ID) or None if not found
     """
     with get_session() as db:
-        return db.execute(
+        result = db.execute(
             select(StravaAccount.user_id).where(StravaAccount.athlete_id == str(athlete_id))
         ).scalar_one_or_none()
+        # Convert to string if result is UUID or other non-string type
+        if result is not None:
+            return str(result)
+        return None
 
 
 def load_context_tool(arguments: dict) -> dict:
@@ -75,16 +79,9 @@ def load_context_tool(arguments: dict) -> dict:
                 logger.warning(f"No user_id found for athlete_id={athlete_id}, returning empty history")
             return {"messages": []}
 
-        # Validate user_id is a string (defensive check)
+        # Ensure user_id is a string (convert if needed - database might return UUID)
         if not isinstance(user_id, str):
-            logger.error(
-                "load_context_tool: user_id is not a string",
-                athlete_id=athlete_id,
-                user_id=user_id,
-                user_id_type=type(user_id).__name__,
-                user_id_repr=repr(user_id),
-            )
-            raise MCPError("INVALID_INPUT", f"user_id must be a string, got {type(user_id).__name__}")
+            user_id = str(user_id)
 
         with get_session() as db:
             messages = (

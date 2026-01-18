@@ -46,6 +46,14 @@ from app.workouts.schemas import (
 )
 from app.workouts.step_grouping import detect_repeating_patterns
 from app.workouts.step_utils import infer_step_name
+from app.workouts.targets_utils import (
+    get_distance_meters,
+    get_duration_seconds,
+    get_target_max,
+    get_target_metric,
+    get_target_min,
+    get_target_value,
+)
 from app.workouts.timeline import build_workout_timeline
 
 router = APIRouter(prefix="/workouts", tags=["workouts"])
@@ -196,51 +204,61 @@ def get_structured_workout(
         # Build step dictionaries with enhanced schema
         step_dicts = []
         for step in steps:
+            # Extract target data from targets JSONB
+            targets = step.targets or {}
+            target_metric = get_target_metric(targets)
+            target_min = get_target_min(targets)
+            target_max = get_target_max(targets)
+            target_value = get_target_value(targets)
+            duration_seconds = get_duration_seconds(targets)
+            distance_meters = get_distance_meters(targets)
+
             # Build target object if target data exists
             target: dict[str, str | float | None] | None = None
-            if step.target_metric or step.target_min is not None or step.target_max is not None or step.target_value is not None:
+            if target_metric or target_min is not None or target_max is not None or target_value is not None:
                 # Determine unit based on metric type
                 unit = None
-                if step.target_metric == "pace":
+                if target_metric == "pace":
                     unit = "min/km"
-                elif step.target_metric == "hr":
+                elif target_metric == "hr":
                     unit = "bpm"
-                elif step.target_metric == "power":
+                elif target_metric == "power":
                     unit = "W"
-                elif step.target_metric == "rpe":
+                elif target_metric == "rpe":
                     unit = "RPE"
 
                 target = {
-                    "type": step.target_metric,
-                    "min": step.target_min,
-                    "max": step.target_max,
-                    "value": step.target_value,
+                    "type": target_metric,
+                    "min": target_min,
+                    "max": target_max,
+                    "value": target_value,
                     "unit": unit,
                 }
 
             step_name = step.purpose or infer_step_name(step, workout.raw_notes)
-            step_kind = step.type  # Use type as kind for now
-            step_intensity = step.intensity_zone  # Use intensity_zone as intensity
+            step_kind = step.step_type  # Use step_type as kind
+            step_intensity = None  # Not stored in WorkoutStep model
 
             step_dict = {
                 "id": step.id,
                 "order": step.step_index,
                 "name": step_name,
-                "type": step.type,
+                "type": step.step_type,
                 "kind": step_kind,
                 "intensity": step_intensity,
-                "duration_seconds": step.duration_seconds,
-                "distance_meters": step.distance_meters,
+                "duration_seconds": duration_seconds,
+                "distance_meters": distance_meters,
                 "target": target,
-                "target_metric": step.target_metric,
-                "target_min": step.target_min,
-                "target_max": step.target_max,
-                "target_value": step.target_value,
+                "target_metric": target_metric,
+                "target_min": target_min,
+                "target_max": target_max,
+                "target_value": target_value,
                 "repeat_group_id": step_id_to_group.get(step.id),
                 "instructions": step.instructions,
                 "purpose": step.purpose,
-                "inferred": step.inferred,
+                "inferred": False,  # Not stored in WorkoutStep model
             }
+            step_dicts.append(step_dict)
             step_dicts.append(step_dict)
 
         # Build groups list for response
@@ -416,49 +434,58 @@ def update_workout_steps(
         # Build step dictionaries with enhanced schema
         step_dicts = []
         for step in steps:
+            # Extract target data from targets JSONB
+            targets = step.targets or {}
+            target_metric = get_target_metric(targets)
+            target_min = get_target_min(targets)
+            target_max = get_target_max(targets)
+            target_value = get_target_value(targets)
+            duration_seconds = get_duration_seconds(targets)
+            distance_meters = get_distance_meters(targets)
+
             # Build target object if target data exists
             target: dict[str, str | float | None] | None = None
-            if step.target_metric or step.target_min is not None or step.target_max is not None or step.target_value is not None:
+            if target_metric or target_min is not None or target_max is not None or target_value is not None:
                 unit = None
-                if step.target_metric == "pace":
+                if target_metric == "pace":
                     unit = "min/km"
-                elif step.target_metric == "hr":
+                elif target_metric == "hr":
                     unit = "bpm"
-                elif step.target_metric == "power":
+                elif target_metric == "power":
                     unit = "W"
-                elif step.target_metric == "rpe":
+                elif target_metric == "rpe":
                     unit = "RPE"
 
                 target = {
-                    "type": step.target_metric,
-                    "min": step.target_min,
-                    "max": step.target_max,
-                    "value": step.target_value,
+                    "type": target_metric,
+                    "min": target_min,
+                    "max": target_max,
+                    "value": target_value,
                     "unit": unit,
                 }
 
             step_name = step.purpose or infer_step_name(step, workout.raw_notes)
-            step_kind = step.type
-            step_intensity = step.intensity_zone
+            step_kind = step.step_type
+            step_intensity = None  # Not stored in WorkoutStep model
 
             step_dict = {
                 "id": step.id,
                 "order": step.step_index,
                 "name": step_name,
-                "type": step.type,
+                "type": step.step_type,
                 "kind": step_kind,
                 "intensity": step_intensity,
-                "duration_seconds": step.duration_seconds,
-                "distance_meters": step.distance_meters,
+                "duration_seconds": duration_seconds,
+                "distance_meters": distance_meters,
                 "target": target,
-                "target_metric": step.target_metric,
-                "target_min": step.target_min,
-                "target_max": step.target_max,
-                "target_value": step.target_value,
+                "target_metric": target_metric,
+                "target_min": target_min,
+                "target_max": target_max,
+                "target_value": target_value,
                 "repeat_group_id": step_id_to_group.get(step.id),
                 "instructions": step.instructions,
                 "purpose": step.purpose,
-                "inferred": step.inferred,
+                "inferred": False,  # Not stored in WorkoutStep model
             }
             step_dicts.append(step_dict)
 
@@ -528,23 +555,33 @@ def get_workout(
         steps = steps_result.scalars().all()
 
         # Convert to schemas
-        step_schemas = [
-            WorkoutStepSchema(
-                id=UUID(step.id),
-                order=step.step_index,
-                type=step.type,
-                duration_seconds=step.duration_seconds,
-                distance_meters=step.distance_meters,
-                target_metric=step.target_metric,
-                target_min=step.target_min,
-                target_max=step.target_max,
-                target_value=step.target_value,
-                instructions=step.instructions,
-                purpose=step.purpose,
-                inferred=step.inferred,
+        step_schemas = []
+        for step in steps:
+            # Extract target data from targets JSONB
+            targets = step.targets or {}
+            target_metric = get_target_metric(targets)
+            target_min = get_target_min(targets)
+            target_max = get_target_max(targets)
+            target_value = get_target_value(targets)
+            duration_seconds = get_duration_seconds(targets)
+            distance_meters = get_distance_meters(targets)
+
+            step_schemas.append(
+                WorkoutStepSchema(
+                    id=UUID(step.id),
+                    order=step.step_index,
+                    type=step.step_type,
+                    duration_seconds=duration_seconds,
+                    distance_meters=distance_meters,
+                    target_metric=target_metric,
+                    target_min=target_min,
+                    target_max=target_max,
+                    target_value=target_value,
+                    instructions=step.instructions,
+                    purpose=step.purpose,
+                    inferred=False,  # Not stored in WorkoutStep model
+                )
             )
-            for step in steps
-        ]
 
         return WorkoutSchema(
             id=UUID(workout.id),

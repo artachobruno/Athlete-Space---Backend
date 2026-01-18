@@ -10,6 +10,13 @@ from uuid import UUID
 
 from app.workouts.models import Workout, WorkoutStep
 from app.workouts.schemas import TimelineTarget, WorkoutTimelineResponse, WorkoutTimelineSegment
+from app.workouts.targets_utils import (
+    get_duration_seconds,
+    get_target_max,
+    get_target_metric,
+    get_target_min,
+    get_target_value,
+)
 
 STEP_TYPE_COLORS = {
     "warmup": "blue",
@@ -43,26 +50,34 @@ def build_workout_timeline(workout: Workout, steps: list[WorkoutStep]) -> Workou
     sorted_steps = sorted(steps, key=lambda s: s.step_index)
 
     for step in sorted_steps:
-        if step.duration_seconds is None:
+        # Extract target data from targets JSONB
+        targets = step.targets or {}
+        duration_seconds = get_duration_seconds(targets)
+        target_metric = get_target_metric(targets)
+        target_min = get_target_min(targets)
+        target_max = get_target_max(targets)
+        target_value = get_target_value(targets)
+
+        if duration_seconds is None:
             raise ValueError("Timeline requires duration-based steps only (Phase 2)")
 
         start = cursor
-        end = cursor + step.duration_seconds
+        end = cursor + duration_seconds
 
-        step_color = STEP_TYPE_COLORS.get(step.type, "gray")
+        step_color = STEP_TYPE_COLORS.get(step.step_type, "gray")
         segments.append(
             WorkoutTimelineSegment(
                 step_id=UUID(step.id),
                 order=step.step_index,
-                step_type=step.type,
+                step_type=step.step_type,
                 step_color=step_color,
                 start_second=start,
                 end_second=end,
                 target=TimelineTarget(
-                    metric=step.target_metric,
-                    min=step.target_min,
-                    max=step.target_max,
-                    value=step.target_value,
+                    metric=target_metric,
+                    min=target_min,
+                    max=target_max,
+                    value=target_value,
                 ),
                 purpose=step.purpose,
             )

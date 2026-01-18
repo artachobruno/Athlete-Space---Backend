@@ -190,8 +190,9 @@ def _get_unpaired_activities(
     activities = unpaired_activities
 
     # Filter by type match
+    # Use activity.sport directly (schema v2) - activity.type is a property that maps to sport
     return [
-        activity for activity in activities if _types_match(planned_type, activity.type)
+        activity for activity in activities if _types_match(planned_type, activity.sport)
     ]
 
 
@@ -219,17 +220,29 @@ def _log_decision(
     activity_id = activity.id if activity else None
     planned_session_id = planned.id if planned else None
 
-    pairing_decision = PairingDecision(
-        user_id=user_id,
-        planned_session_id=planned_session_id,
-        activity_id=activity_id,
-        decision=decision,
-        duration_diff_pct=duration_diff_pct,
-        reason=reason,
-        created_at=datetime.now(timezone.utc),
-    )
-
-    session.add(pairing_decision)
+    # Log pairing decision to audit table (non-critical, failures don't break pairing)
+    try:
+        pairing_decision = PairingDecision(
+            user_id=user_id,
+            planned_session_id=planned_session_id,
+            activity_id=activity_id,
+            decision=decision,
+            duration_diff_pct=duration_diff_pct,
+            reason=reason,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(pairing_decision)
+        session.flush()
+    except Exception as e:
+        # Audit logging is non-critical - log error but don't fail pairing
+        logger.warning(
+            "Failed to log pairing decision to audit table (non-critical)",
+            user_id=user_id,
+            decision=decision,
+            reason=reason,
+            error=str(e),
+        )
+        session.rollback()
 
 
 def _pair_from_activity(activity: Activity, session: Session) -> None:
@@ -254,10 +267,11 @@ def _pair_from_activity(activity: Activity, session: Session) -> None:
         return
 
     # Get candidate planned sessions
+    # Use activity.sport directly (schema v2) - activity.type is a property that maps to sport
     plans = _get_unpaired_plans(
         user_id=activity.user_id,
         activity_date=activity_date,
-        activity_type=activity.type,
+        activity_type=activity.sport,
         session=session,
     )
 

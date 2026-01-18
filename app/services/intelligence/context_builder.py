@@ -350,7 +350,7 @@ def build_daily_decision_context(
     # Get training summary (canonical source) for other metrics (volume, compliance, etc.)
     # Note: This is only used for other context fields, not training_history
     try:
-        training_summary = build_training_summary(
+        build_training_summary(
             user_id=user_id,
             athlete_id=athlete_id,
             window_days=14,

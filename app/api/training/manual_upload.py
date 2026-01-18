@@ -78,6 +78,14 @@ def _raise_duplicate_session_error() -> None:
     )
 
 
+def _raise_no_sessions_created_error() -> None:
+    """Raise HTTPException when no sessions were created."""
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="No sessions were created. Please check your session data and try again.",
+    )
+
+
 def _save_week_sessions_and_get_ids(
     session_dicts: list[dict],
     user_id: str,
@@ -630,10 +638,10 @@ async def upload_manual_session(
                 # Mark workout as dirty to ensure commit happens
                 # After flush(), objects are no longer in session.new, so we need to ensure
                 # the workout update is tracked for the commit check
-                
+
                 session_id = planned_session.id
                 workout_id = workout.id
-                
+
                 # Explicit commit to ensure data is persisted
                 # After flush(), _handle_session_commit may not detect changes
                 logger.debug(
@@ -746,17 +754,18 @@ async def upload_manual_week(
 
             # Check if no sessions were saved despite having sessions to save
             if saved_count == 0 and len(session_dicts) > 0:
+                session_preview = [
+                    {"date": str(s.get("date")), "title": s.get("title"), "sport": s.get("sport")}
+                    for s in session_dicts[:3]
+                ]
                 logger.warning(
                     "No sessions were saved despite having sessions to save",
                     user_id=user_id,
                     athlete_id=athlete_id,
                     requested_count=len(request.sessions),
-                    session_dicts_preview=[{"date": str(s.get("date")), "title": s.get("title"), "sport": s.get("sport")} for s in session_dicts[:3]],
+                    session_dicts_preview=session_preview,
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No sessions were created. Please check your session data and try again.",
-                )
+                _raise_no_sessions_created_error()
 
             # Get created session IDs (query by starts_at range) (schema v2)
             session_ids = _get_session_ids_for_upload(session_dicts, user_id, saved_count)

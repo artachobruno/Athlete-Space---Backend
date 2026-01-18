@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.athletes.models import AthletePaceProfile
 from app.db.models import Activity, Athlete, AthleteProfile, PlannedSession, StravaAccount, WorkoutReconciliation
+from app.pairing.session_links import SessionLink
 from app.plans.reconciliation.reconcile import reconcile_workout
 from app.plans.reconciliation.types import ExecutedWorkout
 
@@ -105,13 +106,21 @@ def reconcile_activity_if_paired(
     Returns:
         WorkoutReconciliation if reconciliation was performed, None otherwise
     """
-    # Only reconcile if activity is paired with a planned session
-    if not activity.planned_session_id:
+    # Schema v2: Check for pairing via session_links table instead of activity.planned_session_id
+    # Get session link for this activity
+    link = session.execute(
+        select(SessionLink).where(
+            SessionLink.activity_id == activity.id,
+            SessionLink.status.in_(["proposed", "confirmed"]),  # Only active links
+        )
+    ).scalar_one_or_none()
+
+    if not link or not link.planned_session_id:
         return None
 
     # Get planned session
     planned_session = session.execute(
-        select(PlannedSession).where(PlannedSession.id == activity.planned_session_id)
+        select(PlannedSession).where(PlannedSession.id == link.planned_session_id)
     ).scalar_one_or_none()
 
     if not planned_session:

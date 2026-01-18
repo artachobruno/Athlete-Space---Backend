@@ -26,7 +26,7 @@ from app.calendar.reconciliation_service import reconcile_calendar
 from app.calendar.view_helper import calendar_session_from_view_row, get_calendar_items_from_view
 from app.db.models import Activity, PlannedSession, StravaAccount, User
 from app.db.session import get_session
-from app.pairing.session_links import upsert_link, unlink_by_planned
+from app.pairing.session_links import unlink_by_planned, upsert_link
 from app.utils.timezone import now_user, to_utc
 from app.workouts.execution_models import WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
@@ -767,7 +767,7 @@ def update_session_status(
                 )
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Activity not found or invalid: {str(e)}",
+                    detail=f"Activity not found or invalid: {e!s}",
                 ) from e
 
         session.commit()

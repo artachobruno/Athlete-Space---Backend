@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.db.models import DailyTrainingLoad, StravaAccount
 from app.db.session import get_session
@@ -69,6 +69,24 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
         if not rows:
             raise NoTrainingDataError("No training data available")
 
+        # Get actual daily training hours from daily_training_summary
+        # This is more accurate than approximating from CTL
+        daily_hours_result = session.execute(
+            text("""
+                SELECT 
+                    day,
+                    (summary->>'load_score')::double precision AS load_score
+                FROM daily_training_summary
+                WHERE user_id = :user_id
+                AND day >= :since_date
+                ORDER BY day
+            """),
+            {"user_id": user_id, "since_date": since_date.isoformat()},
+        ).fetchall()
+
+        # Create a map of date -> actual daily hours
+        daily_hours_map = {row[0]: (row[1] or 0.0) for row in daily_hours_result}
+
         # Extract data from pre-computed metrics
         dates: list[str] = []
         daily_load: list[float] = []
@@ -78,10 +96,15 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
 
         for row in rows:
             daily_load_record = row[0]
-            dates.append(daily_load_record.day.isoformat())
-            # Approximate daily load from CTL (CTL * 10 ≈ TSS, TSS/100 ≈ hours)
-            approximate_load = (daily_load_record.ctl or 0.0) * 10.0 / 100.0
-            daily_load.append(approximate_load)
+            date_str = daily_load_record.day.isoformat()
+            date_obj = daily_load_record.day
+            dates.append(date_str)
+            
+            # Use actual daily hours from daily_training_summary if available
+            # Otherwise default to 0.0 (rest day)
+            actual_hours = daily_hours_map.get(date_obj, 0.0)
+            daily_load.append(actual_hours)
+            
             ctl_values.append(daily_load_record.ctl or 0.0)
             atl_values.append(daily_load_record.atl or 0.0)
             tsb_values.append(daily_load_record.tsb or 0.0)
@@ -95,6 +118,6 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
             ctl=ctl,
             atl=atl,
             tsb=tsb,
-            daily_load=daily_load,  # DTL values (normalized, not raw hours)
+            daily_load=daily_load,  # Actual daily training hours from daily_training_summary
             dates=dates,
         )

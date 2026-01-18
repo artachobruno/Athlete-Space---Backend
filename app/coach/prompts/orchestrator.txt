@@ -144,7 +144,15 @@ User: "What does my training look like right now?"
 
 User: "What workouts do I have scheduled this week?"
 → intent: "explain"
-→ horizon: "week"
+→ horizon: "week" (MUST be set to "week" for scheduled workout queries)
+→ target_action: "explain_training_state" (includes planned sessions in summary)
+→ required_attributes: [] (no attributes needed)
+→ should_execute: true (immediate execution)
+→ action: "EXECUTE"
+
+User: "What's on my calendar this week?"
+→ intent: "explain"
+→ horizon: "week" (MUST be set to "week" for calendar queries)
 → target_action: "explain_training_state" (includes planned sessions in summary)
 → required_attributes: [] (no attributes needed)
 → should_execute: true (immediate execution)

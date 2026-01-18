@@ -1885,14 +1885,14 @@ class CoachActionExecutor:
 
     @staticmethod
     async def _format_week_workouts(user_id: str, training_state_msg: str) -> str:
-        """Format scheduled workouts for the current week.
+        """Format scheduled workouts for the current week with coaching feedback.
 
         Args:
             user_id: User ID to fetch sessions for
             training_state_msg: Base training state message
 
         Returns:
-            Message with training state and scheduled workouts
+            Message with training state, scheduled workouts, and coaching feedback
         """
         try:
             now = datetime.now(timezone.utc)
@@ -1910,6 +1910,31 @@ class CoachActionExecutor:
             )
 
             sessions_data = sessions_result.get("sessions", [])
+            
+            # Also fetch completed activities for the week for context
+            completed_activities = []
+            try:
+                with get_session() as session:
+                    from app.db.models import Activity
+                    
+                    activities_query = select(Activity).where(
+                        Activity.user_id == user_id,
+                        Activity.starts_at >= monday,
+                        Activity.starts_at <= sunday,
+                    ).order_by(Activity.starts_at.desc())
+                    
+                    activities = session.execute(activities_query).scalars().all()
+                    completed_activities = [
+                        {
+                            "name": a.name or "Activity",
+                            "starts_at": a.starts_at.isoformat() if a.starts_at else "",
+                            "type": a.sport_type or "unknown",
+                        }
+                        for a in activities
+                    ]
+            except Exception as e:
+                logger.debug(f"Could not fetch completed activities for context: {e}")
+
             if sessions_data:
                 # Format workouts conversationally
                 sessions_list_parts = []
@@ -1929,7 +1954,33 @@ class CoachActionExecutor:
                         sessions_list_parts.append(session_name)
 
                 sessions_text = "\n".join(f"• {s}" for s in sessions_list_parts)
-                return f"{training_state_msg}\n\nHere's what you have scheduled this week:\n{sessions_text}"
+                
+                # Generate coaching feedback based on schedule
+                feedback_parts = []
+                
+                # Assess schedule density
+                session_count = len(sessions_data)
+                
+                if session_count >= 5:
+                    feedback_parts.append("You have a solid week planned with good structure.")
+                elif session_count >= 3:
+                    feedback_parts.append("Your week has a reasonable training load.")
+                else:
+                    feedback_parts.append("Your schedule looks light this week—consider adding more volume if you're building fitness.")
+                
+                # Assess recovery days
+                if session_count <= 2:
+                    feedback_parts.append("Make sure you're maintaining consistency with your training plan.")
+                elif session_count <= 6 and len([s for s in sessions_data if s.get("name", "").lower() in ["rest", "recovery", "easy", "off"]]) < 1:
+                    feedback_parts.append("Consider scheduling a recovery day to absorb training stress.")
+                
+                feedback_text = " ".join(feedback_parts) if feedback_parts else ""
+                
+                response = f"{training_state_msg}\n\nHere's what you have scheduled this week:\n{sessions_text}"
+                if feedback_text:
+                    response += f"\n\n{feedback_text}"
+                
+                return response
 
             return f"{training_state_msg}\n\nYou don't have any workouts scheduled for this week yet."
 
@@ -1961,9 +2012,15 @@ class CoachActionExecutor:
             )
             training_state_msg = result.get("message", "Training state explained.")
 
-            # If horizon is "week", also fetch scheduled workouts
+            # Check if user is asking about scheduled workouts
+            # Look for keywords in the message or check horizon
+            message_lower = decision.message.lower()
+            workout_keywords = ["scheduled", "workout", "workouts", "calendar", "what do i have", "what's on"]
+            is_workout_query = any(keyword in message_lower for keyword in workout_keywords)
+            
+            # Fetch scheduled workouts if horizon is "week" OR if query is about workouts/calendar
             final_message = training_state_msg
-            if decision.horizon == "week" and deps.user_id:
+            if deps.user_id and (decision.horizon == "week" or is_workout_query):
                 final_message = await CoachActionExecutor._format_week_workouts(deps.user_id, training_state_msg)
 
             if conversation_id and step_info:

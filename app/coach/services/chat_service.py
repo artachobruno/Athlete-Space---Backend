@@ -84,10 +84,11 @@ async def process_coach_chat(
         history_empty=history_empty,
     )
 
-    # Handle cold start
-    if history_empty:
+    # Handle cold start - only return welcome message for simple greetings
+    # For actual queries/questions, process them normally even on cold start
+    if history_empty and _is_simple_greeting(message):
         logger.info(
-            "Cold start detected - providing welcome message",
+            "Cold start with greeting - providing welcome message",
             conversation_id=conversation_id,
         )
         try:
@@ -270,6 +271,41 @@ async def _is_history_empty(athlete_id: int | None = None) -> bool:
     except Exception as e:
         logger.warning(f"Failed to check history: {e}")
         return True
+
+
+def _is_simple_greeting(message: str) -> bool:
+    """Check if message is a simple greeting (not a query).
+
+    Args:
+        message: User message to check
+
+    Returns:
+        True if message is a simple greeting without a query
+    """
+    message_lower = message.lower().strip()
+    greetings = [
+        "hi",
+        "hello",
+        "hey",
+        "hi there",
+        "hello there",
+        "hey there",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "",
+    ]
+    # Check if message is just a greeting (exact match or starts with greeting)
+    if message_lower in greetings:
+        return True
+    # Check if message is just a greeting followed by nothing meaningful
+    for greeting in greetings:
+        if greeting and message_lower.startswith(greeting):
+            # If the message is just the greeting or greeting + punctuation/whitespace
+            remainder = message_lower[len(greeting):].strip()
+            if not remainder or remainder in [".", "!", "?", ",", ":", ";"]:
+                return True
+    return False
 
 
 def _is_simple_acknowledgment(message: str) -> bool:

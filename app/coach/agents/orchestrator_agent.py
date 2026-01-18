@@ -401,7 +401,17 @@ def _get_rag_adapter() -> OrchestratorRagAdapter | None:
         project_root = Path(__file__).parent.parent.parent.parent
         artifacts_dir = project_root / "data" / "rag_artifacts"
 
-        if not artifacts_dir.exists():
+        # Check if directory and required artifact files exist
+        chunks_path = artifacts_dir / "chunks.json"
+        embeddings_path = artifacts_dir / "embeddings.npy"
+        manifest_path = artifacts_dir / "manifest.json"
+
+        if (
+            not artifacts_dir.exists()
+            or not chunks_path.exists()
+            or not embeddings_path.exists()
+            or not manifest_path.exists()
+        ):
             logger.debug(
                 "RAG artifacts not found, RAG features disabled",
                 artifacts_dir=str(artifacts_dir),
@@ -411,7 +421,10 @@ def _get_rag_adapter() -> OrchestratorRagAdapter | None:
         _RAG_ADAPTER = OrchestratorRagAdapter(artifacts_dir=artifacts_dir)
 
     except Exception:
-        logger.exception("Failed to initialize RAG adapter, RAG features disabled")
+        logger.warning(
+            "Failed to initialize RAG adapter, RAG features disabled",
+            exc_info=True,
+        )
         return None
     else:
         return _RAG_ADAPTER

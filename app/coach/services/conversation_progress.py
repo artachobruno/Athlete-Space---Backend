@@ -77,7 +77,7 @@ def get_conversation_progress(conversation_id: str) -> ConversationProgress | No
     """Get conversation progress for a conversation.
 
     Args:
-        conversation_id: Conversation ID
+        conversation_id: Conversation ID (format: c_<UUID> or <UUID>)
 
     Returns:
         ConversationProgress or None if not found
@@ -87,8 +87,14 @@ def get_conversation_progress(conversation_id: str) -> ConversationProgress | No
         immediately or copy the data you need before the session closes.
         Slots are automatically deserialized (ISO date strings -> date objects).
     """
+    # Convert c_<UUID> format to UUID for database query if needed
+    # Database may store as UUID type, so strip the 'c_' prefix
+    db_conversation_id = conversation_id
+    if conversation_id.startswith("c_"):
+        db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
+    
     with get_session() as db:
-        result = db.execute(select(ConversationProgress).where(ConversationProgress.conversation_id == conversation_id)).first()
+        result = db.execute(select(ConversationProgress).where(ConversationProgress.conversation_id == db_conversation_id)).first()
         if result:
             progress = result[0]
             # Detach the object from the session by accessing all attributes

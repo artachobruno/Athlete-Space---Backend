@@ -316,8 +316,14 @@ def _get_messages_since_last_summary(
 
     # If Redis is empty, fall back to database
     if not messages:
+        # Convert c_<UUID> format to UUID for database query if needed
+        # Database may store as UUID type, so strip the 'c_' prefix
+        db_conversation_id = conversation_id
+        if conversation_id.startswith("c_"):
+            db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
+        
         with get_session() as db:
-            query = select(ConversationMessage).where(ConversationMessage.conversation_id == conversation_id)
+            query = select(ConversationMessage).where(ConversationMessage.conversation_id == db_conversation_id)
             if last_summary_timestamp:
                 query = query.where(ConversationMessage.ts > last_summary_timestamp)
             query = query.order_by(ConversationMessage.ts).limit(100)
@@ -400,13 +406,19 @@ def get_next_summary_version(db: Session, conversation_id: str) -> int:
 
     Args:
         db: SQLAlchemy database session
-        conversation_id: Conversation ID
+        conversation_id: Conversation ID (format: c_<UUID> or <UUID>)
 
     Returns:
         Next version number (1 if no previous summaries exist)
     """
+    # Convert c_<UUID> format to UUID for database query if needed
+    # Database may store as UUID type, so strip the 'c_' prefix
+    db_conversation_id = conversation_id
+    if conversation_id.startswith("c_"):
+        db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
+    
     last_version = db.execute(
-        select(func.max(ConversationSummaryModel.version)).where(ConversationSummaryModel.conversation_id == conversation_id)
+        select(func.max(ConversationSummaryModel.version)).where(ConversationSummaryModel.conversation_id == db_conversation_id)
     ).scalar()
     return (last_version or 0) + 1
 
@@ -426,12 +438,18 @@ def persist_conversation_summary(
         summary: Summary dictionary (from ConversationSummary.model_dump())
     """
     try:
+        # Convert c_<UUID> format to UUID for database if needed
+        # Database stores conversation_id as UUID type, so strip the 'c_' prefix
+        db_conversation_id = conversation_id
+        if conversation_id.startswith("c_"):
+            db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
+        
         with get_session() as db:
             version = get_next_summary_version(db, conversation_id)
             created_at = datetime.now(timezone.utc)
 
             row = ConversationSummaryModel(
-                conversation_id=conversation_id,
+                conversation_id=db_conversation_id,
                 version=version,
                 summary=summary,
                 created_at=created_at,
@@ -578,10 +596,16 @@ def get_latest_conversation_summary(
     )
 
     try:
+        # Convert c_<UUID> format to UUID for database query if needed
+        # Database may store as UUID type, so strip the 'c_' prefix
+        db_conversation_id = conversation_id
+        if conversation_id.startswith("c_"):
+            db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
+        
         with get_session() as db:
             row = (
                 db.query(ConversationSummaryModel)
-                .filter(ConversationSummaryModel.conversation_id == conversation_id)
+                .filter(ConversationSummaryModel.conversation_id == db_conversation_id)
                 .order_by(ConversationSummaryModel.version.desc())
                 .first()
             )

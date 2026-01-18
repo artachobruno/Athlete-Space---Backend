@@ -6,7 +6,7 @@ Owns all MCP tool calls, retries, rate limiting, and safety logic.
 
 import json
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, NoReturn
 
 from loguru import logger
@@ -256,6 +256,7 @@ class CoachActionExecutor:
             ("explain", None),
             ("explain", "today"),
             ("explain", "next_session"),
+            ("explain", "week"),  # Allow explaining training state for a week (e.g., "What workouts this week?")
             ("log", None),
             ("log", "today"),
             ("question", None),
@@ -1903,6 +1904,54 @@ class CoachActionExecutor:
                     "state": deps.athlete_state.model_dump(),
                 },
             )
+            training_state_msg = result.get("message", "Training state explained.")
+            
+            # If horizon is "week", also fetch scheduled workouts
+            final_message = training_state_msg
+            if decision.horizon == "week" and deps.user_id:
+                try:
+                    now = datetime.now(timezone.utc)
+                    days_since_monday = now.weekday()
+                    monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
+                    
+                    sessions_result = await call_tool(
+                        "get_planned_sessions",
+                        {
+                            "user_id": deps.user_id,
+                            "start_date": monday.isoformat(),
+                            "end_date": sunday.isoformat(),
+                        },
+                    )
+                    
+                    sessions_data = sessions_result.get("sessions", [])
+                    if sessions_data:
+                        # Format workouts conversationally
+                        sessions_list_parts = []
+                        for s in sessions_data[:10]:  # Limit to 10 to avoid too long responses
+                            session_name = s.get("name", "Workout")
+                            starts_at = s.get("starts_at", "")
+                            if starts_at:
+                                # Parse date for friendly formatting
+                                try:
+                                    dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+                                    day_name = dt.strftime("%A")
+                                    date_str = dt.strftime("%B %d")
+                                    sessions_list_parts.append(f"{session_name} on {day_name}, {date_str}")
+                                except Exception:
+                                    sessions_list_parts.append(f"{session_name} on {starts_at[:10]}")
+                            else:
+                                sessions_list_parts.append(session_name)
+                        
+                        sessions_text = "\n".join(f"• {s}" for s in sessions_list_parts)
+                        final_message = f"{training_state_msg}\n\nHere's what you have scheduled this week:\n{sessions_text}"
+                    else:
+                        final_message = f"{training_state_msg}\n\nYou don't have any workouts scheduled for this week yet."
+                except Exception as e:
+                    logger.warning(f"Failed to fetch scheduled workouts: {e}", exc_info=True)
+                    # Use training state even if scheduled workouts fetch fails
+                    final_message = training_state_msg
+            
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
@@ -1913,7 +1962,7 @@ class CoachActionExecutor:
             )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
-            return result.get("message", "Training state explained.")
+            return final_message
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info

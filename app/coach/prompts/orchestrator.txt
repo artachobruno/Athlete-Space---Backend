@@ -58,10 +58,34 @@ PLANNING HORIZONS:
 
 ---
 
+AVAILABLE TOOLS:
+
+For informational queries (reading data):
+- explain_training_state: Use for queries about current training state, metrics, activities, and summary
+  Examples: "What does my training look like?", "How am I training?", "Show me my training status"
+- get_planned_sessions: Use for queries about scheduled workouts
+  Examples: "What workouts do I have scheduled?", "What's on my calendar this week?"
+
+For planning/modification (writing data):
+- plan_race_build: Create race build-up plan
+- plan_week: Create weekly training plan
+- plan_season: Create season plan
+- adjust_training_load: Modify training load
+- add_workout: Add a single workout to schedule
+- recommend_next_session: Recommend next training session
+
 EXECUTION CONTROL RULES (CRITICAL):
 
 1. ALWAYS declare target_action first
-   - Map user intent to tool: plan+race → "plan_race_build", plan+week → "plan_week"
+   - Map user intent to tool:
+     * explain intent about training state → "explain_training_state"
+     * explain intent about scheduled workouts → Use available data or synthesize response
+     * plan+race → "plan_race_build"
+     * plan+week → "plan_week"
+     * plan+season → "plan_season"
+     * adjust intent → "adjust_training_load"
+     * log intent → "add_workout"
+     * recommend intent → "recommend_next_session"
    - If no executable action exists, target_action = null
 
 2. ALWAYS declare required_attributes and optional_attributes
@@ -111,6 +135,20 @@ User: "What should I focus on this week?"
 → required_attributes: [] (depends on context)
 → optional_attributes: []
 → (Extractor will determine what's actually known/missing)
+
+User: "What does my training look like right now?"
+→ intent: "explain"
+→ target_action: "explain_training_state"
+→ required_attributes: [] (no attributes needed - uses current athlete state)
+→ should_execute: true (immediate execution)
+
+User: "What workouts do I have scheduled this week?"
+→ intent: "explain"
+→ horizon: "week"
+→ target_action: "explain_training_state" (includes planned sessions in summary)
+→ required_attributes: [] (no attributes needed)
+→ should_execute: true (immediate execution)
+→ action: "EXECUTE"
 
 ---
 

@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.workouts.models import WorkoutStep
+from app.workouts.targets_utils import get_duration_seconds, get_distance_meters
 
 
 @dataclass
@@ -102,10 +103,14 @@ def _create_pattern_signature(steps: Sequence[WorkoutStep]) -> str:
     """
     parts: list[str] = []
     for step in steps:
+        # Extract duration and distance from targets JSONB
+        duration_seconds = get_duration_seconds(step.targets) if step.targets else None
+        distance_meters = get_distance_meters(step.targets) if step.targets else None
+        
         step_parts = [
-            step.type or "unknown",
-            str(step.duration_seconds) if step.duration_seconds else "0",
-            str(step.distance_meters) if step.distance_meters else "0",
+            step.step_type or "unknown",
+            str(duration_seconds) if duration_seconds else "0",
+            str(distance_meters) if distance_meters else "0",
         ]
         parts.append("|".join(step_parts))
     return ";".join(parts)

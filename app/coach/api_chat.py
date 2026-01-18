@@ -601,9 +601,14 @@ async def coach_chat(
                 status="planned",
             )
 
-    # Phase 6C: Execute action asynchronously (non-blocking)
-    # For EXECUTE actions, run in background and return immediately
-    if decision.action == "EXECUTE":
+    # Phase 6C: Execute action (synchronously for read-only, asynchronously for write operations)
+    # Read-only actions (explain, read) are fast and should return immediately
+    # Write actions (plan, adjust) can take longer and should run in background
+    read_only_actions = {"explain_training_state", "get_planned_sessions"}
+    is_read_only = decision.target_action in read_only_actions if decision.target_action else False
+
+    if decision.action == "EXECUTE" and not is_read_only:
+        # For write operations (plan, adjust, etc.), run in background and return immediately
         logger.info(
             "Enqueuing execution for background processing",
             conversation_id=conversation_id,
@@ -627,7 +632,7 @@ async def coach_chat(
             plan_items=decision.plan_items,
         )
 
-    # For NO_ACTION, execute synchronously (fast, non-blocking)
+    # For read-only actions or NO_ACTION, execute synchronously (fast, non-blocking)
     reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
 
     # Normalize assistant response before returning

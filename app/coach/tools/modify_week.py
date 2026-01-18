@@ -620,6 +620,8 @@ def modify_week(
             "modified_sessions": [s.id for s in saved_sessions],
             "revision": revision,
             "explanation": explanation,
+            "revision_id": revision_record.id,  # Phase 5: Include revision_id for approval enforcement
+            "requires_approval": needs_approval,  # Phase 5: Include approval flag for executor check
         }
 
         # Optional: Trigger regeneration if requested

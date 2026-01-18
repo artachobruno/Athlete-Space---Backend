@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.coach.adapters.race_modification_adapter import to_race_modification
 from app.coach.adapters.season_modification_adapter import adapt_extracted_season_modification
 from app.coach.adapters.week_modification_adapter import to_week_modification
+from app.coach.admin.tool_registry import READ_ONLY_TOOLS
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.clarification import (
     generate_proactive_clarification,
@@ -35,7 +36,7 @@ from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
 from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
-from app.db.models import AthleteProfile, PlannedSession, SeasonPlan
+from app.db.models import AthleteProfile, PlannedSession, PlanRevision, SeasonPlan
 from app.db.session import get_session
 from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
@@ -152,6 +153,81 @@ class CoachActionExecutor:
 
         logger.debug("No matching step found for tool", tool_name=tool_name)
         return None
+
+    @staticmethod
+    def _enforce_revision_approval(result: dict | Any) -> None:
+        """Enforce that revisions requiring approval are not applied unless explicitly approved.
+
+        Phase 5 Invariant: No state-changing action may execute unless explicitly approved.
+
+        This method checks if a tool result indicates that approval is required,
+        and raises an error if the revision is not approved. This prevents the
+        executor from treating pending revisions as successful execution.
+
+        Args:
+            result: Result dictionary from tool execution (may contain requires_approval, revision_id, or revision object)
+
+        Raises:
+            RuntimeError: If revision requires approval but is not approved
+
+        Design:
+            Tools may create revisions (propose actions).
+            Only the executor may apply revisions (execute actions).
+            If approval is required, the executor MUST refuse execution until approved.
+        """
+        if not isinstance(result, dict):
+            return
+
+        # Check for requires_approval flag in result dict
+        requires_approval = result.get("requires_approval", False)
+        revision_id = result.get("revision_id")
+
+        # Also check if result contains a revision object that might have approval info
+        # Some tools return revision objects directly
+        revision_obj = result.get("revision")
+        if revision_obj and hasattr(revision_obj, "revision_id") and not revision_id:
+            # Try to get revision_id from revision object
+            revision_id = getattr(revision_obj, "revision_id", None)
+
+        # If no approval flag and no revision_id, no approval check needed
+        if not requires_approval and not revision_id:
+            return
+
+        # If we have a revision_id, check the database revision for approval requirement
+        if revision_id:
+            with get_session() as session:
+                revision = session.execute(
+                    select(PlanRevision).where(PlanRevision.id == revision_id)
+                ).scalar_one_or_none()
+
+                if revision and revision.requires_approval:
+                    # Check if revision is approved (status="applied" AND approved_by_user=True)
+                    is_approved = (
+                        revision.status == "applied"
+                        and revision.approved_by_user is True
+                    )
+
+                    if not is_approved:
+                        # Revision requires approval but is not approved - refuse execution
+                        logger.error(
+                            f"Revision {revision_id} requires approval but is not approved. "
+                            f"Status: {revision.status}, approved_by_user: {revision.approved_by_user}"
+                        )
+                        raise RuntimeError(
+                            f"Revision {revision_id} requires user approval before execution. "
+                            f"Current status: {revision.status}. "
+                            "Please approve the revision via the API before executing."
+                        )
+
+        # If result explicitly indicates requires_approval=True but no revision_id, this is a tool error
+        if requires_approval and not revision_id:
+            logger.error(
+                "Tool result indicates requires_approval=True but no revision_id provided"
+            )
+            raise RuntimeError(
+                "Tool indicated approval is required but did not provide a revision_id. "
+                "This indicates a tool implementation error."
+            )
 
     @staticmethod
     def _validate_intent_horizon_combination(
@@ -364,6 +440,14 @@ class CoachActionExecutor:
         # Invariant guard: Legacy planner must never be called
         if "plan_race_build" in (decision.action or ""):
             raise RuntimeError("Legacy planner must never be called")
+
+        # Phase 1: Enforce "No Writes" guarantee - read-only tools must not be executed by executor
+        target_action = decision.target_action or decision.next_executable_action
+        if target_action and target_action in READ_ONLY_TOOLS:
+            raise RuntimeError(
+                f"Read-only tool '{target_action}' must not be executed by executor. "
+                "Read-only tools are for visibility only and should be called directly by orchestrator."
+            )
 
         # Phase 6C: Safe for background execution
         # Individual _execute_* methods have try-except blocks that return error messages
@@ -981,6 +1065,9 @@ class CoachActionExecutor:
                     athlete_profile=athlete_profile,
                 )
 
+                # Phase 5: Enforce approval requirement - refuse execution if approval needed but not granted
+                CoachActionExecutor._enforce_revision_approval(result)
+
                 # Save revision to registry
                 if "revision" in result:
                     registry = PlanRevisionRegistry()
@@ -1083,6 +1170,9 @@ class CoachActionExecutor:
                 athlete_profile=athlete_profile,
             )
 
+            # Phase 5: Enforce approval requirement - refuse execution if approval needed but not granted
+            CoachActionExecutor._enforce_revision_approval(result)
+
             # Save revision to registry
             if "revision" in result:
                 registry = PlanRevisionRegistry()
@@ -1173,6 +1263,9 @@ class CoachActionExecutor:
                 athlete_id=deps.athlete_id,
                 modification=race_modification,
             )
+
+            # Phase 5: Enforce approval requirement (modify_race doesn't currently use approval, but check for consistency)
+            CoachActionExecutor._enforce_revision_approval(result)
 
             if not result.get("success"):
                 error_msg = result.get("error", "Unknown error")
@@ -1266,6 +1359,9 @@ class CoachActionExecutor:
                 athlete_id=deps.athlete_id,
                 modification=season_modification,
             )
+
+            # Phase 5: Enforce approval requirement (modify_season delegates to modify_week which handles approval)
+            CoachActionExecutor._enforce_revision_approval(result)
 
             if not result.get("success"):
                 error_msg = result.get("error", "Unknown error")

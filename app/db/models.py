@@ -1253,3 +1253,84 @@ class PlanRevision(Base):
     __table_args__ = (
         Index("idx_plan_revisions_athlete_created", "athlete_id", "created_at"),
     )
+
+
+class SubjectiveFeedback(Base):
+    """Athlete-reported subjective feedback signals.
+
+    Stores fatigue, soreness, motivation, and notes from athlete.
+    Used for Phase 2 - Reality Reconciliation.
+
+    Schema:
+    - id: UUID primary key
+    - user_id: Foreign key to users.id (UUID)
+    - date: Date for feedback (Date, indexed)
+    - fatigue: Fatigue level (0-10, nullable)
+    - soreness: Soreness level (0-10, nullable)
+    - motivation: Motivation level (0-10, nullable)
+    - note: Optional text note (nullable)
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
+    """
+
+    __tablename__ = "subjective_feedback"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    fatigue: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-10 scale
+    soreness: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-10 scale
+    motivation: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-10 scale
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "date", name="uq_subjective_feedback_user_date"),
+        Index("idx_subjective_feedback_user_date", "user_id", "date"),
+    )
+
+
+class DecisionAudit(Base):
+    """Decision audit log for coaching recommendations.
+
+    Stores coaching decisions and their inputs/outputs for auditability.
+    Append-only log that preserves the reasoning trail.
+
+    Schema:
+    - id: Primary key (UUID)
+    - user_id: User ID (indexed for fast queries)
+    - timestamp: When the decision was made
+    - decision_type: Type of decision (e.g., "no_change", "plan_revision", etc.)
+    - inputs: JSON dictionary of inputs used to make the decision
+    - output: JSON dictionary of decision output/recommendation
+    - rationale: Optional JSON dictionary with explanation/rationale
+
+    Design Notes:
+    - JSON inputs/outputs preserve flexibility
+    - Append-only for auditability
+    - Indexed by user_id and timestamp for fast queries
+    """
+
+    __tablename__ = "decision_audit"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True
+    )
+    decision_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    inputs: Mapped[dict] = mapped_column(JSON, nullable=False)
+    output: Mapped[dict] = mapped_column(JSON, nullable=False)
+    rationale: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index("idx_decision_audit_user_timestamp", "user_id", "timestamp"),
+    )

@@ -43,6 +43,102 @@ class ToolRegistry:
                 max_calls_per_session=None,
                 allowed_horizons=["day", "week", "season"],
             ),
+            # Read-only tools (Phase 1)
+            "get_completed_activities": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "get_planned_activities": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "get_athlete_profile": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "get_calendar_events": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "get_training_metrics": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            # Read-only tools (Phase 2)
+            "get_plan_compliance": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "get_metric_trends": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "get_subjective_feedback": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            # Write tools (Phase 2)
+            "record_subjective_feedback": ToolConfig(
+                enabled=True,
+                read_only=False,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            # Read-only tools (Phase 3)
+            "simulate_training_load_forward": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "get_risk_flags": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "recommend_no_change": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            # Read-only tools (Phase 4)
+            "generate_plan_rationale": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            "get_recent_decisions": ToolConfig(
+                enabled=True,
+                read_only=True,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
+            # Write tools (Phase 4)
+            "record_decision_audit": ToolConfig(
+                enabled=True,
+                read_only=False,
+                max_calls_per_session=None,
+                allowed_horizons=None,
+            ),
         }
 
     def get_config(self, tool_name: str) -> ToolConfig | None:
@@ -132,3 +228,28 @@ class ToolRegistry:
 
 # Global registry instance
 TOOL_REGISTRY = ToolRegistry()
+
+# Read-only tools set (Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 6)
+READ_ONLY_TOOLS = {
+    "get_completed_activities",
+    "get_planned_activities",
+    "get_athlete_profile",
+    "get_calendar_events",
+    "get_training_metrics",
+    "get_plan_compliance",
+    "get_metric_trends",
+    "get_subjective_feedback",
+    "simulate_training_load_forward",
+    "get_risk_flags",
+    "recommend_no_change",
+    "generate_plan_rationale",
+    "get_recent_decisions",
+    "query_coaching_knowledge",  # Phase 6: Explanation-only knowledge
+}
+
+# Write tools set (Phase 2 + Phase 4)
+# These can only be executed by the executor, not directly by the coach
+WRITE_TOOLS = {
+    "record_subjective_feedback",
+    "record_decision_audit",
+}

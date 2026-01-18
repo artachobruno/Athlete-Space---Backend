@@ -26,6 +26,7 @@ from app.calendar.reconciliation_service import reconcile_calendar
 from app.calendar.view_helper import calendar_session_from_view_row, get_calendar_items_from_view
 from app.db.models import Activity, PlannedSession, StravaAccount, User
 from app.db.session import get_session
+from app.pairing.session_links import upsert_link, unlink_by_planned
 from app.utils.timezone import now_user, to_utc
 from app.workouts.execution_models import WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
@@ -729,18 +730,45 @@ def update_session_status(
         if not planned_session:
             raise HTTPException(status_code=404, detail="Planned session not found")
 
+        # If changing from completed to another status, unlink the session
+        if planned_session.status == "completed" and request.status != "completed":
+            unlink_by_planned(session, session_id, reason=f"Status changed from completed to {request.status}")
+
         # Update status
         planned_session.status = request.status
 
-        # Schema v2: completed_activity_id is removed, use session_links table instead
-        # If marking as completed, update status
-        if request.status == "completed":
-            # TODO: Create SessionLink if request.completed_activity_id is provided
-            # For now, just set status - session linking should be handled separately
-            planned_session.status = "completed"
-        else:
-            # Reset status if changing from completed
-            planned_session.status = request.status
+        # Schema v2: Create SessionLink if marking as completed with activity ID
+        if request.status == "completed" and request.completed_activity_id:
+            try:
+                upsert_link(
+                    session=session,
+                    user_id=user_id,
+                    planned_session_id=session_id,
+                    activity_id=request.completed_activity_id,
+                    status="confirmed",  # Manual status updates are confirmed
+                    method="manual",
+                    confidence=1.0,  # Manual actions have full confidence
+                    notes="Status updated to completed via update_session_status endpoint",
+                )
+                logger.info(
+                    "Created session link when marking as completed",
+                    planned_session_id=session_id,
+                    activity_id=request.completed_activity_id,
+                    user_id=user_id,
+                )
+            except ValueError as e:
+                # Activity not found or validation error
+                logger.warning(
+                    "Failed to create session link",
+                    planned_session_id=session_id,
+                    activity_id=request.completed_activity_id,
+                    error=str(e),
+                    user_id=user_id,
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Activity not found or invalid: {str(e)}",
+                ) from e
 
         session.commit()
         session.refresh(planned_session)

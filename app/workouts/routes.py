@@ -291,7 +291,6 @@ def get_structured_workout(
                 "inferred": False,  # Not stored in WorkoutStep model
             }
             step_dicts.append(step_dict)
-            step_dicts.append(step_dict)
 
         # Build groups list for response
         groups_list = [
@@ -326,10 +325,13 @@ def get_structured_workout(
         # Calculate totals from steps (Workout model doesn't store these directly)
         total_distance_meters, total_duration_seconds = calculate_workout_totals(steps)
 
+        # Convert workout.id to string for schema (handles UUID type if returned by SQLAlchemy)
+        workout_id_str = workout.id if isinstance(workout.id, str) else str(workout.id)
+
         return StructuredWorkoutResponse(
             status="ok",
             workout=StructuredWorkoutInfo(
-                id=workout.id,
+                id=workout_id_str,
                 sport=workout.sport,
                 source=workout.source,
                 total_distance_meters=total_distance_meters,
@@ -540,10 +542,13 @@ def update_workout_steps(
         # Calculate totals from steps (Workout model doesn't store these directly)
         total_distance_meters, total_duration_seconds = calculate_workout_totals(steps)
 
+        # Convert workout.id to string for schema (handles UUID type if returned by SQLAlchemy)
+        workout_id_str = workout.id if isinstance(workout.id, str) else str(workout.id)
+
         return StructuredWorkoutResponse(
             status="ok",
             workout=StructuredWorkoutInfo(
-                id=workout.id,
+                id=workout_id_str,
                 sport=workout.sport,
                 source=workout.source,
                 total_distance_meters=total_distance_meters,

@@ -271,8 +271,11 @@ def get_structured_workout(
             step_kind = step.step_type  # Use step_type as kind
             step_intensity = None  # Not stored in WorkoutStep model
 
+            # Convert step.id to string for schema (handles UUID type if returned by SQLAlchemy)
+            step_id_str = step.id if isinstance(step.id, str) else str(step.id)
+
             step_dict = {
-                "id": step.id,
+                "id": step_id_str,
                 "order": step.step_index,
                 "name": step_name,
                 "type": step.step_type,
@@ -285,7 +288,7 @@ def get_structured_workout(
                 "target_min": target_min,
                 "target_max": target_max,
                 "target_value": target_value,
-                "repeat_group_id": step_id_to_group.get(step.id),
+                "repeat_group_id": step_id_to_group.get(step_id_str),
                 "instructions": step.instructions,
                 "purpose": step.purpose,
                 "inferred": False,  # Not stored in WorkoutStep model
@@ -505,8 +508,11 @@ def update_workout_steps(
             step_kind = step.step_type
             step_intensity = None  # Not stored in WorkoutStep model
 
+            # Convert step.id to string for schema (handles UUID type if returned by SQLAlchemy)
+            step_id_str = step.id if isinstance(step.id, str) else str(step.id)
+
             step_dict = {
-                "id": step.id,
+                "id": step_id_str,
                 "order": step.step_index,
                 "name": step_name,
                 "type": step.step_type,
@@ -519,7 +525,7 @@ def update_workout_steps(
                 "target_min": target_min,
                 "target_max": target_max,
                 "target_value": target_value,
-                "repeat_group_id": step_id_to_group.get(step.id),
+                "repeat_group_id": step_id_to_group.get(step_id_str),
                 "instructions": step.instructions,
                 "purpose": step.purpose,
                 "inferred": False,  # Not stored in WorkoutStep model

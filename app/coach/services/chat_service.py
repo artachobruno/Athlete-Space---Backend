@@ -16,6 +16,8 @@ from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.db.models import AthleteProfile, StravaAccount, UserSettings
 from app.db.session import get_session
+from app.responses.input_builder import build_style_input
+from app.responses.style_llm import generate_coach_message
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 
 
@@ -249,7 +251,38 @@ async def process_coach_chat(
             )
 
     # Execute action if needed (executor will also guard against NO_ACTION)
-    return await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
+    executor_reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
+
+    # Style LLM: Rewrite structured decision into natural coach message
+    # This is NON-AUTHORITATIVE - it rewrites, but never decides, computes, retrieves, or executes
+    reply = executor_reply
+    try:
+        # Only use Style LLM for summary/explanation responses (informational queries)
+        # For planning responses, use executor reply as-is
+        if decision.response_type in {"summary", "explanation"} and decision.action == "EXECUTE":
+            style_input = build_style_input(
+                decision=decision,
+                executor_reply=executor_reply,
+                athlete_state=deps.athlete_state,
+            )
+            styled_reply = await generate_coach_message(style_input)
+            logger.info(
+                "Style LLM rewrote executor reply",
+                response_type=decision.response_type,
+                original_length=len(executor_reply),
+                styled_length=len(styled_reply),
+            )
+            reply = styled_reply
+    except Exception as e:
+        # Fallback to executor reply if Style LLM fails
+        logger.warning(
+            "Style LLM failed, using executor reply",
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+        # reply already set to executor_reply above
+
+    return reply
 
 
 async def _is_history_empty(athlete_id: int | None = None) -> bool:

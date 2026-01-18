@@ -36,7 +36,7 @@ from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
 from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
-from app.db.models import AthleteProfile, PlannedSession, PlanRevision, SeasonPlan
+from app.db.models import Activity, AthleteProfile, PlannedSession, PlanRevision, SeasonPlan
 from app.db.session import get_session
 from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
@@ -1914,16 +1914,14 @@ class CoachActionExecutor:
             # Also fetch completed activities for the week for context
             completed_activities = []
             try:
-                with get_session() as session:
-                    from app.db.models import Activity
-                    
+                with get_session() as db_session:
                     activities_query = select(Activity).where(
                         Activity.user_id == user_id,
                         Activity.starts_at >= monday,
                         Activity.starts_at <= sunday,
                     ).order_by(Activity.starts_at.desc())
                     
-                    activities = session.execute(activities_query).scalars().all()
+                    activities = db_session.execute(activities_query).scalars().all()
                     completed_activities = [
                         {
                             "name": a.name or "Activity",
@@ -1971,7 +1969,7 @@ class CoachActionExecutor:
                 # Assess recovery days
                 if session_count <= 2:
                     feedback_parts.append("Make sure you're maintaining consistency with your training plan.")
-                elif session_count <= 6 and len([s for s in sessions_data if s.get("name", "").lower() in ["rest", "recovery", "easy", "off"]]) < 1:
+                elif session_count <= 6 and len([s for s in sessions_data if s.get("name", "").lower() in {"rest", "recovery", "easy", "off"}]) < 1:
                     feedback_parts.append("Consider scheduling a recovery day to absorb training stress.")
                 
                 feedback_text = " ".join(feedback_parts) if feedback_parts else ""

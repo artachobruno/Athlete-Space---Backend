@@ -708,24 +708,14 @@ async def run_conversation(
             ),
         )
 
-        # Print result structure to console for debugging
+        # Log result structure only at debug level (not in production)
         if result.output:
-            output_dict = result.output.model_dump() if hasattr(result.output, "model_dump") else None
-            logger.info(f"\n{'=' * 80}")
-            logger.info("ORCHESTRATOR AGENT RESULT (immediate after agent.run()):")
-            logger.info(f"{'=' * 80}")
-            logger.info(f"Result type: {type(result).__name__}")
-            logger.info(f"Output type: {type(result.output).__name__}")
-            logger.info(f"Output dict keys: {list(output_dict.keys()) if output_dict else 'N/A'}")
-            if output_dict:
-                for key, value in output_dict.items():
-                    if key == "message":
-                        logger.info(f"  {key}: {value!r} (length: {len(value) if value else 0})")
-                    elif isinstance(value, (dict, list)) and len(str(value)) > 100:
-                        logger.info(f"  {key}: {type(value).__name__} (length: {len(str(value))} chars)")
-                    else:
-                        logger.info(f"  {key}: {value!r}")
-            logger.info(f"{'=' * 80}\n")
+            logger.debug(
+                "Orchestrator agent result",
+                intent=result.output.intent if hasattr(result.output, "intent") else None,
+                horizon=result.output.horizon if hasattr(result.output, "horizon") else None,
+                action=result.output.action if hasattr(result.output, "action") else None,
+            )
 
         # Verify response is valid and complete
         # If should_execute is True, message can be empty (executor will generate message from tool result)

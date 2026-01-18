@@ -342,23 +342,54 @@ def _get_messages_since_last_summary(
                             role=role_str,
                         )
                         continue
+                    
+                    # Validate required fields before creating Message
+                    if not db_msg.user_id:
+                        logger.warning(
+                            "Missing user_id in ConversationMessage, skipping",
+                            conversation_id=conversation_id,
+                            message_id=db_msg.id,
+                        )
+                        continue
+                    
+                    if db_msg.ts is None:
+                        logger.warning(
+                            "Missing ts in ConversationMessage, skipping",
+                            conversation_id=conversation_id,
+                            message_id=db_msg.id,
+                        )
+                        continue
+                    
+                    if db_msg.tokens is None:
+                        logger.warning(
+                            "Missing tokens in ConversationMessage, skipping",
+                            conversation_id=conversation_id,
+                            message_id=db_msg.id,
+                        )
+                        continue
+                    
                     role: Literal["user", "assistant", "system"] = role_str  # type: ignore[assignment]
+                    
+                    # Convert ts to ISO format string
+                    ts_str = db_msg.ts.isoformat() if isinstance(db_msg.ts, datetime) else str(db_msg.ts)
+                    
                     msg = Message(
                         conversation_id=db_msg.conversation_id,
                         user_id=db_msg.user_id,
                         role=role,
                         content=db_msg.content,
-                        ts=db_msg.ts.isoformat() if isinstance(db_msg.ts, datetime) else db_msg.ts,
+                        ts=ts_str,
                         tokens=db_msg.tokens,
                         metadata=db_msg.message_metadata or {},
                     )
                     messages.append(msg)
                 except Exception as e:
-                    logger.warning(
+                    logger.debug(
                         "Failed to convert ConversationMessage to Message",
                         conversation_id=conversation_id,
                         message_id=db_msg.id,
                         error=str(e),
+                        exc_info=True,
                     )
                     continue
 

@@ -92,7 +92,7 @@ def get_conversation_progress(conversation_id: str) -> ConversationProgress | No
     db_conversation_id = conversation_id
     if conversation_id.startswith("c_"):
         db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
-    
+
     with get_session() as db:
         result = db.execute(select(ConversationProgress).where(ConversationProgress.conversation_id == db_conversation_id)).first()
         if result:

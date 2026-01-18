@@ -73,7 +73,7 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
         # This is more accurate than approximating from CTL
         daily_hours_result = session.execute(
             text("""
-                SELECT 
+                SELECT
                     day,
                     (summary->>'load_score')::double precision AS load_score
                 FROM daily_training_summary
@@ -99,12 +99,12 @@ def get_training_data(user_id: str, days: int = 60) -> TrainingData:
             date_str = daily_load_record.day.isoformat()
             date_obj = daily_load_record.day
             dates.append(date_str)
-            
+
             # Use actual daily hours from daily_training_summary if available
             # Otherwise default to 0.0 (rest day)
             actual_hours = daily_hours_map.get(date_obj, 0.0)
             daily_load.append(actual_hours)
-            
+
             ctl_values.append(daily_load_record.ctl or 0.0)
             atl_values.append(daily_load_record.atl or 0.0)
             tsb_values.append(daily_load_record.tsb or 0.0)

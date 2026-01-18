@@ -1884,6 +1884,61 @@ class CoachActionExecutor:
             return "Something went wrong while adjusting your training load. Please try again."
 
     @staticmethod
+    async def _format_week_workouts(user_id: str, training_state_msg: str) -> str:
+        """Format scheduled workouts for the current week.
+
+        Args:
+            user_id: User ID to fetch sessions for
+            training_state_msg: Base training state message
+
+        Returns:
+            Message with training state and scheduled workouts
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            days_since_monday = now.weekday()
+            monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+            sessions_result = await call_tool(
+                "get_planned_sessions",
+                {
+                    "user_id": user_id,
+                    "start_date": monday.isoformat(),
+                    "end_date": sunday.isoformat(),
+                },
+            )
+
+            sessions_data = sessions_result.get("sessions", [])
+            if sessions_data:
+                # Format workouts conversationally
+                sessions_list_parts = []
+                for s in sessions_data[:10]:  # Limit to 10 to avoid too long responses
+                    session_name = s.get("name", "Workout")
+                    starts_at = s.get("starts_at", "")
+                    if starts_at:
+                        # Parse date for friendly formatting
+                        try:
+                            dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+                            day_name = dt.strftime("%A")
+                            date_str = dt.strftime("%B %d")
+                            sessions_list_parts.append(f"{session_name} on {day_name}, {date_str}")
+                        except Exception:
+                            sessions_list_parts.append(f"{session_name} on {starts_at[:10]}")
+                    else:
+                        sessions_list_parts.append(session_name)
+
+                sessions_text = "\n".join(f"• {s}" for s in sessions_list_parts)
+                return f"{training_state_msg}\n\nHere's what you have scheduled this week:\n{sessions_text}"
+
+            return f"{training_state_msg}\n\nYou don't have any workouts scheduled for this week yet."
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch scheduled workouts: {e}", exc_info=True)
+            # Use training state even if scheduled workouts fetch fails
+            return training_state_msg
+
+    @staticmethod
     async def _execute_explain_training_state(
         decision: OrchestratorAgentResponse,
         deps: CoachDeps,
@@ -1905,53 +1960,12 @@ class CoachActionExecutor:
                 },
             )
             training_state_msg = result.get("message", "Training state explained.")
-            
+
             # If horizon is "week", also fetch scheduled workouts
             final_message = training_state_msg
             if decision.horizon == "week" and deps.user_id:
-                try:
-                    now = datetime.now(timezone.utc)
-                    days_since_monday = now.weekday()
-                    monday = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    sunday = monday + timedelta(days=6, hours=23, minutes=59, seconds=59)
-                    
-                    sessions_result = await call_tool(
-                        "get_planned_sessions",
-                        {
-                            "user_id": deps.user_id,
-                            "start_date": monday.isoformat(),
-                            "end_date": sunday.isoformat(),
-                        },
-                    )
-                    
-                    sessions_data = sessions_result.get("sessions", [])
-                    if sessions_data:
-                        # Format workouts conversationally
-                        sessions_list_parts = []
-                        for s in sessions_data[:10]:  # Limit to 10 to avoid too long responses
-                            session_name = s.get("name", "Workout")
-                            starts_at = s.get("starts_at", "")
-                            if starts_at:
-                                # Parse date for friendly formatting
-                                try:
-                                    dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
-                                    day_name = dt.strftime("%A")
-                                    date_str = dt.strftime("%B %d")
-                                    sessions_list_parts.append(f"{session_name} on {day_name}, {date_str}")
-                                except Exception:
-                                    sessions_list_parts.append(f"{session_name} on {starts_at[:10]}")
-                            else:
-                                sessions_list_parts.append(session_name)
-                        
-                        sessions_text = "\n".join(f"• {s}" for s in sessions_list_parts)
-                        final_message = f"{training_state_msg}\n\nHere's what you have scheduled this week:\n{sessions_text}"
-                    else:
-                        final_message = f"{training_state_msg}\n\nYou don't have any workouts scheduled for this week yet."
-                except Exception as e:
-                    logger.warning(f"Failed to fetch scheduled workouts: {e}", exc_info=True)
-                    # Use training state even if scheduled workouts fetch fails
-                    final_message = training_state_msg
-            
+                final_message = await CoachActionExecutor._format_week_workouts(deps.user_id, training_state_msg)
+
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")

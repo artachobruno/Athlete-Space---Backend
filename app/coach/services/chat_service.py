@@ -303,7 +303,7 @@ def _is_simple_greeting(message: str) -> bool:
         if greeting and message_lower.startswith(greeting):
             # If the message is just the greeting or greeting + punctuation/whitespace
             remainder = message_lower[len(greeting):].strip()
-            if not remainder or remainder in [".", "!", "?", ",", ":", ";"]:
+            if not remainder or remainder in {".", "!", "?", ",", ":", ";"}:
                 return True
     return False
 

@@ -321,7 +321,7 @@ def _get_messages_since_last_summary(
         db_conversation_id = conversation_id
         if conversation_id.startswith("c_"):
             db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
-        
+
         with get_session() as db:
             query = select(ConversationMessage).where(ConversationMessage.conversation_id == db_conversation_id)
             if last_summary_timestamp:
@@ -416,7 +416,7 @@ def get_next_summary_version(db: Session, conversation_id: str) -> int:
     db_conversation_id = conversation_id
     if conversation_id.startswith("c_"):
         db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
-    
+
     last_version = db.execute(
         select(func.max(ConversationSummaryModel.version)).where(ConversationSummaryModel.conversation_id == db_conversation_id)
     ).scalar()
@@ -443,7 +443,7 @@ def persist_conversation_summary(
         db_conversation_id = conversation_id
         if conversation_id.startswith("c_"):
             db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
-        
+
         with get_session() as db:
             version = get_next_summary_version(db, conversation_id)
             created_at = datetime.now(timezone.utc)
@@ -601,7 +601,7 @@ def get_latest_conversation_summary(
         db_conversation_id = conversation_id
         if conversation_id.startswith("c_"):
             db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
-        
+
         with get_session() as db:
             row = (
                 db.query(ConversationSummaryModel)

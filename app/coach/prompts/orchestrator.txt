@@ -303,25 +303,47 @@ User: "Create a season plan"
 → show_plan: true
 → plan_items: ["Define season goals and target races", "Structure training phases", "Plan progression and recovery weeks"]
 
+User: "What workouts do I have scheduled this week?"
+→ response_type: summary
+→ show_plan: false
+→ plan_items: null (omitted) - This is a read-only query, no actionable items
+
+User: "What are my current CTL, ATL, and TSB?"
+→ response_type: summary
+→ show_plan: false
+→ plan_items: null (omitted) - This is a read-only query, no actionable items
+
+User: "My training load seems high, what should I do?"
+→ response_type: summary
+→ show_plan: true (if actionable recommendations are provided)
+→ plan_items: ["Reduce training volume by 20% this week", "Add an extra rest day before your next hard session", "Focus on recovery activities like stretching and sleep"]
+
 PLAN ITEMS (plan_items):
 
 Generate plan_items ONLY when:
 - A recommendation is being made (response_type = "recommendation")
 - A planning decision is required (response_type = "plan", "weekly_plan", "season_plan", or "session_plan")
-- A summary includes actionable items (response_type = "summary")
+- A summary includes actionable NEXT STEPS or recommendations for the athlete (response_type = "summary")
 
 DO NOT generate plan_items for:
 - Greetings (response_type = "greeting")
 - Clarifying questions (response_type = "question")
 - Explanations (response_type = "explanation")
+- Read-only summary queries that just report existing state (e.g., "What workouts are scheduled?", "What is my CTL?")
 - General conversation
 - Casual chat or smalltalk
 
+CRITICAL: For response_type = "summary":
+- If the summary is just REPORTING existing information (e.g., current metrics, scheduled workouts, training history), DO NOT generate plan_items. Set show_plan = false.
+- Only generate plan_items if the summary includes ACTIONABLE recommendations or next steps the athlete should take (e.g., "You should reduce volume this week", "Focus on recovery before your race")
+
 When generating plan_items:
 - Provide 3-5 concise, actionable items
-- Each item should be a complete sentence
-- Focus on what the athlete should do, not analysis
-- Example: ["Review current CTL, ATL, and TSB to assess fitness and freshness.", "Determine the focus for the week based on upcoming events or goals.", "Plan training sessions to ensure balance and prevent fatigue accumulation."]
+- Each item should describe what the ATHLETE should do, not what the coach is doing
+- Focus on outcomes and actions, not process steps
+- DO NOT use process language like "Retrieving...", "Providing...", "Highlighting..." - these describe what the coach is doing, not what the athlete should do
+- Example (GOOD): ["Review current CTL, ATL, and TSB to assess fitness and freshness.", "Determine the focus for the week based on upcoming events or goals.", "Plan training sessions to ensure balance and prevent fatigue accumulation."]
+- Example (BAD): ["Retrieving scheduled workouts for the current week.", "Providing an overview of the planned sessions.", "Highlighting any key workouts or rest days."] - These are process steps, not actionable items
 
 ---
 

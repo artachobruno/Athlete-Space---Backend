@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.workouts.models import WorkoutStep
+from app.workouts.targets_utils import get_target_max, get_target_metric, get_target_min, get_target_value
 
 
 @dataclass
@@ -151,31 +152,38 @@ def _classify_sample(
     if _is_paused(cadence, velocity):
         return ("pause", True)
 
+    # Extract target data from targets JSONB (schema v2)
+    targets = step.targets or {}
+    target_metric = get_target_metric(targets)
+    target_min = get_target_min(targets)
+    target_max = get_target_max(targets)
+    target_value = get_target_value(targets)
+
     # If no target metric, mark as in_range (completed)
-    if not step.target_metric:
+    if not target_metric:
         return ("in_range", False)
 
     # Get metric value (with mapping and unit conversion)
-    metric_value = _get_metric_value(streams_data, step.target_metric, index)
+    metric_value = _get_metric_value(streams_data, target_metric, index)
     if metric_value is None:
         # Missing metric data - treat as in_range (completed)
         return ("in_range", False)
 
     # Check against target range
-    if step.target_min is not None and step.target_max is not None:
+    if target_min is not None and target_max is not None:
         # Range target
-        if step.target_min <= metric_value <= step.target_max:
+        if target_min <= metric_value <= target_max:
             return ("in_range", False)
-        if metric_value > step.target_max:
+        if metric_value > target_max:
             return ("overshoot", False)
         return ("undershoot", False)
 
-    if step.target_value is not None:
+    if target_value is not None:
         # Single value target (treat as exact match with small tolerance)
-        tolerance = 0.01 * abs(step.target_value) if step.target_value != 0 else 0.01
-        if abs(metric_value - step.target_value) <= tolerance:
+        tolerance = 0.01 * abs(target_value) if target_value != 0 else 0.01
+        if abs(metric_value - target_value) <= tolerance:
             return ("in_range", False)
-        if metric_value > step.target_value:
+        if metric_value > target_value:
             return ("overshoot", False)
         return ("undershoot", False)
 

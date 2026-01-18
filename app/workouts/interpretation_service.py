@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.workouts.execution_models import StepCompliance, WorkoutComplianceSummary
 from app.workouts.llm.evaluator import WorkoutLLMEvaluator
 from app.workouts.models import WorkoutStep
+from app.workouts.targets_utils import get_target_max, get_target_metric, get_target_min, get_target_value
 
 
 class InterpretationService:
@@ -31,16 +32,23 @@ class InterpretationService:
         Returns:
             Human-readable target description
         """
-        if not step.target_metric:
+        # Extract target data from targets JSONB (schema v2)
+        targets = step.targets or {}
+        target_metric = get_target_metric(targets)
+        target_min = get_target_min(targets)
+        target_max = get_target_max(targets)
+        target_value = get_target_value(targets)
+
+        if not target_metric:
             return "No specific target"
 
-        metric_name = step.target_metric.upper()
-        if step.target_min is not None and step.target_max is not None:
-            return f"{metric_name} {step.target_min:.1f}-{step.target_max:.1f}"
-        if step.target_value is not None:
-            return f"{metric_name} {step.target_value:.1f}"
+        metric_name = target_metric.upper()
+        if target_min is not None and target_max is not None:
+            return f"{metric_name} {target_min:.1f}-{target_max:.1f}"
+        if target_value is not None:
+            return f"{metric_name} {target_value:.1f}"
 
-        return f"{metric_name} (zone {step.intensity_zone})" if step.intensity_zone else f"{metric_name} target"
+        return f"{metric_name} target"
 
     async def interpret_workout(self, session: Session, workout_id: str) -> bool:
         """Generate and persist interpretations for a workout.
@@ -105,7 +113,7 @@ class InterpretationService:
 
             # Generate interpretation
             interpretation = await self.evaluator.evaluate_step(
-                step_type=step.type,
+                step_type=step.step_type,  # Use step_type from database model
                 planned_target=planned_target,
                 time_in_range_pct=time_in_range_pct,
                 overshoot_pct=overshoot_pct,
@@ -122,7 +130,7 @@ class InterpretationService:
                 compliance.llm_tip = interpretation.coaching_tip
                 compliance.llm_confidence = interpretation.confidence
 
-                step_summaries.append(f"Step {step.step_index} ({step.type}): {interpretation.summary}")
+                step_summaries.append(f"Step {step.step_index} ({step.step_type}): {interpretation.summary}")
 
         # Generate workout-level interpretation
         workout_interpretation = await self.evaluator.evaluate_workout(

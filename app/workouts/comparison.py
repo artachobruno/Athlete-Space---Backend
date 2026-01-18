@@ -13,6 +13,7 @@ from app.db.models import Activity
 from app.db.session import get_session
 from app.workouts.execution_models import WorkoutComplianceSummary, WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
+from app.workouts.targets_utils import get_distance_meters, get_duration_seconds
 
 
 def _compute_step_comparison(
@@ -30,9 +31,10 @@ def _compute_step_comparison(
     Returns:
         Dictionary with comparison metrics
     """
-    # Get planned values
-    planned_distance = planned_step.distance_meters or 0
-    planned_duration = planned_step.duration_seconds or 0
+    # Extract planned values from targets JSONB (schema v2)
+    targets = planned_step.targets or {}
+    planned_distance = get_distance_meters(targets) or 0
+    planned_duration = get_duration_seconds(targets) or 0
 
     # Get executed values from activity streams (simplified - would need actual stream data)
     # For now, use activity totals as approximation
@@ -118,8 +120,10 @@ def compute_workout_comparison(workout_id: str) -> None:
             for step in steps:
                 # Simple matching: use activity totals divided by step count
                 # In a real implementation, this would use time-aligned stream data
-                step_planned_distance = step.distance_meters or 0
-                step_planned_duration = step.duration_seconds or 0
+                # Extract planned values from targets JSONB (schema v2)
+                step_targets = step.targets or {}
+                step_planned_distance = get_distance_meters(step_targets) or 0
+                step_planned_duration = get_duration_seconds(step_targets) or 0
 
                 # Initialize executed values
                 step_executed_distance = 0
@@ -131,7 +135,7 @@ def compute_workout_comparison(workout_id: str) -> None:
                     total_planned_distance += step_planned_distance
                 elif step_planned_duration > 0:
                     # Duration-based: distribute activity duration proportionally
-                    total_planned_duration = sum(s.duration_seconds or 0 for s in steps)
+                    total_planned_duration = sum(get_duration_seconds(s.targets or {}) or 0 for s in steps)
                     if total_planned_duration > 0:
                         step_executed_duration = int(
                             (step_planned_duration / total_planned_duration) * (activity.duration_seconds or 0)
@@ -159,7 +163,7 @@ def compute_workout_comparison(workout_id: str) -> None:
                         else 0.0
                     )
                 elif step_planned_duration > 0:
-                    total_planned_duration = sum(s.duration_seconds or 0 for s in steps)
+                    total_planned_duration = sum(get_duration_seconds(s.targets or {}) or 0 for s in steps)
                     if total_planned_duration > 0:
                         step_executed_duration = int(
                             (step_planned_duration / total_planned_duration) * (activity.duration_seconds or 0)
@@ -195,9 +199,9 @@ def compute_workout_comparison(workout_id: str) -> None:
                 total_executed_distance += step_executed_distance
 
             # Compute overall compliance
-            total_planned_distance = sum(s.distance_meters or 0 for s in steps)
+            total_planned_distance = sum(get_distance_meters(s.targets or {}) or 0 for s in steps)
             if total_planned_distance == 0:
-                total_planned_duration = sum(s.duration_seconds or 0 for s in steps)
+                total_planned_duration = sum(get_duration_seconds(s.targets or {}) or 0 for s in steps)
                 if total_planned_duration > 0:
                     total_executed_duration = activity.duration_seconds or 0
                     overall_delta = (

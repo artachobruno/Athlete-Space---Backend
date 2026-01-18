@@ -73,12 +73,14 @@ def detect_repeating_patterns(steps: Sequence[WorkoutStep]) -> list[StepGroup]:
             group_id = str(uuid.uuid4())
             step_ids: list[str] = []
 
-            # Collect all step IDs in this pattern
+            # Collect all step IDs in this pattern (ensure they're strings)
             for repeat_idx in range(repeat_count):
                 for step_idx in range(pattern_length):
                     step_index = i + repeat_idx * pattern_length + step_idx
                     if step_index < len(steps):
-                        step_ids.append(steps[step_index].id)
+                        step_id = steps[step_index].id
+                        # Ensure step_id is a string (database might return UUID objects)
+                        step_ids.append(str(step_id))
                         used_step_indices.add(step_index)
 
             groups.append(StepGroup(group_id=group_id, repeat=repeat_count, step_ids=step_ids))

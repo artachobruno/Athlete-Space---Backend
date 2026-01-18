@@ -7,12 +7,13 @@ and are normalized for display and export.
 from __future__ import annotations
 
 from app.workouts.models import WorkoutStep
+from app.workouts.targets_utils import get_duration_seconds
 
 
 def infer_step_name(step: WorkoutStep, raw_text: str | None = None) -> str:
     """Infer step name from step attributes if name is missing.
 
-    Uses step type, intensity_zone, purpose, instructions, and raw text
+    Uses step type, purpose, instructions, and raw text
     to infer a meaningful name for the step.
 
     Args:
@@ -28,10 +29,13 @@ def infer_step_name(step: WorkoutStep, raw_text: str | None = None) -> str:
     if step.instructions:
         return step.instructions
 
-    # Infer from type and intensity
-    step_type = (step.type or "").lower()
-    intensity = (step.intensity_zone or "").lower()
+    # Extract step_type from database model (schema v2: step_type, not type)
+    step_type = (step.step_type or "").lower()
     raw_lower = (raw_text or "").lower() if raw_text else ""
+
+    # Extract duration from targets JSONB if needed
+    targets = step.targets or {}
+    duration_seconds = get_duration_seconds(targets)
 
     # Check for hill keywords in raw text or type
     hill_keywords = ["hill", "uphill", "climb", "gradient"]
@@ -46,25 +50,6 @@ def infer_step_name(step: WorkoutStep, raw_text: str | None = None) -> str:
     if "recovery" in step_type or "recover" in step_type:
         return "Recovery"
 
-    # Check intensity for common patterns
-    if intensity == "warmup" or "warmup" in intensity:
-        return "Warmup"
-    if intensity == "cooldown" or "cooldown" in intensity:
-        return "Cooldown"
-    if intensity in {"tempo", "lt2"}:
-        return "Tempo"
-    if intensity == "threshold":
-        return "Threshold"
-    if intensity == "vo2":
-        return "VO2"
-    if intensity in {"easy", "recovery", "rest"}:
-        # Check if it's a short duration recovery
-        if step.duration_seconds and step.duration_seconds < 300:  # Less than 5 minutes
-            return "Recovery"
-        return "Easy"
-    if intensity == "steady":
-        return "Steady"
-
     # Check step type for common patterns
     if step_type == "interval":
         return "Interval"
@@ -76,6 +61,11 @@ def infer_step_name(step: WorkoutStep, raw_text: str | None = None) -> str:
         return "Tempo"
     if step_type == "threshold":
         return "Threshold"
+    if step_type in {"easy", "recovery", "rest"}:
+        # Check if it's a short duration recovery
+        if duration_seconds and duration_seconds < 300:  # Less than 5 minutes
+            return "Recovery"
+        return "Easy"
 
     # Default fallback based on type
     if step_type:

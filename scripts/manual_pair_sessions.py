@@ -165,10 +165,15 @@ def _process_session_pairing(db_session, planned: PlannedSession, backfill: bool
     link = get_link_for_planned(db_session, planned.id)
     print(f"\n🔍 Processing: {planned.title} on {planned.starts_at.date()}")
 
-    if link and backfill:
-        was_backfilled = _handle_backfill_for_paired_session(db_session, planned, link)
-        return False, was_backfilled
+    if link:
+        # Already paired
+        if backfill:
+            was_backfilled = _handle_backfill_for_paired_session(db_session, planned, link)
+            return False, was_backfilled
+        print("   ℹ Already paired (use --backfill to generate missing data)")
+        return False, False
 
+    # Not paired - try to pair
     try_auto_pair(planned=planned, session=db_session)
     db_session.commit()
     print("   ✅ Pairing attempted")

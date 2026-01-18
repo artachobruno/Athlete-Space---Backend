@@ -221,6 +221,9 @@ def _log_decision(
     planned_session_id = planned.id if planned else None
 
     # Log pairing decision to audit table (non-critical, failures don't break pairing)
+    # Use a savepoint to isolate logging failures from the main transaction
+    in_transaction = session.in_transaction()
+    savepoint = session.begin_nested() if in_transaction else None
     try:
         pairing_decision = PairingDecision(
             user_id=user_id,
@@ -233,16 +236,20 @@ def _log_decision(
         )
         session.add(pairing_decision)
         session.flush()
+        if savepoint:
+            savepoint.commit()
     except Exception as e:
-        # Audit logging is non-critical - log error but don't fail pairing
+        # Audit logging is non-critical - rollback savepoint only, not main transaction
+        if savepoint:
+            savepoint.rollback()
         logger.warning(
             "Failed to log pairing decision to audit table (non-critical)",
             user_id=user_id,
             decision=decision,
             reason=reason,
             error=str(e),
+            exc_info=True,
         )
-        session.rollback()
 
 
 def _pair_from_activity(activity: Activity, session: Session) -> None:

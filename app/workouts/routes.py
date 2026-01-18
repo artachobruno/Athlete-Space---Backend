@@ -109,6 +109,38 @@ def get_workout_steps(session: Session, workout_id: UUID) -> list[WorkoutStep]:
     return list(result.scalars().all())
 
 
+def calculate_workout_totals(steps: list[WorkoutStep]) -> tuple[int | None, int | None]:
+    """Calculate total distance and duration from workout steps.
+
+    Args:
+        steps: List of WorkoutStep instances
+
+    Returns:
+        Tuple of (total_distance_meters, total_duration_seconds)
+    """
+    total_distance: int = 0
+    total_duration: int = 0
+    has_distance = False
+    has_duration = False
+
+    for step in steps:
+        targets = step.targets or {}
+        step_distance = get_distance_meters(targets)
+        step_duration = get_duration_seconds(targets)
+
+        if step_distance is not None:
+            total_distance += step_distance
+            has_distance = True
+        if step_duration is not None:
+            total_duration += step_duration
+            has_duration = True
+
+    return (
+        total_distance if has_distance else None,
+        total_duration if has_duration else None,
+    )
+
+
 @router.post("/parse-notes", response_model=ParseNotesResponse)
 def parse_notes(
     request: ParseNotesRequest,
@@ -291,14 +323,17 @@ def get_structured_workout(
         # Determine structured availability
         structured_available = bool(steps and len(steps) > 0)
 
+        # Calculate totals from steps (Workout model doesn't store these directly)
+        total_distance_meters, total_duration_seconds = calculate_workout_totals(steps)
+
         return StructuredWorkoutResponse(
             status="ok",
             workout=StructuredWorkoutInfo(
                 id=workout.id,
                 sport=workout.sport,
                 source=workout.source,
-                total_distance_meters=workout.total_distance_meters,
-                total_duration_seconds=workout.total_duration_seconds,
+                total_distance_meters=total_distance_meters,
+                total_duration_seconds=total_duration_seconds,
                 parse_status=workout.parse_status or "pending",
             ),
             steps=step_dicts,
@@ -502,14 +537,17 @@ def update_workout_steps(
         # Determine structured availability
         structured_available = bool(steps and len(steps) > 0)
 
+        # Calculate totals from steps (Workout model doesn't store these directly)
+        total_distance_meters, total_duration_seconds = calculate_workout_totals(steps)
+
         return StructuredWorkoutResponse(
             status="ok",
             workout=StructuredWorkoutInfo(
                 id=workout.id,
                 sport=workout.sport,
                 source=workout.source,
-                total_distance_meters=workout.total_distance_meters,
-                total_duration_seconds=workout.total_duration_seconds,
+                total_distance_meters=total_distance_meters,
+                total_duration_seconds=total_duration_seconds,
                 parse_status=workout.parse_status or "pending",
             ),
             steps=step_dicts,
@@ -552,7 +590,7 @@ def get_workout(
             .order_by(WorkoutStep.step_index)
         )
         steps_result = session.execute(steps_stmt)
-        steps = steps_result.scalars().all()
+        steps = list(steps_result.scalars().all())
 
         # Convert to schemas
         step_schemas = []
@@ -583,12 +621,15 @@ def get_workout(
                 )
             )
 
+        # Calculate totals from steps (Workout model doesn't store these directly)
+        total_distance_meters, total_duration_seconds = calculate_workout_totals(steps)
+
         return WorkoutSchema(
             id=UUID(workout.id),
             sport=workout.sport,
             source=workout.source,
-            total_duration_seconds=workout.total_duration_seconds,
-            total_distance_meters=workout.total_distance_meters,
+            total_duration_seconds=total_duration_seconds,
+            total_distance_meters=total_distance_meters,
             steps=step_schemas,
         )
 

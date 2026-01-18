@@ -170,7 +170,7 @@ def _process_session_pairing(db_session, planned: PlannedSession, backfill: bool
         if backfill:
             was_backfilled = _handle_backfill_for_paired_session(db_session, planned, link)
             return False, was_backfilled
-        print("   ℹ Already paired (use --backfill to generate missing data)")
+        print("   [i] Already paired (use --backfill to generate missing data)")
         return False, False
 
     # Not paired - try to pair

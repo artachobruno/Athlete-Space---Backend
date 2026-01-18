@@ -44,10 +44,33 @@ async def process_coach_chat(
     Returns:
         Coach's reply message
     """
+    # Resolve user_id from athlete_id if user_id is the CLI default placeholder
+    resolved_user_id = user_id
+    if user_id == "cli-user":
+        resolved_user_id = get_user_id_from_athlete_id(athlete_id)
+        if resolved_user_id is None:
+            logger.warning(
+                "Cannot resolve user_id from athlete_id for CLI",
+                athlete_id=athlete_id,
+                conversation_id=conversation_id,
+            )
+            # Fall back to a UUID-like placeholder to avoid DB errors, but this won't work
+            # The CLI should provide a valid user_id or athlete_id should be in the database
+            raise ValueError(
+                f"Cannot find user_id for athlete_id={athlete_id}. "
+                "Please ensure the athlete has a Strava account connected."
+            )
+        logger.info(
+            "Resolved user_id from athlete_id for CLI",
+            original_user_id=user_id,
+            resolved_user_id=resolved_user_id,
+            athlete_id=athlete_id,
+        )
+
     logger.info(
         "Processing coach chat",
         message_length=len(message),
-        user_id=user_id,
+        user_id=resolved_user_id,
         athlete_id=athlete_id,
         conversation_id=conversation_id,
     )
@@ -68,7 +91,7 @@ async def process_coach_chat(
             conversation_id=conversation_id,
         )
         try:
-            training_data = get_training_data(user_id=user_id, days=days)
+            training_data = get_training_data(user_id=resolved_user_id, days=days)
             athlete_state = build_athlete_state(
                 ctl=training_data.ctl,
                 atl=training_data.atl,
@@ -105,7 +128,7 @@ async def process_coach_chat(
 
     # Build athlete state
     try:
-        training_data = get_training_data(user_id=user_id, days=days)
+        training_data = get_training_data(user_id=resolved_user_id, days=days)
         athlete_state = build_athlete_state(
             ctl=training_data.ctl,
             atl=training_data.atl,
@@ -125,7 +148,7 @@ async def process_coach_chat(
     training_preferences = None
     race_profile = None
     with get_session() as db:
-        profile = db.query(AthleteProfile).filter_by(user_id=user_id).first()
+        profile = db.query(AthleteProfile).filter_by(user_id=resolved_user_id).first()
         if profile:
             # Calculate age from date_of_birth
             age = None
@@ -168,7 +191,7 @@ async def process_coach_chat(
                 )
 
         # Load training preferences from UserSettings
-        settings = db.query(UserSettings).filter_by(user_id=user_id).first()
+        settings = db.query(UserSettings).filter_by(user_id=resolved_user_id).first()
         if settings:
             training_preferences = TrainingPreferencesData(
                 training_consistency=getattr(settings, "consistency", None),
@@ -191,7 +214,7 @@ async def process_coach_chat(
     # Create dependencies
     deps = CoachDeps(
         athlete_id=athlete_id,
-        user_id=user_id,
+        user_id=resolved_user_id,
         athlete_state=athlete_state,
         athlete_profile=athlete_profile,
         training_preferences=training_preferences,

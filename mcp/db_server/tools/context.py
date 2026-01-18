@@ -30,10 +30,10 @@ def _get_user_id_from_athlete_id(athlete_id: int) -> str | None:
         User ID (Clerk user ID) or None if not found
     """
     with get_session() as db:
-        result = db.execute(select(StravaAccount.user_id).where(StravaAccount.athlete_id == str(athlete_id))).first()
-        if result:
-            return result[0]
-        return None
+        result = db.execute(
+            select(StravaAccount.user_id).where(StravaAccount.athlete_id == str(athlete_id))
+        ).scalar_one_or_none()
+        return result
 
 
 def load_context_tool(arguments: dict) -> dict:
@@ -53,49 +53,123 @@ def load_context_tool(arguments: dict) -> dict:
         raise MCPError("INVALID_LIMIT", "Limit must be a positive integer")
 
     try:
-        # Convert athlete_id to user_id
-        user_id = _get_user_id_from_athlete_id(athlete_id)
-        if user_id is None:
-            logger.warning(f"No user_id found for athlete_id={athlete_id}, returning empty history")
-            return {"messages": []}
+            # Convert athlete_id to user_id
+            user_id = _get_user_id_from_athlete_id(athlete_id)
 
-        with get_session() as db:
-            messages = (
-                db.query(CoachMessage).filter(CoachMessage.user_id == user_id).order_by(CoachMessage.created_at.desc()).limit(limit).all()
-            )
+            # Defensive logging: capture user_id type and value before using it
+            # Wrap in try-except to prevent logging errors from crashing the tool
+            try:
+                logger.debug(
+                    "load_context_tool: Resolved user_id from athlete_id",
+                    athlete_id=athlete_id,
+                    user_id=user_id,
+                    user_id_type=type(user_id).__name__ if user_id else None,
+                    user_id_repr=repr(user_id) if user_id else None,
+                )
+            except Exception as log_err:
+                # Log failure should not crash the tool - log to stderr as fallback
+                print(f"WARNING: Logging failed in load_context_tool: {log_err}", file=sys.stderr)
 
-            # Reverse to get chronological order (oldest first)
-            # Messages from DB are already normalized, but we validate roles
-            history = []
-            for msg in reversed(messages):
-                # Validate role is one of the allowed values
-                if msg.role not in {"user", "assistant", "system"}:
-                    logger.warning(
-                        "Invalid role in stored message, skipping",
+            if user_id is None:
+                try:
+                    logger.warning(f"No user_id found for athlete_id={athlete_id}, returning empty history")
+                except Exception:
+                    pass  # Ignore logging errors
+                return {"messages": []}
+
+            # Validate user_id is a string (defensive check)
+            if not isinstance(user_id, str):
+                logger.error(
+                    "load_context_tool: user_id is not a string",
+                    athlete_id=athlete_id,
+                    user_id=user_id,
+                    user_id_type=type(user_id).__name__,
+                    user_id_repr=repr(user_id),
+                )
+                raise MCPError("INVALID_INPUT", f"user_id must be a string, got {type(user_id).__name__}")
+
+            with get_session() as db:
+                messages = (
+                    db.query(CoachMessage).filter(CoachMessage.user_id == user_id).order_by(CoachMessage.created_at.desc()).limit(limit).all()
+                )
+
+                # Reverse to get chronological order (oldest first)
+                # Messages from DB are already normalized, but we validate roles
+                history = []
+                for msg in reversed(messages):
+                    # Validate role is one of the allowed values
+                    if msg.role not in {"user", "assistant", "system"}:
+                        try:
+                            logger.warning(
+                                "Invalid role in stored message, skipping",
+                                athlete_id=athlete_id,
+                                user_id=user_id,
+                                message_id=msg.id,
+                                role=msg.role,
+                            )
+                        except Exception:
+                            pass  # Ignore logging errors
+                        continue
+                    history.append({"role": msg.role, "content": msg.content})
+
+                try:
+                    logger.info(
+                        "Loaded conversation history",
                         athlete_id=athlete_id,
                         user_id=user_id,
-                        message_id=msg.id,
-                        role=msg.role,
+                        message_count=len(history),
                     )
-                    continue
-                history.append({"role": msg.role, "content": msg.content})
+                except Exception:
+                    pass  # Ignore logging errors
 
-            logger.info(
-                "Loaded conversation history",
-                athlete_id=athlete_id,
-                user_id=user_id,
-                message_count=len(history),
-            )
-
-            return {"messages": history}
+                return {"messages": history}
 
     except SQLAlchemyError as e:
         error_msg = f"Database error loading context: {e!s}"
-        logger.error(error_msg, exc_info=True)
+        try:
+            logger.error(
+                "load_context_tool: SQLAlchemy error",
+                athlete_id=athlete_id,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                error_repr=repr(e),
+                exc_info=True,
+            )
+        except Exception:
+            pass  # Ignore logging errors to prevent cascading failures
+        raise MCPError("DB_ERROR", error_msg) from e
+    except KeyError as e:
+        # Special handling for KeyError to capture more context
+        error_msg = f"KeyError in load_context: {e!s}"
+        try:
+            logger.error(
+                "load_context_tool: KeyError detected",
+                athlete_id=athlete_id if "athlete_id" in locals() else None,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                error_repr=repr(e),
+                error_args=getattr(e, "args", None),
+                arguments_keys=list(arguments.keys()) if "arguments" in locals() else None,
+                arguments_repr=repr(arguments) if "arguments" in locals() else None,
+                exc_info=True,
+            )
+        except Exception:
+            pass  # Ignore logging errors to prevent cascading failures
         raise MCPError("DB_ERROR", error_msg) from e
     except Exception as e:
         error_msg = f"Unexpected error loading context: {e!s}"
-        logger.error(error_msg, exc_info=True)
+        try:
+            logger.error(
+                "load_context_tool: Unexpected error",
+                athlete_id=athlete_id if "athlete_id" in locals() else None,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                error_repr=repr(e),
+                error_args=getattr(e, "args", None),
+                exc_info=True,
+            )
+        except Exception:
+            pass  # Ignore logging errors to prevent cascading failures
         raise MCPError("DB_ERROR", error_msg) from e
 
 

@@ -1652,7 +1652,7 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
 
             # Convert target_event from dict to TargetEvent model if present
             target_event_obj = None
-            if profile.target_event:
+            if hasattr(profile, "target_event") and profile.target_event:
                 try:
                     target_event_obj = TargetEvent(**profile.target_event)
                 except Exception as e:
@@ -1678,23 +1678,23 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
 
             # Convert height_in (float) to height_inches (int) for API
             height_inches_int = None
-            if profile.height_in is not None:
+            if hasattr(profile, "height_in") and profile.height_in is not None:
                 height_inches_int = round(float(profile.height_in))
 
             return AthleteProfileResponse(
-                full_name=profile.name,  # Map name -> full_name
+                full_name=getattr(profile, "name", None),  # Map name -> full_name
                 email=user_email,  # From auth user
-                gender=profile.gender,
+                gender=getattr(profile, "gender", None),
                 date_of_birth=date_of_birth_str,
                 weight_kg=profile.weight_kg,
                 height_cm=profile.height_cm,
-                weight_lbs=profile.weight_lbs,  # Raw float, no rounding
+                weight_lbs=getattr(profile, "weight_lbs", None),  # Raw float, no rounding
                 height_inches=height_inches_int,  # Converted to int
-                location=profile.location,
-                unit_system=profile.unit_system or "imperial",
+                location=getattr(profile, "location", None),
+                unit_system=getattr(profile, "unit_system", None) or "imperial",
                 strava_connected=strava_connected,
                 target_event=target_event_obj,
-                goals=_convert_goals_to_list(profile.goals),
+                goals=_convert_goals_to_list(profile.goals) if profile.goals else [],
             )
     except ProgrammingError as e:
         # Database schema error (missing column, table, etc.)
@@ -1747,19 +1747,22 @@ def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdat
         profile: AthleteProfile instance to update
         request: Update request with fields to update
     """
-    if profile.sources is None:
+    # Check if sources attribute exists (may not be in all model versions)
+    if hasattr(profile, "sources") and profile.sources is None:
         profile.sources = {}
 
     # Full object overwrite - set all fields from request
-    profile.name = request.full_name  # Map full_name -> name
-    if request.full_name is not None:
+    if hasattr(profile, "name"):
+        profile.name = request.full_name  # Map full_name -> name
+    if hasattr(profile, "sources") and request.full_name is not None:
         profile.sources["name"] = "user"
 
     # Email is read-only - it comes from auth user, not profile
     # Do not update profile.email
 
-    profile.gender = request.gender
-    if request.gender is not None:
+    if hasattr(profile, "gender"):
+        profile.gender = request.gender
+    if hasattr(profile, "sources") and request.gender is not None:
         profile.sources["gender"] = "user"
 
     if request.date_of_birth is not None:
@@ -1774,49 +1777,56 @@ def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdat
         profile.birthdate = None
 
     profile.weight_kg = request.weight_kg
-    if request.weight_kg is not None:
+    if hasattr(profile, "sources") and request.weight_kg is not None:
         profile.sources["weight_kg"] = "user"
 
     profile.height_cm = request.height_cm
-    if request.height_cm is not None:
+    if hasattr(profile, "sources") and request.height_cm is not None:
         profile.sources["height_cm"] = "user"
 
     # Store weight_lbs as raw float (no rounding)
-    profile.weight_lbs = request.weight_lbs
-    if request.weight_lbs is not None:
+    if hasattr(profile, "weight_lbs"):
+        profile.weight_lbs = request.weight_lbs
+    if hasattr(profile, "sources") and request.weight_lbs is not None:
         profile.sources["weight_lbs"] = "user"
 
     # Convert height_inches (int) to height_in (float) for database
-    if request.height_inches is not None:
-        profile.height_in = float(request.height_inches)
-        profile.sources["height_in"] = "user"
-    elif request.height_inches is None and hasattr(request, "height_inches"):
-        profile.height_in = None
+    if hasattr(profile, "height_in"):
+        if request.height_inches is not None:
+            profile.height_in = float(request.height_inches)
+            if hasattr(profile, "sources"):
+                profile.sources["height_in"] = "user"
+        elif request.height_inches is None and hasattr(request, "height_inches"):
+            profile.height_in = None
 
-    profile.location = request.location
-    if request.location is not None:
+    if hasattr(profile, "location"):
+        profile.location = request.location
+    if hasattr(profile, "sources") and request.location is not None:
         profile.sources["location"] = "user"
 
-    if request.unit_system is not None:
-        _validate_unit_system(request.unit_system)
-        profile.unit_system = request.unit_system
-    elif request.unit_system is None and hasattr(request, "unit_system"):
-        profile.unit_system = "imperial"  # Default only on creation, but handle None
+    if hasattr(profile, "unit_system"):
+        if request.unit_system is not None:
+            _validate_unit_system(request.unit_system)
+            profile.unit_system = request.unit_system
+        elif request.unit_system is None and hasattr(request, "unit_system"):
+            profile.unit_system = "imperial"  # Default only on creation, but handle None
 
-    if request.target_event is not None:
-        profile.target_event = {
-            "name": request.target_event.name,
-            "date": request.target_event.date,
-            "distance": request.target_event.distance,
-        }
-    elif request.target_event is None and hasattr(request, "target_event"):
-        profile.target_event = None
+    if hasattr(profile, "target_event"):
+        if request.target_event is not None:
+            profile.target_event = {
+                "name": request.target_event.name,
+                "date": request.target_event.date,
+                "distance": request.target_event.distance,
+            }
+        elif request.target_event is None and hasattr(request, "target_event"):
+            profile.target_event = None
 
     if request.goals is not None:
         _validate_goals(request.goals)
         profile.goals = request.goals
     elif request.goals is None and hasattr(request, "goals"):
-        profile.goals = []
+        if profile.goals is None:
+            profile.goals = {}
 
     profile.updated_at = datetime.now(timezone.utc)
 
@@ -1989,7 +1999,7 @@ def _build_response_from_profile(profile: AthleteProfile, session: Session, user
         date_of_birth_str = profile.birthdate.isoformat() if isinstance(profile.birthdate, date) else str(profile.birthdate)
 
     target_event_obj = None
-    if profile.target_event:
+    if hasattr(profile, "target_event") and profile.target_event:
         try:
             target_event_obj = TargetEvent(**profile.target_event)
         except Exception as e:
@@ -1997,26 +2007,26 @@ def _build_response_from_profile(profile: AthleteProfile, session: Session, user
 
     # Convert height_in (float) to height_inches (int)
     height_inches_int: int | None = None
-    if profile.height_in is not None:
+    if hasattr(profile, "height_in") and profile.height_in is not None:
         height_inches_int = round(float(profile.height_in))
 
     # Check Strava connection from strava_accounts table (source of truth)
     strava_connected = _get_strava_connected_from_db(session, profile.user_id)
 
     return AthleteProfileResponse(
-        full_name=profile.name,  # Map name -> full_name
-        email=user_email or profile.email,  # Prefer auth email
-        gender=profile.gender,
+        full_name=getattr(profile, "name", None),  # Map name -> full_name
+        email=user_email or getattr(profile, "email", None),  # Prefer auth email
+        gender=getattr(profile, "gender", None),
         date_of_birth=date_of_birth_str,
         weight_kg=profile.weight_kg,
         height_cm=profile.height_cm,
-        weight_lbs=profile.weight_lbs,  # Raw float, no rounding
+        weight_lbs=getattr(profile, "weight_lbs", None),  # Raw float, no rounding
         height_inches=height_inches_int,  # Converted to int
-        location=profile.location,
-        unit_system=profile.unit_system or "imperial",
+        location=getattr(profile, "location", None),
+        unit_system=getattr(profile, "unit_system", None) or "imperial",
         strava_connected=strava_connected,
         target_event=target_event_obj,
-        goals=_convert_goals_to_list(profile.goals),
+        goals=_convert_goals_to_list(profile.goals) if profile.goals else [],
     )
 
 

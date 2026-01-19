@@ -107,10 +107,10 @@ def _get_session_id(session: PlannedSession | dict) -> str | None:
         id_value = session.get("id")
     else:
         id_value = getattr(session, "id", None)
-    
+
     if id_value is None:
         return None
-    
+
     # Convert UUID to string if needed (SQLAlchemy may return UUID objects)
     return str(id_value)
 

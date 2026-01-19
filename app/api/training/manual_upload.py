@@ -785,6 +785,21 @@ async def upload_manual_week(
             )
         except HTTPException:
             raise
+        except ValueError as e:
+            # Handle conflict errors from save_sessions_to_database
+            error_message = str(e)
+            if "conflicts that require user confirmation" in error_message:
+                logger.warning("Conflicts detected in manual week upload", user_id=user_id, error=error_message)
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=error_message,
+                ) from e
+            # Re-raise other ValueError as 400 Bad Request
+            logger.warning("Validation error in manual week upload", user_id=user_id, error=error_message)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_message,
+            ) from e
         except Exception as e:
             logger.exception(f"Error uploading manual week (user_id={user_id})")
             raise HTTPException(

@@ -133,6 +133,7 @@ async def execute_canonical_pipeline(
     progress_callback: Callable[[int, int, str], Awaitable[None] | None] | None = None,
     base_volume_calculator: Callable[[int], float] | None = None,
     conversation_id: str | None = None,
+    race_priority: str | None = None,
 ) -> tuple[list[PlannedWeek], PersistResult]:
     """Execute the canonical planner pipeline (B2 → B7).
 
@@ -147,6 +148,7 @@ async def execute_canonical_pipeline(
         progress_callback: Optional callback(week_number, total_weeks, phase) for progress tracking
         base_volume_calculator: Optional function(week_idx) -> volume for volume calculation
         conversation_id: Optional conversation ID for progress tracking
+        race_priority: Optional race priority (A/B/C) for taper logic adjustment
 
     Returns:
         Tuple of (list of PlannedWeek objects, PersistResult)
@@ -169,6 +171,7 @@ async def execute_canonical_pipeline(
         ctx=ctx,
         athlete_state=athlete_state,
         user_preference=None,
+        race_priority=race_priority,
     )
 
     # Emit WEEKS stage progress
@@ -399,6 +402,7 @@ async def plan_race_simple(
     athlete_state: AthleteState | None = None,
     progress_callback: Callable[[int, int, str], Awaitable[None] | None] | None = None,
     conversation_id: str | None = None,
+    race_priority: str | None = None,
 ) -> tuple[list[dict], int]:
     """Generate complete race plan using linear pipeline (B2 → B7).
 
@@ -407,6 +411,7 @@ async def plan_race_simple(
     Args:
         race_date: Race date
         distance: Race distance ("5K", "10K", "Half Marathon", "Marathon", "Ultra")
+        race_priority: Optional race priority (A/B/C) for taper logic adjustment
         user_id: User ID
         athlete_id: Athlete ID
         start_date: Training start date (optional, defaults to 16 weeks before race)
@@ -497,6 +502,7 @@ async def plan_race_simple(
         progress_callback=progress_callback,
         base_volume_calculator=volume_calculator,
         conversation_id=conversation_id,
+        race_priority=race_priority,
     )
 
     # Convert to legacy session dict format for compatibility

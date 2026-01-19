@@ -448,6 +448,71 @@ class SeasonPlan(Base):
     )
 
 
+class RacePriority(enum.Enum):
+    """Race priority enum for multi-race season support."""
+
+    A = "A"  # Primary/main race
+    B = "B"  # Secondary race
+    C = "C"  # Tune-up/training race
+
+
+class RacePlan(Base):
+    """Race plan storage for multi-race season support.
+
+    Stores individual race information with priority (A/B/C).
+    Each athlete can have multiple races in a season, with one active race at a time.
+
+    Schema:
+    - id: UUID primary key
+    - user_id: Foreign key to users.id
+    - athlete_id: Foreign key to athletes.id
+    - race_date: Race date (required, indexed)
+    - race_distance: Race distance (e.g., "5K", "10K", "Half Marathon", "Marathon", "Ultra")
+    - race_name: Optional race name
+    - target_time: Optional target finish time (HH:MM:SS format)
+    - priority: Race priority (A/B/C, default A)
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
+
+    Constraints:
+    - Unique constraint: (athlete_id, race_date, race_distance) prevents duplicates
+    - Priority A should be unique per athlete (enforced in application logic)
+    """
+
+    __tablename__ = "race_plans"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    # Race information
+    race_date: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    race_distance: Mapped[str] = mapped_column(String, nullable=False)
+    race_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    target_time: Mapped[str | None] = mapped_column(String, nullable=True)  # HH:MM:SS format
+
+    # Priority (A/B/C) - default A for backward compatibility
+    priority: Mapped[str] = mapped_column(
+        Enum(RacePriority, name="race_priority", values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=RacePriority.A.value,
+    )
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("athlete_id", "race_date", "race_distance", name="uq_race_plan_athlete_date_distance"),
+        Index("idx_race_plan_athlete_priority", "athlete_id", "priority"),
+    )
+
+
 class WeeklyIntent(Base):
     """LLM-generated weekly intent storage.
 
@@ -933,6 +998,8 @@ class ConversationProgress(Base):
     awaiting_slots: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     conversation_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     summary_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Active race pointer - tracks which race is currently in focus for this conversation
+    active_race_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,

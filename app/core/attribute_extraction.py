@@ -58,6 +58,10 @@ class ExtractedAttributes(BaseModel):
         default=None,
         description="Race name (official or informal name)",
     )
+    race_priority: Literal["A", "B", "C"] | None = Field(
+        default=None,
+        description="Race priority: A (main/goal race), B (secondary race), C (tune-up/training race). Only extract if explicitly stated.",
+    )
 
     # Confidence and evidence
     confidence: float = Field(
@@ -99,6 +103,8 @@ class ExtractedAttributes(BaseModel):
             result["weekly_mileage"] = self.weekly_mileage
         if self.race_name is not None:
             result["race_name"] = self.race_name
+        if self.race_priority is not None:
+            result["race_priority"] = self.race_priority
         return result
 
 
@@ -110,6 +116,7 @@ class EvidenceNormalization(BaseModel):
     target_time: str | None = None
     weekly_mileage: int | float | None = None
     race_name: str | None = None
+    race_priority: Literal["A", "B", "C"] | None = None
 
     @property
     def values(self) -> dict[str, str | int | float | bool | None]:
@@ -125,6 +132,8 @@ class EvidenceNormalization(BaseModel):
             result["weekly_mileage"] = self.weekly_mileage
         if self.race_name is not None:
             result["race_name"] = self.race_name
+        if self.race_priority is not None:
+            result["race_priority"] = self.race_priority
         return result
 
 
@@ -235,6 +244,11 @@ async def extract_attributes(
         "target_time": "Target finish time in HH:MM:SS format (e.g., 03:00:00 for 3 hours)",
         "weekly_mileage": "Weekly mileage (number in miles per week)",
         "race_name": "Race name (official or informal name)",
+        "race_priority": (
+            "Race priority: A (main/goal race), B (secondary race), C (tune-up/training race). "
+            "Only extract if explicitly stated (e.g., 'goal race', 'main race', 'secondary race', 'tune-up', 'training race'). "
+            "Do NOT guess or infer priority silently."
+        ),
     }
 
     requested_descriptions = []
@@ -416,6 +430,7 @@ Return a JSON object with explicit fields:
 - target_time: "HH:MM:SS" | null
 - weekly_mileage: number | null
 - race_name: string | null
+- race_priority: "A" | "B" | "C" | null (only if explicitly stated)
 - confidence: Overall confidence (0.0-1.0)
 - evidence: List of evidence spans (field + text)
 - missing_fields: List of requested fields NOT found
@@ -504,6 +519,7 @@ Return the canonical value for this field:
 - target_time: HH:MM:SS format
 - weekly_mileage: Number
 - race_name: String
+- race_priority: "A" (main/goal race), "B" (secondary), or "C" (tune-up/training race)
 
 You MUST return a value - evidence exists, so extraction is required.
 """
@@ -570,6 +586,7 @@ You MUST return a value - evidence exists, so extraction is required.
             target_time=None,
             weekly_mileage=None,
             race_name=None,
+            race_priority=None,
             confidence=0.0,
             evidence=[],
             missing_fields=attributes_requested.copy(),

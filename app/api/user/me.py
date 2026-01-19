@@ -57,6 +57,7 @@ from app.ingestion.tasks import history_backfill_task
 from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
 from app.metrics.data_quality import assess_data_quality
 from app.metrics.training_load import compute_training_load
+from app.services.overview_service import get_overview_data
 from app.services.training_preferences import extract_and_store_race_info
 from app.users.profile_service import create_user_settings, validate_user_settings_not_null
 
@@ -832,7 +833,7 @@ def get_strava_account(user_id: str) -> StravaAccount:
         return account
 
 
-def _extract_today_metrics(metrics_result: dict[str, list[tuple[str, float]]]) -> dict[str, float]:
+def _extract_today_metrics_legacy(metrics_result: dict[str, list[tuple[str, float]]]) -> dict[str, float]:
     """Extract today's CTL, ATL, TSB values and 7-day TSB average from metrics.
 
     Args:
@@ -898,7 +899,7 @@ def _extract_today_metrics(metrics_result: dict[str, list[tuple[str, float]]]) -
     }
 
 
-def _build_overview_response(
+def _build_overview_response_legacy(
     connected: bool,
     last_sync: str | None,
     data_quality_status: str,
@@ -959,7 +960,7 @@ def _build_overview_response(
     }
 
 
-def _maybe_trigger_aggregation(user_id: str, activity_count: int, daily_rows: list, days: int = 60) -> list:
+def _maybe_trigger_aggregation_legacy(user_id: str, activity_count: int, daily_rows: list, days: int = 60) -> list:
     """Trigger aggregation if needed and return updated daily_rows.
 
     Triggers aggregation if:
@@ -1094,162 +1095,7 @@ def get_status(user_id: str = Depends(get_current_user_id)):
         }
 
 
-def get_overview_data(user_id: str, days: int = 7) -> dict:
-    """Get athlete training overview data (internal function).
-
-    Args:
-        user_id: Current authenticated user ID
-        days: Number of days to look back (default: 7)
-
-    Returns:
-        Overview response dictionary with connected, last_sync, data_quality, metrics, today
-
-    Raises:
-        HTTPException: If no Strava account is connected or on error
-    """
-    # Validate user_id is actually a string, not a Depends object
-    if not isinstance(user_id, str):
-        error_msg = f"Invalid user_id type: {type(user_id)}. Expected str, got {type(user_id).__name__}"
-        logger.error(error_msg)
-        raise TypeError(error_msg)
-
-    # Validate days parameter
-    if days < 1:
-        days = 7
-    days = min(days, 365)  # Cap at 1 year for performance
-
-    request_time = time.time()
-    logger.info(
-        f"[API] /me/overview called at {datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]} for user_id={user_id}, days={days}"
-    )
-
-    # Get StravaAccount for user - handle missing account gracefully
-    try:
-        account = get_strava_account(user_id)
-        last_sync = account.last_sync_at.isoformat() if account.last_sync_at else None
-        strava_connected = True
-    except HTTPException as e:
-        # Strava account not connected - return graceful response, not an error
-        if e.status_code == 404:
-            logger.info(f"[API] /me/overview: No Strava account connected for user_id={user_id}, returning connected=false")
-            strava_connected = False
-            last_sync = None
-        else:
-            # Re-raise other HTTPExceptions
-            raise
-
-    # Check if we have activities but no daily rows - trigger aggregation if needed
-    with get_session() as session:
-        # Count activities for this user
-        activity_count = session.execute(select(func.count(Activity.id)).where(Activity.user_id == user_id)).scalar() or 0
-
-        # Count activities in the requested date range
-        end_date = datetime.now(timezone.utc).date()
-        start_date = end_date - timedelta(days=days)
-        # Schema v2: use starts_at instead of start_time
-        activities_in_range = (
-            session.execute(
-                select(func.count(Activity.id)).where(
-                    Activity.user_id == user_id,
-                    func.date(Activity.starts_at) >= start_date,
-                    func.date(Activity.starts_at) <= end_date,
-                )
-            ).scalar()
-            or 0
-        )
-
-        logger.info(
-            f"[API] /me/overview: user_id={user_id}, total_activities={activity_count}, "
-            f"activities_in_range({days} days)={activities_in_range}"
-        )
-
-        daily_rows = get_daily_rows(session, user_id, days=days)
-
-    # Auto-trigger aggregation if needed
-    daily_rows = _maybe_trigger_aggregation(user_id, activity_count, daily_rows, days=days)
-
-    # Check if we need to fetch more historical data (ensure at least 90 days)
-    days_with_training = sum(1 for row in daily_rows if row.get("load_score", 0.0) > 0.0)
-    if days_with_training < 90 and activity_count > 0:
-        logger.info(
-            f"[API] /me/overview: user_id={user_id} has only {days_with_training} days with training "
-            f"(need 90). Triggering history backfill."
-        )
-        try:
-            # Trigger history backfill in background to fetch more data
-            def trigger_backfill():
-                try:
-                    history_backfill_task(user_id)
-                except Exception as e:
-                    logger.exception(f"[API] History backfill failed for user_id={user_id}: {e}")
-
-            threading.Thread(target=trigger_backfill, daemon=True).start()
-        except Exception as e:
-            logger.warning(f"[API] Failed to trigger history backfill for user_id={user_id}: {e}")
-
-    # Log daily rows info for debugging
-    logger.info(
-        f"[API] /me/overview: user_id={user_id}, daily_rows_count={len(daily_rows)}, "
-        f"date_range={daily_rows[0]['date']} to {daily_rows[-1]['date']}"
-        if daily_rows
-        else "none"
-    )
-    logger.debug(
-        f"[API] /me/overview: Sending {len(daily_rows)} days to frontend "
-        f"({days_with_training} days with training, {len(daily_rows) - days_with_training} rest days)"
-    )
-
-    # Assess data quality and compute metrics
-    data_quality_status = assess_data_quality(daily_rows)
-    logger.info(f"[API] /me/overview: data_quality={data_quality_status} (requires >=14 days, got {len(daily_rows)} days)")
-
-    # Read metrics from DailyTrainingLoad table (single source of truth)
-    try:
-        end_date = datetime.now(timezone.utc).date()
-        start_date = end_date - timedelta(days=days)
-
-        with get_session() as session:
-            daily_load_rows = session.execute(
-                select(DailyTrainingLoad)
-                .where(
-                    DailyTrainingLoad.user_id == user_id,
-                    DailyTrainingLoad.day >= start_date,
-                )
-                .order_by(DailyTrainingLoad.day)
-            ).all()
-
-        # Convert to (date, value) tuples format expected by frontend
-        ctl_data: list[tuple[str, float]] = []
-        atl_data: list[tuple[str, float]] = []
-        tsb_data: list[tuple[str, float]] = []
-
-        for row in daily_load_rows:
-            daily_load_record = row[0]  # Extract the model instance from the Row object
-            date_str = daily_load_record.day.isoformat()
-            ctl_data.append((date_str, daily_load_record.ctl or 0.0))
-            atl_data.append((date_str, daily_load_record.atl or 0.0))
-            tsb_data.append((date_str, daily_load_record.tsb or 0.0))
-
-        metrics_result = {
-            "ctl": ctl_data,
-            "atl": atl_data,
-            "tsb": tsb_data,
-        }
-
-        logger.info(
-            f"[API] /me/overview: Read {len(daily_load_rows)} days from DailyTrainingLoad table "
-            f"(date range: {start_date.isoformat()} to {end_date.isoformat()})"
-        )
-    except Exception as e:
-        logger.exception(f"[API] /me/overview: Error reading from DailyTrainingLoad: {e}")
-        metrics_result = {"ctl": [], "atl": [], "tsb": []}
-
-    today_metrics = _extract_today_metrics(metrics_result)
-
-    elapsed = time.time() - request_time
-    logger.info(f"[API] /me/overview response: data_quality={data_quality_status}, elapsed={elapsed:.3f}s")
-
-    return _build_overview_response(strava_connected, last_sync, data_quality_status, metrics_result, today_metrics)
+# get_overview_data moved to app.services.overview_service to break import cycle
 
 
 @router.get("/overview/debug")

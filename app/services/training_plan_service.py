@@ -80,6 +80,7 @@ async def plan_race(
     start_date: datetime | None = None,
     athlete_state: AthleteState | None = None,
     progress_callback: Callable[[int, int, str], Awaitable[None] | None] | None = None,
+    race_priority: str | None = None,
 ) -> tuple[list[dict], int]:
     """Generate and persist a race training plan.
 
@@ -94,6 +95,7 @@ async def plan_race(
         start_date: Training start date (optional, defaults to 16 weeks before race)
         athlete_state: Athlete state snapshot (optional, will use defaults if None)
         progress_callback: Optional callback(week_number, total_weeks, phase) for progress tracking
+        race_priority: Optional race priority (A/B/C) for taper logic adjustment
 
     Returns:
         Tuple of (list of session dictionaries, total weeks)
@@ -139,6 +141,7 @@ async def plan_race(
             start_date=start_date,
             athlete_state=athlete_state,
             progress_callback=progress_callback,
+            race_priority=race_priority,
         )
 
         logger.info(

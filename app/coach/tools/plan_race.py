@@ -17,6 +17,7 @@ from app.coach.tools.slot_utils import merge_slots, parse_date_loose
 from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import ConversationProgress
 from app.services.llm.model import get_model
+from app.services.race_service import resolve_race_focus
 from app.services.training_plan_service import plan_race
 
 # Simple cache to prevent repeated calls with same input (cleared periodically)
@@ -897,7 +898,14 @@ async def plan_race_build_legacy(
             date=race_date,
         )
         message, saved_count = await create_and_save_plan_new(
-            race_date, distance, target_time, user_id, athlete_id, conversation_id=conversation_id
+            race_date,
+            distance,
+            target_time,
+            user_id,
+            athlete_id,
+            conversation_id=conversation_id,
+            race_name=None,
+            race_priority=None,
         )
         if return_structured:
             return (message, saved_count)
@@ -923,6 +931,8 @@ async def create_and_save_plan_new(
     athlete_id: int,
     *,
     conversation_id: str | None = None,
+    race_name: str | None = None,
+    race_priority: str | None = None,
 ) -> tuple[str, int]:
     """Create and save race training plan using hierarchical, compositional approach.
 
@@ -933,6 +943,8 @@ async def create_and_save_plan_new(
         user_id: User ID
         athlete_id: Athlete ID
         conversation_id: Conversation ID for progress tracking (optional)
+        race_name: Optional race name
+        race_priority: Optional race priority (A/B/C) for multi-race season support
 
     Returns:
         Tuple of (success message, saved_count)
@@ -946,6 +958,24 @@ async def create_and_save_plan_new(
             user_id=user_id,
             athlete_id=athlete_id,
             conversation_id=conversation_id,
+        )
+
+        # Resolve race creation vs focus switching (multi-race season support)
+        race_plan, was_created = resolve_race_focus(
+            athlete_id=athlete_id,
+            user_id=user_id,
+            race_date=race_date,
+            race_distance=distance,
+            race_name=race_name,
+            target_time=target_time,
+            race_priority=race_priority,
+            conversation_id=conversation_id,
+        )
+        logger.info(
+            "Race resolved",
+            race_id=race_plan.id,
+            was_created=was_created,
+            priority=race_plan.priority,
         )
 
         # Create progress callback if conversation_id is provided
@@ -964,6 +994,7 @@ async def create_and_save_plan_new(
                     message=message,
                 )
 
+        # Pass race priority for taper logic adjustment
         sessions, total_weeks = await plan_race(
             race_date=race_date,
             distance=distance,
@@ -971,6 +1002,7 @@ async def create_and_save_plan_new(
             athlete_id=athlete_id,
             start_date=None,
             progress_callback=progress_callback if conversation_id else None,
+            race_priority=race_plan.priority,
         )
 
         if not sessions:
@@ -1240,6 +1272,8 @@ async def plan_race_build(
     distance_raw = current_slots.get("race_distance")
     race_date_raw = current_slots.get("race_date")
     target_time_raw = current_slots.get("target_time")
+    race_priority_raw = current_slots.get("race_priority")
+    race_name_raw = current_slots.get("race_name")
 
     distance: str | None = None
     if isinstance(distance_raw, str):
@@ -1254,6 +1288,14 @@ async def plan_race_build(
     target_time: str | None = None
     if isinstance(target_time_raw, str):
         target_time = target_time_raw
+
+    race_priority: str | None = None
+    if isinstance(race_priority_raw, str) and race_priority_raw in {"A", "B", "C"}:
+        race_priority = race_priority_raw
+
+    race_name: str | None = None
+    if isinstance(race_name_raw, str):
+        race_name = race_name_raw
 
     awaiting_slots: list[str] = []
     if not distance:
@@ -1321,7 +1363,14 @@ async def plan_race_build(
             date=race_date,
         )
         message, saved_count = await create_and_save_plan_new(
-            race_date, distance, target_time, user_id, athlete_id, conversation_id=conversation_id
+            race_date,
+            distance,
+            target_time,
+            user_id,
+            athlete_id,
+            conversation_id=conversation_id,
+            race_name=race_name,
+            race_priority=race_priority,
         )
         if return_structured:
             return (message, saved_count)

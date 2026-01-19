@@ -15,6 +15,7 @@ from app.coach.utils.reconciliation_context import get_recent_missed_workouts, g
 from app.db.models import Activity
 from app.db.session import get_session
 from app.services.intelligence.store import IntentStore
+from app.services.overview_service import get_overview_data
 
 
 def _normalize_datetime(dt: datetime) -> datetime:
@@ -332,10 +333,7 @@ def build_daily_decision_context(
     logger.info(f"Building daily decision context for user_id={user_id}, athlete_id={athlete_id}, date={decision_date.isoformat()}")
 
     # Get overview data for athlete state
-    # Lazy import to avoid circular dependency: me.py -> ingestion/tasks -> scheduler -> context_builder -> me.py
     try:
-        from app.api.user.me import get_overview_data  # noqa: PLC0415
-
         overview = get_overview_data(user_id)
     except Exception as e:
         logger.warning(f"Failed to get overview data: {e}, using minimal context")
@@ -437,10 +435,7 @@ def build_weekly_intent_context(
     logger.info(f"Building weekly intent context for user_id={user_id}, athlete_id={athlete_id}, week_start={week_start.isoformat()}")
 
     # Get overview data for athlete state
-    # Lazy import to avoid circular dependency: me.py -> ingestion/tasks -> scheduler -> context_builder -> me.py
     try:
-        from app.api.user.me import get_overview_data  # noqa: PLC0415
-
         overview = get_overview_data(user_id)
     except Exception as e:
         logger.warning(f"Failed to get overview data: {e}, using minimal context")

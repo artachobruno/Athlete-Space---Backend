@@ -29,18 +29,24 @@ from app.domains.training_plan.philosophy_selector_semantic import select_philos
 from app.domains.training_plan.week_structure_selector_semantic import load_week_structure_semantic as load_week_structure
 
 
-def _compute_days_to_race(ctx: PlanContext, week: MacroWeek) -> int:
-    """Compute days to race for a given week.
+def _compute_days_to_race(ctx: PlanContext, week: MacroWeek, race_priority: str | None = None) -> int:
+    """Compute days to race for a given week, adjusted by priority for taper logic.
 
     For race plans, calculates days from week start to race date.
+    Priority-based taper adjustment:
+    - A (main race): Full taper (actual days_to_race)
+    - B (secondary): Partial taper (add 7 days offset to shift toward non-taper structures)
+    - C (tune-up): No taper (use large value to always match non-taper structures)
+
     For season plans, returns a large number (9999) to match any structure.
 
     Args:
         ctx: Plan context with target_date
         week: Macro week with week_index
+        race_priority: Optional race priority (A/B/C) for taper adjustment
 
     Returns:
-        Days until race (or 9999 for season plans)
+        Days until race (or 9999 for season plans), adjusted by priority
     """
     if not ctx.target_date:
         return 9999  # Season / non-race plans
@@ -50,13 +56,25 @@ def _compute_days_to_race(ctx: PlanContext, week: MacroWeek) -> int:
     weeks_until_race = ctx.weeks - week.week_index + 1
     week_start = race_date - timedelta(weeks=weeks_until_race)
 
-    return (race_date - week_start).days
+    days_to_race = (race_date - week_start).days
+
+    # Adjust days_to_race based on priority for taper logic
+    if race_priority == "B":
+        # Partial taper: add offset to shift toward non-taper structures
+        days_to_race += 7
+    elif race_priority == "C":
+        # No taper: use large value to always match non-taper structures
+        days_to_race = 9999
+
+    return days_to_race
 
 
 async def build_plan_structure(
     ctx: PlanContext,
     athlete_state: AthleteState,
     user_preference: str | None = None,
+    *,
+    race_priority: str | None = None,
 ) -> tuple[PlanRuntimeContext, list[WeekStructure]]:
     """Execute B2 → B2.5 → B3 pipeline.
 
@@ -74,6 +92,7 @@ async def build_plan_structure(
         ctx: Plan context with intent, race_distance, weeks
         athlete_state: Athlete state with metrics and flags
         user_preference: Optional explicit philosophy ID override
+        race_priority: Optional race priority (A/B/C) for taper logic adjustment
 
     Returns:
         Tuple of:
@@ -149,7 +168,7 @@ async def build_plan_structure(
             week_structures: list[WeekStructure] = []
 
             for week in macro_weeks:
-                days_to_race = _compute_days_to_race(ctx, week)
+                days_to_race = _compute_days_to_race(ctx, week, race_priority=race_priority)
 
                 structure = load_week_structure(
                     ctx=runtime_ctx,

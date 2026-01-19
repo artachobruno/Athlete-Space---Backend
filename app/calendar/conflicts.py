@@ -233,6 +233,47 @@ def _time_ranges_overlap(
     return start1 < end2 and start2 < end1
 
 
+def _is_exact_duplicate(
+    candidate: PlannedSession | dict[str, Any],
+    existing: PlannedSession,
+) -> bool:
+    """Check if candidate session is an exact duplicate of existing session.
+    
+    This matches the duplicate detection logic in save_sessions_to_database
+    and allows re-uploads of the same session without flagging as conflict.
+    
+    Args:
+        candidate: Candidate session to check
+        existing: Existing session to compare against
+        
+    Returns:
+        True if sessions are exact duplicates (same starts_at and title), False otherwise
+    """
+    candidate_title = _get_session_title(candidate)
+    existing_title = existing.title or ""
+    
+    if candidate_title != existing_title:
+        return False
+    
+    # Compute starts_at for candidate session (same logic as save_sessions_to_database)
+    candidate_datetime = _get_session_date(candidate)
+    candidate_time_str = _get_session_time(candidate)
+    candidate_starts_at = combine_date_time(candidate_datetime, candidate_time_str)
+    
+    # Compare with existing session's starts_at
+    existing_starts_at = existing.starts_at
+    
+    # Normalize timezone for comparison (both should be timezone-aware)
+    if not candidate_starts_at or not existing_starts_at:
+        return False
+    
+    # Compare normalized timestamps (ignore microseconds)
+    candidate_normalized = candidate_starts_at.replace(microsecond=0)
+    existing_normalized = existing_starts_at.replace(microsecond=0)
+    
+    return candidate_normalized == existing_normalized
+
+
 def _is_key_session(session: PlannedSession | dict) -> bool:
     """Check if a session is a 'key session' (workout or long run).
 
@@ -310,27 +351,9 @@ def detect_conflicts(
                     continue
 
                 # Skip if candidate is an exact duplicate of existing (same starts_at and title)
-                # This matches the duplicate detection logic in save_sessions_to_database
-                # and allows re-uploads of the same session without flagging as conflict
-                existing_title = existing.title or ""
-                if candidate_title == existing_title:
-                    # Compute starts_at for candidate session (same logic as save_sessions_to_database)
-                    candidate_datetime = _get_session_date(candidate)
-                    candidate_time_str = _get_session_time(candidate)
-                    candidate_starts_at = combine_date_time(candidate_datetime, candidate_time_str)
-                    
-                    # Compare with existing session's starts_at
-                    existing_starts_at = existing.starts_at
-                    
-                    # Normalize timezone for comparison (both should be timezone-aware)
-                    if candidate_starts_at and existing_starts_at:
-                        # Compare normalized timestamps (ignore microseconds)
-                        candidate_normalized = candidate_starts_at.replace(microsecond=0)
-                        existing_normalized = existing_starts_at.replace(microsecond=0)
-                        
-                        if candidate_normalized == existing_normalized:
-                            # Exact duplicate - skip conflict detection, will be handled by duplicate check later
-                            continue
+                # This allows re-uploads of the same session without flagging as conflict
+                if _is_exact_duplicate(candidate, existing):
+                    continue
 
                 existing_time_info = SessionTimeInfo.from_session(existing)
 

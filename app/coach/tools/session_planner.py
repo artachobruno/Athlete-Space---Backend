@@ -101,7 +101,7 @@ def _validate_user_id_athlete_id_match(session: Any, user_id: str, athlete_id: i
     """
     account = session.execute(
         select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id))
-    ).first()
+    ).scalars().first()
 
     if not account:
         logger.warning(
@@ -110,10 +110,13 @@ def _validate_user_id_athlete_id_match(session: Any, user_id: str, athlete_id: i
         )
         return  # Skip validation if no StravaAccount (e.g., manual uploads without Strava)
 
-    correct_user_id = account[0].user_id
-    if correct_user_id != user_id:
+    # Ensure both are strings for comparison (user_id might be UUID object)
+    correct_user_id = str(account.user_id) if account.user_id else None
+    user_id_str = str(user_id) if user_id else None
+
+    if correct_user_id != user_id_str:
         raise ValueError(
-            f"user_id mismatch: planned session user_id={user_id} doesn't match "
+            f"user_id mismatch: planned session user_id={user_id_str} doesn't match "
             f"StravaAccount user_id={correct_user_id} for athlete_id={athlete_id}. "
             f"This will prevent pairing with activities."
         )

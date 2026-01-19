@@ -272,7 +272,7 @@ class ManualSessionRequest(BaseModel):
 
     date: datetime = Field(..., description="Session date and time (timezone-aware)")
     time: str | None = Field(default=None, description="Session time (HH:MM format)")
-    sport: str = Field(..., description="Sport type (Run, Bike, Swim, Triathlon, Crossfit, Strength, Walk)")
+    sport: str = Field(..., description="Sport type (Run, Bike, Swim, Triathlon, Crossfit, Strength, Walk, Race)")
     type: str = Field(..., description="Session type (easy, workout, long, rest)")
     title: str | None = Field(default=None, description="Session title (auto-generated if not provided)")
     duration_minutes: int | None = Field(default=None, description="Duration in minutes")

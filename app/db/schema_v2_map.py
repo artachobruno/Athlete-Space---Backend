@@ -36,6 +36,9 @@ def normalize_sport(sport: str) -> str:
         # Running variations
         "running": "run",
         "run": "run",
+        # Race/Event variations (mapped to run since races are typically running events)
+        "race": "run",
+        "event": "run",
         # Cycling variations
         "cycling": "ride",
         "bike": "ride",

@@ -33,7 +33,7 @@ class OrchestratorAgentResponse(BaseModel):
     All execution happens in the separate executor module.
     """
 
-    intent: Literal["recommend", "plan", "adjust", "explain", "log", "question", "general"]
+    intent: Literal["recommend", "plan", "adjust", "explain", "log", "question", "general", "clarify", "propose", "confirm", "modify"]
 
     horizon: Literal["today", "next_session", "week", "race", "season", None]
 

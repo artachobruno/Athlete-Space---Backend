@@ -9,6 +9,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
+from typing import NoReturn
 
 from loguru import logger
 from sqlalchemy import and_, select
@@ -24,7 +25,7 @@ from app.db.schema_v2_map import (
     minutes_to_seconds,
     normalize_sport,
 )
-from app.domains.training_plan.enums import DayType, WeekFocus
+from app.domains.training_plan.enums import DayType, PlanType, WeekFocus
 from app.domains.training_plan.models import PlanContext, PlannedSession, PlannedWeek, SessionTextOutput
 from app.plans.week_planner import assign_intent_from_day_type
 from app.services.intelligence.scheduler import trigger_daily_decision_for_user
@@ -345,7 +346,7 @@ def _upsert_session(
     *,
     week: PlannedWeek,
     plan_start: date,
-    plan_id: str,
+    plan_id: str,  # noqa: ARG001
     user_id: str,
     session_order: int,
 ) -> str:
@@ -357,7 +358,7 @@ def _upsert_session(
         planned_session: Planned session to persist
         week: Planned week containing the session
         plan_start: Plan start date (Monday of first week)
-        plan_id: Plan identifier
+        plan_id: Plan identifier (unused, kept for API compatibility)
         user_id: User ID
         session_order: Order of session within the day (0-based)
 
@@ -376,18 +377,28 @@ def _upsert_session(
     duration_min = _extract_duration_min(planned_session, text_output)
     duration_seconds = minutes_to_seconds(duration_min)  # Schema v2: seconds
     time_str = _get_time_default(planned_session)
-    phase = _determine_phase(week.focus)
     session_type = _map_session_type(planned_session.day_type)
     intent = _map_intent_from_day_type(planned_session.day_type)  # Authoritative field
     tags = _get_tags(planned_session)
-    philosophy_id = ctx.philosophy.philosophy_id if ctx.philosophy else None
-    template_id = planned_session.template.template_id
 
     # Schema v2: Combine date + time into starts_at (TIMESTAMPTZ)
     starts_at = combine_date_time(session_date, time_str)
 
     # Schema v2: Normalize sport type
     sport = normalize_sport("run")  # Default to "run", can be extended later
+
+    # Determine season_plan_id based on plan type
+    # Race plans don't have season_plan records, so season_plan_id should be None
+    # Season plans could have season_plan records, but we're not creating them yet
+    # For now, set season_plan_id to None for all plans to avoid FK violations
+    # TODO: Create season_plan records for season plans and link them properly
+    season_plan_id: str | None = None
+    if ctx.plan_type == PlanType.SEASON:
+        # For season plans, we could create a season_plan record here
+        # For now, set to None to avoid FK violations
+        # In the future, create SeasonPlan record and use its ID
+        season_plan_id = None
+    # For race plans (PlanType.RACE), season_plan_id is always None
 
     # Build unique constraint key for lookup (schema v2 dedupe key)
     # Note: We use title and sport for additional uniqueness beyond just starts_at
@@ -401,9 +412,9 @@ def _upsert_session(
         ]
 
         # Handle season_plan_id (can be None for some plans)
-        # Schema v2: plan_id -> season_plan_id
-        if plan_id is not None:
-            conditions.append(DBPlannedSession.season_plan_id == plan_id)
+        # Schema v2: Only set season_plan_id if it's a valid foreign key
+        if season_plan_id is not None:
+            conditions.append(DBPlannedSession.season_plan_id == season_plan_id)
         else:
             conditions.append(DBPlannedSession.season_plan_id.is_(None))
 
@@ -414,7 +425,7 @@ def _upsert_session(
         error_msg = (
             f"B7: Failed to persist session "
             f"(user_id={user_id}, "
-            f"season_plan_id={plan_id}, starts_at={starts_at_str}, "
+            f"season_plan_id={season_plan_id}, starts_at={starts_at_str}, "
             f"error_type={type(e).__name__})"
         )
         logger.error(
@@ -438,16 +449,22 @@ def _upsert_session(
         db_session_obj.session_type = session_type
         db_session_obj.intent = intent  # Authoritative field
         db_session_obj.tags = tags if tags else []  # Schema v2: tags is list
-        db_session_obj.phase = phase
-        db_session_obj.philosophy_id = philosophy_id
-        db_session_obj.template_id = template_id
-        db_session_obj.week_number = week.week_index
         # Schema v2: season_plan_id already matched in query, no need to update
+        # Note: week_number, session_order, phase, source, philosophy_id, template_id
+        # are not part of the PlannedSession model schema v2
 
         return "updated"
 
     # Create new session (schema v2)
     try:
+        # Validate starts_at is not None (required field)
+        if starts_at is None:
+            error_msg = (
+                f"starts_at cannot be None (week_index={week.week_index}, "
+                f"day_index={planned_session.day_index}, session_date={session_date}, time_str={time_str})"
+            )
+            raise ValueError(error_msg)  # noqa: TRY301
+
         db_session_obj = DBPlannedSession(
             id=str(uuid.uuid4()),
             user_id=user_id,
@@ -460,16 +477,12 @@ def _upsert_session(
             session_type=session_type,
             intent=intent,  # Authoritative field
             notes=description,
-            season_plan_id=plan_id,  # Schema v2: season_plan_id instead of plan_id
-            week_number=week.week_index,
-            session_order=session_order,
-            phase=phase,
-            source="planner_v2",
-            philosophy_id=philosophy_id,
-            template_id=template_id,
+            season_plan_id=season_plan_id,  # Schema v2: season_plan_id (None for race plans, None for season plans until we create records)
             tags=tags if tags else [],  # Schema v2: tags is list, not None
             status="planned",  # Schema v2: status field
             # Schema v2: removed athlete_id, plan_type, completed
+            # Note: week_number, session_order, phase, source, philosophy_id, template_id
+            # are not part of the PlannedSession model schema v2
         )
 
         db_session.add(db_session_obj)
@@ -479,7 +492,8 @@ def _upsert_session(
             f"(week_index={week.week_index}, "
             f"day_index={planned_session.day_index}, "
             f"session_order={session_order}, "
-            f"error_type={type(e).__name__})"
+            f"error_type={type(e).__name__}, "
+            f"error={e!s})"
         )
         logger.error(error_msg)
         raise
@@ -560,8 +574,10 @@ def persist_plan(
             # Moved outside the with block to reduce nesting
             try:
                 today = datetime.now(timezone.utc).date()
+                # Compute session dates from day_index and week_index (PlannedSession dataclass
+                # doesn't have starts_at - that's only on DBPlannedSession)
                 has_today_session = any(
-                    (session.starts_at.date() if session.starts_at else None) == today
+                    _compute_session_date(plan_start, week.week_index, session.day_index) == today
                     for session in week.sessions
                 )
                 if has_today_session and (week_created > 0 or week_updated > 0):

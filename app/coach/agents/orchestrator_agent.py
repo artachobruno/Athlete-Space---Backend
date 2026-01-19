@@ -89,8 +89,15 @@ async def _compute_missing_slots_for_decision(
     decision: OrchestratorAgentResponse,
     user_message: str,
     conversation_id: str | None,
+    user_id: str | None = None,
 ) -> tuple[str | None, list[str], dict[str, str | date | int | float | bool | None]]:
     """Compute missing_slots deterministically from decision with slot persistence.
+
+    Args:
+        decision: Orchestrator decision response
+        user_message: User's input message
+        conversation_id: Optional conversation ID for slot persistence
+        user_id: Optional user ID for slot persistence
 
     CRITICAL: The orchestrator must see the cumulative slot state, not just the last message.
     This function:
@@ -130,10 +137,11 @@ async def _compute_missing_slots_for_decision(
         progress = get_conversation_progress(conversation_id)
         if progress and progress.slots:
             conversation_slot_state = progress.slots.copy()
-            logger.debug(
+            logger.info(
                 "Loaded conversation slot state",
                 conversation_id=conversation_id,
                 slot_state=conversation_slot_state,
+                slot_keys=list(conversation_slot_state.keys()),
             )
 
     # STEP 2: Extract attributes using authoritative extractor
@@ -186,9 +194,20 @@ async def _compute_missing_slots_for_decision(
     for key, value in normalized_slots.items():
         if value is not None:  # Only update with non-None values
             merged_slots[key] = value
+            logger.debug(
+                "Adding extracted value to merged_slots",
+                key=key,
+                value=value,
+                value_type=type(value).__name__,
+                conversation_id=conversation_id,
+            )
 
     logger.info(
-        "Merged slot state from extractor",
+        f"Merged slot state from extractor - "
+        f"extracted_count={len(extracted.values)}, "
+        f"normalized_count={len(normalized_slots)}, "
+        f"merged_count={len(merged_slots)}, "
+        f"missing_count={len(extracted.missing_fields)}",
         conversation_id=conversation_id,
         previous_state=conversation_slot_state,
         extracted_values=extracted.values,
@@ -197,6 +216,7 @@ async def _compute_missing_slots_for_decision(
         missing_fields=extracted.missing_fields,
         ambiguous_fields=extracted.ambiguous_fields,
         confidence=extracted.confidence,
+        extracted_evidence=[{"field": e.field, "text": e.text} for e in extracted.evidence],
     )
 
     # STEP 4: Determine missing slots deterministically from required_attributes vs merged_slots
@@ -241,6 +261,7 @@ async def _compute_missing_slots_for_decision(
                     intent=decision.intent,
                     slots=merged_slots,
                     awaiting_slots=[],  # Empty awaiting_slots = locked state
+                    user_id=user_id,
                 )
                 logger.info(
                     "Slot state locked after validation (slots complete)",
@@ -254,11 +275,17 @@ async def _compute_missing_slots_for_decision(
                     intent=decision.intent,
                     slots=merged_slots,
                     awaiting_slots=missing_slots,
+                    user_id=user_id,
                 )
-                logger.debug(
-                    "Persisted merged slot state with awaiting_slots",
+                logger.info(
+                    f"Persisted merged slot state - "
+                    f"merged_count={len(merged_slots)}, "
+                    f"missing_count={len(missing_slots)}",
                     conversation_id=conversation_id,
                     merged_slots=merged_slots,
+                    missing_slots=missing_slots,
+                    extracted_values=extracted.values,
+                    normalized_slots=normalized_slots,
                     awaiting_slots=missing_slots,
                 )
         except Exception:
@@ -929,6 +956,7 @@ async def run_conversation(
             decision=result.output,
             user_message=user_input,
             conversation_id=conversation_id_for_slots,
+            user_id=deps.user_id,
         )
         t3 = time.monotonic()
         validation_time = t3 - t3_start

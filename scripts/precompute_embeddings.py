@@ -47,7 +47,7 @@ from app.domains.training_plan.philosophy_embedding import (
 from app.domains.training_plan.philosophy_loader import load_philosophies
 from app.domains.training_plan.session_template_selector import parse_template_file
 from app.domains.training_plan.template_embedding import build_template_canonical_text
-from app.domains.training_plan.week_structure import get_structures_dir, load_structures_from_philosophy
+from app.domains.training_plan.week_structure import get_structures_dir, load_all_structures, load_structures_from_philosophy
 from app.domains.training_plan.week_structure_embedding import build_week_structure_canonical_text
 from app.embeddings.embedding_service import compute_text_hash, get_embedding_service
 from app.planning.structure.types import StructureSpec
@@ -234,23 +234,33 @@ def _compute_week_structure_embeddings(force: bool = False) -> int:
     items_to_compute: list[tuple[str, str, StructureSpec]] = []  # (id, canonical_text, spec)
     items_to_skip: list[dict] = []
 
-    for domain_dir in structures_dir.iterdir():
-        if not domain_dir.is_dir():
-            continue
-
-        for philosophy_dir in domain_dir.iterdir():
-            if not philosophy_dir.is_dir():
+    # Load all structures using load_all_structures() which handles all directory structures
+    # including edge cases like structures directly in a directory (e.g., mountain/)
+    try:
+        all_structures = load_all_structures()
+        for spec in all_structures:
+            _process_structure_spec(spec, cache, force, items_to_compute, items_to_skip)
+    except Exception as e:
+        logger.error(f"Failed to load all structures: {e}")
+        # Fallback to old method for backward compatibility
+        logger.warning("Falling back to domain/philosophy directory iteration")
+        for domain_dir in structures_dir.iterdir():
+            if not domain_dir.is_dir():
                 continue
 
-            philosophy_id = philosophy_dir.name
-            try:
-                structures = load_structures_from_philosophy(domain_dir.name, philosophy_id)
-            except Exception as e:
-                logger.warning(f"Failed to load structures for {domain_dir.name}/{philosophy_id}: {e}")
-                continue
+            for philosophy_dir in domain_dir.iterdir():
+                if not philosophy_dir.is_dir():
+                    continue
 
-            for spec in structures:
-                _process_structure_spec(spec, cache, force, items_to_compute, items_to_skip)
+                philosophy_id = philosophy_dir.name
+                try:
+                    structures = load_structures_from_philosophy(domain_dir.name, philosophy_id)
+                except Exception as e:
+                    logger.warning(f"Failed to load structures for {domain_dir.name}/{philosophy_id}: {e}")
+                    continue
+
+                for spec in structures:
+                    _process_structure_spec(spec, cache, force, items_to_compute, items_to_skip)
 
     # Compute embeddings in batch
     computed_count = 0

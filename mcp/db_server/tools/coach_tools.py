@@ -364,7 +364,7 @@ def get_planned_sessions_tool(arguments: dict) -> dict:
                 starts_at_time = session.starts_at.time().isoformat()
 
                 session_dict = {
-                    "id": session.id,
+                    "id": str(session.id),  # Convert UUID to string for JSON serialization
                     "date": starts_at_date,
                     "time": starts_at_time,
                     "starts_at": starts_at_iso,
@@ -381,9 +381,9 @@ def get_planned_sessions_tool(arguments: dict) -> dict:
                     "intent": session.intent,
                     "notes": session.notes,
                     "status": session.status,
-                    "season_plan_id": session.season_plan_id,
-                    "revision_id": session.revision_id,
-                    "workout_id": session.workout_id,
+                    "season_plan_id": str(session.season_plan_id) if session.season_plan_id else None,  # Convert UUID to string
+                    "revision_id": str(session.revision_id) if session.revision_id else None,  # Convert UUID to string
+                    "workout_id": str(session.workout_id) if session.workout_id else None,  # Convert UUID to string
                     "tags": session.tags if session.tags else [],
                 }
                 sessions_list.append(session_dict)

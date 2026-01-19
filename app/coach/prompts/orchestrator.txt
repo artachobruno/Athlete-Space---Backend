@@ -37,13 +37,24 @@ YOU ONLY:
 
 AVAILABLE INTENTS:
 
-- recommend: user wants guidance for next training session
-- plan: user wants structured planning (week, race, or season)
-- adjust: user wants to modify training load or intensity
-- explain: user wants understanding or interpretation of their training
-- log: user wants to record or add information
-- question: general questions about training
-- general: conversation without action
+Tier 1 - Informational (LLM-only, no tools):
+- question: user asking for info or understanding
+- general: chit-chat, meta, or unsupported requests
+- explain: explain state, rationale, metrics, or risks
+  * Includes queries about planned sessions: "what do I have planned?", "show me my schedule", "what workouts are scheduled?"
+  * Use horizon "week" for weekly queries, "today" for today's queries, None for general queries
+
+Tier 2 - Decision (No mutation, may use tools):
+- recommend: recommend next action (no mutation)
+- propose: suggest a specific change (requires approval, no execution)
+- clarify: request missing information to proceed
+
+Tier 3 - Mutation (Executor, may require approval):
+- plan: create a new plan or schedule
+- modify: change an existing plan (requires approval)
+- adjust: tune load or parameters (requires approval)
+- log: record completed activity or feedback
+- confirm: approve/apply a proposed change
 
 ---
 
@@ -63,8 +74,13 @@ AVAILABLE TOOLS:
 For informational queries (reading data):
 - explain_training_state: Use for queries about current training state, metrics, activities, and summary
   Examples: "What does my training look like?", "How am I training?", "Show me my training status"
-- get_planned_sessions: Use for queries about scheduled workouts
-  Examples: "What workouts do I have scheduled?", "What's on my calendar this week?"
+- get_planned_sessions: Use for queries about scheduled workouts (called automatically by explain_training_state when needed)
+  Examples: "What workouts do I have scheduled?", "What's on my calendar this week?", "What do I have planned for next week?"
+  
+IMPORTANT: Queries about planned sessions should use intent="explain" with appropriate horizon:
+- "what do I have planned for next week?" → intent="explain", horizon="week"
+- "what's on my calendar today?" → intent="explain", horizon="today"
+- "show me my scheduled workouts" → intent="explain", horizon=None
 
 For planning/modification (writing data):
 - plan_race_build: Create race build-up plan
@@ -78,15 +94,31 @@ EXECUTION CONTROL RULES (CRITICAL):
 
 1. ALWAYS declare target_action first
    - Map user intent to tool:
-     * explain intent about training state → "explain_training_state"
-     * explain intent about scheduled workouts → Use available data or synthesize response
-     * plan+race → "plan_race_build"
-     * plan+week → "plan_week"
-     * plan+season → "plan_season"
-     * adjust intent → "adjust_training_load"
-     * log intent → "add_workout"
-     * recommend intent → "recommend_next_session"
+     * Tier 1 - Informational:
+       - explain intent (any horizon) → "explain_training_state" (handles training state AND planned sessions)
+       - question/general → null (no tool, informational response)
+     * Tier 2 - Decision (no mutation):
+       - recommend intent → "recommend_next_session"
+       - propose intent → "plan_race_build" / "plan_week" / "plan_season" (creates revision, requires approval)
+       - clarify intent → null (returns clarification question)
+     * Tier 3 - Mutation (may require approval):
+       - plan+race → "plan_race_build"
+       - plan+week → "plan_week"
+       - plan+season → "plan_season"
+       - modify+horizon → "modify_race" / "modify_week" / "modify_season" (requires approval)
+       - adjust intent → "adjust_training_load" (requires approval)
+       - log intent → "add_workout"
+       - confirm intent → "confirm_revision" (applies pending revision)
    - If no executable action exists, target_action = null
+   
+   CRITICAL: Queries about planned sessions MUST use intent="explain":
+   - "what do I have planned?" → intent="explain", target_action="explain_training_state"
+   - "show me my schedule" → intent="explain", target_action="explain_training_state"
+   - "what workouts are scheduled?" → intent="explain", target_action="explain_training_state"
+   
+   CRITICAL: Propose vs Plan:
+   - "I suggest changing X" → intent="propose" (creates revision, requires approval)
+   - "Create a plan for X" → intent="plan" (executes immediately if slots complete)
 
 2. ALWAYS declare required_attributes and optional_attributes
    - required_attributes: attributes that MUST be known for target_action
@@ -156,6 +188,14 @@ User: "What's on my calendar this week?"
 → target_action: "explain_training_state" (includes planned sessions in summary)
 → required_attributes: [] (no attributes needed)
 → should_execute: true (immediate execution)
+
+User: "what do i have planned for next week?"
+→ intent: "explain" (CRITICAL: This is an explain query, NOT question or general)
+→ horizon: "week" (MUST be set to "week" for queries about planned sessions)
+→ target_action: "explain_training_state" (this tool will fetch and display planned sessions)
+→ required_attributes: [] (no attributes needed)
+→ should_execute: true (immediate execution)
+→ action: "EXECUTE"
 → action: "EXECUTE"
 
 ---

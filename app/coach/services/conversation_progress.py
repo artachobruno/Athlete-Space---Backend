@@ -13,7 +13,8 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.db.models import ConversationProgress
+from app.core.conversation_ownership import get_conversation_owner
+from app.db.models import Conversation, ConversationProgress
 from app.db.session import get_session
 
 
@@ -120,14 +121,16 @@ def create_or_update_progress(
     intent: str | None = None,
     slots: dict[str, Any] | None = None,
     awaiting_slots: list[str] | None = None,
+    user_id: str | None = None,
 ) -> ConversationProgress:
     """Create or update conversation progress.
 
     Args:
-        conversation_id: Conversation ID
+        conversation_id: Conversation ID (format: c_<UUID> or <UUID>)
         intent: Intent name (e.g., "race_plan")
         slots: Slot values dictionary (may contain date objects)
         awaiting_slots: List of slot names we're waiting for
+        user_id: Optional user ID (will be looked up if not provided)
 
     Returns:
         Updated ConversationProgress (slots are deserialized back to date objects)
@@ -138,9 +141,45 @@ def create_or_update_progress(
         B41: Slot state is locked when awaiting_slots is empty (slots are complete).
         Locked slot state cannot be modified.
     """
+    # Convert c_<UUID> format to UUID for database query if needed
+    # Database stores conversation_id as UUID type, so strip the 'c_' prefix
+    db_conversation_id = conversation_id
+    if conversation_id.startswith("c_"):
+        db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
+
     with get_session() as db:
+        # Ensure the Conversation exists before creating ConversationProgress
+        # This is required to satisfy the foreign key constraint
+        conversation = db.get(Conversation, db_conversation_id)
+        if conversation is None:
+            # Get user_id - use provided value, or look it up from ConversationOwnership
+            resolved_user_id = user_id
+            if resolved_user_id is None:
+                resolved_user_id = get_conversation_owner(conversation_id)
+            if resolved_user_id is None:
+                # If still None, we can't create the conversation
+                # This should not happen in production - ownership should exist
+                raise ValueError(
+                    f"Cannot create Conversation for {conversation_id}: user_id is required. "
+                    "Either provide user_id parameter or ensure ConversationOwnership exists."
+                )
+
+            # Create the conversation
+            conversation = Conversation(
+                id=db_conversation_id,
+                user_id=resolved_user_id,
+                status="active",
+            )
+            db.add(conversation)
+            db.flush()  # Ensure FK is visible for subsequent inserts
+            logger.debug(
+                "Created conversation for progress",
+                conversation_id=conversation_id,
+                user_id=resolved_user_id,
+            )
+
         # Query within this session to avoid detached instance issues
-        result = db.execute(select(ConversationProgress).where(ConversationProgress.conversation_id == conversation_id)).first()
+        result = db.execute(select(ConversationProgress).where(ConversationProgress.conversation_id == db_conversation_id)).first()
         progress = result[0] if result else None
         now = datetime.now(timezone.utc)
 
@@ -169,7 +208,7 @@ def create_or_update_progress(
         if progress is None:
             # Create new progress
             progress = ConversationProgress(
-                conversation_id=conversation_id,
+                conversation_id=db_conversation_id,
                 intent=intent,
                 slots=serialized_slots,
                 awaiting_slots=awaiting_slots if awaiting_slots is not None else [],
@@ -177,10 +216,13 @@ def create_or_update_progress(
             )
             db.add(progress)
             logger.info(
-                "Created conversation progress",
+                f"Created conversation progress - "
+                f"slots_count={len(slots) if slots else 0}, "
+                f"awaiting_count={len(awaiting_slots) if awaiting_slots else 0}",
                 conversation_id=conversation_id,
                 intent=intent,
-                slots=serialized_slots,
+                slots_raw=slots,
+                slots_serialized=serialized_slots,
                 awaiting_slots=awaiting_slots,
             )
         else:
@@ -197,7 +239,9 @@ def create_or_update_progress(
                 "Updated conversation progress",
                 conversation_id=conversation_id,
                 intent=progress.intent,
-                slots=serialized_slots,
+                slots_raw=slots,
+                slots_serialized=serialized_slots,
+                slots_before_update=progress.slots if progress else None,
                 awaiting_slots=progress.awaiting_slots,
             )
 

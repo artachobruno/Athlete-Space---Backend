@@ -5,6 +5,7 @@ Transforms OrchestratorAgentResponse and executor reply into StyleLLMInput.
 
 import re
 
+from app.coach.intent_ux import get_intent_phrasing
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.responses.prompts import StyleLLMInput
@@ -252,11 +253,23 @@ def build_style_input(
     if not next_cta:
         next_cta = "All good for now."
 
+    # Add intent-specific context to action field to guide Style LLM
+    # This helps the Style LLM match the intent's tone naturally
+    intent_phrasing = get_intent_phrasing(decision.intent)
+    intent_pattern = intent_phrasing.get("pattern", "")
+    intent_tone = intent_phrasing.get("tone", "")
+
+    # Enhance action with intent context (Style LLM will use this as guidance)
+    if intent_pattern and intent_tone:
+        action_with_intent = f"{action} | Intent: {decision.intent} | Tone: {intent_tone} | Pattern inspiration: {intent_pattern}"
+    else:
+        action_with_intent = action
+
     return StyleLLMInput(
         goal=goal,
         headline=headline,
         situation=situation,
         signal=signal,
-        action=action,
+        action=action_with_intent,
         next=next_cta,
     )

@@ -27,6 +27,7 @@ from app.domains.training_plan.week_structure import (
     SESSION_TYPE_TO_DAY_TYPE,
     load_all_structures,
 )
+from app.domains.training_plan.week_structure_embedding import build_week_structure_canonical_text
 from app.embeddings.embedding_service import get_embedding_service
 from app.embeddings.vector_store import EmbeddedItem, VectorStore
 from app.planning.structure.types import StructureSpec
@@ -87,6 +88,8 @@ def _load_week_structure_vector_store() -> VectorStore:
 def _load_all_structures_with_embeddings() -> list[EmbeddedStructureSpec]:
     """Load all structures with their embeddings.
 
+    Computes embeddings on-the-fly for structures missing from cache.
+
     Returns:
         List of EmbeddedStructureSpec objects
 
@@ -96,11 +99,24 @@ def _load_all_structures_with_embeddings() -> list[EmbeddedStructureSpec]:
     # Load all structures from files
     all_structures = load_all_structures()
 
-    # Load vector store with embeddings
-    vector_store = _load_week_structure_vector_store()
+    # Load vector store with embeddings (may be empty if cache doesn't exist)
+    try:
+        vector_store = _load_week_structure_vector_store()
+    except RuntimeError:
+        # Cache doesn't exist - we'll compute all embeddings on-the-fly
+        logger.warning(
+            "Week structure embeddings cache not found. Computing embeddings on-the-fly. "
+            "Run: python scripts/precompute_embeddings.py --week-structures to precompute."
+        )
+        vector_store = VectorStore([])
 
-    # Match structures with embeddings
+    # Get embedding service for on-the-fly computation
+    embedding_service = get_embedding_service()
+
+    # Match structures with embeddings, computing missing ones on-the-fly
     embedded_structures: list[EmbeddedStructureSpec] = []
+    structures_to_compute: list[StructureSpec] = []
+
     for spec in all_structures:
         embedded_item = vector_store.get_item(spec.metadata.id)
         if embedded_item:
@@ -108,7 +124,23 @@ def _load_all_structures_with_embeddings() -> list[EmbeddedStructureSpec]:
                 EmbeddedStructureSpec(spec=spec, embedding=embedded_item.embedding)
             )
         else:
-            logger.warning(f"No embedding found for structure {spec.metadata.id}, skipping")
+            # Embedding missing - will compute on-the-fly
+            structures_to_compute.append(spec)
+
+    # Compute missing embeddings on-the-fly
+    if structures_to_compute:
+        logger.info(
+            f"Computing {len(structures_to_compute)} missing embeddings on-the-fly",
+            missing_ids=[s.metadata.id for s in structures_to_compute],
+        )
+        canonical_texts = [build_week_structure_canonical_text(spec) for spec in structures_to_compute]
+        embeddings = embedding_service.embed_batch(canonical_texts)
+
+        for spec, embedding in zip(structures_to_compute, embeddings, strict=True):
+            embedded_structures.append(
+                EmbeddedStructureSpec(spec=spec, embedding=embedding)
+            )
+            logger.debug(f"Computed embedding for structure {spec.metadata.id}")
 
     return embedded_structures
 

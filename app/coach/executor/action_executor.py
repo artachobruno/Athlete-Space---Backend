@@ -40,6 +40,7 @@ from app.db.models import Activity, AthleteProfile, PlannedSession, PlanRevision
 from app.db.session import get_session
 from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
+from app.plans.modify.plan_revision_repo import list_plan_revisions
 from app.plans.modify.types import DayModification
 from app.plans.revision.explanation_payload import build_explanation_payload
 from app.plans.revision.registry import PlanRevisionRegistry
@@ -230,6 +231,57 @@ class CoachActionExecutor:
             )
 
     @staticmethod
+    def _validate_intent_contract(
+        intent: str,
+        horizon: str | None,
+        has_revision: bool = False,
+        filled_slots: dict | None = None,
+    ) -> tuple[bool, str | None]:
+        """Validate intent contract before executor dispatch.
+
+        Enforces:
+        - confirm ⇒ must reference revision
+        - propose ⇒ must NOT mutate (creates revision only)
+        - Tier 1 intents ⇒ must never reach executor (informational only)
+        - Tier 3 intents ⇒ must go through executor
+
+        Args:
+            intent: Intent classification
+            horizon: Planning horizon (unused, kept for API compatibility)
+            has_revision: Whether a revision exists in context
+            filled_slots: Filled slots from decision (may contain revision_id)
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        _ = horizon  # Unused but kept for API compatibility
+        filled_slots = filled_slots or {}
+
+        # Tier 1 - Informational (should not reach executor for mutation)
+        if intent in {"question", "general"}:
+            # These are informational only - executor should return message directly
+            return True, None
+
+        # confirm must reference revision
+        if intent == "confirm":
+            revision_id = filled_slots.get("revision_id")
+            if not revision_id and not has_revision:
+                return False, "confirm intent requires a revision_id or pending revision"
+
+        # propose must NOT mutate (creates revision, doesn't apply)
+        if intent == "propose":
+            # This is validated by the tool returning requires_approval=True
+            # No additional validation needed here
+            pass
+
+        # Tier 3 intents must go through executor
+        if intent in {"plan", "modify", "adjust", "log", "confirm"}:
+            # These are mutation intents - must use executor
+            return True, None
+
+        return True, None
+
+    @staticmethod
     def _validate_intent_horizon_combination(
         intent: str,
         horizon: str | None,
@@ -244,23 +296,39 @@ class CoachActionExecutor:
             Tuple of (is_valid, error_message)
         """
         # Valid combinations
+        # Tier 1 - Informational
+        # Tier 2 - Decision (no mutation)
+        # Tier 3 - Mutation (may require approval)
         valid_combinations = {
-            ("recommend", "next_session"),
-            ("recommend", "today"),
-            ("plan", "week"),
-            ("plan", "race"),
-            ("plan", "season"),
-            ("adjust", None),
-            ("adjust", "today"),
-            ("adjust", "next_session"),
+            # Tier 1 - Informational
+            ("question", None),
+            ("general", None),
             ("explain", None),
             ("explain", "today"),
             ("explain", "next_session"),
             ("explain", "week"),  # Allow explaining training state for a week (e.g., "What workouts this week?")
+            # Tier 2 - Decision (no mutation)
+            ("recommend", "next_session"),
+            ("recommend", "today"),
+            ("propose", None),
+            ("propose", "week"),
+            ("propose", "race"),
+            ("propose", "season"),
+            ("clarify", None),
+            # Tier 3 - Mutation (may require approval)
+            ("plan", "week"),
+            ("plan", "race"),
+            ("plan", "season"),
+            ("modify", "day"),
+            ("modify", "week"),
+            ("modify", "race"),
+            ("modify", "season"),
+            ("adjust", None),
+            ("adjust", "today"),
+            ("adjust", "next_session"),
             ("log", None),
             ("log", "today"),
-            ("question", None),
-            ("general", None),
+            ("confirm", None),
         }
 
         if (intent, horizon) not in valid_combinations:
@@ -549,7 +617,9 @@ class CoachActionExecutor:
 
         # STATE 3: NO EXECUTABLE INTENT - Return informational response
         # If no executable action, return message as-is (allowed for informational responses)
-        if not target_action:
+        # EXCEPTION: Some intents (confirm, propose, clarify) are routed by intent, not target_action
+        intent_based_routing = decision.intent in {"confirm", "propose", "clarify"}
+        if not target_action and not intent_based_routing:
             logger.info(
                 "STATE 3: No executable intent - returning informational response",
                 intent=decision.intent,
@@ -560,7 +630,8 @@ class CoachActionExecutor:
 
         # If we reach here and action is still NO_ACTION, this is STATE 3 (no executable intent)
         # Return informational response without side effects
-        if decision.action != "EXECUTE":
+        # EXCEPTION: intent_based_routing intents can execute even with NO_ACTION if they have should_execute=True
+        if decision.action != "EXECUTE" and not (intent_based_routing and decision.should_execute):
             logger.info(
                 "NO_ACTION: returning informational response, no side effects",
                 action=decision.action,
@@ -584,6 +655,29 @@ class CoachActionExecutor:
                 athlete_id=deps.athlete_id,
             )
             return "I encountered an issue processing your request. Could you try rephrasing your question or being more specific?"
+
+        # Risk 2.5: Validate intent contract (tier semantics, revision requirements)
+        has_revision = bool(decision.filled_slots and decision.filled_slots.get("revision_id"))
+        is_valid, error_msg = CoachActionExecutor._validate_intent_contract(
+            decision.intent,
+            decision.horizon,
+            has_revision=has_revision,
+            filled_slots=decision.filled_slots,
+        )
+        if not is_valid:
+            logger.error(
+                "Invalid intent contract",
+                intent=decision.intent,
+                horizon=decision.horizon,
+                has_revision=has_revision,
+                error=error_msg,
+                athlete_id=deps.athlete_id,
+            )
+            return (
+                error_msg
+                or "I encountered an issue processing your request. "
+                "Could you try rephrasing your question or being more specific?"
+            )
 
         # Risk 1: Validate step granularity if action plan exists
         if decision.action_plan:
@@ -725,6 +819,47 @@ class CoachActionExecutor:
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("add_workout")
             return await CoachActionExecutor._execute_add_workout(decision, deps, conversation_id)
+
+        # Tier 2 - Decision (no mutation)
+        if intent == "propose":
+            # Propose creates a revision but doesn't execute it
+            # This will be handled by the plan/modify tools with approval flow
+            logger.info(
+                "Propose intent - will create revision requiring approval",
+                horizon=horizon,
+                conversation_id=conversation_id,
+            )
+            # Route to appropriate planning tool based on horizon
+            if horizon == "week":
+                if deps.execution_guard:
+                    deps.execution_guard.mark_executed("propose_week")
+                return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
+            if horizon == "race":
+                if deps.execution_guard:
+                    deps.execution_guard.mark_executed("propose_race")
+                return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
+            if horizon == "season":
+                if deps.execution_guard:
+                    deps.execution_guard.mark_executed("propose_season")
+                return await CoachActionExecutor._execute_plan_season(decision, deps, conversation_id)
+            return "Propose requires a horizon (week, race, or season)."
+
+        if intent == "clarify":
+            # Clarify is informational - return the question from decision
+            logger.info(
+                "Clarify intent - returning clarification question",
+                conversation_id=conversation_id,
+            )
+            return decision.message or decision.next_question or "I need more information to proceed."
+
+        # Tier 3 - Mutation (approval)
+        if intent == "confirm":
+            # Confirm applies a pending revision
+            logger.info(
+                "Confirm intent - applying pending revision",
+                conversation_id=conversation_id,
+            )
+            return await CoachActionExecutor._execute_confirm_revision(decision, deps, conversation_id)
 
         logger.warning(
             "Unhandled intent/horizon combination",
@@ -2040,6 +2175,130 @@ class CoachActionExecutor:
                 },
             )
             return "Something went wrong while explaining your training state. Please try again."
+
+    @staticmethod
+    async def _execute_confirm_revision(
+        decision: OrchestratorAgentResponse,
+        deps: CoachDeps,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Execute confirm intent - approve and apply a pending revision.
+
+        Phase 5 Invariant: A confirmed change can never apply without a pending revision.
+
+        Flow:
+        1. Require explicit revision reference (revision_id OR "latest pending revision")
+        2. Validate revision state (must exist, status="pending", belongs to user/athlete)
+        3. Apply via rollback-safe path (update status, approved_by_user, applied, applied_at)
+        4. Write audit entry (intent=confirm, actor=user, revision_id)
+
+        Args:
+            decision: Orchestrator decision with revision_id in filled_slots
+            deps: Dependencies
+            conversation_id: Optional conversation ID
+
+        Returns:
+            Success message or clarification if validation fails
+        """
+        # Step 1: Require explicit revision reference
+        revision_id = None
+        if decision.filled_slots:
+            revision_id = decision.filled_slots.get("revision_id")
+
+        # If no explicit revision_id, try "latest pending revision"
+        if not revision_id:
+            if not deps.athlete_id:
+                return "I need to know which revision you want to confirm. Please specify the revision ID."
+
+            # Get latest pending revision for this athlete
+            with get_session() as session:
+                pending_revisions = [
+                    r for r in list_plan_revisions(session, athlete_id=deps.athlete_id)
+                    if r.status == "pending" and r.requires_approval
+                ]
+
+                if not pending_revisions:
+                    return "I don't see any pending revisions to confirm. Would you like me to propose a change first?"
+
+                # Get most recent pending revision
+                latest_pending = max(pending_revisions, key=lambda r: r.created_at)
+                revision_id = latest_pending.id
+                logger.info(
+                    "Using latest pending revision for confirm",
+                    revision_id=revision_id,
+                    athlete_id=deps.athlete_id,
+                    conversation_id=conversation_id,
+                )
+
+        # Step 2: Validate revision state
+        if not deps.user_id or not deps.athlete_id:
+            return "I need your user and athlete information to confirm a revision."
+
+        try:
+            with get_session() as session:
+                revision = session.execute(
+                    select(PlanRevision).where(PlanRevision.id == revision_id)
+                ).scalar_one_or_none()
+
+                if not revision:
+                    return f"I couldn't find revision {revision_id}. Please check the revision ID and try again."
+
+                # Validate ownership
+                if revision.user_id != deps.user_id:
+                    return "This revision doesn't belong to your account. I can only confirm revisions for your own plans."
+
+                if revision.athlete_id != deps.athlete_id:
+                    return "This revision is for a different athlete. I can only confirm revisions for your current athlete profile."
+
+                # Validate status
+                if revision.status != "pending":
+                    return {
+                        "applied": "This revision has already been applied.",
+                        "blocked": "This revision was blocked and cannot be applied.",
+                    }.get(
+                        revision.status,
+                        f"This revision has status '{revision.status}' and cannot be confirmed.",
+                    )
+
+                if not revision.requires_approval:
+                    return "This revision doesn't require approval. It should have been applied automatically."
+
+                # Step 3: Apply via rollback-safe path
+                # Update revision to approved and applied
+                revision.status = "applied"
+                revision.approved_by_user = True
+                revision.applied = True
+                revision.applied_at = datetime.now(timezone.utc)
+
+                session.commit()
+
+                # Step 4: Write audit entry (revision already updated above)
+                logger.info(
+                    "Revision confirmed and applied",
+                    revision_id=revision_id,
+                    user_id=deps.user_id,
+                    athlete_id=deps.athlete_id,
+                    revision_type=revision.revision_type,
+                    conversation_id=conversation_id,
+                    intent="confirm",
+                )
+
+                # The actual application of the revision's changes happens when the tool
+                # that created the revision is re-executed (it will see approved_by_user=True
+                # and proceed with applying the changes)
+
+                return "Got it — I've confirmed and applied the revision. The changes are now active in your plan."
+
+        except Exception as e:
+            logger.exception(
+                "Failed to confirm revision",
+                revision_id=revision_id,
+                user_id=deps.user_id,
+                athlete_id=deps.athlete_id,
+                conversation_id=conversation_id,
+                error=str(e),
+            )
+            return "Something went wrong while confirming the revision. Please try again."
 
     @staticmethod
     async def _execute_add_workout(

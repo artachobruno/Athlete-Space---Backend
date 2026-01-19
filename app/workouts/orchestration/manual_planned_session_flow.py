@@ -33,7 +33,7 @@ def _map_sport_type(session_type: str) -> str:
     """Map PlannedSession type to workout sport type.
 
     Args:
-        session_type: PlannedSession type (Run, Ride, Bike, Swim, etc.)
+        session_type: PlannedSession type (Run, Ride, Bike, Swim, Race, etc.)
 
     Returns:
         Workout sport type (run, ride, swim) - matches database CHECK constraint
@@ -45,6 +45,8 @@ def _map_sport_type(session_type: str) -> str:
     sport_map: dict[str, str] = {
         "run": "run",
         "running": "run",
+        "race": "run",  # Races are typically running events
+        "event": "run",  # Events are typically running events
         "ride": "ride",
         "bike": "ride",
         "cycling": "ride",
@@ -95,17 +97,17 @@ async def create_structured_workout_from_manual_session(
         PlannedSession must be created AFTER this returns (with workout_id set).
     """
     # Step 1: Validate notes_raw
-    if not notes_raw or not notes_raw.strip():
+    notes_stripped = notes_raw.strip() if notes_raw else ""
+    if not notes_stripped:
         raise ValueError("Cannot create structured workout without notes_raw")
 
     # Step 2: Extract attributes (deterministic signal detection)
-    signals = extract_workout_signals(notes_raw)
+    signals = extract_workout_signals(notes_stripped)
 
     # Map session type to sport
     sport = _map_sport_type(session_type)
 
-    # Prepare ActivityInput for LLM
-    # Use extracted signals if available, otherwise use provided fields
+    # Prepare distance and duration for both paths
     total_distance_meters = None
     if signals.distance_m:
         total_distance_meters = int(signals.distance_m)
@@ -118,20 +120,57 @@ async def create_structured_workout_from_manual_session(
     elif duration_minutes:
         total_duration_seconds = int(duration_minutes * 60)
 
-    activity_input = ActivityInput(
-        sport=sport,
-        total_distance_meters=total_distance_meters,
-        total_duration_seconds=total_duration_seconds,
-        notes=notes_raw,
-    )
+    # For races with minimal notes, create a simple workout structure
+    # instead of trying to parse with LLM (which may fail on minimal input)
+    is_race = session_type.lower() in {"race", "event"}
+    has_minimal_notes = len(notes_stripped.split("\n")) <= 3 and "Distance:" in notes_stripped
 
-    # Step 3: LLM → Structured Workout
-    logger.info(
-        "Generating structured workout from notes",
-        user_id=user_id,
-        sport=sport,
-    )
-    structured_workout = await generate_steps_from_notes(activity_input)
+    if is_race and has_minimal_notes:
+        # Skip LLM parsing for simple race entries
+        # Create a basic structured workout directly
+        from app.workouts.canonical import StructuredWorkout, WorkoutStep
+
+        # Create a simple single-step workout for the race
+        race_step = WorkoutStep(
+            order=1,
+            name="Race",
+            distance_meters=total_distance_meters,
+            duration_seconds=None,
+            intensity="race",
+            target_type=None,
+            repeat=1,
+            is_recovery=False,
+        )
+
+        structured_workout = StructuredWorkout(
+            sport=sport,
+            total_distance_meters=total_distance_meters,
+            total_duration_seconds=None,
+            steps=[race_step],
+        )
+
+        logger.info(
+            "Created simple race workout (skipped LLM parsing)",
+            user_id=user_id,
+            sport=sport,
+            distance_meters=total_distance_meters,
+        )
+    else:
+        # Normal flow: use LLM to parse notes
+        activity_input = ActivityInput(
+            sport=sport,
+            total_distance_meters=total_distance_meters,
+            total_duration_seconds=total_duration_seconds,
+            notes=notes_stripped,
+        )
+
+        # Step 3: LLM → Structured Workout
+        logger.info(
+            "Generating structured workout from notes",
+            user_id=user_id,
+            sport=sport,
+        )
+        structured_workout = await generate_steps_from_notes(activity_input)
 
     # Step 3.5: Fetch user settings for target calculation
     # Defensive query: handle schema drift (missing ftp_watts column)

@@ -171,9 +171,9 @@ def _save_week_sessions_and_get_ids(
                         .where(PlannedSession.title == session_dict["title"])
                         .order_by(PlannedSession.created_at.desc())
                         .limit(1)
-                    ).first()
+                    ).scalars().first()
                     if result:
-                        session_ids[i] = result[0].id
+                        session_ids[i] = str(result.id)
 
     return session_ids
 
@@ -220,9 +220,9 @@ def _get_session_ids_for_upload(
             .where(PlannedSession.starts_at <= max_starts_at)
             .order_by(PlannedSession.created_at.desc())
             .limit(saved_count)
-        ).all()
+        ).scalars().all()
 
-        return [row[0].id for row in results[:saved_count]]
+        return [str(session_obj.id) for session_obj in results[:saved_count]]
 
 
 def _get_athlete_id_from_user_id(user_id: str) -> int:

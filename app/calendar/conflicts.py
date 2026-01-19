@@ -104,8 +104,15 @@ def _get_session_intensity(session: PlannedSession | dict) -> str | None:
 def _get_session_id(session: PlannedSession | dict) -> str | None:
     """Get id from session (PlannedSession or dict)."""
     if isinstance(session, dict):
-        return session.get("id")
-    return getattr(session, "id", None)
+        id_value = session.get("id")
+    else:
+        id_value = getattr(session, "id", None)
+    
+    if id_value is None:
+        return None
+    
+    # Convert UUID to string if needed (SQLAlchemy may return UUID objects)
+    return str(id_value)
 
 
 class Conflict(BaseModel):
@@ -304,7 +311,7 @@ def detect_conflicts(
                     conflicts.append(
                         Conflict(
                             date=candidate_date,
-                            existing_session_id=existing.id,
+                            existing_session_id=str(existing.id),
                             candidate_session_id=candidate_id,
                             existing_session_title=existing.title or "",
                             candidate_session_title=candidate_title,
@@ -329,7 +336,7 @@ def detect_conflicts(
                     conflicts.append(
                         Conflict(
                             date=candidate_date,
-                            existing_session_id=existing.id,
+                            existing_session_id=str(existing.id),
                             candidate_session_id=candidate_id,
                             existing_session_title=existing.title or "",
                             candidate_session_title=candidate_title,
@@ -341,8 +348,9 @@ def detect_conflicts(
                 # Check if both are key sessions (even if they don't overlap in time)
                 if _is_key_session(existing) and _is_key_session(candidate):
                     # Only add if not already added as time_overlap
+                    existing_id_str = str(existing.id)
                     already_conflicted = any(
-                        c.existing_session_id == existing.id
+                        c.existing_session_id == existing_id_str
                         and c.candidate_session_title == candidate_title
                         for c in conflicts
                     )
@@ -350,7 +358,7 @@ def detect_conflicts(
                         conflicts.append(
                             Conflict(
                                 date=candidate_date,
-                                existing_session_id=existing.id,
+                                existing_session_id=existing_id_str,
                                 candidate_session_id=candidate_id,
                                 existing_session_title=existing.title or "",
                                 candidate_session_title=candidate_title,
@@ -672,7 +680,7 @@ def detect_execution_conflicts(
                     CalendarConflict(
                         date=candidate_date,
                         conflict_type=ConflictType.TIME_OVERLAP,
-                        existing_session_id=existing.id,
+                        existing_session_id=str(existing.id),
                     )
                 )
                 continue
@@ -683,7 +691,7 @@ def detect_execution_conflicts(
                     CalendarConflict(
                         date=candidate_date,
                         conflict_type=ConflictType.TIME_OVERLAP,
-                        existing_session_id=existing.id,
+                        existing_session_id=str(existing.id),
                     )
                 )
                 continue
@@ -714,11 +722,11 @@ def detect_execution_conflicts_batch(
     candidate_session_ids: set[str] = {s.get("id", "") for s in candidate_sessions if s.get("id")}
 
     # Check for duplicate session_ids in database
-    existing_session_ids: set[str] = {s.id for s in existing_sessions}
+    existing_session_ids: set[str] = {str(s.id) for s in existing_sessions}
     for candidate_id in candidate_session_ids:
         if candidate_id in existing_session_ids:
             # Find the existing session to get its date
-            existing = next((s for s in existing_sessions if s.id == candidate_id), None)
+            existing = next((s for s in existing_sessions if str(s.id) == candidate_id), None)
             if existing:
                 conflicts.append(
                     CalendarConflict(

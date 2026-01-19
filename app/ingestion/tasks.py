@@ -14,7 +14,7 @@ from app.ingestion.jobs.strava_backfill import backfill_user, check_activities_e
 from app.ingestion.jobs.strava_incremental import incremental_sync_user
 from app.ingestion.locks import lock_manager
 from app.metrics.daily_aggregation import aggregate_daily_training
-from app.models import StravaAuth
+from app.model_aliases import StravaAuth
 
 
 def _record_error(session, user, exc: Exception) -> None:

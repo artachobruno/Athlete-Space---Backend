@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from app.db.session import get_session
 from app.ingestion.quota_manager import quota_manager
-from app.models import StravaAuth
+from app.model_aliases import StravaAuth
 
 NOW = int(time.time())
 

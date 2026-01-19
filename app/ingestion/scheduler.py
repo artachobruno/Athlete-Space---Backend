@@ -7,7 +7,7 @@ from app.db.models import StravaAccount
 from app.db.session import get_session
 from app.ingestion.quota_manager import quota_manager
 from app.ingestion.tasks import backfill_task, history_backfill_task, incremental_task
-from app.models import StravaAuth
+from app.model_aliases import StravaAuth
 
 STUCK_BACKFILL_SECONDS = 3 * 60 * 60  # 3 hours
 

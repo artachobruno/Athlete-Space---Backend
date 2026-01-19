@@ -14,7 +14,7 @@ from sqlalchemy import update
 
 from app.coach.diff.confidence import compute_revision_confidence, requires_approval
 from app.coach.diff.plan_diff import build_plan_diff
-from app.coach.explainability import explain_plan_revision
+from app.coach.explainability.revision_explainer import explain_plan_revision
 from app.db.models import AthleteProfile, PlannedSession
 from app.db.schema_v2_map import mi_to_meters, minutes_to_seconds
 from app.db.session import get_session as _get_session

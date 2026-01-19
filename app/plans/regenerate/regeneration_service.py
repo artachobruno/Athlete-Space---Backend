@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.coach.diff.confidence import compute_revision_confidence, requires_approval
 from app.coach.diff.plan_diff import build_plan_diff
-from app.coach.explainability import explain_plan_revision
+from app.coach.explainability.revision_explainer import explain_plan_revision
 from app.db.models import AthleteProfile, PlannedSession, PlanRevision
 from app.db.session import get_session
 from app.plans.modify.plan_revision_repo import create_plan_revision

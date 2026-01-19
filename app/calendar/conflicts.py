@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.db.models import PlannedSession
+from app.db.schema_v2_map import combine_date_time
 
 
 # Helper functions to work with both PlannedSession and dict
@@ -308,28 +309,30 @@ def detect_conflicts(
                 if candidate_id and candidate_id == existing_id_str:
                     continue
 
-                existing_time_info = SessionTimeInfo.from_session(existing)
-
-                # Skip if candidate is an exact duplicate of existing (same date, time, and title)
-                # This allows re-uploads of the same session without flagging as conflict
+                # Skip if candidate is an exact duplicate of existing (same starts_at and title)
+                # This matches the duplicate detection logic in save_sessions_to_database
+                # and allows re-uploads of the same session without flagging as conflict
                 existing_title = existing.title or ""
-                is_exact_duplicate = False
                 if candidate_title == existing_title:
-                    if candidate_time_info.is_all_day and existing_time_info.is_all_day:
-                        # Both are all-day sessions with same title - exact duplicate
-                        is_exact_duplicate = True
-                    elif (
-                        not candidate_time_info.is_all_day
-                        and not existing_time_info.is_all_day
-                        and candidate_time_info.start_time == existing_time_info.start_time
-                        and candidate_time_info.end_time == existing_time_info.end_time
-                    ):
-                        # Both have same time range and title - exact duplicate
-                        is_exact_duplicate = True
+                    # Compute starts_at for candidate session (same logic as save_sessions_to_database)
+                    candidate_datetime = _get_session_date(candidate)
+                    candidate_time_str = _get_session_time(candidate)
+                    candidate_starts_at = combine_date_time(candidate_datetime, candidate_time_str)
+                    
+                    # Compare with existing session's starts_at
+                    existing_starts_at = existing.starts_at
+                    
+                    # Normalize timezone for comparison (both should be timezone-aware)
+                    if candidate_starts_at and existing_starts_at:
+                        # Compare normalized timestamps (ignore microseconds)
+                        candidate_normalized = candidate_starts_at.replace(microsecond=0)
+                        existing_normalized = existing_starts_at.replace(microsecond=0)
+                        
+                        if candidate_normalized == existing_normalized:
+                            # Exact duplicate - skip conflict detection, will be handled by duplicate check later
+                            continue
 
-                if is_exact_duplicate:
-                    # Exact duplicate - skip conflict detection, will be handled by duplicate check later
-                    continue
+                existing_time_info = SessionTimeInfo.from_session(existing)
 
                 # Conflict type 1 & 2: All-day overlap (both all-day OR one all-day vs timed)
                 # All-day sessions conflict with all other sessions on the same day

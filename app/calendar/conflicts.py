@@ -303,7 +303,33 @@ def detect_conflicts(
         # Check against existing sessions on same date
         if candidate_date in existing_by_date:
             for existing in existing_by_date[candidate_date]:
+                # Skip if candidate is the same session as existing (update/re-upload scenario)
+                existing_id_str = str(existing.id)
+                if candidate_id and candidate_id == existing_id_str:
+                    continue
+
                 existing_time_info = SessionTimeInfo.from_session(existing)
+
+                # Skip if candidate is an exact duplicate of existing (same date, time, and title)
+                # This allows re-uploads of the same session without flagging as conflict
+                existing_title = existing.title or ""
+                is_exact_duplicate = False
+                if candidate_title == existing_title:
+                    if candidate_time_info.is_all_day and existing_time_info.is_all_day:
+                        # Both are all-day sessions with same title - exact duplicate
+                        is_exact_duplicate = True
+                    elif (
+                        not candidate_time_info.is_all_day
+                        and not existing_time_info.is_all_day
+                        and candidate_time_info.start_time == existing_time_info.start_time
+                        and candidate_time_info.end_time == existing_time_info.end_time
+                    ):
+                        # Both have same time range and title - exact duplicate
+                        is_exact_duplicate = True
+
+                if is_exact_duplicate:
+                    # Exact duplicate - skip conflict detection, will be handled by duplicate check later
+                    continue
 
                 # Conflict type 1 & 2: All-day overlap (both all-day OR one all-day vs timed)
                 # All-day sessions conflict with all other sessions on the same day

@@ -121,7 +121,13 @@ async def explain_plan_revision(
 
     try:
         logger.debug("Calling LLM for revision explanation", revision_id=revision.revision_id)
-        result = await agent.run("Generate the explanation for this revision.")
+        user_prompt = "Generate the explanation for this revision."
+        logger.debug(
+            "LLM Prompt: Revision Explanation",
+            system_prompt=prompt,
+            user_prompt=user_prompt,
+        )
+        result = await agent.run(user_prompt)
         explanation = result.output
 
         # Ensure revision_type matches

@@ -44,10 +44,21 @@ class RaceProfileData(BaseModel):
     raw_text: str | None = None
 
 
+class StructuredProfileData(BaseModel):
+    """Structured profile data for agent context (read-only)."""
+
+    constraints: dict | None = None
+    structured_profile: dict | None = None
+    narrative_bio: str | None = None
+    profile_last_updated_at: str | None = None
+
+
 class CoachDeps(BaseModel):
     """Dependencies for the Coach Orchestrator Agent.
 
     Provides context that tools and the agent can access.
+
+    CRITICAL: This is read-only context. The Coach agent MUST NEVER mutate profile data.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -58,6 +69,7 @@ class CoachDeps(BaseModel):
     athlete_profile: AthleteProfileData | None = None
     training_preferences: TrainingPreferencesData | None = None
     race_profile: RaceProfileData | None = None
+    structured_profile_data: StructuredProfileData | None = None  # Structured profile (read-only)
     days: int = 60
     days_to_race: int | None = None
     execution_guard: TurnExecutionGuard | None = Field(

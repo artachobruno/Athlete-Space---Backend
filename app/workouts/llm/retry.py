@@ -47,9 +47,10 @@ async def generate_with_retry(
     model = get_model("openai", USER_FACING_MODEL)
     prompt = build_workout_prompt(activity)
 
+    system_prompt = "You are a workout structuring engine. Output JSON only."
     agent = Agent(
         model=model,
-        system_prompt="You are a workout structuring engine. Output JSON only.",
+        system_prompt=system_prompt,
         output_type=StructuredWorkout,
     )
 
@@ -70,6 +71,12 @@ PREVIOUS ATTEMPT VALIDATION ERRORS:
 
 Please fix these errors and output valid JSON only."""
 
+            logger.debug(
+                "LLM Prompt: Workout Step Generation (Retry)",
+                system_prompt=system_prompt,
+                user_prompt=current_prompt,
+                attempt=attempt + 1,
+            )
             result = await agent.run(current_prompt)
             workout = result.output
 

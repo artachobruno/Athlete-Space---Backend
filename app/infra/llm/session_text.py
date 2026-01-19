@@ -265,6 +265,13 @@ async def generate_session_text_llm(
     for attempt in range(max_attempts_transient):
         try:
             logger.debug("Calling LLM for session text", attempt=attempt + 1, template_id=input_data.template_id)
+            logger.debug(
+                "LLM Prompt: Session Text Generation",
+                system_prompt=system_prompt,
+                user_prompt=user_message,
+                attempt=attempt + 1,
+                template_id=input_data.template_id,
+            )
             result = await agent.run(user_message)
 
             # Parse schema output

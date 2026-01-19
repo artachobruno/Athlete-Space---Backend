@@ -162,6 +162,11 @@ Notes:
     )
 
     try:
+        logger.debug(
+            "LLM Prompt: Race Modification Extraction",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
         result = await agent.run(user_prompt)
         extracted = result.output
     except Exception as e:

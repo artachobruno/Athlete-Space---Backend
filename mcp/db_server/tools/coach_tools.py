@@ -348,21 +348,43 @@ def get_planned_sessions_tool(arguments: dict) -> dict:
             # Convert to dictionary format
             sessions_list = []
             for session in sessions:
+                # Convert duration_seconds to minutes if present
+                duration_minutes = None
+                if session.duration_seconds is not None:
+                    duration_minutes = int(session.duration_seconds / 60)
+
+                # Convert distance_meters to km if present
+                distance_km = None
+                if session.distance_meters is not None:
+                    distance_km = float(session.distance_meters / 1000.0)
+
+                # Extract date and time from starts_at
+                starts_at_iso = session.starts_at.isoformat()
+                starts_at_date = session.starts_at.date().isoformat()
+                starts_at_time = session.starts_at.time().isoformat()
+
                 session_dict = {
                     "id": session.id,
-                    "date": session.date.isoformat(),
-                    "time": session.time,
-                    "type": session.type,
+                    "date": starts_at_date,
+                    "time": starts_at_time,
+                    "starts_at": starts_at_iso,
+                    "ends_at": session.ends_at.isoformat() if session.ends_at else None,
+                    "type": session.session_type,
+                    "session_type": session.session_type,
+                    "sport": session.sport,
                     "title": session.title,
-                    "duration_minutes": session.duration_minutes,
-                    "distance_km": session.distance_km,
+                    "duration_seconds": session.duration_seconds,
+                    "duration_minutes": duration_minutes,
+                    "distance_meters": session.distance_meters,
+                    "distance_km": distance_km,
                     "intensity": session.intensity,
+                    "intent": session.intent,
                     "notes": session.notes,
-                    "plan_type": session.plan_type,
-                    "plan_id": session.plan_id,
-                    "week_number": session.week_number,
                     "status": session.status,
-                    "completed": session.completed,
+                    "season_plan_id": session.season_plan_id,
+                    "revision_id": session.revision_id,
+                    "workout_id": session.workout_id,
+                    "tags": session.tags if session.tags else [],
                 }
                 sessions_list.append(session_dict)
 

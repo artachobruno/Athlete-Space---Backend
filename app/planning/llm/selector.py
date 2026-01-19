@@ -77,6 +77,11 @@ async def select_templates(
             week_index=selection_input.week_index,
             prompt_length=len(user_prompt),
         )
+        logger.debug(
+            "LLM Prompt: Template Selection",
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
 
         result = await agent.run(user_prompt)
         output = result.output

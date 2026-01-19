@@ -6,11 +6,18 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.coach.agents.orchestrator_agent import run_conversation
-from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
+from app.coach.agents.orchestrator_deps import (
+    AthleteProfileData,
+    CoachDeps,
+    RaceProfileData,
+    StructuredProfileData,
+    TrainingPreferencesData,
+)
 from app.coach.config.models import USER_FACING_MODEL
 from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
+from app.coach.services.response_postprocessor import postprocess_response
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.coach.utils.context_management import save_context
@@ -28,10 +35,11 @@ from app.core.observe import set_association_properties, trace
 from app.core.redis_conversation_store import write_message
 from app.core.trace_metadata import get_trace_metadata
 from app.db.message_repository import persist_message
-from app.db.models import AthleteProfile, CoachMessage, CoachProgressEvent, StravaAccount, StravaAuth, UserSettings
+from app.db.models import AthleteBio, AthleteProfile, CoachMessage, CoachProgressEvent, StravaAccount, StravaAuth, UserSettings
 from app.db.session import get_session
 from app.responses.input_builder import build_style_input
 from app.responses.style_llm import generate_coach_message
+from app.services.athlete_profile_service import get_profile_schema
 from app.state.api_helpers import get_training_data, get_user_id_from_athlete_id
 from app.upload.activity_handler import upload_activity_from_chat
 from app.upload.plan_handler import upload_plan_from_chat
@@ -488,6 +496,7 @@ async def coach_chat(
     athlete_profile = None
     training_preferences = None
     race_profile = None
+    structured_profile_data = None
     with get_session() as db:
         profile = db.query(AthleteProfile).filter_by(user_id=user_id).first()
         if profile:
@@ -545,6 +554,36 @@ async def coach_chat(
                 injury_flag=getattr(settings, "injury_history", None) or False,
             )
 
+        # Load structured profile data (read-only for Coach)
+        try:
+            profile_schema = get_profile_schema(db, user_id)
+            bio_text = None
+
+            # Only include bio if confidence >= 0.7
+            if profile_schema.narrative_bio and profile_schema.narrative_bio.confidence_score >= 0.7:
+                bio_text = profile_schema.narrative_bio.text
+
+            # Get profile last updated timestamp
+            profile_last_updated = None
+            if profile:
+                profile_last_updated = profile.updated_at.isoformat() if profile.updated_at else None
+
+            # Build structured profile data (read-only)
+            structured_profile_data = StructuredProfileData(
+                constraints=profile_schema.constraints.model_dump() if profile_schema.constraints else None,
+                structured_profile={
+                    "identity": profile_schema.identity.model_dump(),
+                    "goals": profile_schema.goals.model_dump(),
+                    "training_context": profile_schema.training_context.model_dump(),
+                    "preferences": profile_schema.preferences.model_dump(),
+                },
+                narrative_bio=bio_text,
+                profile_last_updated_at=profile_last_updated,
+            )
+        except Exception as e:
+            logger.warning("Failed to load structured profile data", user_id=user_id, error=str(e))
+            structured_profile_data = None
+
     # Create turn-scoped execution guard (prevents duplicate tool execution within a turn)
     execution_guard = TurnExecutionGuard(conversation_id=conversation_id)
     logger.debug(
@@ -560,6 +599,7 @@ async def coach_chat(
         athlete_profile=athlete_profile,
         training_preferences=training_preferences,
         race_profile=race_profile,
+        structured_profile_data=structured_profile_data,
         days=req.days,
         days_to_race=req.days_to_race,
         execution_guard=execution_guard,
@@ -665,6 +705,14 @@ async def coach_chat(
             error_type=type(e).__name__,
         )
         # reply already set to executor_reply above
+
+    # Post-process response: Add profile-based explanation if appropriate
+    reply = postprocess_response(
+        message=reply,
+        response_type=decision.response_type,
+        deps=deps,
+        confidence=decision.confidence,
+    )
 
     # Normalize assistant response before returning
     try:

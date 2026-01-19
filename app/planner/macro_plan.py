@@ -144,7 +144,13 @@ async def generate_macro_plan(
     # Single LLM call (no retries)
     try:
         logger.debug("Calling LLM for macro plan", input_keys=list(llm_input.keys()))
-        result = await agent.run(f"Context:\n{input_str}")
+        user_prompt = f"Context:\n{input_str}"
+        logger.debug(
+            "LLM Prompt: Macro Plan Generation (Planner)",
+            system_prompt=prompt_text,
+            user_prompt=user_prompt,
+        )
+        result = await agent.run(user_prompt)
         parsed = result.output
 
         logger.debug(

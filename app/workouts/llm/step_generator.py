@@ -90,14 +90,20 @@ async def generate_steps_from_notes(activity: ActivityInput) -> StructuredWorkou
     model = get_model("openai", USER_FACING_MODEL)
     prompt = build_workout_prompt(activity)
 
+    system_prompt = "You are a workout structuring engine. Output JSON only."
     agent = Agent(
         model=model,
-        system_prompt="You are a workout structuring engine. Output JSON only.",
+        system_prompt=system_prompt,
         output_type=StructuredWorkout,
     )
 
     try:
         logger.info(f"Generating workout steps from notes for sport: {activity.sport}")
+        logger.debug(
+            "LLM Prompt: Workout Step Generation",
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+        )
         result = await agent.run(prompt)
         logger.info(f"Successfully generated workout with {len(result.output.steps)} steps")
     except ValidationError as e:

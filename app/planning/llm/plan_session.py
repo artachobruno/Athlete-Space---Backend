@@ -75,6 +75,11 @@ async def plan_session_llm(spec: SessionSpec) -> SessionPlan:
         target_distance_km=spec.target_distance_km,
         target_duration_min=spec.target_duration_min,
     )
+    logger.debug(
+        "LLM Prompt: Session Plan Generation",
+        system_prompt=SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+    )
 
     try:
         result = await agent.run(user_prompt)

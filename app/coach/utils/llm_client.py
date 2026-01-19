@@ -102,7 +102,14 @@ class CoachLLMClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating season plan (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = await agent.run(f"Context:\n{context_str}")
+                user_prompt = f"Context:\n{context_str}"
+                logger.debug(
+                    "LLM Prompt: Season Plan Generation",
+                    system_prompt=prompt_text,
+                    user_prompt=user_prompt,
+                    attempt=attempt + 1,
+                )
+                result = await agent.run(user_prompt)
 
                 # Validate against constraints
                 errors = validate_season_plan(result.output)
@@ -168,7 +175,14 @@ class CoachLLMClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating weekly intent (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = await agent.run(f"Context:\n{context_str}")
+                user_prompt = f"Context:\n{context_str}"
+                logger.debug(
+                    "LLM Prompt: Weekly Intent Generation",
+                    system_prompt=prompt_text,
+                    user_prompt=user_prompt,
+                    attempt=attempt + 1,
+                )
+                result = await agent.run(user_prompt)
 
                 # Validate against constraints
                 errors = validate_weekly_intent(result.output, previous_volume)
@@ -230,7 +244,14 @@ class CoachLLMClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating daily decision (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = await agent.run(f"Context:\n{context_str}")
+                user_prompt = f"Context:\n{context_str}"
+                logger.debug(
+                    "LLM Prompt: Daily Decision Generation",
+                    system_prompt=prompt_text,
+                    user_prompt=user_prompt,
+                    attempt=attempt + 1,
+                )
+                result = await agent.run(user_prompt)
 
                 # Validate against constraints
                 errors = validate_daily_decision(result.output)
@@ -291,7 +312,14 @@ class CoachLLMClient:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"Generating weekly report (attempt {attempt + 1}/{MAX_RETRIES + 1})")
-                result = await agent.run(f"Context:\n{context_str}")
+                user_prompt = f"Context:\n{context_str}"
+                logger.debug(
+                    "LLM Prompt: Weekly Report Generation",
+                    system_prompt=prompt_text,
+                    user_prompt=user_prompt,
+                    attempt=attempt + 1,
+                )
+                result = await agent.run(user_prompt)
 
                 # Basic validation (schema validation is handled by pydantic)
                 if not result.output.week_summary or len(result.output.week_summary) < 100:
@@ -623,7 +651,7 @@ class CoachLLMClient:
                 user_prompt = f"Context:\n{context_str}"
                 full_prompt = f"{prompt_text}\n\n{user_prompt}"
                 logger.debug(
-                    "llm_client: Exact prompt sent to LLM",
+                    "LLM Prompt: Training Plan Generation",
                     attempt=attempt + 1,
                     system_prompt=prompt_text,
                     user_prompt=user_prompt,

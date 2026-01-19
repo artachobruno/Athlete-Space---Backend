@@ -14,7 +14,7 @@ Core invariants:
 
 import json
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, NoReturn
 
 import redis
 from loguru import logger
@@ -190,6 +190,11 @@ async def _extract_summary_via_llm(
             has_slot_state=bool(slot_state),
             has_previous_summary=previous_summary is not None,
         )
+        logger.debug(
+            "LLM Prompt: Conversation Summary Extraction",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
 
         result = await agent.run(user_prompt)
         summary = result.output
@@ -342,7 +347,7 @@ def _get_messages_since_last_summary(
                             role=role_str,
                         )
                         continue
-                    
+
                     # Validate required fields before creating Message
                     if not db_msg.user_id:
                         logger.warning(
@@ -351,7 +356,7 @@ def _get_messages_since_last_summary(
                             message_id=db_msg.id,
                         )
                         continue
-                    
+
                     if db_msg.ts is None:
                         logger.warning(
                             "Missing ts in ConversationMessage, skipping",
@@ -359,7 +364,7 @@ def _get_messages_since_last_summary(
                             message_id=db_msg.id,
                         )
                         continue
-                    
+
                     if db_msg.tokens is None:
                         logger.warning(
                             "Missing tokens in ConversationMessage, skipping",
@@ -367,12 +372,12 @@ def _get_messages_since_last_summary(
                             message_id=db_msg.id,
                         )
                         continue
-                    
+
                     role: Literal["user", "assistant", "system"] = role_str  # type: ignore[assignment]
-                    
+
                     # Convert ts to ISO format string
                     ts_str = db_msg.ts.isoformat() if isinstance(db_msg.ts, datetime) else str(db_msg.ts)
-                    
+
                     msg = Message(
                         conversation_id=db_msg.conversation_id,
                         user_id=db_msg.user_id,
@@ -468,6 +473,10 @@ def persist_conversation_summary(
         conversation_id: Conversation ID
         summary: Summary dictionary (from ConversationSummary.model_dump())
     """
+    def _raise_persistence_error() -> NoReturn:
+        """Raise error for persistence failure."""
+        raise ValueError("Failed to persist conversation summary after retries")
+
     try:
         # Convert c_<UUID> format to UUID for database if needed
         # Database stores conversation_id as UUID type, so strip the 'c_' prefix
@@ -475,44 +484,75 @@ def persist_conversation_summary(
         if conversation_id.startswith("c_"):
             db_conversation_id = conversation_id[2:]  # Strip 'c_' prefix
 
-        with get_session() as db:
-            version = get_next_summary_version(db, conversation_id)
-            created_at = datetime.now(timezone.utc)
+        # Retry logic to handle race conditions
+        max_retries = 3
+        version = None
+        created_at = None
 
-            row = ConversationSummaryModel(
-                conversation_id=db_conversation_id,
-                version=version,
-                summary=summary,
-                created_at=created_at,
-            )
-            db.add(row)
-            db.commit()
+        for attempt in range(max_retries):
+            try:
+                with get_session() as db:
+                    version = get_next_summary_version(db, conversation_id)
+                    created_at = datetime.now(timezone.utc)
 
-            logger.info(
-                "summary_persisted",
-                conversation_id=conversation_id,
-                summary_version=version,
-                storage="postgres+redis",
-            )
+                    row = ConversationSummaryModel(
+                        conversation_id=db_conversation_id,
+                        version=version,
+                        summary=summary,
+                        created_at=created_at,
+                    )
+                    db.add(row)
+                    db.commit()
+                    break  # Success, exit retry loop
+            except Exception as e:
+                # Check if it's a unique constraint violation (race condition)
+                error_str = str(e).lower()
+                is_unique_violation = (
+                    "unique" in error_str
+                    or "duplicate" in error_str
+                    or "uniqueconstraint" in error_str
+                    or "integrityerror" in error_str
+                )
 
-            # Increment counter
-            increment_memory_counter("summaries_created")
+                if is_unique_violation and attempt < max_retries - 1:
+                    # Race condition detected - retry with fresh version lookup
+                    logger.warning(
+                        f"Race condition detected in conversation summary persistence (attempt {attempt + 1}/{max_retries}), retrying...",
+                        conversation_id=conversation_id,
+                    )
+                    continue
+                # Either not a race condition or max retries reached - re-raise
+                raise
 
-            # Cache the latest summary in Redis after successful persistence
-            cache_latest_summary(
-                conversation_id=conversation_id,
-                version=version,
-                summary=summary,
-                created_at=created_at,
-            )
+        # Continue with rest of function after successful commit
+        if version is None or created_at is None:
+            _raise_persistence_error()
 
-            # Compact Redis memory after successful persistence and caching (B36)
-            compact_conversation_memory(
-                conversation_id=conversation_id,
-                summary=summary,
-                summary_version=version,
-                summary_created_at=created_at,
-            )
+        logger.info(
+            "summary_persisted",
+            conversation_id=conversation_id,
+            summary_version=version,
+            storage="postgres+redis",
+        )
+
+        # Increment counter
+        increment_memory_counter("summaries_created")
+
+        # Cache the latest summary in Redis after successful persistence
+        cache_latest_summary(
+            conversation_id=conversation_id,
+            version=version,
+            summary=summary,
+            created_at=created_at,
+        )
+
+        # Compact Redis memory after successful persistence and caching (B36)
+        compact_conversation_memory(
+            conversation_id=conversation_id,
+            summary=summary,
+            summary_version=version,
+            summary_created_at=created_at,
+        )
     except Exception:
         logger.exception(
             "Failed to persist conversation summary",

@@ -68,10 +68,16 @@ class WorkoutLLMEvaluator:
                 fatigue=fatigue,
             )
 
+            system_prompt = "You are a professional endurance coach providing workout execution feedback."
             agent = Agent(
                 model=self.model,
-                system_prompt="You are a professional endurance coach providing workout execution feedback.",
+                system_prompt=system_prompt,
                 output_type=StepLLMInterpretation,
+            )
+            logger.debug(
+                "LLM Prompt: Step Interpretation",
+                system_prompt=system_prompt,
+                user_prompt=prompt,
             )
 
             result = await agent.run(prompt)
@@ -126,10 +132,16 @@ class WorkoutLLMEvaluator:
                 step_summaries=step_summaries,
             )
 
+            system_prompt = "You are a professional endurance coach providing workout execution feedback."
             agent = Agent(
                 model=self.model,
-                system_prompt="You are a professional endurance coach providing workout execution feedback.",
+                system_prompt=system_prompt,
                 output_type=WorkoutLLMInterpretation,
+            )
+            logger.debug(
+                "LLM Prompt: Workout Interpretation",
+                system_prompt=system_prompt,
+                user_prompt=prompt,
             )
 
             result = await agent.run(prompt)

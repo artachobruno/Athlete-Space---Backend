@@ -98,7 +98,13 @@ class GoalExtractionService:
         )
 
         try:
-            result = agent.run_sync(f"Extract race attributes from this goal: {goal_text}")
+            user_prompt = f"Extract race attributes from this goal: {goal_text}"
+            logger.debug(
+                "LLM Prompt: Race Attributes Extraction (Onboarding)",
+                system_prompt=prompt_text,
+                user_prompt=user_prompt,
+            )
+            result = agent.run_sync(user_prompt)
             extracted = result.output
 
             logger.info(
@@ -135,7 +141,13 @@ def extract_injury_attributes(injury_notes: str) -> ExtractedInjuryAttributes:
     )
 
     try:
-        result = agent.run_sync(f"Extract injury attributes from this description: {injury_notes}")
+        user_prompt = f"Extract injury attributes from this description: {injury_notes}"
+        logger.debug(
+            "LLM Prompt: Injury Attributes Extraction",
+            system_prompt=prompt_text,
+            user_prompt=user_prompt,
+        )
+        result = agent.run_sync(user_prompt)
         extracted = result.output
 
         logger.info(

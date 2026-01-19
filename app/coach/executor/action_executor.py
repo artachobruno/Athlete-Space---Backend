@@ -1910,28 +1910,6 @@ class CoachActionExecutor:
             )
 
             sessions_data = sessions_result.get("sessions", [])
-            
-            # Also fetch completed activities for the week for context
-            completed_activities = []
-            try:
-                with get_session() as db_session:
-                    activities_query = select(Activity).where(
-                        Activity.user_id == user_id,
-                        Activity.starts_at >= monday,
-                        Activity.starts_at <= sunday,
-                    ).order_by(Activity.starts_at.desc())
-                    
-                    activities = db_session.execute(activities_query).scalars().all()
-                    completed_activities = [
-                        {
-                            "name": a.name or "Activity",
-                            "starts_at": a.starts_at.isoformat() if a.starts_at else "",
-                            "type": a.sport_type or "unknown",
-                        }
-                        for a in activities
-                    ]
-            except Exception as e:
-                logger.debug(f"Could not fetch completed activities for context: {e}")
 
             if sessions_data:
                 # Format workouts conversationally
@@ -1952,32 +1930,37 @@ class CoachActionExecutor:
                         sessions_list_parts.append(session_name)
 
                 sessions_text = "\n".join(f"• {s}" for s in sessions_list_parts)
-                
+
                 # Generate coaching feedback based on schedule
                 feedback_parts = []
-                
+
                 # Assess schedule density
                 session_count = len(sessions_data)
-                
+
                 if session_count >= 5:
                     feedback_parts.append("You have a solid week planned with good structure.")
                 elif session_count >= 3:
                     feedback_parts.append("Your week has a reasonable training load.")
                 else:
                     feedback_parts.append("Your schedule looks light this week—consider adding more volume if you're building fitness.")
-                
+
                 # Assess recovery days
                 if session_count <= 2:
                     feedback_parts.append("Make sure you're maintaining consistency with your training plan.")
-                elif session_count <= 6 and len([s for s in sessions_data if s.get("name", "").lower() in {"rest", "recovery", "easy", "off"}]) < 1:
-                    feedback_parts.append("Consider scheduling a recovery day to absorb training stress.")
-                
+                elif session_count <= 6:
+                    recovery_day_names = {"rest", "recovery", "easy", "off"}
+                    has_recovery_day = any(
+                        s.get("name", "").lower() in recovery_day_names for s in sessions_data
+                    )
+                    if not has_recovery_day:
+                        feedback_parts.append("Consider scheduling a recovery day to absorb training stress.")
+
                 feedback_text = " ".join(feedback_parts) if feedback_parts else ""
-                
+
                 response = f"{training_state_msg}\n\nHere's what you have scheduled this week:\n{sessions_text}"
                 if feedback_text:
                     response += f"\n\n{feedback_text}"
-                
+
                 return response
 
             return f"{training_state_msg}\n\nYou don't have any workouts scheduled for this week yet."
@@ -2015,7 +1998,7 @@ class CoachActionExecutor:
             message_lower = decision.message.lower()
             workout_keywords = ["scheduled", "workout", "workouts", "calendar", "what do i have", "what's on"]
             is_workout_query = any(keyword in message_lower for keyword in workout_keywords)
-            
+
             # Fetch scheduled workouts if horizon is "week" OR if query is about workouts/calendar
             final_message = training_state_msg
             if deps.user_id and (decision.horizon == "week" or is_workout_query):

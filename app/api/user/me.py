@@ -727,6 +727,26 @@ def _create_new_profile(session, user_id: str) -> AthleteProfile:
     return profile
 
 
+def _convert_goals_to_list(goals: dict | list[str] | None) -> list[str]:
+    """Convert goals from dict/list/None to list[str].
+
+    Args:
+        goals: Goals as dict, list[str], or None
+
+    Returns:
+        List of goal strings
+    """
+    if goals is None:
+        return []
+    if isinstance(goals, list):
+        return goals
+    if isinstance(goals, dict):
+        # If it's a dict, try to extract list values or return empty
+        # This handles legacy data that might be stored as dict
+        return []
+    return []
+
+
 def _validate_goals(goals: list[str]) -> None:
     """Validate goals array.
 
@@ -1674,7 +1694,7 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                 unit_system=profile.unit_system or "imperial",
                 strava_connected=strava_connected,
                 target_event=target_event_obj,
-                goals=profile.goals or [],
+                goals=_convert_goals_to_list(profile.goals),
             )
     except ProgrammingError as e:
         # Database schema error (missing column, table, etc.)
@@ -1996,7 +2016,7 @@ def _build_response_from_profile(profile: AthleteProfile, session: Session, user
         unit_system=profile.unit_system or "imperial",
         strava_connected=strava_connected,
         target_event=target_event_obj,
-        goals=profile.goals or [],
+        goals=_convert_goals_to_list(profile.goals),
     )
 
 

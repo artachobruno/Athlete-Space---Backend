@@ -38,6 +38,7 @@ from app.api.integrations.integrations_strava import router as integrations_stra
 from app.api.intelligence.intelligence import router as intelligence_router
 from app.api.intelligence.risks import router as risks_router
 from app.api.onboarding.onboarding import router as onboarding_router
+from app.api.profile import router as profile_router
 from app.api.settings.settings import router as settings_router
 from app.api.strava.strava import router as strava_router
 from app.api.training.manual_upload import router as manual_upload_router
@@ -908,6 +909,7 @@ app.include_router(intelligence_router)
 app.include_router(risks_router)
 app.include_router(me_router)
 app.include_router(onboarding_router)
+app.include_router(profile_router)
 app.include_router(settings_router)
 app.include_router(strava_router)
 app.include_router(manual_upload_router)

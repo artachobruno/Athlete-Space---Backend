@@ -64,6 +64,11 @@ async def generate_coach_message(structured_input: StyleLLMInput) -> str:
 
     try:
         # Call LLM
+        logger.debug(
+            "LLM Prompt: Style Message Generation",
+            system_prompt=STYLE_LLM_SYSTEM_PROMPT,
+            user_prompt=prompt,
+        )
         result = await agent.run(prompt)
         output = result.output
 

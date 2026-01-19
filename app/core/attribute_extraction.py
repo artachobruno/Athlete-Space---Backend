@@ -212,7 +212,13 @@ CRITICAL: If you didn't extract it, it does not exist.
             text_preview=text[:100],
             has_context=conversation_slot_state is not None,
         )
-        result = await agent.run(f"Extract the requested attributes from this message: {text}")
+        user_prompt = f"Extract the requested attributes from this message: {text}"
+        logger.debug(
+            "LLM Prompt: Attribute Extraction",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        result = await agent.run(user_prompt)
         extracted = result.output
 
         logger.info(

@@ -160,7 +160,13 @@ Example inputs (assuming today is {today_str}):
     )
 
     try:
-        result = agent.run_sync(f"Extract race information from this message: {message}")
+        user_prompt = f"Extract race information from this message: {message}"
+        logger.debug(
+            "LLM Prompt: Race Information Extraction",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        result = agent.run_sync(user_prompt)
         race_info = result.output
 
         logger.info(
@@ -348,6 +354,11 @@ AWAITING SLOTS
         logger.debug(
             "plan_race: Calling LLM agent for goal extraction",
             prompt_length=len(user_prompt),
+        )
+        logger.debug(
+            "LLM Prompt: Training Goal Extraction",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
         )
         result = await agent.run(user_prompt)
         goal_info = result.output

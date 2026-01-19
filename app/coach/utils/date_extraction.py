@@ -170,7 +170,13 @@ Example inputs (assuming today is {today_str}):
     )
 
     try:
-        result = agent.run_sync(f"Extract date from this text: {text}")
+        user_prompt = f"Extract date from this text: {text}"
+        logger.debug(
+            "LLM Prompt: Date Extraction",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        result = agent.run_sync(user_prompt)
         extraction = result.output
 
         if extraction.date:
@@ -282,7 +288,13 @@ Example inputs (assuming today is {today_str}):
     )
 
     try:
-        result = agent.run_sync(f"Extract all dates from this text: {text}")
+        user_prompt = f"Extract all dates from this text: {text}"
+        logger.debug(
+            "LLM Prompt: Multi-Date Extraction",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        result = agent.run_sync(user_prompt)
         extraction = result.output
 
         parsed_dates: list[date] = []
@@ -369,7 +381,13 @@ Example inputs:
     )
 
     try:
-        result = agent.run_sync(f"Extract session count from this text: {text}")
+        user_prompt = f"Extract session count from this text: {text}"
+        logger.debug(
+            "LLM Prompt: Session Count Extraction",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        result = agent.run_sync(user_prompt)
         extraction = result.output
 
         session_count: int | None = None

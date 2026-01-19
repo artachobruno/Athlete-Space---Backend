@@ -824,6 +824,13 @@ class AthleteProfile(Base):
     threshold_pace_sec_per_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
     baseline_weekly_run_km: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Structured profile data stored as JSONB (for athlete auto profile feature)
+    identity: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    goals: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    constraints: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    training_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
@@ -1332,4 +1339,43 @@ class DecisionAudit(Base):
 
     __table_args__ = (
         Index("idx_decision_audit_user_timestamp", "user_id", "timestamp"),
+    )
+
+
+class AthleteBio(Base):
+    """Athlete narrative bio.
+
+    Stores the generated narrative bio for athletes along with metadata
+    about generation confidence and dependencies.
+    """
+
+    __tablename__ = "athlete_bios"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Bio content
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Metadata
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    source: Mapped[str] = mapped_column(String, nullable=False)  # 'ai_generated', 'user_edited', 'manual'
+    depends_on_hash: Mapped[str | None] = mapped_column(String, nullable=True)  # Hash of profile data this bio depends on
+    last_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("idx_athlete_bios_user_id", "user_id"),
+        Index("idx_athlete_bios_stale", "stale"),
     )

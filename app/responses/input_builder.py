@@ -83,28 +83,18 @@ def _extract_goal_from_decision(
     return "training"
 
 
-def _extract_headline(decision: OrchestratorAgentResponse) -> str:
+def _extract_headline(_decision: OrchestratorAgentResponse) -> str | None:
     """Extract headline from decision.
 
     Args:
-        decision: Orchestrator decision
+        _decision: Orchestrator decision (unused, kept for API compatibility)
 
     Returns:
-        Headline text
+        Headline text or None to let LLM generate it
     """
-    # Use response_type to generate headline
-    if decision.response_type == "summary":
-        return "Your training is on track"
-    if decision.response_type == "explanation":
-        return "Here's what I see"
-    if decision.response_type == "recommendation":
-        return "Here's my recommendation"
-    if decision.response_type == "plan":
-        return "Your plan is ready"
-    if decision.response_type == "weekly_plan":
-        return "Your week is planned"
-
-    return "Your training status"
+    # Let the Style LLM generate headlines organically based on context
+    # Do not provide hardcoded templates - all responses must be LLM-generated
+    return None
 
 
 def _extract_situation(
@@ -118,34 +108,36 @@ def _extract_situation(
         executor_reply: Executor reply text
 
     Returns:
-        Situation description
+        Situation description - passes raw context to LLM for generation
     """
+    # Instead of hardcoded templates, pass structured context to the Style LLM
+    # The LLM will generate the situation description organically
     # decision parameter kept for API consistency, may be used in future
     _ = decision
-    # Try to extract from executor reply first
-    # Look for context clues
-    if "well-recovered" in executor_reply.lower():
-        return "You're well-recovered and ready for quality work"
-    if "fatigue" in executor_reply.lower() or "fatigued" in executor_reply.lower():
-        return "You're carrying some fatigue"
-    if "recovery" in executor_reply.lower() and "good" in executor_reply.lower():
-        return "You're in a good recovery state"
 
-    # Use athlete state if available
+    # Build context from executor reply and athlete state for LLM to interpret
+    context_parts = []
+
+    # Add athlete state context if available
     if athlete_state:
-        if athlete_state.tsb > 10:
-            return "You're well-recovered and ready for quality work"
-        if athlete_state.tsb < -10:
-            return "You're carrying some fatigue"
-        if athlete_state.load_trend == "falling":
-            return "Your load is decreasing, which suggests good recovery"
-        if athlete_state.load_trend == "stable":
-            return "Your load is holding steady"
-        if athlete_state.load_trend == "rising":
-            return "Your load is building steadily"
+        if athlete_state.tsb is not None:
+            context_parts.append(f"Training Stress Balance (TSB): {athlete_state.tsb:.1f}")
+        if athlete_state.load_trend:
+            context_parts.append(f"Load trend: {athlete_state.load_trend}")
+        if athlete_state.volatility:
+            context_parts.append(f"Volatility: {athlete_state.volatility}")
 
-    # Default
-    return "You're mid-block with manageable fatigue"
+    # Add executor reply context (truncated for brevity)
+    if executor_reply:
+        # Pass a condensed version of the executor reply as context
+        context_parts.append(f"Context from analysis: {executor_reply[:200]}")
+
+    # Return structured context for LLM to interpret, not a pre-written template
+    if context_parts:
+        return " | ".join(context_parts)
+
+    # Minimal fallback - LLM should still generate based on this
+    return "Current training state analysis"
 
 
 def _extract_action(decision: OrchestratorAgentResponse, executor_reply: str) -> str:
@@ -156,23 +148,36 @@ def _extract_action(decision: OrchestratorAgentResponse, executor_reply: str) ->
         executor_reply: Executor reply text
 
     Returns:
-        Action description
+        Action description - passes raw context to LLM for generation
     """
-    # Check if action is "no change"
-    if "no change" in executor_reply.lower() or "stay the course" in executor_reply.lower():
-        return "No changes recommended"
+    # Instead of hardcoded templates, pass structured context to the Style LLM
+    # The LLM will generate the action description organically
 
-    # Check for adjustment language
-    if "reduce" in executor_reply.lower() or "decrease" in executor_reply.lower():
-        return "Reduce training load"
-    if "increase" in executor_reply.lower() or "add" in executor_reply.lower():
-        return "Increase training load"
+    # Build action context from executor reply for LLM to interpret
+    action_context = []
 
-    # Default based on intent
+    # Pass relevant parts of executor reply as context
+    if executor_reply:
+        # Look for key action indicators but don't template them
+        if "no change" in executor_reply.lower() or "stay the course" in executor_reply.lower():
+            action_context.append("Recommendation: maintain current approach")
+        elif "reduce" in executor_reply.lower() or "decrease" in executor_reply.lower():
+            action_context.append("Recommendation: reduce training load")
+        elif "increase" in executor_reply.lower() or "add" in executor_reply.lower():
+            action_context.append("Recommendation: increase training load")
+        else:
+            # Pass decision intent as context
+            action_context.append(f"Intent: {decision.intent}")
+
+    # Return structured context for LLM to interpret, not a pre-written template
+    if action_context:
+        return " | ".join(action_context)
+
+    # Minimal fallback based on intent - LLM should still generate based on this
     if decision.intent == "explain":
-        return "No changes recommended"
+        return "Status: explaining current state"
 
-    return "Continue with current plan"
+    return "Status: reviewing training plan"
 
 
 def _extract_next_cta(decision: OrchestratorAgentResponse, executor_reply: str) -> str | None:
@@ -183,27 +188,39 @@ def _extract_next_cta(decision: OrchestratorAgentResponse, executor_reply: str) 
         executor_reply: Executor reply text
 
     Returns:
-        CTA text or None
+        CTA context or None - passes raw context to LLM for generation
     """
-    # Look for explicit CTA in reply
+    # Instead of hardcoded templates, pass structured context to the Style LLM
+    # The LLM will generate the CTA organically
+
+    # Build CTA context from executor reply and decision for LLM to interpret
+    cta_context = []
+
+    # Look for explicit CTA indicators in executor reply but don't template them
     if "reassess" in executor_reply.lower():
-        # Extract time reference
         if "after" in executor_reply.lower():
-            # Try to extract what comes after
+            # Extract time reference as context
             after_match = re.search(r"after\s+([^\.]+)", executor_reply.lower())
             if after_match:
-                return f"Let's reassess after {after_match.group(1)}"
-        return "Let's reassess after your next session"
+                cta_context.append(f"Reassess timing: after {after_match.group(1)}")
+            else:
+                cta_context.append("Reassess timing: after next session")
+        else:
+            cta_context.append("Reassess timing: after next session")
 
-    # Look for follow_up
+    # Pass follow_up from decision as context, not as template
     if decision.follow_up:
-        return decision.follow_up
+        cta_context.append(f"Suggested follow-up: {decision.follow_up}")
 
-    # Default based on horizon
+    # Pass horizon as context
     if decision.horizon == "week":
-        return "Let's reassess after your long run"
-    if decision.horizon == "race":
-        return "Let's check in next week"
+        cta_context.append("Horizon: week")
+    elif decision.horizon == "race":
+        cta_context.append("Horizon: race")
+
+    # Return structured context for LLM to interpret, not a pre-written template
+    if cta_context:
+        return " | ".join(cta_context)
 
     return None
 

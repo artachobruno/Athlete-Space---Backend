@@ -102,6 +102,11 @@ async def generate_coach_text(
             session_type=session.session_type,
             template_id=template.id,
         )
+        logger.debug(
+            "LLM Prompt: Coach Text Generation",
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
 
         result = await agent.run(user_prompt)
         output = result.output

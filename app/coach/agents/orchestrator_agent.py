@@ -385,6 +385,78 @@ logger.info(
 _RAG_ADAPTER: OrchestratorRagAdapter | None = None
 
 
+def _inject_profile_into_prompt(base_instructions: str, deps: CoachDeps) -> str:
+    """Inject profile data into orchestrator prompt.
+
+    Args:
+        base_instructions: Base orchestrator instructions
+        deps: Coach dependencies with profile data
+
+    Returns:
+        Instructions with profile data injected
+    """
+    if not deps.structured_profile_data:
+        return base_instructions
+
+    profile_data = deps.structured_profile_data
+    profile_lines = ["\n---", "ATHLETE PROFILE (AUTHORITATIVE):"]
+
+    # Build structured profile section
+    if profile_data.structured_profile:
+        structured = profile_data.structured_profile
+        training_context = structured.get("training_context", {})
+        constraints = profile_data.constraints or {}
+
+        # Primary sport
+        primary_sport = training_context.get("primary_sport", "unknown")
+        if primary_sport and primary_sport != "unknown":
+            profile_lines.append(f"- Primary sport: {primary_sport}")
+
+        # Experience level
+        experience_level = training_context.get("experience_level", "unknown")
+        if experience_level and experience_level != "unknown":
+            profile_lines.append(f"- Experience level: {experience_level}")
+
+        # Goal type
+        goals = structured.get("goals", {})
+        goal_type = goals.get("goal_type", "unknown")
+        if goal_type and goal_type != "unknown":
+            profile_lines.append(f"- Goal type: {goal_type}")
+
+        # Weekly availability
+        availability_hours = constraints.get("availability_hours_per_week")
+        if availability_hours:
+            profile_lines.append(f"- Weekly availability: {availability_hours} hours")
+
+        # Recovery preference
+        preferences = structured.get("preferences", {})
+        recovery_pref = preferences.get("recovery_preference", "unknown")
+        if recovery_pref and recovery_pref != "unknown":
+            profile_lines.append(f"- Recovery preference: {recovery_pref}")
+
+        # Injury flags
+        injury_status = constraints.get("injury_status")
+        if injury_status and injury_status != "none":
+            profile_lines.append(f"- Injury flags: {injury_status}")
+        else:
+            profile_lines.append("- Injury flags: none")
+
+    # Add narrative bio if confidence >= 0.7 (checked in api_chat.py, so just include if present)
+    if profile_data.narrative_bio:
+        profile_lines.append("")
+        profile_lines.append("PROFILE SUMMARY (AI-DERIVED, MAY BE STALE):")
+        profile_lines.append(profile_data.narrative_bio)
+
+    # Add guardrails
+    profile_lines.append("")
+    profile_lines.append("PROFILE RULES:")
+    profile_lines.append("The athlete profile is authoritative.")
+    profile_lines.append("Do not reinterpret, rewrite, or question it unless explicitly instructed.")
+
+    profile_section = "\n".join(profile_lines)
+    return f"{base_instructions}\n{profile_section}"
+
+
 def _get_rag_adapter() -> OrchestratorRagAdapter | None:
     """Get or create RAG adapter (lazy initialization).
 
@@ -491,6 +563,10 @@ async def run_conversation(
             instructions_length=len(ORCHESTRATOR_INSTRUCTIONS),
         )
 
+    # Inject profile data into instructions per-request (not cached)
+    # Profile data is user-specific, so we inject it dynamically
+    instructions_with_profile = _inject_profile_into_prompt(ORCHESTRATOR_INSTRUCTIONS, deps)
+
     # Load conversation history via MCP
     logger.debug(
         "Orchestrator: Loading conversation history via MCP",
@@ -531,8 +607,8 @@ async def run_conversation(
         athlete_id=deps.athlete_id,
     )
 
-    # Log full prompt at debug level
-    prompt_parts = [f"Instructions: {ORCHESTRATOR_INSTRUCTIONS}"]
+    # Log full prompt at debug level (use instructions_with_profile for logging)
+    prompt_parts = [f"Instructions: {instructions_with_profile}"]
     if message_history:
         history_text = "\n".join([f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in message_history])
         prompt_parts.append(f"Message History:\n{history_text}")
@@ -541,7 +617,7 @@ async def run_conversation(
 
     logger.debug(
         "Orchestrator: Exact prompt sent to LLM",
-        system_prompt=ORCHESTRATOR_INSTRUCTIONS,
+        system_prompt=instructions_with_profile,
         message_history=message_history,
         user_input=user_input,
         full_prompt=full_prompt_text,
@@ -549,7 +625,7 @@ async def run_conversation(
     logger.debug(
         "Orchestrator prompt",
         prompt_length=len(full_prompt_text),
-        instructions_length=len(ORCHESTRATOR_INSTRUCTIONS),
+        instructions_length=len(instructions_with_profile),
         message_history_length=len(message_history) if message_history else 0,
         user_input_length=len(user_input),
         full_prompt=full_prompt_text,
@@ -594,13 +670,13 @@ async def run_conversation(
 
     # Build full prompt: system + history + user
     logger.debug("Orchestrator: Building full prompt")
-    system_message: LLMMessage = {"role": "system", "content": ORCHESTRATOR_INSTRUCTIONS}
+    system_message: LLMMessage = {"role": "system", "content": instructions_with_profile}
     user_message: LLMMessage = {"role": "user", "content": user_input}
     full_prompt: list[LLMMessage] = [system_message, *llm_history, user_message]
     logger.debug(
         "Orchestrator: Full prompt built",
         total_messages=len(full_prompt),
-        system_length=len(ORCHESTRATOR_INSTRUCTIONS),
+        system_length=len(instructions_with_profile),
         history_length=len(llm_history),
         user_length=len(user_input),
     )
@@ -684,10 +760,28 @@ async def run_conversation(
             name="llm.orchestrator_decision",
             metadata=trace_meta,
         ):
-            result = await ORCHESTRATOR_AGENT.run(
+            # Create a temporary agent with profile-injected instructions
+            # This allows per-request profile injection without modifying cached agent
+            agent_with_profile = Agent(
+                instructions=instructions_with_profile,
+                model=ORCHESTRATOR_AGENT_MODEL,
+                output_type=OrchestratorAgentResponse,
+                deps_type=CoachDeps,
+                tools=[],  # No tools - decision only
+                name="Virtus Coach Orchestrator",
+                instrument=True,
+            )
+            message_history_for_log = cast(list[ModelMessage], typed_message_history) if typed_message_history else None
+            logger.debug(
+                "LLM Prompt: Orchestrator Agent Decision",
+                system_prompt=instructions_with_profile,
+                user_prompt=user_input,
+                message_history_count=len(message_history_for_log) if message_history_for_log else 0,
+            )
+            result = await agent_with_profile.run(
                 user_prompt=user_input,
                 deps=deps,
-                message_history=cast(list[ModelMessage], typed_message_history) if typed_message_history else None,
+                message_history=message_history_for_log,
             )
         t2 = time.monotonic()
         llm_generate_time = t2 - t2_start

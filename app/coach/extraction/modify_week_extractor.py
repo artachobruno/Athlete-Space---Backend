@@ -173,7 +173,9 @@ Notes:
 
     try:
         logger.debug(
-            "LLM Prompt: Week Modification Extraction",
+            f"LLM Prompt: Week Modification Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )

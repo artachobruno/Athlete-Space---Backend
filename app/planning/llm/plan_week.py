@@ -196,7 +196,9 @@ async def plan_week_llm(input: PlanWeekInput) -> list[SessionSpec]:
                 max_attempts=MAX_WEEK_RETRIES + 1,
             )
             logger.debug(
-                "LLM Prompt: Week Plan Generation",
+                f"LLM Prompt: Week Plan Generation (attempt {attempt + 1})\n"
+                f"System Prompt:\n{SYSTEM_PROMPT}\n\n"
+                f"User Prompt:\n{user_prompt}",
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 attempt=attempt + 1,

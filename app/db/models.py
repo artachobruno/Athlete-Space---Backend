@@ -611,7 +611,7 @@ class PlannedSession(Base):
     - intensity: Intensity level ('Z1..Z5', 'RPE', etc., nullable)
     - intent: Workout intent ('rest', 'easy', 'long', 'quality', nullable)
     - workout_id: Foreign key to workouts.id (nullable)
-    - status: Status ('planned', 'completed', 'skipped', 'moved', 'canceled')
+    - status: Status ('planned', 'completed', 'skipped', 'moved', 'cancelled')
     - tags: JSONB array of tags (default: empty array)
     - created_at: Record creation timestamp
     - updated_at: Last update timestamp
@@ -642,7 +642,7 @@ class PlannedSession(Base):
     workout_id: Mapped[str | None] = mapped_column(String, ForeignKey("workouts.id"), nullable=True, index=True)
 
     # Status tracking
-    # CHECK: 'planned', 'completed', 'skipped', 'moved', 'canceled'
+    # CHECK: 'planned', 'completed', 'skipped', 'moved', 'cancelled'
     status: Mapped[str] = mapped_column(String, nullable=False, default="planned")
 
     # Tags (JSONB array)

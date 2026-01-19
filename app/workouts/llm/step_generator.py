@@ -100,7 +100,9 @@ async def generate_steps_from_notes(activity: ActivityInput) -> StructuredWorkou
     try:
         logger.info(f"Generating workout steps from notes for sport: {activity.sport}")
         logger.debug(
-            "LLM Prompt: Workout Step Generation",
+            f"LLM Prompt: Workout Step Generation\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{prompt}",
             system_prompt=system_prompt,
             user_prompt=prompt,
         )

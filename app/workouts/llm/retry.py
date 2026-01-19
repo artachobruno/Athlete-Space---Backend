@@ -72,7 +72,9 @@ PREVIOUS ATTEMPT VALIDATION ERRORS:
 Please fix these errors and output valid JSON only."""
 
             logger.debug(
-                "LLM Prompt: Workout Step Generation (Retry)",
+                f"LLM Prompt: Workout Step Generation (Retry) (attempt {attempt + 1})\n"
+                f"System Prompt:\n{system_prompt}\n\n"
+                f"User Prompt:\n{current_prompt}",
                 system_prompt=system_prompt,
                 user_prompt=current_prompt,
                 attempt=attempt + 1,

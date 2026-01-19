@@ -65,7 +65,9 @@ async def generate_coach_message(structured_input: StyleLLMInput) -> str:
     try:
         # Call LLM
         logger.debug(
-            "LLM Prompt: Style Message Generation",
+            f"LLM Prompt: Style Message Generation\n"
+            f"System Prompt:\n{STYLE_LLM_SYSTEM_PROMPT}\n\n"
+            f"User Prompt:\n{prompt}",
             system_prompt=STYLE_LLM_SYSTEM_PROMPT,
             user_prompt=prompt,
         )

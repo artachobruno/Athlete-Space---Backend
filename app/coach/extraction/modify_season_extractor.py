@@ -161,7 +161,9 @@ Notes:
 
     try:
         logger.debug(
-            "LLM Prompt: Season Modification Extraction",
+            f"LLM Prompt: Season Modification Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )

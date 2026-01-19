@@ -100,7 +100,9 @@ class GoalExtractionService:
         try:
             user_prompt = f"Extract race attributes from this goal: {goal_text}"
             logger.debug(
-                "LLM Prompt: Race Attributes Extraction (Onboarding)",
+                f"LLM Prompt: Race Attributes Extraction (Onboarding)\n"
+                f"System Prompt:\n{prompt_text}\n\n"
+                f"User Prompt:\n{user_prompt}",
                 system_prompt=prompt_text,
                 user_prompt=user_prompt,
             )
@@ -143,7 +145,9 @@ def extract_injury_attributes(injury_notes: str) -> ExtractedInjuryAttributes:
     try:
         user_prompt = f"Extract injury attributes from this description: {injury_notes}"
         logger.debug(
-            "LLM Prompt: Injury Attributes Extraction",
+            f"LLM Prompt: Injury Attributes Extraction\n"
+            f"System Prompt:\n{prompt_text}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=prompt_text,
             user_prompt=user_prompt,
         )

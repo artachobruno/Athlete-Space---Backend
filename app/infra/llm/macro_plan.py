@@ -133,7 +133,9 @@ async def generate_macro_plan_llm(
         logger.debug("Calling LLM for macro plan", input_keys=list(llm_input.keys()))
         user_prompt = f"Context:\n{input_str}"
         logger.debug(
-            "LLM Prompt: Macro Plan Generation",
+            f"LLM Prompt: Macro Plan Generation\n"
+            f"System Prompt:\n{prompt_text}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=prompt_text,
             user_prompt=user_prompt,
         )

@@ -76,7 +76,9 @@ async def plan_session_llm(spec: SessionSpec) -> SessionPlan:
         target_duration_min=spec.target_duration_min,
     )
     logger.debug(
-        "LLM Prompt: Session Plan Generation",
+        f"LLM Prompt: Session Plan Generation\n"
+        f"System Prompt:\n{SYSTEM_PROMPT}\n\n"
+        f"User Prompt:\n{user_prompt}",
         system_prompt=SYSTEM_PROMPT,
         user_prompt=user_prompt,
     )

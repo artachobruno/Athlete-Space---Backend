@@ -123,7 +123,9 @@ async def explain_plan_revision(
         logger.debug("Calling LLM for revision explanation", revision_id=revision.revision_id)
         user_prompt = "Generate the explanation for this revision."
         logger.debug(
-            "LLM Prompt: Revision Explanation",
+            f"LLM Prompt: Revision Explanation\n"
+            f"System Prompt:\n{prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=prompt,
             user_prompt=user_prompt,
         )

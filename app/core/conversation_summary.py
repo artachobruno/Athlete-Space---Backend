@@ -191,7 +191,9 @@ async def _extract_summary_via_llm(
             has_previous_summary=previous_summary is not None,
         )
         logger.debug(
-            "LLM Prompt: Conversation Summary Extraction",
+            f"LLM Prompt: Conversation Summary Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )

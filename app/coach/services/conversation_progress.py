@@ -116,12 +116,40 @@ def get_conversation_progress(conversation_id: str) -> ConversationProgress | No
         return None
 
 
+def clear_conversation_progress(conversation_id: str) -> None:
+    """Clear/reset conversation progress slots.
+
+    Used when starting a new planning intent to prevent old slots from
+    poisoning new conversations.
+
+    Args:
+        conversation_id: Conversation ID to clear
+    """
+    db_conversation_id = conversation_id
+    if conversation_id.startswith("c_"):
+        db_conversation_id = conversation_id[2:]
+
+    with get_session() as db:
+        progress = db.get(ConversationProgress, db_conversation_id)
+        if progress:
+            progress.slots = {}
+            progress.awaiting_slots = []
+            progress.intent = None
+            progress.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            logger.info(
+                "Cleared conversation progress",
+                conversation_id=conversation_id,
+            )
+
+
 def create_or_update_progress(
     conversation_id: str,
     intent: str | None = None,
     slots: dict[str, Any] | None = None,
     awaiting_slots: list[str] | None = None,
     user_id: str | None = None,
+    clear_on_intent_change: bool = True,
 ) -> ConversationProgress:
     """Create or update conversation progress.
 
@@ -131,6 +159,7 @@ def create_or_update_progress(
         slots: Slot values dictionary (may contain date objects)
         awaiting_slots: List of slot names we're waiting for
         user_id: Optional user ID (will be looked up if not provided)
+        clear_on_intent_change: If True, clear old slots when intent changes (default: True)
 
     Returns:
         Updated ConversationProgress (slots are deserialized back to date objects)
@@ -140,6 +169,11 @@ def create_or_update_progress(
         and deserialized (ISO strings -> date objects) when returned.
         B41: Slot state is locked when awaiting_slots is empty (slots are complete).
         Locked slot state cannot be modified.
+
+        IMPORTANT: Slots are automatically cleared when intent changes to prevent old
+        conversation slots from poisoning new conversations. This ensures that starting
+        a new planning conversation (e.g., "I want to train for a marathon" after
+        previously planning a 5K) doesn't carry over old race_date, race_distance, etc.
     """
     # Convert c_<UUID> format to UUID for database query if needed
     # Database stores conversation_id as UUID type, so strip the 'c_' prefix
@@ -182,6 +216,18 @@ def create_or_update_progress(
         result = db.execute(select(ConversationProgress).where(ConversationProgress.conversation_id == db_conversation_id)).first()
         progress = result[0] if result else None
         now = datetime.now(timezone.utc)
+
+        # Clear slots if intent changed (prevent old slots from poisoning new conversations)
+        if clear_on_intent_change and progress and intent and progress.intent and progress.intent != intent:
+            logger.info(
+                "Intent changed - clearing old slots to prevent contamination",
+                conversation_id=conversation_id,
+                old_intent=progress.intent,
+                new_intent=intent,
+            )
+            progress.slots = {}
+            progress.awaiting_slots = []
+            progress.intent = intent
 
         # B41: Check if slot state is locked (awaiting_slots is empty = slots complete)
         if progress and len(progress.awaiting_slots) == 0:

@@ -126,7 +126,9 @@ RULES:
 
         logger.info("Calling LLM to parse workout notes", extra={"sport": sport, "notes_length": len(notes)})
         logger.debug(
-            "LLM Prompt: Workout Notes Parsing",
+            f"LLM Prompt: Workout Notes Parsing\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )

@@ -90,6 +90,7 @@ async def _compute_missing_slots_for_decision(
     user_message: str,
     conversation_id: str | None,
     user_id: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> tuple[str | None, list[str], dict[str, str | date | int | float | bool | None]]:
     """Compute missing_slots deterministically from decision with slot persistence.
 
@@ -98,6 +99,7 @@ async def _compute_missing_slots_for_decision(
         user_message: User's input message
         conversation_id: Optional conversation ID for slot persistence
         user_id: Optional user ID for slot persistence
+        conversation_history: Recent conversation messages for context
 
     CRITICAL: The orchestrator must see the cumulative slot state, not just the last message.
     This function:
@@ -112,12 +114,66 @@ async def _compute_missing_slots_for_decision(
         decision: Orchestrator decision
         user_message: Original user message
         conversation_id: Optional conversation ID for context
+        conversation_history: Recent conversation messages for context-aware extraction
 
     Returns:
         Tuple of (next_executable_action, missing_slots, merged_slots)
     """
+    # STEP 1: Load conversation slot state FIRST (before early returns)
+    # This allows us to check awaiting_slots even if orchestrator doesn't recognize intent
+    conversation_slot_state: dict[str, str | date | int | float | bool | None] = {}
+    awaiting_slots_from_progress: list[str] = []
+    if conversation_id:
+        progress = get_conversation_progress(conversation_id)
+        if progress:
+            if progress.slots:
+                conversation_slot_state = progress.slots.copy()
+            if progress.awaiting_slots:
+                awaiting_slots_from_progress = progress.awaiting_slots.copy()
+            logger.info(
+                "Loaded conversation slot state",
+                conversation_id=conversation_id,
+                slot_state=conversation_slot_state,
+                slot_keys=list(conversation_slot_state.keys()),
+                awaiting_slots=awaiting_slots_from_progress,
+            )
+
     # Map intent/horizon to tool name (horizon must not be None)
     if decision.horizon is None:
+        # CRITICAL: Even if no horizon, check if we have awaiting_slots to extract
+        if awaiting_slots_from_progress:
+            logger.info(
+                "No horizon but have awaiting_slots - attempting extraction",
+                awaiting_slots=awaiting_slots_from_progress,
+                conversation_id=conversation_id,
+            )
+            # Try to extract attributes for awaiting_slots even without tool_name
+            extracted = await extract_attributes(
+                text=user_message,
+                attributes_requested=awaiting_slots_from_progress,
+                conversation_slot_state=conversation_slot_state,
+                conversation_history=conversation_history,
+            )
+            # Normalize and merge extracted slots
+            normalized_slots: dict[str, str | date | int | float | bool | None] = {}
+            for key, value in extracted.values.items():
+                if value is None:
+                    continue
+                # Normalize date strings to date objects
+                if key == "race_date" and isinstance(value, str):
+                    parsed = parse_date_string(value)
+                    if parsed:
+                        normalized_slots[key] = parsed.date()
+                    else:
+                        normalized_slots[key] = value
+                else:
+                    normalized_slots[key] = value
+            merged_slots = conversation_slot_state.copy()
+            for key, value in normalized_slots.items():
+                if value is not None:
+                    merged_slots[key] = value
+            # Return with extracted slots (tool_name is None since we don't have one)
+            return None, awaiting_slots_from_progress, merged_slots
         return None, [], {}
 
     intent_to_tool = {
@@ -129,31 +185,70 @@ async def _compute_missing_slots_for_decision(
     tool_name = intent_to_tool.get((decision.intent, decision.horizon))
     if not tool_name or tool_name not in REQUIRED_SLOTS:
         # No executable action or no slot requirements
-        return None, [], {}
-
-    # STEP 1: Load conversation slot state (single source of truth)
-    conversation_slot_state: dict[str, str | date | int | float | bool | None] = {}
-    if conversation_id:
-        progress = get_conversation_progress(conversation_id)
-        if progress and progress.slots:
-            conversation_slot_state = progress.slots.copy()
+        # BUT: Still check if we have awaiting_slots to extract
+        if awaiting_slots_from_progress:
             logger.info(
-                "Loaded conversation slot state",
+                "No tool_name but have awaiting_slots - attempting extraction",
+                awaiting_slots=awaiting_slots_from_progress,
                 conversation_id=conversation_id,
-                slot_state=conversation_slot_state,
-                slot_keys=list(conversation_slot_state.keys()),
             )
+            # Try to extract attributes for awaiting_slots even without tool_name
+            extracted = await extract_attributes(
+                text=user_message,
+                attributes_requested=awaiting_slots_from_progress,
+                conversation_slot_state=conversation_slot_state,
+                conversation_history=conversation_history,
+            )
+            # Normalize and merge extracted slots
+            normalized_slots: dict[str, str | date | int | float | bool | None] = {}
+            for key, value in extracted.values.items():
+                if value is None:
+                    continue
+                # Normalize date strings to date objects
+                if key == "race_date" and isinstance(value, str):
+                    parsed = parse_date_string(value)
+                    if parsed:
+                        normalized_slots[key] = parsed.date()
+                    else:
+                        normalized_slots[key] = value
+                else:
+                    normalized_slots[key] = value
+            merged_slots = conversation_slot_state.copy()
+            for key, value in normalized_slots.items():
+                if value is not None:
+                    merged_slots[key] = value
+            # Return with extracted slots (tool_name is None since we don't have one)
+            return None, awaiting_slots_from_progress, merged_slots
+        return None, [], {}
 
     # STEP 2: Extract attributes using authoritative extractor
     # Orchestrator decides WHAT is needed (required_attributes + optional_attributes)
     # Extractor decides WHAT is actually known
     attributes_requested = list(set(decision.required_attributes + decision.optional_attributes))
 
+    logger.debug(
+        "Attribute extraction check",
+        attributes_requested=attributes_requested,
+        required_attributes=decision.required_attributes,
+        optional_attributes=decision.optional_attributes,
+        conversation_history_length=len(conversation_history) if conversation_history else 0,
+        has_conversation_history=conversation_history is not None,
+    )
+
     if not attributes_requested:
         # No attributes requested - use legacy flow for backward compatibility
         # Fall back to required_slots if available
         if decision.required_slots:
             attributes_requested = decision.required_slots
+        elif awaiting_slots_from_progress:
+            # CRITICAL FALLBACK: If orchestrator didn't request attributes but we have awaiting_slots,
+            # extract those attributes anyway (user is likely answering the previous question)
+            attributes_requested = awaiting_slots_from_progress
+            logger.info(
+                "Using awaiting_slots as fallback for attribute extraction",
+                awaiting_slots=awaiting_slots_from_progress,
+                conversation_id=conversation_id,
+            )
         else:
             # No attributes to extract
             merged_slots = conversation_slot_state.copy()
@@ -164,11 +259,23 @@ async def _compute_missing_slots_for_decision(
 
     message_for_slots = decision.structured_data.get("race_description", "") or user_message
 
-    # Call authoritative extractor
+    # Call authoritative extractor with conversation history for context
+    logger.debug(
+        "Calling extract_attributes",
+        text=message_for_slots[:100],
+        attributes_requested=attributes_requested,
+        conversation_history_length=len(conversation_history) if conversation_history else 0,
+        last_assistant_msg=(
+            conversation_history[-1].get("content", "")[:100]
+            if conversation_history and conversation_history[-1].get("role") == "assistant"
+            else None
+        ),
+    )
     extracted = await extract_attributes(
         text=message_for_slots,
         attributes_requested=attributes_requested,
         conversation_slot_state=conversation_slot_state,
+        conversation_history=conversation_history,
     )
 
     # STEP 3: Normalize extractor output and merge with conversation state
@@ -799,8 +906,21 @@ async def run_conversation(
                 instrument=True,
             )
             message_history_for_log = cast(list[ModelMessage], typed_message_history) if typed_message_history else None
+            history_str = ""
+            if message_history_for_log:
+                history_lines = []
+                for msg in message_history_for_log:
+                    role = msg.get("role", "unknown") if isinstance(msg, dict) else getattr(msg, "role", "unknown")
+                    content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                    history_lines.append(f"{role.upper()}: {content}")
+                history_str = "\n".join(history_lines)
+            msg_count = len(message_history_for_log) if message_history_for_log else 0
+            history_display = history_str if history_str else "(none)"
             logger.debug(
-                "LLM Prompt: Orchestrator Agent Decision",
+                f"LLM Prompt: Orchestrator Agent Decision\n"
+                f"System Prompt:\n{instructions_with_profile}\n\n"
+                f"Message History ({msg_count} messages):\n{history_display}\n\n"
+                f"User Prompt:\n{user_input}",
                 system_prompt=instructions_with_profile,
                 user_prompt=user_input,
                 message_history_count=len(message_history_for_log) if message_history_for_log else 0,
@@ -957,6 +1077,7 @@ async def run_conversation(
             user_message=user_input,
             conversation_id=conversation_id_for_slots,
             user_id=deps.user_id,
+            conversation_history=message_history,
         )
         t3 = time.monotonic()
         validation_time = t3 - t3_start

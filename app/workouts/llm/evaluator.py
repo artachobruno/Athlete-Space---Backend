@@ -75,7 +75,9 @@ class WorkoutLLMEvaluator:
                 output_type=StepLLMInterpretation,
             )
             logger.debug(
-                "LLM Prompt: Step Interpretation",
+                f"LLM Prompt: Step Interpretation\n"
+                f"System Prompt:\n{system_prompt}\n\n"
+                f"User Prompt:\n{prompt}",
                 system_prompt=system_prompt,
                 user_prompt=prompt,
             )
@@ -139,7 +141,9 @@ class WorkoutLLMEvaluator:
                 output_type=WorkoutLLMInterpretation,
             )
             logger.debug(
-                "LLM Prompt: Workout Interpretation",
+                f"LLM Prompt: Workout Interpretation\n"
+                f"System Prompt:\n{system_prompt}\n\n"
+                f"User Prompt:\n{prompt}",
                 system_prompt=system_prompt,
                 user_prompt=prompt,
             )

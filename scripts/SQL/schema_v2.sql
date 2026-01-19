@@ -228,7 +228,7 @@ CREATE TABLE planned_sessions (
   workout_id       UUID REFERENCES workouts(id) ON DELETE SET NULL,
 
   status           TEXT NOT NULL DEFAULT 'planned'
-                  CHECK (status IN ('planned','completed','skipped','moved','canceled')),
+                  CHECK (status IN ('planned','completed','skipped','moved','cancelled')),
 
   tags             JSONB NOT NULL DEFAULT '{}'::jsonb,
 

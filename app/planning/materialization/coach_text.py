@@ -103,7 +103,9 @@ async def generate_coach_text(
             template_id=template.id,
         )
         logger.debug(
-            "LLM Prompt: Coach Text Generation",
+            f"LLM Prompt: Coach Text Generation\n"
+            f"System Prompt:\n{SYSTEM_PROMPT}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=SYSTEM_PROMPT,
             user_prompt=user_prompt,
         )

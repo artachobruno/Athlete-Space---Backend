@@ -133,6 +133,7 @@ async def extract_attributes(
     attributes_requested: list[str],
     conversation_slot_state: dict[str, str | date | int | float | bool | None] | None = None,
     today: date | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> ExtractedAttributes:
     """Extract ONLY the requested attributes from text with confidence and evidence.
 
@@ -143,6 +144,7 @@ async def extract_attributes(
         attributes_requested: List of attribute names to extract (e.g., ["race_distance", "race_date"])
         conversation_slot_state: Current conversation slot state for context-aware extraction
         today: Today's date for date inference (defaults to current date)
+        conversation_history: Recent conversation messages for context (list of dicts with 'role' and 'content')
 
     Returns:
         ExtractedAttributes with:
@@ -162,7 +164,7 @@ async def extract_attributes(
     today_str = today.strftime("%Y-%m-%d")
     current_year = today.year
 
-    # Build conversation context string
+    # Build conversation context string from slot state
     context_parts = []
     if conversation_slot_state:
         if conversation_slot_state.get("race_distance"):
@@ -176,7 +178,47 @@ async def extract_attributes(
         if conversation_slot_state.get("target_time"):
             context_parts.append(f"Known target time: {conversation_slot_state['target_time']}")
 
-    context_str = "\n".join(context_parts) if context_parts else "No previous context."
+    # Extract last assistant question for explicit tagging
+    last_assistant_question: str | None = None
+    if conversation_history:
+        # Find the last assistant message (going backwards)
+        for msg in reversed(conversation_history):
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if role == "assistant" and content:
+                last_assistant_question = content
+                break
+
+    # Build conversation history context
+    history_parts = []
+    if conversation_history:
+        # Include last few messages for context (especially assistant questions)
+        recent_messages = conversation_history[-6:] if len(conversation_history) > 6 else conversation_history
+        for msg in recent_messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if content and role in {"user", "assistant"}:
+                role_label = "User" if role == "user" else "Assistant"
+                history_parts.append(f"{role_label}: {content}")
+
+    # Combine slot state and history context
+    if context_parts:
+        context_str = "Known slot values:\n" + "\n".join(context_parts)
+    else:
+        context_str = "No known slot values."
+
+    # Add explicit last assistant question tag
+    if last_assistant_question:
+        context_str += (
+            f'\n\nCRITICAL CONTEXT: The assistant most recently asked the user:\n'
+            f'"{last_assistant_question}"\n\n'
+            f'Assume the user\'s message is answering that question unless clearly stated otherwise.'
+        )
+    elif history_parts:
+        history_str = "\n\nRecent conversation:\n" + "\n".join(history_parts)
+        context_str += history_str
+    else:
+        context_str += "\n\nNo recent conversation history."
 
     # Build attribute descriptions for the prompt
     attribute_descriptions = {
@@ -271,8 +313,12 @@ CRITICAL: Schema enforces evidence → value coupling. If you provide evidence f
      * Always convert to YYYY-MM-DD format using current year ({current_year}) if date hasn't passed
    - target_time: HH:MM:SS format
    - weekly_mileage: Number (integer or float)
-4. Use conversation context to resolve partial answers (e.g., "April 25" + known month)
-5. Do NOT invent or guess missing information - but DO extract if clearly mentioned
+4. Use conversation context to resolve partial answers:
+   - If the user says "in 3 weeks" and the assistant previously asked "What is the date of your marathon?",
+     extract race_date as today + 3 weeks
+   - If the user says "April 25" and conversation mentions a race, extract race_date
+   - Use conversation history to understand what the user is referring to
+5. Do NOT invent or guess missing information - but DO extract if clearly mentioned or implied by context
 6. If an attribute is not mentioned, mark it in missing_fields
 7. If an attribute is ambiguous, mark it in ambiguous_fields
 8. Provide evidence spans for each extracted value showing exactly where in the text it was found
@@ -326,6 +372,9 @@ Date formats to recognize and parse:
 - MM/DD or M/D: "04/25" → parse as month/day, "4/25" → parse as month/day, "12/31" → parse as month/day
 - Month/Day: "April 25", "April 25th", "on April 25", "April 25, 2026"
 - Relative dates: "in 4 weeks" → today + 28 days, format as YYYY-MM-DD
+  * CRITICAL: If conversation history shows the assistant asked about a race date,
+    and the user responds with "in 3 weeks", extract race_date as today + 3 weeks
+  * Use conversation context to understand what relative dates refer to
 - Day only in context: "on the 25th" → infer month from context or current month
 
 Date parsing rules:
@@ -391,20 +440,35 @@ CRITICAL: If you didn't extract it, it does not exist.
             attributes_requested=attributes_requested,
             text_preview=text[:100],
             has_context=conversation_slot_state is not None,
+            has_history=conversation_history is not None,
+            history_length=len(conversation_history) if conversation_history else 0,
+            last_assistant_question=last_assistant_question[:100] if last_assistant_question else None,
         )
-        user_prompt = f"""Extract the requested attributes from this message: "{text}"
+        # Build user prompt with explicit question context
+        question_context = ""
+        if last_assistant_question:
+            question_context = (
+                f'\n\nThe assistant previously asked: "{last_assistant_question}"\n'
+                f'Assume the user\'s message is answering that question unless clearly stated otherwise.\n'
+            )
+
+        user_prompt = f"""Extract the requested attributes from this message: "{text}"{question_context}
 
 IMPORTANT:
 - If you see "marathon" or "my marathon" → set race_distance: "Marathon" (not null)
 - If you see "04/25" or "4/25" → set race_date: "{current_year}-04-25" (not null)
+- If you see "in X weeks/days" and the assistant asked about race date →
+  extract race_date as today + X weeks/days (not null)
 - If you see both → set BOTH fields (not null)
 
 CRITICAL: If you provide evidence for a field, you MUST set that field's value.
 The schema enforces this - evidence without a value is invalid.
 
-Be thorough and extract everything that is clearly mentioned in the message."""
+Be thorough and extract everything that is clearly mentioned in the message or implied by conversation context."""
         logger.debug(
-            "LLM Prompt: Attribute Extraction",
+            f"LLM Prompt: Attribute Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )

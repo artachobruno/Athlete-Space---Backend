@@ -162,7 +162,9 @@ Example inputs (assuming today is {today_str}):
     try:
         user_prompt = f"Extract race information from this message: {message}"
         logger.debug(
-            "LLM Prompt: Race Information Extraction",
+            f"LLM Prompt: Race Information Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
@@ -356,7 +358,9 @@ AWAITING SLOTS
             prompt_length=len(user_prompt),
         )
         logger.debug(
-            "LLM Prompt: Training Goal Extraction",
+            f"LLM Prompt: Training Goal Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )

@@ -231,7 +231,9 @@ Write a 3-5 sentence bio that summarizes this athlete's profile."""
     try:
         # Run agent
         logger.debug(
-            "LLM Prompt: Athlete Bio Generation",
+            f"LLM Prompt: Athlete Bio Generation\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_message}",
             system_prompt=system_prompt,
             user_prompt=user_message,
         )

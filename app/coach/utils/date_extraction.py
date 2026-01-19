@@ -172,7 +172,9 @@ Example inputs (assuming today is {today_str}):
     try:
         user_prompt = f"Extract date from this text: {text}"
         logger.debug(
-            "LLM Prompt: Date Extraction",
+            f"LLM Prompt: Date Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
@@ -290,7 +292,9 @@ Example inputs (assuming today is {today_str}):
     try:
         user_prompt = f"Extract all dates from this text: {text}"
         logger.debug(
-            "LLM Prompt: Multi-Date Extraction",
+            f"LLM Prompt: Multi-Date Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
@@ -383,7 +387,9 @@ Example inputs:
     try:
         user_prompt = f"Extract session count from this text: {text}"
         logger.debug(
-            "LLM Prompt: Session Count Extraction",
+            f"LLM Prompt: Session Count Extraction\n"
+            f"System Prompt:\n{system_prompt}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )

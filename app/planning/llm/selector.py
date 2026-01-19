@@ -78,7 +78,9 @@ async def select_templates(
             prompt_length=len(user_prompt),
         )
         logger.debug(
-            "LLM Prompt: Template Selection",
+            f"LLM Prompt: Template Selection\n"
+            f"System Prompt:\n{SYSTEM_PROMPT}\n\n"
+            f"User Prompt:\n{user_prompt}",
             system_prompt=SYSTEM_PROMPT,
             user_prompt=user_prompt,
         )

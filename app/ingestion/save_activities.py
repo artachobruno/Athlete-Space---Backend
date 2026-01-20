@@ -22,6 +22,7 @@ from app.pairing.auto_pairing_service import try_auto_pair
 from app.services.intelligence.scheduler import trigger_daily_decision_for_user
 from app.state.models import ActivityRecord
 from app.utils.sport_utils import normalize_sport_type
+from app.utils.title_utils import normalize_activity_title
 
 
 def _get_user_id_from_athlete_id(session: Session, athlete_id: int) -> str | None:
@@ -218,10 +219,19 @@ def _create_new_activity(
         metrics_dict["streams_data"] = streams_data
 
     normalized_sport = _normalize_sport(record.sport)
+
+    # Generate title from activity metrics (legacy path - no Strava title available)
+    title = normalize_activity_title(
+        strava_title=None,  # Legacy path doesn't have Strava title
+        sport=normalized_sport,
+        distance_meters=record.distance_m,
+        duration_seconds=record.duration_sec,
+    )
+
     logger.debug(
         f"[SAVE_ACTIVITIES] Creating Activity object (schema v2): user_id={user_id}, "
         f"source=strava, source_activity_id={strava_id}, sport={normalized_sport}, "
-        f"starts_at={record.start_time}, duration_seconds={record.duration_sec or 0}, "
+        f"title={title}, starts_at={record.start_time}, duration_seconds={record.duration_sec or 0}, "
         f"distance_meters={record.distance_m}, elevation_gain_meters={record.elevation_m}, "
         f"metrics_keys={list(metrics_dict.keys())}"
     )
@@ -230,6 +240,7 @@ def _create_new_activity(
         source="strava",
         source_activity_id=strava_id,
         sport=normalized_sport,
+        title=title,
         starts_at=record.start_time,
         duration_seconds=record.duration_sec or 0,  # Required, >= 0
         distance_meters=record.distance_m,

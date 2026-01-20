@@ -24,6 +24,7 @@ from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 from app.utils.sport_utils import normalize_sport_type
+from app.utils.title_utils import normalize_activity_title
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -285,8 +286,14 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         if raw_json:
             metrics_dict["raw_json"] = raw_json
 
-        # Normalize sport type to allowed values
+        # Normalize sport type and title
         sport_type = normalize_sport_type(strava_activity.type)
+        title = normalize_activity_title(
+            strava_title=strava_activity.name,
+            sport=sport_type,
+            distance_meters=strava_activity.distance,
+            duration_seconds=strava_activity.elapsed_time,
+        )
 
         # Create new activity record
         activity = Activity(
@@ -294,6 +301,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
             source="strava",
             source_activity_id=strava_id,
             sport=sport_type,
+            title=title,
             starts_at=start_time,
             duration_seconds=strava_activity.elapsed_time,
             distance_meters=strava_activity.distance,

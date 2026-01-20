@@ -43,188 +43,7 @@ from sqlalchemy import select
 
 from app.db.models import Activity
 from app.db.session import SessionLocal
-
-
-def _is_generic_strava_title(title: str | None) -> bool:
-    """Check if title is a generic Strava-style auto-generated title.
-
-    Args:
-        title: Title to check
-
-    Returns:
-        True if title is generic/auto-generated
-    """
-    if not title:
-        return True
-
-    title_lower = title.lower().strip()
-
-    # Time-of-day prefixes used by Strava
-    time_prefixes = ["morning", "lunch", "afternoon", "evening", "night"]
-
-    # Activity types used by Strava
-    activity_types = [
-        "run", "ride", "swim", "walk", "hike", "workout",
-        "weight training", "yoga", "crossfit", "elliptical",
-        "stair stepper", "rowing", "ski", "snowboard",
-        "ice skate", "kayak", "surf", "windsurf", "kitesurf",
-    ]
-
-    # Check for "Time Activity" pattern (e.g., "Morning Run", "Lunch Swim")
-    for prefix in time_prefixes:
-        for activity in activity_types:
-            if title_lower == f"{prefix} {activity}":
-                return True
-
-    # Also catch simple generic titles
-    generic_exact = {
-        "run", "running", "ride", "cycling", "swim", "swimming",
-        "activity", "workout", "exercise", "training",
-    }
-    return title_lower in generic_exact
-
-
-def _generate_title_from_activity(activity: Activity) -> str:
-    """Generate a descriptive title from activity metrics.
-
-    Uses distance, duration, and sport to create meaningful titles like:
-    - "5K Run" for ~5km runs
-    - "10K Run" for ~10km runs  
-    - "Half Marathon" for ~21km runs
-    - "Long Run (15 mi)" for long runs
-    - "Easy Run" for short easy runs
-    - "Quick Run" for short duration runs
-
-    Args:
-        activity: The activity to generate title for
-
-    Returns:
-        Descriptive title string
-    """
-    sport = (activity.sport or "run").lower()
-    distance_m = activity.distance_meters or 0
-    duration_sec = activity.duration_seconds or 0
-
-    # Convert to km and miles
-    distance_km = distance_m / 1000.0
-    distance_mi = distance_km * 0.621371
-    duration_min = duration_sec / 60.0
-
-    # Sport-specific title generation
-    if sport in ("run", "running"):
-        return _generate_run_title(distance_km, distance_mi, duration_min)
-    elif sport in ("ride", "cycling", "bike"):
-        return _generate_ride_title(distance_km, distance_mi, duration_min)
-    elif sport in ("swim", "swimming"):
-        return _generate_swim_title(distance_m, duration_min)
-    elif sport in ("walk", "walking"):
-        return _generate_walk_title(distance_km, duration_min)
-    elif sport in ("hike", "hiking"):
-        return _generate_hike_title(distance_km, duration_min)
-    else:
-        return _generate_generic_title(sport, duration_min)
-
-
-def _generate_run_title(distance_km: float, distance_mi: float, duration_min: float) -> str:
-    """Generate title for running activities."""
-    # Check for race distances first
-    if 4.8 <= distance_km <= 5.2:
-        return "5K Run"
-    elif 9.8 <= distance_km <= 10.2:
-        return "10K Run"
-    elif 14.8 <= distance_km <= 15.2:
-        return "15K Run"
-    elif 20.5 <= distance_km <= 21.5:
-        return "Half Marathon"
-    elif 41.5 <= distance_km <= 43.0:
-        return "Marathon"
-
-    # Distance-based titles
-    if distance_km >= 20:
-        return f"Long Run ({distance_km:.0f}K)"
-    elif distance_km >= 15:
-        return f"Long Run ({distance_mi:.0f} mi)"
-    elif distance_km >= 10:
-        return f"Steady Run ({distance_km:.0f}K)"
-    elif distance_km >= 5:
-        return f"Easy Run ({distance_km:.1f}K)"
-    elif distance_km >= 2:
-        return "Short Run"
-    elif duration_min >= 20:
-        return f"Run ({duration_min:.0f} min)"
-    else:
-        return "Quick Run"
-
-
-def _generate_ride_title(distance_km: float, distance_mi: float, duration_min: float) -> str:
-    """Generate title for cycling activities."""
-    if distance_km >= 100:
-        return f"Century Ride ({distance_km:.0f}K)"
-    elif distance_km >= 50:
-        return f"Long Ride ({distance_km:.0f}K)"
-    elif distance_km >= 30:
-        return f"Ride ({distance_km:.0f}K)"
-    elif distance_km >= 15:
-        return f"Easy Ride ({distance_km:.0f}K)"
-    elif duration_min >= 30:
-        return f"Ride ({duration_min:.0f} min)"
-    else:
-        return "Quick Ride"
-
-
-def _generate_swim_title(distance_m: float, duration_min: float) -> str:
-    """Generate title for swimming activities."""
-    if distance_m >= 3800:
-        return "Iron Distance Swim"
-    elif distance_m >= 1900:
-        return "Half Iron Swim"
-    elif distance_m >= 1500:
-        return "Olympic Swim"
-    elif distance_m >= 750:
-        return "Sprint Swim"
-    elif distance_m >= 400:
-        return f"Swim ({distance_m:.0f}m)"
-    elif duration_min >= 20:
-        return f"Swim ({duration_min:.0f} min)"
-    else:
-        return "Quick Swim"
-
-
-def _generate_walk_title(distance_km: float, duration_min: float) -> str:
-    """Generate title for walking activities."""
-    if distance_km >= 10:
-        return f"Long Walk ({distance_km:.0f}K)"
-    elif distance_km >= 5:
-        return f"Walk ({distance_km:.1f}K)"
-    elif duration_min >= 30:
-        return f"Walk ({duration_min:.0f} min)"
-    else:
-        return "Short Walk"
-
-
-def _generate_hike_title(distance_km: float, duration_min: float) -> str:
-    """Generate title for hiking activities."""
-    if distance_km >= 15:
-        return f"Long Hike ({distance_km:.0f}K)"
-    elif distance_km >= 8:
-        return f"Hike ({distance_km:.0f}K)"
-    elif duration_min >= 60:
-        hours = duration_min / 60
-        return f"Hike ({hours:.1f} hrs)"
-    else:
-        return "Short Hike"
-
-
-def _generate_generic_title(sport: str, duration_min: float) -> str:
-    """Generate title for other activity types."""
-    sport_display = sport.replace("_", " ").title()
-    if duration_min >= 60:
-        hours = duration_min / 60
-        return f"{sport_display} ({hours:.1f} hrs)"
-    elif duration_min >= 10:
-        return f"{sport_display} ({duration_min:.0f} min)"
-    else:
-        return sport_display
+from app.utils.title_utils import is_generic_strava_title, normalize_activity_title
 
 
 def backfill_activity_titles(
@@ -263,11 +82,16 @@ def backfill_activity_titles(
 
         for i, activity in enumerate(activities):
             try:
-                if not _is_generic_strava_title(activity.title):
+                if not is_generic_strava_title(activity.title):
                     stats["already_good"] += 1
                     continue
 
-                new_title = _generate_title_from_activity(activity)
+                new_title = normalize_activity_title(
+                    strava_title=activity.title,
+                    sport=activity.sport or "run",
+                    distance_meters=activity.distance_meters,
+                    duration_seconds=activity.duration_seconds,
+                )
 
                 # Don't update if title would be the same
                 if new_title.lower() == (activity.title or "").lower():

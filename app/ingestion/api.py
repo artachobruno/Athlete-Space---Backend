@@ -22,6 +22,7 @@ from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 from app.utils.sport_utils import normalize_sport_type
+from app.utils.title_utils import normalize_activity_title
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -263,12 +264,22 @@ def ingest_activities(
             if raw_json:
                 metrics_dict["raw_json"] = raw_json
 
+            # Normalize sport type and title
+            sport = normalize_sport_type(strava_activity.type)
+            title = normalize_activity_title(
+                strava_title=strava_activity.name,
+                sport=sport,
+                distance_meters=strava_activity.distance,
+                duration_seconds=strava_activity.elapsed_time,
+            )
+
             # Create new activity record
             activity = Activity(
                 user_id=user_id,
                 source="strava",
                 source_activity_id=strava_id,
-                sport=normalize_sport_type(strava_activity.type),
+                sport=sport,
+                title=title,
                 starts_at=start_time,
                 duration_seconds=strava_activity.elapsed_time,
                 distance_meters=strava_activity.distance,

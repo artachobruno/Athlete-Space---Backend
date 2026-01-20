@@ -29,6 +29,7 @@ from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.daily_aggregation import aggregate_daily_training
 from app.services.intelligence.scheduler import trigger_daily_decision_for_user
 from app.utils.sport_utils import normalize_sport_type
+from app.utils.title_utils import normalize_activity_title
 
 
 class HistoryBackfillError(Exception):
@@ -280,11 +281,21 @@ def _save_activities_batch(session, activities: list, user_id: str) -> int:
                     date_string = date_string.replace("Z", "+00:00")
                 start_time = datetime.fromisoformat(date_string)
 
+            # Normalize sport type and title
+            sport = normalize_sport_type(activity.type)
+            title = normalize_activity_title(
+                strava_title=activity.name,
+                sport=sport,
+                distance_meters=activity.distance,
+                duration_seconds=activity.elapsed_time,
+            )
+
             activity_obj = Activity(
                 user_id=user_id,
                 source="strava",
                 source_activity_id=strava_id,
-                sport=normalize_sport_type(activity.type),
+                sport=sport,
+                title=title,
                 starts_at=start_time,
                 duration_seconds=activity.elapsed_time,
                 distance_meters=activity.distance,

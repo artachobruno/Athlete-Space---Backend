@@ -11,6 +11,7 @@ from app.utils.sport_utils import normalize_sport_type
 
 class StravaActivity(BaseModel):
     id: int
+    name: str | None = None  # Strava's original activity title (may be generic)
     type: str
     start_date: datetime
     elapsed_time: int
@@ -19,7 +20,7 @@ class StravaActivity(BaseModel):
     average_heartrate: float | None = None
     average_watts: float | None = None
 
-    raw: dict[str, Any] | None = None
+    raw: dict[str, str | int | float | bool | None] | None = None
 
 
 def map_strava_activity(activity: StravaActivity, athlete_id: int) -> ActivityRecord:

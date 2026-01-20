@@ -917,12 +917,13 @@ async def run_conversation(
             msg_count = len(message_history_for_log) if message_history_for_log else 0
             history_display = history_str if history_str else "(none)"
             logger.debug(
-                f"LLM Prompt: Orchestrator Agent Decision\n"
-                f"System Prompt:\n{instructions_with_profile}\n\n"
-                f"Message History ({msg_count} messages):\n{history_display}\n\n"
-                f"User Prompt:\n{user_input}",
+                "LLM Prompt: Orchestrator Agent Decision\n"
+                "System Prompt:\n{system_prompt}\n\n"
+                "Message History ({message_history_count} messages):\n{history_display}\n\n"
+                "User Prompt:\n{user_prompt}",
                 system_prompt=instructions_with_profile,
                 user_prompt=user_input,
+                history_display=history_display,
                 message_history_count=len(message_history_for_log) if message_history_for_log else 0,
             )
             result = await agent_with_profile.run(

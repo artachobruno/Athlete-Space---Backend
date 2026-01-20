@@ -1,0 +1,348 @@
+"""Backfill script for coach feedback and activity titles.
+
+This script processes activities that:
+1. Have a paired workout with compliance data but no LLM interpretation
+2. Are missing a meaningful title (uses Strava title or generates from workout type)
+
+Usage:
+    From project root:
+    python scripts/backfill_coach_feedback_and_title.py [--no-dry-run] [--limit N]
+
+    Or as a module:
+    python -m scripts.backfill_coach_feedback_and_title [--no-dry-run] [--limit N]
+
+Safety:
+    - DRY_RUN = True by default
+    - Logs everything before making changes
+    - Use --no-dry-run to actually execute
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import sys
+from pathlib import Path
+
+script_dir = Path(__file__).parent.resolve()
+project_root = script_dir.parent.resolve()
+
+if not (project_root / "app").exists() and not (project_root / "pyproject.toml").exists():
+    cwd = Path.cwd().resolve()
+    if (cwd / "app").exists() or (cwd / "pyproject.toml").exists():
+        project_root = cwd
+    else:
+        parent_parent = script_dir.parent.parent.resolve()
+        if (parent_parent / "app").exists() or (parent_parent / "pyproject.toml").exists():
+            project_root = parent_parent
+
+project_root_str = str(project_root)
+if project_root_str not in sys.path:
+    sys.path.insert(0, project_root_str)
+
+from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.models import Activity
+from app.db.session import SessionLocal
+from app.workouts.execution_models import WorkoutComplianceSummary, WorkoutExecution
+from app.workouts.interpretation_service import InterpretationService
+from app.workouts.models import Workout
+
+
+def _get_title_from_workout_type(workout_type: str) -> str:
+    """Generate a display title from workout type.
+
+    Args:
+        workout_type: The workout type string
+
+    Returns:
+        Human-readable title
+    """
+    type_lower = (workout_type or "").lower()
+
+    title_map = {
+        "threshold": "Threshold Run",
+        "tempo": "Tempo Run",
+        "interval": "Interval Session",
+        "vo2": "VO2max Intervals",
+        "recovery": "Recovery Run",
+        "easy": "Easy Run",
+        "long": "Long Run",
+        "endurance": "Endurance Run",
+        "aerobic": "Aerobic Run",
+        "fartlek": "Fartlek Session",
+    }
+
+    for key, title in title_map.items():
+        if key in type_lower:
+            return title
+
+    return "Training Run"
+
+
+def _needs_title_update(activity: Activity, workout: Workout) -> bool:
+    """Check if activity needs a title update.
+
+    Args:
+        activity: Activity to check
+        workout: Associated workout
+
+    Returns:
+        True if title should be updated
+    """
+    if activity.title and len(activity.title) > 5:
+        # Already has a meaningful title
+        return False
+
+    # Check if title is just generic or empty
+    generic_titles = {"run", "running", "activity", "workout", None, ""}
+    current_title_lower = (activity.title or "").lower().strip()
+
+    return current_title_lower in generic_titles or len(current_title_lower) < 3
+
+
+def _needs_interpretation(compliance: WorkoutComplianceSummary) -> bool:
+    """Check if workout compliance needs LLM interpretation.
+
+    Args:
+        compliance: Compliance summary to check
+
+    Returns:
+        True if interpretation is missing
+    """
+    return not compliance.llm_summary or not compliance.llm_verdict
+
+
+async def _process_interpretation(
+    db: Session,
+    workout: Workout,
+    compliance: WorkoutComplianceSummary,
+    stats: dict[str, int],
+    dry_run: bool,
+) -> None:
+    """Generate LLM interpretation for a workout.
+
+    Args:
+        db: Database session
+        workout: Workout to interpret
+        compliance: Compliance summary
+        stats: Statistics dictionary to update
+        dry_run: Whether this is a dry run
+    """
+    if not _needs_interpretation(compliance):
+        logger.debug(f"Workout {workout.id} already has interpretation")
+        return
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would generate interpretation for workout {workout.id}")
+        stats["interpretations_generated"] += 1
+        return
+
+    try:
+        service = InterpretationService()
+        success = await service.interpret_workout(db, workout.id)
+        if success:
+            stats["interpretations_generated"] += 1
+            logger.info(f"Generated interpretation for workout {workout.id}")
+        else:
+            logger.warning(f"Interpretation generation returned False for workout {workout.id}")
+    except ValueError as e:
+        logger.warning(f"Cannot interpret workout {workout.id}: {e}")
+    except Exception as e:
+        logger.error(f"Failed to interpret workout {workout.id}: {e}", exc_info=True)
+        stats["errors"] += 1
+
+
+def _process_title(
+    activity: Activity,
+    workout: Workout,
+    stats: dict[str, int],
+    dry_run: bool,
+) -> None:
+    """Update activity title if needed.
+
+    Args:
+        activity: Activity to update
+        workout: Associated workout
+        stats: Statistics dictionary to update
+        dry_run: Whether this is a dry run
+    """
+    if not _needs_title_update(activity, workout):
+        logger.debug(f"Activity {activity.id} already has title: {activity.title}")
+        return
+
+    new_title = _get_title_from_workout_type(workout.workout_type)
+
+    if dry_run:
+        logger.info(
+            f"[DRY RUN] Would update activity {activity.id} title: "
+            f"'{activity.title}' -> '{new_title}'"
+        )
+        stats["titles_updated"] += 1
+        return
+
+    activity.title = new_title
+    stats["titles_updated"] += 1
+    logger.info(f"Updated activity {activity.id} title to '{new_title}'")
+
+
+async def _process_single_activity(
+    db: Session,
+    activity: Activity,
+    stats: dict[str, int],
+    dry_run: bool,
+) -> None:
+    """Process a single activity for backfill.
+
+    Args:
+        db: Database session
+        activity: Activity to process
+        stats: Statistics dictionary to update
+        dry_run: Whether this is a dry run
+    """
+    # Get workout execution for this activity
+    execution = db.execute(
+        select(WorkoutExecution).where(WorkoutExecution.activity_id == activity.id)
+    ).scalar_one_or_none()
+
+    if not execution:
+        logger.debug(f"Activity {activity.id} has no workout execution - skipping")
+        stats["skipped_no_execution"] += 1
+        return
+
+    # Get workout
+    workout = db.get(Workout, execution.workout_id)
+    if not workout:
+        logger.warning(f"Workout {execution.workout_id} not found for activity {activity.id}")
+        stats["skipped_no_workout"] += 1
+        return
+
+    # Get compliance summary
+    compliance = db.execute(
+        select(WorkoutComplianceSummary).where(
+            WorkoutComplianceSummary.workout_id == workout.id
+        )
+    ).scalar_one_or_none()
+
+    # Process title update
+    _process_title(activity, workout, stats, dry_run)
+
+    # Process LLM interpretation if compliance exists
+    if compliance:
+        await _process_interpretation(db, workout, compliance, stats, dry_run)
+    else:
+        logger.debug(f"No compliance for workout {workout.id} - skipping interpretation")
+        stats["skipped_no_compliance"] += 1
+
+
+async def backfill_coach_feedback_and_title(
+    dry_run: bool = True,
+    limit: int = 0,
+) -> dict[str, int]:
+    """Backfill coach feedback and titles for activities.
+
+    Steps:
+    1. Find activities with workout executions
+    2. For each activity:
+       a. Update title if missing/generic
+       b. Generate LLM interpretation if compliance exists but no interpretation
+
+    Args:
+        dry_run: If True, only log what would be done (default: True)
+        limit: Maximum number of activities to process (0 = no limit)
+
+    Returns:
+        Dictionary with counts of items processed
+    """
+    stats: dict[str, int] = {
+        "activities_found": 0,
+        "titles_updated": 0,
+        "interpretations_generated": 0,
+        "skipped_no_execution": 0,
+        "skipped_no_workout": 0,
+        "skipped_no_compliance": 0,
+        "errors": 0,
+    }
+
+    db = SessionLocal()
+    try:
+        logger.info(f"Starting coach feedback and title backfill (dry_run={dry_run}, limit={limit})")
+
+        # Find all activities
+        query = select(Activity).order_by(Activity.starts_at.desc())
+        if limit > 0:
+            query = query.limit(limit)
+
+        activities = db.execute(query).scalars().all()
+
+        logger.info(f"Found {len(activities)} activities to process")
+        stats["activities_found"] = len(activities)
+
+        for i, activity in enumerate(activities):
+            try:
+                logger.info(f"Processing activity {i + 1}/{len(activities)}: {activity.id}")
+                await _process_single_activity(db, activity, stats, dry_run)
+            except Exception as e:
+                stats["errors"] += 1
+                logger.error(
+                    f"Error processing activity {activity.id}: {e}",
+                    exc_info=True,
+                )
+                db.rollback()
+                continue
+
+        if not dry_run:
+            db.commit()
+            logger.info("Backfill complete - changes committed")
+        else:
+            logger.info("DRY RUN complete - no changes made")
+
+        logger.info(
+            "Coach feedback and title backfill complete",
+            dry_run=dry_run,
+            **stats,
+        )
+    except Exception as e:
+        db.rollback()
+        logger.exception(f"Fatal error in backfill: {e}")
+        raise
+    else:
+        return stats
+    finally:
+        db.close()
+
+
+def main() -> int:
+    """Main entry point for the backfill script."""
+    parser = argparse.ArgumentParser(
+        description="Backfill coach feedback and titles for activities",
+    )
+    parser.add_argument(
+        "--no-dry-run",
+        action="store_true",
+        help="Actually execute the backfill (default: dry run)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Maximum number of activities to process (0 = no limit)",
+    )
+
+    args = parser.parse_args()
+    dry_run = not args.no_dry_run
+
+    try:
+        stats = asyncio.run(backfill_coach_feedback_and_title(dry_run=dry_run, limit=args.limit))
+        logger.info("Backfill completed successfully", **stats)
+    except Exception as e:
+        logger.exception(f"Backfill failed: {e}")
+        return 1
+    else:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

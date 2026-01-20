@@ -190,17 +190,17 @@ def _process_title(
     logger.info(f"Updated activity {activity.id} title to '{new_title}'")
 
 
-async def _process_single_activity(
+async def _process_single_activity_with_execution(
     db: Session,
     activity: Activity,
     stats: dict[str, int],
     dry_run: bool,
 ) -> None:
-    """Process a single activity for backfill.
+    """Process a single activity that has a workout execution.
 
     Args:
         db: Database session
-        activity: Activity to process
+        activity: Activity to process (already confirmed to have execution)
         stats: Statistics dictionary to update
         dry_run: Whether this is a dry run
     """
@@ -210,8 +210,8 @@ async def _process_single_activity(
     ).scalar_one_or_none()
 
     if not execution:
-        logger.debug(f"Activity {activity.id} has no workout execution - skipping")
-        stats["skipped_no_execution"] += 1
+        # This shouldn't happen since we joined on WorkoutExecution
+        logger.warning(f"Activity {activity.id} unexpectedly has no workout execution")
         return
 
     # Get workout - ensure we use string ID
@@ -247,7 +247,7 @@ async def backfill_coach_feedback_and_title(
     """Backfill coach feedback and titles for activities.
 
     Steps:
-    1. Find activities with workout executions
+    1. Find activities WITH workout executions (optimized query)
     2. For each activity:
        a. Update title if missing/generic
        b. Generate LLM interpretation if compliance exists but no interpretation
@@ -263,7 +263,6 @@ async def backfill_coach_feedback_and_title(
         "activities_found": 0,
         "titles_updated": 0,
         "interpretations_generated": 0,
-        "skipped_no_execution": 0,
         "skipped_no_workout": 0,
         "skipped_no_compliance": 0,
         "errors": 0,
@@ -273,20 +272,24 @@ async def backfill_coach_feedback_and_title(
     try:
         logger.info(f"Starting coach feedback and title backfill (dry_run={dry_run}, limit={limit})")
 
-        # Find all activities
-        query = select(Activity).order_by(Activity.starts_at.desc())
+        # Find only activities that HAVE workout executions (much more efficient)
+        query = (
+            select(Activity)
+            .join(WorkoutExecution, WorkoutExecution.activity_id == Activity.id)
+            .order_by(Activity.starts_at.desc())
+        )
         if limit > 0:
             query = query.limit(limit)
 
         activities = db.execute(query).scalars().all()
 
-        logger.info(f"Found {len(activities)} activities to process")
+        logger.info(f"Found {len(activities)} activities with workout executions to process")
         stats["activities_found"] = len(activities)
 
         for i, activity in enumerate(activities):
             try:
                 logger.info(f"Processing activity {i + 1}/{len(activities)}: {activity.id}")
-                await _process_single_activity(db, activity, stats, dry_run)
+                await _process_single_activity_with_execution(db, activity, stats, dry_run)
             except Exception as e:
                 stats["errors"] += 1
                 logger.error(

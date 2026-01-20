@@ -14,66 +14,51 @@ from app.db.models import AthleteProfile, StravaAccount, User, UserSettings
 
 
 def create_user_settings(user_id: str) -> UserSettings:
-    """Create a new UserSettings instance with all required NOT NULL fields explicitly set.
+    """Create a new UserSettings instance with default preferences.
 
-    This ensures all database constraints are satisfied and prevents None values
-    from leaking into NOT NULL columns.
+    Schema v2: All settings are stored in the preferences JSONB column.
 
     Args:
         user_id: User ID (primary key)
 
     Returns:
-        UserSettings instance with all required fields set
+        UserSettings instance with default preferences
     """
+    default_preferences = {
+        "units": "metric",
+        "timezone": "UTC",
+        "notifications_enabled": True,
+        "email_notifications": False,
+        "weekly_summary": True,
+        "profile_visibility": "private",
+        "share_activity_data": False,
+        "share_training_metrics": False,
+        "push_notifications": True,
+        "workout_reminders": True,
+        "training_load_alerts": True,
+        "race_reminders": True,
+        "goal_achievements": True,
+        "coach_messages": True,
+    }
     return UserSettings(
         user_id=user_id,
-        units="metric",
-        timezone="UTC",
-        notifications_enabled=True,
-        email_notifications=False,
-        weekly_summary=True,
-        profile_visibility="private",
-        share_activity_data=False,
-        share_training_metrics=False,
-        push_notifications=True,
-        workout_reminders=True,
-        training_load_alerts=True,
-        race_reminders=True,
-        goal_achievements=True,
-        coach_messages=True,
+        preferences=default_preferences,
     )
 
 
 def validate_user_settings_not_null(settings: UserSettings) -> None:
-    """Validate that all NOT NULL UserSettings fields are not None.
+    """Validate that UserSettings has valid preferences.
 
-    This is a hard guardrail to catch regressions before they hit the database.
-    Raises ValueError if any NOT NULL field is None.
+    Schema v2: All settings are stored in the preferences JSONB column.
 
     Args:
         settings: UserSettings instance to validate
 
     Raises:
-        ValueError: If any NOT NULL field is None
+        ValueError: If preferences is None
     """
-    if settings.profile_visibility is None:
-        raise ValueError("profile_visibility must not be None")
-    if settings.share_activity_data is None:
-        raise ValueError("share_activity_data must not be None")
-    if settings.share_training_metrics is None:
-        raise ValueError("share_training_metrics must not be None")
-    if settings.push_notifications is None:
-        raise ValueError("push_notifications must not be None")
-    if settings.workout_reminders is None:
-        raise ValueError("workout_reminders must not be None")
-    if settings.training_load_alerts is None:
-        raise ValueError("training_load_alerts must not be None")
-    if settings.race_reminders is None:
-        raise ValueError("race_reminders must not be None")
-    if settings.goal_achievements is None:
-        raise ValueError("goal_achievements must not be None")
-    if settings.coach_messages is None:
-        raise ValueError("coach_messages must not be None")
+    if settings.preferences is None:
+        raise ValueError("preferences must not be None")
 
 
 def map_gender(strava_sex: str | None) -> str | None:
@@ -300,31 +285,21 @@ def upsert_athlete_profile(
     user.first_name = payload.first_name
     user.last_name = payload.last_name
     user.timezone = payload.timezone
+    # Mark onboarding as complete on User table (the authoritative flag)
+    user.onboarding_complete = True
 
     # 2. Get or create AthleteProfile
     profile_result = session.execute(select(AthleteProfile).where(AthleteProfile.user_id == user_id)).first()
     if profile_result:
         profile = profile_result[0]
     else:
-        strava_account_result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
-        if strava_account_result:
-            strava_account = strava_account_result[0]
-            athlete_id = int(strava_account.athlete_id) if strava_account.athlete_id else 0
-        else:
-            athlete_id = 0
-        profile = AthleteProfile(user_id=user_id, athlete_id=athlete_id, sources={})
+        # Create new profile with only valid columns (schema v2)
+        profile = AthleteProfile(user_id=user_id)
         session.add(profile)
 
-    # Update profile fields
-    profile.primary_sport = payload.primary_sport
-    # Mark onboarding as complete (idempotent - safe to call multiple times)
-    if not profile.onboarding_completed:
-        profile.onboarding_completed = True
-
-    if profile.sources is None:
-        profile.sources = {}
-    profile.sources["primary_sport"] = "user"
-    profile.sources["onboarding"] = "user"
+    # Update profile fields - copy name from User to AthleteProfile for convenience
+    profile.first_name = payload.first_name
+    profile.last_name = payload.last_name
 
     # 3. Get or create UserSettings
     settings_result = session.execute(select(UserSettings).where(UserSettings.user_id == user_id)).first()
@@ -334,8 +309,10 @@ def upsert_athlete_profile(
         settings = create_user_settings(user_id=user_id)
         session.add(settings)
 
-    # Map primary_sport (single) to primary_sports (list)
-    settings.primary_sports = [payload.primary_sport]
+    # Update preferences JSONB field with all training settings
+    # Initialize preferences dict if None
+    if settings.preferences is None:
+        settings.preferences = {}
 
     # Map goal_type to training_focus
     goal_type_to_focus = {
@@ -343,23 +320,26 @@ def upsert_athlete_profile(
         "completion": "race_focused",
         "general": "general_fitness",
     }
-    settings.training_focus = goal_type_to_focus.get(payload.goal_type, "general_fitness")
-
-    # Store experience_level in consistency field
-    settings.consistency = payload.experience_level
 
     # Convert availability_days_per_week (int) to available_days (list of day names)
     week_days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-    settings.available_days = week_days[: payload.availability_days_per_week]
+    available_days = week_days[: payload.availability_days_per_week]
 
-    settings.weekly_hours = payload.availability_hours_per_week
+    # Build updated preferences dict
+    updated_preferences = {
+        **settings.preferences,
+        "primary_sports": [payload.primary_sport],
+        "training_focus": goal_type_to_focus.get(payload.goal_type, "general_fitness"),
+        "consistency": payload.experience_level,
+        "available_days": available_days,
+        "weekly_hours": payload.availability_hours_per_week,
+        "injury_history": payload.injury_status != "none",
+        "injury_notes": payload.injury_notes if payload.injury_notes else None,
+        "onboarding_completed": True,
+    }
 
-    # Map injury_status to injury_history (boolean) and injury_notes
-    settings.injury_history = payload.injury_status != "none"
-    if payload.injury_notes:
-        settings.injury_notes = payload.injury_notes
-    elif payload.injury_status == "none":
-        settings.injury_notes = None
+    # Assign the new dict to trigger SQLAlchemy change detection
+    settings.preferences = updated_preferences
 
     # Validate all NOT NULL constraints before commit (hard guardrail)
     validate_user_settings_not_null(settings)

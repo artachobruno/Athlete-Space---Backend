@@ -62,7 +62,7 @@ class User(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
     password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
-    auth_provider: Mapped[str] = mapped_column(String, nullable=False)  # CHECK constraint in DB: 'google', 'email', 'apple'
+    auth_provider: Mapped[str] = mapped_column(String, nullable=False)  # CHECK constraint in DB: 'google', 'email', 'apple', 'password'
     google_sub: Mapped[str | None] = mapped_column(String, nullable=True, unique=True, index=True)
     role: Mapped[str] = mapped_column(String, nullable=False, default="athlete")  # CHECK constraint in DB: 'athlete', 'coach', 'admin'
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")  # CHECK constraint in DB: 'active', 'disabled', 'deleted'
@@ -942,6 +942,261 @@ class UserSettings(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    # COMPATIBILITY PROPERTIES: Access preferences JSONB fields as direct attributes
+    # These allow code to use settings.primary_sports instead of settings.preferences["primary_sports"]
+
+    def _get_pref(self, key: str, default: object = None) -> object:
+        """Helper to get a preference value."""
+        if self.preferences is None:
+            return default
+        return self.preferences.get(key, default)
+
+    def _set_pref(self, key: str, value: object) -> None:
+        """Helper to set a preference value."""
+        if self.preferences is None:
+            self.preferences = {}
+        # Create a new dict to trigger SQLAlchemy change detection
+        new_prefs = dict(self.preferences)
+        new_prefs[key] = value
+        self.preferences = new_prefs
+
+    @property
+    def primary_sports(self) -> list[str] | None:
+        """Primary sports list."""
+        result = self._get_pref("primary_sports")
+        if result is None:
+            return None
+        return list(result) if isinstance(result, (list, tuple)) else None
+
+    @primary_sports.setter
+    def primary_sports(self, value: list[str] | None) -> None:
+        self._set_pref("primary_sports", value)
+
+    @property
+    def available_days(self) -> list[str] | None:
+        """Available training days."""
+        result = self._get_pref("available_days")
+        if result is None:
+            return None
+        return list(result) if isinstance(result, (list, tuple)) else None
+
+    @available_days.setter
+    def available_days(self, value: list[str] | None) -> None:
+        self._set_pref("available_days", value)
+
+    @property
+    def weekly_hours(self) -> float | None:
+        """Weekly training hours."""
+        result = self._get_pref("weekly_hours")
+        if result is None:
+            return None
+        return float(result) if isinstance(result, (int, float)) else None
+
+    @weekly_hours.setter
+    def weekly_hours(self, value: float | None) -> None:
+        self._set_pref("weekly_hours", value)
+
+    @property
+    def training_focus(self) -> str | None:
+        """Training focus (race_focused, general_fitness)."""
+        result = self._get_pref("training_focus")
+        if result is None:
+            return None
+        return str(result) if result else None
+
+    @training_focus.setter
+    def training_focus(self, value: str | None) -> None:
+        self._set_pref("training_focus", value)
+
+    @property
+    def injury_history(self) -> bool | None:
+        """Whether user has injury history."""
+        result = self._get_pref("injury_history")
+        if result is None:
+            return None
+        return bool(result)
+
+    @injury_history.setter
+    def injury_history(self, value: bool | None) -> None:
+        self._set_pref("injury_history", value)
+
+    @property
+    def injury_notes(self) -> str | None:
+        """Injury notes."""
+        result = self._get_pref("injury_notes")
+        if result is None:
+            return None
+        return str(result) if result else None
+
+    @injury_notes.setter
+    def injury_notes(self, value: str | None) -> None:
+        self._set_pref("injury_notes", value)
+
+    @property
+    def consistency(self) -> str | None:
+        """Training consistency/experience level."""
+        result = self._get_pref("consistency")
+        if result is None:
+            return None
+        return str(result) if result else None
+
+    @consistency.setter
+    def consistency(self, value: str | None) -> None:
+        self._set_pref("consistency", value)
+
+    @property
+    def units(self) -> str:
+        """Measurement units (metric/imperial)."""
+        result = self._get_pref("units", "metric")
+        return str(result) if result else "metric"
+
+    @units.setter
+    def units(self, value: str) -> None:
+        self._set_pref("units", value)
+
+    @property
+    def timezone(self) -> str:
+        """User timezone."""
+        result = self._get_pref("timezone", "UTC")
+        return str(result) if result else "UTC"
+
+    @timezone.setter
+    def timezone(self, value: str) -> None:
+        self._set_pref("timezone", value)
+
+    @property
+    def notifications_enabled(self) -> bool:
+        """Whether notifications are enabled."""
+        return bool(self._get_pref("notifications_enabled", True))
+
+    @notifications_enabled.setter
+    def notifications_enabled(self, value: bool) -> None:
+        self._set_pref("notifications_enabled", value)
+
+    @property
+    def email_notifications(self) -> bool:
+        """Whether email notifications are enabled."""
+        return bool(self._get_pref("email_notifications", False))
+
+    @email_notifications.setter
+    def email_notifications(self, value: bool) -> None:
+        self._set_pref("email_notifications", value)
+
+    @property
+    def weekly_summary(self) -> bool:
+        """Whether weekly summary is enabled."""
+        return bool(self._get_pref("weekly_summary", True))
+
+    @weekly_summary.setter
+    def weekly_summary(self, value: bool) -> None:
+        self._set_pref("weekly_summary", value)
+
+    @property
+    def profile_visibility(self) -> str:
+        """Profile visibility setting."""
+        result = self._get_pref("profile_visibility", "private")
+        return str(result) if result else "private"
+
+    @profile_visibility.setter
+    def profile_visibility(self, value: str) -> None:
+        self._set_pref("profile_visibility", value)
+
+    @property
+    def share_activity_data(self) -> bool:
+        """Whether to share activity data."""
+        return bool(self._get_pref("share_activity_data", False))
+
+    @share_activity_data.setter
+    def share_activity_data(self, value: bool) -> None:
+        self._set_pref("share_activity_data", value)
+
+    @property
+    def share_training_metrics(self) -> bool:
+        """Whether to share training metrics."""
+        return bool(self._get_pref("share_training_metrics", False))
+
+    @share_training_metrics.setter
+    def share_training_metrics(self, value: bool) -> None:
+        self._set_pref("share_training_metrics", value)
+
+    @property
+    def push_notifications(self) -> bool:
+        """Whether push notifications are enabled."""
+        return bool(self._get_pref("push_notifications", True))
+
+    @push_notifications.setter
+    def push_notifications(self, value: bool) -> None:
+        self._set_pref("push_notifications", value)
+
+    @property
+    def workout_reminders(self) -> bool:
+        """Whether workout reminders are enabled."""
+        return bool(self._get_pref("workout_reminders", True))
+
+    @workout_reminders.setter
+    def workout_reminders(self, value: bool) -> None:
+        self._set_pref("workout_reminders", value)
+
+    @property
+    def training_load_alerts(self) -> bool:
+        """Whether training load alerts are enabled."""
+        return bool(self._get_pref("training_load_alerts", True))
+
+    @training_load_alerts.setter
+    def training_load_alerts(self, value: bool) -> None:
+        self._set_pref("training_load_alerts", value)
+
+    @property
+    def race_reminders(self) -> bool:
+        """Whether race reminders are enabled."""
+        return bool(self._get_pref("race_reminders", True))
+
+    @race_reminders.setter
+    def race_reminders(self, value: bool) -> None:
+        self._set_pref("race_reminders", value)
+
+    @property
+    def goal_achievements(self) -> bool:
+        """Whether goal achievement notifications are enabled."""
+        return bool(self._get_pref("goal_achievements", True))
+
+    @goal_achievements.setter
+    def goal_achievements(self, value: bool) -> None:
+        self._set_pref("goal_achievements", value)
+
+    @property
+    def coach_messages(self) -> bool:
+        """Whether coach message notifications are enabled."""
+        return bool(self._get_pref("coach_messages", True))
+
+    @coach_messages.setter
+    def coach_messages(self, value: bool) -> None:
+        self._set_pref("coach_messages", value)
+
+    @property
+    def years_of_training(self) -> int | None:
+        """Years of structured training experience."""
+        result = self._get_pref("years_of_training")
+        if result is None:
+            return None
+        return int(result) if isinstance(result, (int, float)) else None
+
+    @years_of_training.setter
+    def years_of_training(self, value: int | None) -> None:
+        self._set_pref("years_of_training", value)
+
+    @property
+    def goal(self) -> str | None:
+        """Training goal text."""
+        result = self._get_pref("goal")
+        if result is None:
+            return None
+        return str(result) if result else None
+
+    @goal.setter
+    def goal(self, value: str | None) -> None:
+        self._set_pref("goal", value)
 
 
 class ConversationOwnership(Base):

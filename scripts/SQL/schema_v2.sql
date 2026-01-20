@@ -17,7 +17,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE users (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email         TEXT NOT NULL UNIQUE,
-  auth_provider TEXT NOT NULL CHECK (auth_provider IN ('google', 'email', 'apple')),
+  auth_provider TEXT NOT NULL CHECK (auth_provider IN ('google', 'email', 'apple', 'password')),
   role          TEXT NOT NULL DEFAULT 'athlete' CHECK (role IN ('athlete', 'coach', 'admin')),
   status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'deleted')),
   timezone      TEXT NOT NULL DEFAULT 'UTC',

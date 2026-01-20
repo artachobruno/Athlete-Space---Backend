@@ -121,6 +121,7 @@ async def _process_interpretation(
     compliance: WorkoutComplianceSummary,
     stats: dict[str, int],
     dry_run: bool,
+    workout_id_str: str,
 ) -> None:
     """Generate LLM interpretation for a workout.
 
@@ -130,28 +131,29 @@ async def _process_interpretation(
         compliance: Compliance summary
         stats: Statistics dictionary to update
         dry_run: Whether this is a dry run
+        workout_id_str: Workout ID as string for database queries
     """
     if not _needs_interpretation(compliance):
-        logger.debug(f"Workout {workout.id} already has interpretation")
+        logger.debug(f"Workout {workout_id_str} already has interpretation")
         return
 
     if dry_run:
-        logger.info(f"[DRY RUN] Would generate interpretation for workout {workout.id}")
+        logger.info(f"[DRY RUN] Would generate interpretation for workout {workout_id_str}")
         stats["interpretations_generated"] += 1
         return
 
     try:
         service = InterpretationService()
-        success = await service.interpret_workout(db, workout.id)
+        success = await service.interpret_workout(db, workout_id_str)
         if success:
             stats["interpretations_generated"] += 1
-            logger.info(f"Generated interpretation for workout {workout.id}")
+            logger.info(f"Generated interpretation for workout {workout_id_str}")
         else:
-            logger.warning(f"Interpretation generation returned False for workout {workout.id}")
+            logger.warning(f"Interpretation generation returned False for workout {workout_id_str}")
     except ValueError as e:
-        logger.warning(f"Cannot interpret workout {workout.id}: {e}")
+        logger.warning(f"Cannot interpret workout {workout_id_str}: {e}")
     except Exception as e:
-        logger.error(f"Failed to interpret workout {workout.id}: {e}", exc_info=True)
+        logger.error(f"Failed to interpret workout {workout_id_str}: {e}", exc_info=True)
         stats["errors"] += 1
 
 
@@ -204,7 +206,7 @@ async def _process_single_activity(
     """
     # Get workout execution for this activity
     execution = db.execute(
-        select(WorkoutExecution).where(WorkoutExecution.activity_id == activity.id)
+        select(WorkoutExecution).where(WorkoutExecution.activity_id == str(activity.id))
     ).scalar_one_or_none()
 
     if not execution:
@@ -212,17 +214,18 @@ async def _process_single_activity(
         stats["skipped_no_execution"] += 1
         return
 
-    # Get workout
-    workout = db.get(Workout, execution.workout_id)
+    # Get workout - ensure we use string ID
+    workout_id_str = str(execution.workout_id)
+    workout = db.get(Workout, workout_id_str)
     if not workout:
-        logger.warning(f"Workout {execution.workout_id} not found for activity {activity.id}")
+        logger.warning(f"Workout {workout_id_str} not found for activity {activity.id}")
         stats["skipped_no_workout"] += 1
         return
 
-    # Get compliance summary
+    # Get compliance summary - use string comparison
     compliance = db.execute(
         select(WorkoutComplianceSummary).where(
-            WorkoutComplianceSummary.workout_id == workout.id
+            WorkoutComplianceSummary.workout_id == workout_id_str
         )
     ).scalar_one_or_none()
 
@@ -231,9 +234,9 @@ async def _process_single_activity(
 
     # Process LLM interpretation if compliance exists
     if compliance:
-        await _process_interpretation(db, workout, compliance, stats, dry_run)
+        await _process_interpretation(db, workout, compliance, stats, dry_run, workout_id_str)
     else:
-        logger.debug(f"No compliance for workout {workout.id} - skipping interpretation")
+        logger.debug(f"No compliance for workout {workout_id_str} - skipping interpretation")
         stats["skipped_no_compliance"] += 1
 
 
@@ -300,9 +303,15 @@ async def backfill_coach_feedback_and_title(
             logger.info("DRY RUN complete - no changes made")
 
         logger.info(
-            "Coach feedback and title backfill complete",
-            dry_run=dry_run,
-            **stats,
+            f"Coach feedback and title backfill complete: "
+            f"dry_run={dry_run}, "
+            f"activities_found={stats['activities_found']}, "
+            f"titles_updated={stats['titles_updated']}, "
+            f"interpretations_generated={stats['interpretations_generated']}, "
+            f"skipped_no_execution={stats['skipped_no_execution']}, "
+            f"skipped_no_workout={stats['skipped_no_workout']}, "
+            f"skipped_no_compliance={stats['skipped_no_compliance']}, "
+            f"errors={stats['errors']}"
         )
     except Exception as e:
         db.rollback()
@@ -336,7 +345,7 @@ def main() -> int:
 
     try:
         stats = asyncio.run(backfill_coach_feedback_and_title(dry_run=dry_run, limit=args.limit))
-        logger.info("Backfill completed successfully", **stats)
+        logger.info(f"Backfill completed successfully: {stats}")
     except Exception as e:
         logger.exception(f"Backfill failed: {e}")
         return 1

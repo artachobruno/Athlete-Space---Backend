@@ -22,6 +22,7 @@ class StepIntensity(StrEnum):
     VO2 = "vo2"
     FLOW = "flow"
     REST = "rest"
+    RACE = "race"
 
 
 class StepTargetType(StrEnum):

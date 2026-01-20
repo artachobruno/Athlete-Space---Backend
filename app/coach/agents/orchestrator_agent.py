@@ -914,7 +914,6 @@ async def run_conversation(
                     content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
                     history_lines.append(f"{role.upper()}: {content}")
                 history_str = "\n".join(history_lines)
-            msg_count = len(message_history_for_log) if message_history_for_log else 0
             history_display = history_str if history_str else "(none)"
             logger.debug(
                 "LLM Prompt: Orchestrator Agent Decision\n"

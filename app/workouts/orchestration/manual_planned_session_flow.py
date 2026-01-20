@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import UserSettings
 from app.workouts.attribute_extraction import extract_workout_signals
+from app.workouts.canonical import StepIntensity, StepTargetType, StructuredWorkout, WorkoutStep
 from app.workouts.input import ActivityInput
 from app.workouts.llm.step_generator import generate_steps_from_notes
 from app.workouts.models import Workout
@@ -128,16 +129,14 @@ async def create_structured_workout_from_manual_session(
     if is_race and has_minimal_notes:
         # Skip LLM parsing for simple race entries
         # Create a basic structured workout directly
-        from app.workouts.canonical import StructuredWorkout, WorkoutStep
-
         # Create a simple single-step workout for the race
         race_step = WorkoutStep(
             order=1,
             name="Race",
             distance_meters=total_distance_meters,
             duration_seconds=None,
-            intensity="race",
-            target_type=None,
+            intensity=StepIntensity.RACE,
+            target_type=StepTargetType.NONE,
             repeat=1,
             is_recovery=False,
         )

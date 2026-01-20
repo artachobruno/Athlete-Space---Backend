@@ -104,9 +104,9 @@ class CoachLLMClient:
                 logger.info(f"Generating season plan (attempt {attempt + 1}/{MAX_RETRIES + 1})")
                 user_prompt = f"Context:\n{context_str}"
                 logger.debug(
-                    f"LLM Prompt: Season Plan Generation (attempt {attempt + 1})\n"
-                    f"System Prompt:\n{prompt_text}\n\n"
-                    f"User Prompt:\n{user_prompt}",
+                    "LLM Prompt: Season Plan Generation (attempt {attempt})\n"
+                    "System Prompt:\n{system_prompt}\n\n"
+                    "User Prompt:\n{user_prompt}",
                     system_prompt=prompt_text,
                     user_prompt=user_prompt,
                     attempt=attempt + 1,
@@ -179,9 +179,9 @@ class CoachLLMClient:
                 logger.info(f"Generating weekly intent (attempt {attempt + 1}/{MAX_RETRIES + 1})")
                 user_prompt = f"Context:\n{context_str}"
                 logger.debug(
-                    f"LLM Prompt: Weekly Intent Generation (attempt {attempt + 1})\n"
-                    f"System Prompt:\n{prompt_text}\n\n"
-                    f"User Prompt:\n{user_prompt}",
+                    "LLM Prompt: Weekly Intent Generation (attempt {attempt})\n"
+                    "System Prompt:\n{system_prompt}\n\n"
+                    "User Prompt:\n{user_prompt}",
                     system_prompt=prompt_text,
                     user_prompt=user_prompt,
                     attempt=attempt + 1,
@@ -250,9 +250,9 @@ class CoachLLMClient:
                 logger.info(f"[DAILY_DECISION] LLM call starting (attempt {attempt + 1}/{MAX_RETRIES + 1})")
                 user_prompt = f"Context:\n{context_str}"
                 logger.debug(
-                    f"LLM Prompt: Daily Decision Generation (attempt {attempt + 1})\n"
-                    f"System Prompt:\n{prompt_text}\n\n"
-                    f"User Prompt:\n{user_prompt}",
+                    "LLM Prompt: Daily Decision Generation (attempt {attempt})\n"
+                    "System Prompt:\n{system_prompt}\n\n"
+                    "User Prompt:\n{user_prompt}",
                     system_prompt=prompt_text,
                     user_prompt=user_prompt,
                     attempt=attempt + 1,
@@ -324,9 +324,9 @@ class CoachLLMClient:
                 logger.info(f"Generating weekly report (attempt {attempt + 1}/{MAX_RETRIES + 1})")
                 user_prompt = f"Context:\n{context_str}"
                 logger.debug(
-                    f"LLM Prompt: Weekly Report Generation (attempt {attempt + 1})\n"
-                    f"System Prompt:\n{prompt_text}\n\n"
-                    f"User Prompt:\n{user_prompt}",
+                    "LLM Prompt: Weekly Report Generation (attempt {attempt})\n"
+                    "System Prompt:\n{system_prompt}\n\n"
+                    "User Prompt:\n{user_prompt}",
                     system_prompt=prompt_text,
                     user_prompt=user_prompt,
                     attempt=attempt + 1,
@@ -663,10 +663,10 @@ class CoachLLMClient:
                 user_prompt = f"Context:\n{context_str}"
                 full_prompt = f"{prompt_text}\n\n{user_prompt}"
                 logger.debug(
-                    f"LLM Prompt: Training Plan Generation (attempt {attempt + 1})\n"
-                    f"System Prompt:\n{prompt_text}\n\n"
-                    f"User Prompt:\n{user_prompt}\n\n"
-                    f"Full Prompt:\n{full_prompt}",
+                    "LLM Prompt: Training Plan Generation (attempt {attempt})\n"
+                    "System Prompt:\n{system_prompt}\n\n"
+                    "User Prompt:\n{user_prompt}\n\n"
+                    "Full Prompt:\n{full_prompt}",
                     attempt=attempt + 1,
                     system_prompt=prompt_text,
                     user_prompt=user_prompt,

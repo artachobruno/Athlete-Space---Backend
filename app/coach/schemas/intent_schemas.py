@@ -16,15 +16,11 @@ class Confidence(BaseModel):
 
     score: float = Field(
         ...,
-        description="Confidence score (0.0 to 1.0)",
-        ge=0.0,
-        le=1.0,
+        description="Confidence score (0.0 to 1.0). Must be between 0.0 and 1.0.",
     )
     explanation: str = Field(
         ...,
-        description="Human-readable explanation of the confidence level. Must be calm and coach-like.",
-        min_length=20,
-        max_length=200,
+        description="Human-readable explanation of the confidence level (20-200 chars). Must be calm and coach-like.",
     )
 
 
@@ -39,49 +35,35 @@ class SeasonPlan(BaseModel):
     # Core plan attributes
     focus: str = Field(
         ...,
-        description="Primary training focus for the season (e.g., 'Base building', 'Race preparation', 'Recovery')",
-        min_length=10,
-        max_length=200,
+        description="Primary training focus for the season (e.g., 'Base building', 'Race preparation', 'Recovery'). 10-200 chars.",
     )
     volume_range: str = Field(
         ...,
-        description="Target weekly volume range in hours (e.g., '8-12 hours/week')",
-        min_length=5,
-        max_length=50,
+        description="Target weekly volume range in hours (e.g., '8-12 hours/week'). 5-50 chars.",
     )
     intensity_density: str = Field(
         ...,
-        description="Intensity distribution strategy (e.g., '80/20 polarized', 'Pyramidal', 'Threshold-focused')",
-        min_length=5,
-        max_length=100,
+        description="Intensity distribution strategy (e.g., '80/20 polarized', 'Pyramidal', 'Threshold-focused'). 5-100 chars.",
     )
     adaptation_goal: str = Field(
         ...,
-        description="Primary physiological adaptation goal (e.g., 'Aerobic capacity', 'Lactate threshold', 'VO2 max')",
-        min_length=10,
-        max_length=150,
+        description="Primary physiological adaptation goal (e.g., 'Aerobic capacity', 'Lactate threshold', 'VO2 max'). 10-150 chars.",
     )
 
     # Risk and confidence
     risk_notes: str = Field(
         ...,
-        description="Identified risks and mitigation strategies for the season",
-        min_length=20,
-        max_length=500,
+        description="Identified risks and mitigation strategies for the season. 20-500 chars.",
     )
     confidence: float = Field(
         ...,
-        description="Confidence in this plan (0.0 to 1.0)",
-        ge=0.0,
-        le=1.0,
+        description="Confidence in this plan (0.0 to 1.0). Must be between 0.0 and 1.0.",
     )
 
     # Explanation (first-class field)
     explanation: str = Field(
         ...,
-        description="Human-readable explanation of the season plan. Must be calm, conservative, and coach-like.",
-        min_length=100,
-        max_length=1000,
+        description="Human-readable explanation of the season plan. Must be calm, conservative, and coach-like. 100-1000 chars.",
     )
 
     # Metadata
@@ -104,54 +86,40 @@ class WeeklyIntent(BaseModel):
     # Core intent attributes
     focus: str = Field(
         ...,
-        description="Primary focus for this week (e.g., 'Volume accumulation', 'Recovery', 'Intensity block')",
-        min_length=10,
-        max_length=200,
+        description="Primary focus for this week (e.g., 'Volume accumulation', 'Recovery', 'Intensity block'). 10-200 chars.",
     )
     volume_target_hours: float = Field(
         ...,
-        description="Target weekly volume in hours",
-        ge=0.0,
-        le=30.0,
+        description="Target weekly volume in hours. Must be between 0.0 and 30.0.",
     )
     intensity_distribution: str = Field(
         ...,
-        description="Intensity distribution for the week (e.g., '2 hard sessions, 4 easy sessions, 1 rest day')",
-        min_length=10,
-        max_length=300,
+        description="Intensity distribution for the week (e.g., '2 hard sessions, 4 easy sessions, 1 rest day'). 10-300 chars.",
     )
     adaptation_goal: str = Field(
         ...,
-        description="Primary adaptation goal for this week",
-        min_length=10,
-        max_length=150,
+        description="Primary adaptation goal for this week. 10-150 chars.",
     )
 
     # Risk and confidence
     risk_notes: str = Field(
         ...,
-        description="Risks specific to this week and how to mitigate them",
-        min_length=20,
-        max_length=500,
+        description="Risks specific to this week and how to mitigate them. 20-500 chars.",
     )
     confidence: float = Field(
         ...,
-        description="Confidence in this weekly intent (0.0 to 1.0)",
-        ge=0.0,
-        le=1.0,
+        description="Confidence in this weekly intent (0.0 to 1.0). Must be between 0.0 and 1.0.",
     )
 
     # Explanation (first-class field)
     explanation: str = Field(
         ...,
-        description="Human-readable explanation of the weekly intent. Must be calm, conservative, and coach-like.",
-        min_length=100,
-        max_length=1000,
+        description="Human-readable explanation of the weekly intent. Must be calm, conservative, and coach-like. 100-1000 chars.",
     )
 
     # Context
     week_start: date = Field(..., description="Start date of the week (Monday)")
-    week_number: int = Field(..., description="Week number within the season plan", ge=1)
+    week_number: int = Field(..., description="Week number within the season plan. Must be at least 1.")
     season_plan_id: str | None = Field(
         default=None,
         description="Reference to the season plan this week belongs to",
@@ -168,33 +136,23 @@ class WeeklyReport(BaseModel):
     # Core report attributes
     week_summary: str = Field(
         ...,
-        description="High-level summary of the week's training and outcomes",
-        min_length=100,
-        max_length=500,
+        description="High-level summary of the week's training and outcomes. 100-500 chars.",
     )
     progress_highlights: list[str] = Field(
         ...,
-        description="Key progress points from the week (2-4 items)",
-        min_length=2,
-        max_length=4,
+        description="Key progress points from the week. Must have 2-4 items.",
     )
     changes_explained: str = Field(
         ...,
-        description="Explanation of any changes made during the week and why",
-        min_length=50,
-        max_length=400,
+        description="Explanation of any changes made during the week and why. 50-400 chars.",
     )
     next_focus: str = Field(
         ...,
-        description="Primary focus for the upcoming week",
-        min_length=50,
-        max_length=300,
+        description="Primary focus for the upcoming week. 50-300 chars.",
     )
     risk_observations: str | None = Field(
         default=None,
-        description="Observations about risk or fatigue (if any)",
-        min_length=20,
-        max_length=300,
+        description="Observations about risk or fatigue (if any). 20-300 chars when provided.",
     )
 
     # Context
@@ -217,21 +175,15 @@ class DailyDecision(BaseModel):
     )
     volume_hours: float | None = Field(
         default=None,
-        description="Recommended training volume in hours (null for rest days)",
-        ge=0.0,
-        le=6.0,
+        description="Recommended training volume in hours (null for rest days). Must be between 0.0 and 6.0 when provided.",
     )
     intensity_focus: str | None = Field(
         default=None,
-        description="Intensity focus for the day (e.g., 'Zone 2 aerobic', 'Threshold intervals', 'VO2 max')",
-        min_length=5,
-        max_length=100,
+        description="Intensity focus for the day (e.g., 'Zone 2 aerobic', 'Threshold intervals', 'VO2 max'). 5-100 chars when provided.",
     )
     session_type: str | None = Field(
         default=None,
-        description="Type of session (e.g., 'Long run', 'Tempo run', 'Recovery jog', 'Rest day')",
-        min_length=5,
-        max_length=100,
+        description="Type of session (e.g., 'Long run', 'Tempo run', 'Recovery jog', 'Rest day'). 5-100 chars when provided.",
     )
 
     # Risk and confidence
@@ -241,9 +193,7 @@ class DailyDecision(BaseModel):
     )
     risk_notes: str | None = Field(
         default=None,
-        description="Specific risk considerations for this day",
-        min_length=10,
-        max_length=300,
+        description="Specific risk considerations for this day. 10-300 chars when provided.",
     )
     confidence: Confidence = Field(
         ...,
@@ -253,9 +203,7 @@ class DailyDecision(BaseModel):
     # Explanation (first-class field)
     explanation: str = Field(
         ...,
-        description="Human-readable explanation of the daily decision. Must be calm, conservative, and coach-like.",
-        min_length=50,
-        max_length=500,
+        description="Human-readable explanation of the daily decision. Must be calm, conservative, and coach-like. 50-500 chars.",
     )
 
     # Context

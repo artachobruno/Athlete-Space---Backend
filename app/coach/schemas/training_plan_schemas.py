@@ -24,7 +24,7 @@ class TrainingSession(BaseModel):
     distance_km: float | None = Field(default=None, description="Distance in kilometers")
     intensity: Literal["easy", "moderate", "hard", "race"] = Field(..., description="Session intensity")
     purpose: str = Field(..., description="Purpose of this session")
-    week_number: int = Field(..., description="Week number in the plan", ge=1)
+    week_number: int = Field(..., description="Week number in the plan. Must be at least 1.")
 
 
 class TrainingPlan(BaseModel):

@@ -73,7 +73,7 @@ async def _process_user_daily_decision(
 
 async def _generate_daily_decisions_async() -> None:
     """Async helper to generate daily decisions for all users."""
-    logger.info("Starting overnight daily decision generation for all users")
+    logger.info("[DAILY_DECISION] Starting overnight batch generation for all users")
 
     triggers = RegenerationTriggers()
     store = IntentStore()
@@ -105,7 +105,7 @@ async def _generate_daily_decisions_async() -> None:
             error_count += 1
 
     logger.info(
-        f"Completed overnight daily decision generation: "
+        f"[DAILY_DECISION] Batch generation completed: "
         f"total={total_users}, success={success_count}, skipped={skipped_count}, errors={error_count}"
     )
 
@@ -142,6 +142,11 @@ async def trigger_daily_decision_for_user(
     if decision_date is None:
         decision_date = datetime.now(timezone.utc).date()
 
+    logger.info(
+        f"[DAILY_DECISION] Evaluating athlete: user_id={user_id}, "
+        f"athlete_id={athlete_id}, date={decision_date.isoformat()}"
+    )
+
     try:
         triggers = RegenerationTriggers()
         store = IntentStore()
@@ -154,12 +159,12 @@ async def trigger_daily_decision_for_user(
             # Decision exists, but we should regenerate to reflect new activity/session
             # The context hash check in maybe_regenerate_daily_decision will determine if regeneration is needed
             logger.debug(
-                f"Triggering daily decision regeneration for user_id={user_id}, "
+                f"[DAILY_DECISION] Decision exists, checking for context changes: user_id={user_id}, "
                 f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
             )
         else:
             logger.info(
-                f"Triggering daily decision generation for user_id={user_id}, "
+                f"[DAILY_DECISION] No existing decision, generating new: user_id={user_id}, "
                 f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
             )
 
@@ -191,17 +196,17 @@ async def trigger_daily_decision_for_user(
 
         if decision_id:
             logger.info(
-                f"Successfully generated/regenerated daily decision for user_id={user_id}, "
-                f"athlete_id={athlete_id}, decision_id={decision_id}, decision_date={decision_date.isoformat()}"
+                f"[DAILY_DECISION] Completed: action=generated, user_id={user_id}, "
+                f"athlete_id={athlete_id}, decision_id={decision_id}, date={decision_date.isoformat()}"
             )
         else:
-            logger.debug(
-                f"Daily decision generation skipped (context unchanged) for user_id={user_id}, "
-                f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
+            logger.info(
+                f"[DAILY_DECISION] Completed: action=skipped (context unchanged), user_id={user_id}, "
+                f"athlete_id={athlete_id}, date={decision_date.isoformat()}"
             )
     except Exception:
         logger.exception(
-            f"Failed to trigger daily decision generation for user_id={user_id}, "
-            f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
+            f"[DAILY_DECISION] Failed: user_id={user_id}, "
+            f"athlete_id={athlete_id}, date={decision_date.isoformat()}"
         )
         # Don't raise - this is a background operation

@@ -96,9 +96,8 @@ class RegenerationTriggers:
 
         if existing is None:
             logger.info(
-                "Daily decision does not exist, should regenerate",
-                user_id=user_id,
-                decision_date=decision_date.isoformat(),
+                f"[DAILY_DECISION] No existing decision found, will generate: user_id={user_id}, "
+                f"date={decision_date.isoformat()}"
             )
             return True
 
@@ -106,18 +105,14 @@ class RegenerationTriggers:
         stored_hash = existing.decision_data.get("_context_hash")
         if stored_hash != current_context_hash:
             logger.info(
-                "Daily decision context changed, should regenerate",
-                user_id=user_id,
-                decision_date=decision_date.isoformat(),
-                old_hash=stored_hash,
-                new_hash=current_context_hash,
+                f"[DAILY_DECISION] Context changed, will regenerate: user_id={user_id}, "
+                f"date={decision_date.isoformat()}"
             )
             return True
 
         logger.debug(
-            "Daily decision exists and context unchanged, no regeneration needed",
-            user_id=user_id,
-            decision_date=decision_date.isoformat(),
+            f"[DAILY_DECISION] Decision exists and context unchanged: user_id={user_id}, "
+            f"date={decision_date.isoformat()}"
         )
         return False
 
@@ -203,13 +198,15 @@ class RegenerationTriggers:
         context_hash = self.runtime.compute_context_hash(context)
 
         if not self.should_regenerate_daily_decision(user_id, decision_date, context_hash):
+            logger.debug(
+                f"[DAILY_DECISION] Regeneration not needed (context unchanged): user_id={user_id}, "
+                f"date={decision_date.isoformat()}"
+            )
             return None
 
         logger.info(
-            "Regenerating daily decision",
-            user_id=user_id,
-            athlete_id=athlete_id,
-            decision_date=decision_date.isoformat(),
+            f"[DAILY_DECISION] Regenerating: user_id={user_id}, athlete_id={athlete_id}, "
+            f"date={decision_date.isoformat()}"
         )
 
         try:
@@ -222,15 +219,14 @@ class RegenerationTriggers:
             )
         except Exception:
             logger.exception(
-                f"Failed to regenerate daily decision (user_id={user_id}, athlete_id={athlete_id})"
+                f"[DAILY_DECISION] Regeneration failed: user_id={user_id}, athlete_id={athlete_id}, "
+                f"date={decision_date.isoformat()}"
             )
             raise
         else:
             logger.info(
-                "Daily decision regenerated successfully",
-                decision_id=decision_id,
-                user_id=user_id,
-                athlete_id=athlete_id,
+                f"[DAILY_DECISION] Regeneration saved: decision_id={decision_id}, user_id={user_id}, "
+                f"athlete_id={athlete_id}, date={decision_date.isoformat()}"
             )
             return decision_id
 

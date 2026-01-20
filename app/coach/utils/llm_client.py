@@ -247,7 +247,7 @@ class CoachLLMClient:
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                logger.info(f"Generating daily decision (attempt {attempt + 1}/{MAX_RETRIES + 1})")
+                logger.info(f"[DAILY_DECISION] LLM call starting (attempt {attempt + 1}/{MAX_RETRIES + 1})")
                 user_prompt = f"Context:\n{context_str}"
                 logger.debug(
                     f"LLM Prompt: Daily Decision Generation (attempt {attempt + 1})\n"
@@ -270,23 +270,26 @@ class CoachLLMClient:
                         continue
                     _raise_validation_error("Daily decision", error_msg)
                 else:
-                    logger.info("Daily decision generated successfully")
+                    logger.info(
+                        f"[DAILY_DECISION] LLM call succeeded: recommendation={result.output.recommendation}, "
+                        f"confidence={result.output.confidence.score:.2f}"
+                    )
                     return result.output
 
             except ValidationError as e:
+                logger.warning(f"[DAILY_DECISION] LLM parsing failed: {e}. Retrying..." if attempt < MAX_RETRIES else f"[DAILY_DECISION] LLM parsing failed after all retries: {e}")
                 if attempt < MAX_RETRIES:
-                    logger.warning(f"Daily decision parsing failed: {e}. Retrying...")
                     context["parsing_errors"] = str(e)
                     context_str = json.dumps(context, indent=2, default=str)
                     continue
                 raise ValueError(f"Daily decision parsing failed after {MAX_RETRIES + 1} attempts: {e}") from e
             except Exception as e:
-                logger.exception("Error generating daily decision")
+                logger.exception(f"[DAILY_DECISION] LLM call error: {type(e).__name__}: {e}")
                 if attempt < MAX_RETRIES:
                     continue
                 raise RuntimeError(f"Failed to generate daily decision: {type(e).__name__}: {e}") from e
 
-        raise RuntimeError("Failed to generate daily decision after all retries")
+        raise RuntimeError("[DAILY_DECISION] Failed to generate daily decision after all retries")
 
     async def generate_weekly_report(self, context: dict[str, Any]) -> WeeklyReport:
         """Generate a weekly report from LLM.

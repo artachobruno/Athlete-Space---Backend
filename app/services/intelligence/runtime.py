@@ -157,26 +157,21 @@ class CoachRuntime:
             RuntimeError: If LLM call fails
         """
         logger.info(
-            "Generating daily decision",
-            user_id=user_id,
-            athlete_id=athlete_id,
+            f"[DAILY_DECISION] LLM generation starting: user_id={user_id}, athlete_id={athlete_id}"
         )
 
         try:
             decision = await self.llm_client.generate_daily_decision(context)
         except Exception:
             logger.exception(
-                f"Failed to generate daily decision (user_id={user_id}, athlete_id={athlete_id})"
+                f"[DAILY_DECISION] LLM generation failed: user_id={user_id}, athlete_id={athlete_id}"
             )
             raise
         else:
             logger.info(
-                "Daily decision generated successfully",
-                user_id=user_id,
-                athlete_id=athlete_id,
-                decision_date=decision.decision_date.isoformat(),
-                recommendation=decision.recommendation,
-                confidence_score=decision.confidence.score,
+                f"[DAILY_DECISION] LLM generation completed: user_id={user_id}, athlete_id={athlete_id}, "
+                f"decision_date={decision.decision_date.isoformat()}, recommendation={decision.recommendation}, "
+                f"confidence={decision.confidence.score:.2f}"
             )
             return decision
 

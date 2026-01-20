@@ -62,7 +62,7 @@ async def _generate_daily_decision_on_demand(
         HTTPException: If generation fails or decision cannot be retrieved
     """
     logger.info(
-        f"Daily decision not found, generating on-demand for user_id={user_id}, "
+        f"[DAILY_DECISION] On-demand generation triggered: user_id={user_id}, "
         f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
     )
 
@@ -94,19 +94,26 @@ async def _generate_daily_decision_on_demand(
         # Retrieve the newly created decision by ID (more reliable than querying by date)
         decision_model = store.get_daily_decision_by_id(decision_id)
         if decision_model is not None:
-            logger.info(f"Successfully generated daily decision on-demand, decision_id={decision_id}")
+            logger.info(
+                f"[DAILY_DECISION] On-demand generation completed: decision_id={decision_id}, "
+                f"user_id={user_id}, date={decision_date.isoformat()}"
+            )
             return decision_model
 
         # Fallback: try querying by date in case of timing issues
-        logger.warning(f"Decision {decision_id} not found by ID, trying date query as fallback")
+        logger.warning(f"[DAILY_DECISION] Decision {decision_id} not found by ID, trying date query as fallback")
         decision_model = store.get_latest_daily_decision(user_id, decision_date_dt, active_only=True)
         if decision_model is not None:
-            logger.info(f"Successfully generated daily decision on-demand (via fallback), decision_id={decision_id}")
+            logger.info(
+                f"[DAILY_DECISION] On-demand generation completed (via fallback): decision_id={decision_id}, "
+                f"user_id={user_id}, date={decision_date.isoformat()}"
+            )
             return decision_model
 
         # If we get here, neither query found the decision
         logger.error(
-            f"Decision was generated (decision_id={decision_id}) but could not be retrieved by ID or date. This should not happen."
+            f"[DAILY_DECISION] Decision was generated (decision_id={decision_id}) but could not be retrieved. "
+            f"This should not happen."
         )
         _raise_unavailable_error(decision_date)
 
@@ -114,16 +121,15 @@ async def _generate_daily_decision_on_demand(
         raise
     except Exception as e:
         logger.exception(
-            f"Failed to generate daily decision on-demand "
-            f"for user_id={user_id}, athlete_id={athlete_id}, "
-            f"decision_date={decision_date.isoformat()}"
+            f"[DAILY_DECISION] On-demand generation failed: user_id={user_id}, "
+            f"athlete_id={athlete_id}, decision_date={decision_date.isoformat()}"
         )
         # Diagnostic: Check if user has activities/data available
         with get_session() as session:
             activity_count = session.execute(select(func.count()).select_from(Activity).where(Activity.user_id == user_id)).scalar() or 0
 
         logger.warning(
-            f"Daily decision generation failed for user_id={user_id}, athlete_id={athlete_id}, "
+            f"[DAILY_DECISION] Generation failed diagnostics: user_id={user_id}, athlete_id={athlete_id}, "
             f"decision_date={decision_date.isoformat()}, activity_count={activity_count}"
         )
 
@@ -301,7 +307,7 @@ async def get_daily_decision(
     if decision_date is None:
         decision_date = datetime.now(timezone.utc).date()
 
-    logger.info(f"Getting daily decision for user_id={user_id}, decision_date={decision_date.isoformat()}")
+    logger.info(f"[DAILY_DECISION] API request: user_id={user_id}, decision_date={decision_date.isoformat()}")
 
     # Check if user has any activities (graceful short-circuit)
     with get_session() as session:
@@ -345,8 +351,8 @@ async def get_daily_decision(
                 try:
                     athlete_id = _get_athlete_id_from_user(user_id)
                     logger.info(
-                        f"No decision found for today, attempting on-demand generation "
-                        f"for user_id={user_id}, athlete_id={athlete_id}"
+                        f"[DAILY_DECISION] No decision found for today, triggering on-demand generation: "
+                        f"user_id={user_id}, athlete_id={athlete_id}"
                     )
                     decision_model = await _generate_daily_decision_on_demand(
                         user_id=user_id,
@@ -354,24 +360,25 @@ async def get_daily_decision(
                         decision_date=decision_date,
                         decision_date_dt=decision_date_dt,
                     )
-                except HTTPException:
+                except HTTPException as http_exc:
                     # If generation fails, fall through to return placeholder
                     logger.warning(
-                        f"On-demand generation failed for user_id={user_id}, "
-                        f"decision_date={decision_date.isoformat()}, returning placeholder"
+                        f"[DAILY_DECISION] On-demand generation failed with HTTP {http_exc.status_code}: "
+                        f"user_id={user_id}, decision_date={decision_date.isoformat()}, "
+                        f"detail={http_exc.detail}"
                     )
                 except Exception as e:
                     # Log but don't fail - return placeholder instead
                     logger.exception(
-                        f"Unexpected error during on-demand generation for user_id={user_id}, "
-                        f"decision_date={decision_date.isoformat()}: {e}"
+                        f"[DAILY_DECISION] Unexpected error during on-demand generation: "
+                        f"user_id={user_id}, decision_date={decision_date.isoformat()}, error={e}"
                     )
 
             # If still no decision (either not today, or generation failed), return placeholder
             if decision_model is None:
-                logger.debug(
-                    f"No decision found for user_id={user_id}, date={decision_date.isoformat()}, "
-                    f"returning placeholder (is_today={decision_date == today})"
+                logger.warning(
+                    f"[DAILY_DECISION] Returning placeholder: user_id={user_id}, "
+                    f"date={decision_date.isoformat()}, is_today={decision_date == today}"
                 )
                 return DailyDecisionResponse(
                     id="",

@@ -288,23 +288,27 @@ def _create_new_activity(
             account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
             if account:
                 athlete_id = int(account[0].athlete_id)
+                logger.info(
+                    f"[DAILY_DECISION] Triggering regeneration after activity save: user_id={user_id}, "
+                    f"athlete_id={athlete_id}, activity_date={activity_date.isoformat()}"
+                )
                 # Trigger asynchronously in background thread (fire and forget)
 
                 def _trigger_decision():
                     try:
                         asyncio.run(trigger_daily_decision_for_user(user_id, athlete_id, activity_date))
                     except Exception as e:
-                        logger.warning(f"[SAVE_ACTIVITIES] Background daily decision trigger failed: {e}")
+                        logger.warning(f"[DAILY_DECISION] Background trigger failed: {e}")
 
                 thread = threading.Thread(target=_trigger_decision, daemon=True)
                 thread.start()
                 logger.debug(
-                    f"[SAVE_ACTIVITIES] Triggered daily decision regeneration for user_id={user_id}, "
+                    f"[DAILY_DECISION] Background thread started for user_id={user_id}, "
                     f"athlete_id={athlete_id}, activity_date={activity_date.isoformat()}"
                 )
     except Exception as e:
         # Don't fail activity save if decision trigger fails - just log the error
-        logger.warning(f"[SAVE_ACTIVITIES] Failed to trigger daily decision for user {user_id}: {e}")
+        logger.warning(f"[DAILY_DECISION] Failed to trigger after activity save for user {user_id}: {e}")
 
     return activity
 

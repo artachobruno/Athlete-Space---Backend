@@ -16,7 +16,7 @@ from typing import Any
 
 from loguru import logger
 from pydantic import ValidationError
-from pydantic_ai import Agent, NativeOutput
+from pydantic_ai import Agent
 
 from app.coach.config.models import USER_FACING_MODEL
 from app.coach.prompts.loader import load_prompt
@@ -240,7 +240,7 @@ class CoachLLMClient:
         agent = Agent(
             model=self.model,
             system_prompt=prompt_text,
-            output_type=NativeOutput(DailyDecision),
+            output_type=DailyDecision,
         )
 
         context_str = json.dumps(context, indent=2, default=str)

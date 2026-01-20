@@ -896,6 +896,9 @@ class AthleteProfile(Base):
     training_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Onboarding status
+    onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(

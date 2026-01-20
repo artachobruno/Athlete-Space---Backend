@@ -126,6 +126,39 @@ elif not settings.openai_api_key:
     logger.warning("OPENAI_API_KEY is not set. Coach features may not work.")
 
 
+def _check_migrations_complete() -> bool:
+    """Check if all migrations have already been applied by checking for latest schema markers.
+
+    Returns True if we can skip migrations (schema is current), False if migrations need to run.
+    """
+    from sqlalchemy import text
+    from app.db.session import engine
+
+    try:
+        with engine.connect() as conn:
+            # Check for a late-stage table that only exists after all migrations
+            # workout_compliance_summary is one of the last tables created
+            result = conn.execute(
+                text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'workout_compliance_summary'")
+            )
+            has_compliance_table = result.fetchone() is not None
+
+            # Also check for preferences JSONB in user_settings (schema v2 marker)
+            if has_compliance_table:
+                result = conn.execute(
+                    text("SELECT column_name FROM information_schema.columns WHERE table_name = 'user_settings' AND column_name = 'preferences'")
+                )
+                has_preferences = result.fetchone() is not None
+                if has_preferences:
+                    logger.info("Schema markers found - migrations already complete, skipping")
+                    return True
+
+        return False
+    except Exception as e:
+        logger.warning(f"Could not check migration status: {e} - will run migrations")
+        return False
+
+
 def initialize_database() -> None:
     """Initialize database tables and run migrations.
 
@@ -160,8 +193,26 @@ def initialize_database() -> None:
         logger.exception(f"Database initialization failed: {e}")
         raise
 
+    # Check if migrations are already complete (fast path for subsequent deployments)
+    if _check_migrations_complete():
+        logger.info("Migrations already applied - skipping to schema verification")
+        # Skip to schema verification
+        try:
+            logger.info("Verifying database schema...")
+            verify_schema()
+            logger.info("✓ Database schema verification completed")
+            logging.info(">>> database initialized (fast path) <<<")
+            print("DB INIT DONE (FAST)", flush=True)
+            return
+        except RuntimeError as e:
+            logger.warning(f"Schema verification failed on fast path: {e} - will run migrations")
+            # Fall through to run migrations
+        except Exception:
+            logger.warning("Schema verification failed on fast path - will run migrations")
+            # Fall through to run migrations
+
     # Run migrations for derived tables
-    logger.info("Running database migrations")
+    logger.info("Running database migrations (full path)")
     migration_errors = []
 
     try:

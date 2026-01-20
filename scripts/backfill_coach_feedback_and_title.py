@@ -51,16 +51,99 @@ from app.workouts.interpretation_service import InterpretationService
 from app.workouts.models import Workout
 
 
-def _get_title_from_workout_type(workout_type: str) -> str:
-    """Generate a display title from workout type.
+def _is_generic_title(title: str | None) -> bool:
+    """Check if title is a generic Strava-style auto-generated title.
+
+    Strava auto-generates titles like:
+    - Morning Run, Lunch Run, Afternoon Run, Evening Run, Night Run
+    - Morning Ride, Lunch Ride, Afternoon Ride, Evening Ride, Night Ride
+    - Morning Swim, Lunch Swim, Afternoon Swim, Evening Swim, Night Swim
+    - etc.
 
     Args:
-        workout_type: The workout type string
+        title: Title to check
+
+    Returns:
+        True if title is generic/auto-generated
+    """
+    if not title:
+        return True
+
+    title_lower = title.lower().strip()
+
+    # Time-of-day prefixes used by Strava
+    time_prefixes = ["morning", "lunch", "afternoon", "evening", "night"]
+
+    # Activity types used by Strava
+    activity_types = [
+        "run", "ride", "swim", "walk", "hike", "workout",
+        "weight training", "yoga", "crossfit", "elliptical",
+        "stair stepper", "rowing", "ski", "snowboard",
+        "ice skate", "kayak", "surf", "windsurf", "kitesurf",
+    ]
+
+    # Check for "Time Activity" pattern (e.g., "Morning Run", "Lunch Swim")
+    for prefix in time_prefixes:
+        for activity in activity_types:
+            if title_lower == f"{prefix} {activity}":
+                return True
+
+    # Also catch simple generic titles
+    generic_exact = {
+        "run", "running", "ride", "cycling", "swim", "swimming",
+        "activity", "workout", "exercise", "training",
+    }
+    if title_lower in generic_exact:
+        return True
+
+    return False
+
+
+def _get_workout_type(workout: Workout) -> str:
+    """Extract workout type from workout structure or tags.
+
+    Args:
+        workout: The workout object
+
+    Returns:
+        Workout type string
+    """
+    # Try to get type from tags
+    tags = workout.tags or {}
+    if isinstance(tags, dict):
+        workout_type = tags.get("type") or tags.get("intent") or tags.get("workout_type")
+        if workout_type:
+            return workout_type
+
+    # Try to get from structure
+    structure = workout.structure or {}
+    if isinstance(structure, dict):
+        workout_type = structure.get("type") or structure.get("intent")
+        if workout_type:
+            return workout_type
+
+    # Fall back to name-based inference
+    return workout.name or ""
+
+
+def _get_title_from_workout(workout: Workout) -> str:
+    """Generate a display title from workout.
+
+    Uses workout name if meaningful, otherwise generates from type.
+
+    Args:
+        workout: The workout object
 
     Returns:
         Human-readable title
     """
-    type_lower = (workout_type or "").lower()
+    # First try the workout's own name if it's not generic
+    if workout.name and not _is_generic_title(workout.name):
+        return workout.name
+
+    # Fall back to generating from workout type
+    workout_type = _get_workout_type(workout)
+    type_lower = workout_type.lower()
 
     title_map = {
         "threshold": "Threshold Run",
@@ -73,6 +156,10 @@ def _get_title_from_workout_type(workout_type: str) -> str:
         "endurance": "Endurance Run",
         "aerobic": "Aerobic Run",
         "fartlek": "Fartlek Session",
+        "race": "Race",
+        "hill": "Hill Workout",
+        "speed": "Speed Session",
+        "progression": "Progression Run",
     }
 
     for key, title in title_map.items():
@@ -92,15 +179,7 @@ def _needs_title_update(activity: Activity, workout: Workout) -> bool:
     Returns:
         True if title should be updated
     """
-    if activity.title and len(activity.title) > 5:
-        # Already has a meaningful title
-        return False
-
-    # Check if title is just generic or empty
-    generic_titles = {"run", "running", "activity", "workout", None, ""}
-    current_title_lower = (activity.title or "").lower().strip()
-
-    return current_title_lower in generic_titles or len(current_title_lower) < 3
+    return _is_generic_title(activity.title)
 
 
 def _needs_interpretation(compliance: WorkoutComplianceSummary) -> bool:
@@ -172,10 +251,15 @@ def _process_title(
         dry_run: Whether this is a dry run
     """
     if not _needs_title_update(activity, workout):
-        logger.debug(f"Activity {activity.id} already has title: {activity.title}")
+        logger.debug(f"Activity {activity.id} already has good title: {activity.title}")
         return
 
-    new_title = _get_title_from_workout_type(workout.workout_type)
+    new_title = _get_title_from_workout(workout)
+
+    # Don't update if the new title would be the same as old
+    if new_title.lower() == (activity.title or "").lower():
+        logger.debug(f"Activity {activity.id} title unchanged: {activity.title}")
+        return
 
     if dry_run:
         logger.info(
@@ -187,7 +271,7 @@ def _process_title(
 
     activity.title = new_title
     stats["titles_updated"] += 1
-    logger.info(f"Updated activity {activity.id} title to '{new_title}'")
+    logger.info(f"Updated activity {activity.id} title: '{activity.title}' -> '{new_title}'")
 
 
 async def _process_single_activity_with_execution(
@@ -311,7 +395,6 @@ async def backfill_coach_feedback_and_title(
             f"activities_found={stats['activities_found']}, "
             f"titles_updated={stats['titles_updated']}, "
             f"interpretations_generated={stats['interpretations_generated']}, "
-            f"skipped_no_execution={stats['skipped_no_execution']}, "
             f"skipped_no_workout={stats['skipped_no_workout']}, "
             f"skipped_no_compliance={stats['skipped_no_compliance']}, "
             f"errors={stats['errors']}"

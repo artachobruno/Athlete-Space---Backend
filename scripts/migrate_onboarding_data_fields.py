@@ -80,7 +80,14 @@ def _column_exists(db, table_name: str, column_name: str) -> bool:
     return any(col[1] == column_name for col in result)
 
 
-def _add_column(db, table_name: str, column_name: str, column_type: str, nullable: bool = True) -> None:
+def _add_column(
+    db,
+    table_name: str,
+    column_name: str,
+    column_type: str,
+    nullable: bool = True,
+    default_value: str | None = None,
+) -> None:
     """Add a column to a table if it doesn't exist.
 
     Args:
@@ -89,6 +96,7 @@ def _add_column(db, table_name: str, column_name: str, column_type: str, nullabl
         column_name: Name of the column
         column_type: SQL type for the column
         nullable: Whether the column is nullable
+        default_value: Default value for the column (required for NOT NULL columns on tables with existing rows)
     """
     if _column_exists(db, table_name, column_name):
         logger.info(f"Column {table_name}.{column_name} already exists, skipping")
@@ -96,11 +104,12 @@ def _add_column(db, table_name: str, column_name: str, column_type: str, nullabl
 
     logger.info(f"Adding column {table_name}.{column_name}")
     null_clause = "" if nullable else " NOT NULL"
+    default_clause = f" DEFAULT {default_value}" if default_value is not None else ""
     db.execute(
         text(
             f"""
             ALTER TABLE {table_name}
-            ADD COLUMN {column_name} {column_type}{null_clause}
+            ADD COLUMN {column_name} {column_type}{default_clause}{null_clause}
             """,
         ),
     )
@@ -133,9 +142,9 @@ def migrate_onboarding_data_fields() -> None:
             _add_column(db, "athlete_profiles", "date_of_birth", "TIMESTAMP", nullable=True)
             _add_column(db, "athlete_profiles", "location", "VARCHAR(255)", nullable=True)
             _add_column(db, "athlete_profiles", "unit_system", "VARCHAR(20)", nullable=True)
-            _add_column(db, "athlete_profiles", "strava_connected", "BOOLEAN", nullable=False)
+            _add_column(db, "athlete_profiles", "strava_connected", "BOOLEAN", nullable=False, default_value="FALSE")
             _add_column(db, "athlete_profiles", "sources", "JSONB", nullable=True)
-            _add_column(db, "athlete_profiles", "onboarding_completed", "BOOLEAN", nullable=False)
+            _add_column(db, "athlete_profiles", "onboarding_completed", "BOOLEAN", nullable=False, default_value="FALSE")
             _add_column(db, "athlete_profiles", "strava_athlete_id", "INTEGER", nullable=True)
             _add_column(db, "athlete_profiles", "years_training", "INTEGER", nullable=True)
             _add_column(db, "athlete_profiles", "primary_sport", "VARCHAR(255)", nullable=True)
@@ -148,9 +157,9 @@ def migrate_onboarding_data_fields() -> None:
             _add_column(db, "athlete_profiles", "date_of_birth", "TIMESTAMP", nullable=True)
             _add_column(db, "athlete_profiles", "location", "TEXT", nullable=True)
             _add_column(db, "athlete_profiles", "unit_system", "TEXT", nullable=True)
-            _add_column(db, "athlete_profiles", "strava_connected", "BOOLEAN", nullable=False)
+            _add_column(db, "athlete_profiles", "strava_connected", "BOOLEAN", nullable=False, default_value="0")
             _add_column(db, "athlete_profiles", "sources", "JSON", nullable=True)
-            _add_column(db, "athlete_profiles", "onboarding_completed", "BOOLEAN", nullable=False)
+            _add_column(db, "athlete_profiles", "onboarding_completed", "BOOLEAN", nullable=False, default_value="0")
             _add_column(db, "athlete_profiles", "strava_athlete_id", "INTEGER", nullable=True)
             _add_column(db, "athlete_profiles", "years_training", "INTEGER", nullable=True)
             _add_column(db, "athlete_profiles", "primary_sport", "TEXT", nullable=True)

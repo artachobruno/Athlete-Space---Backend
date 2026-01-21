@@ -3,6 +3,7 @@
 This module implements Google OAuth flow:
 - Users can sign up/login with Google (unauthenticated flow)
 - Users can connect their Google account to existing account (authenticated flow)
+- Native mobile SDK authentication via ID token verification
 - Tokens are stored encrypted and never exposed to frontend
 """
 
@@ -13,9 +14,11 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id, get_optional_user_id
@@ -25,6 +28,13 @@ from app.core.encryption import EncryptionError, encrypt_token
 from app.db.models import AuthProvider, GoogleAccount, User
 from app.db.session import get_session
 from app.integrations.google.oauth import exchange_code_for_token, get_user_info
+
+
+class MobileGoogleLoginRequest(BaseModel):
+    """Request body for native mobile Google Sign-In."""
+
+    id_token: str
+    platform: str = "mobile"
 
 router = APIRouter(prefix="/auth/google", tags=["auth", "google"])
 
@@ -578,6 +588,180 @@ def google_callback(
     except Exception as e:
         logger.exception("[GOOGLE_OAUTH] Error in OAuth callback")
         return _create_error_html(redirect_url, str(e))
+
+
+@router.post("/mobile")
+def google_mobile_login(
+    body: MobileGoogleLoginRequest,
+    request: Request,
+) -> dict[str, bool]:
+    """Authenticate user via native mobile Google Sign-In SDK.
+
+    This endpoint verifies the ID token from the native Google Sign-In SDK
+    (used by iOS and Android apps) and creates/logs in the user.
+
+    The native SDK handles the Google authentication UI natively, avoiding
+    the "disallowed_useragent" error that occurs with webview-based OAuth.
+
+    Args:
+        body: Request body containing id_token from native SDK
+        request: FastAPI request object for setting cookies
+
+    Returns:
+        JSON response with success status
+
+    Raises:
+        HTTPException: If token verification fails or user creation fails
+    """
+    logger.info(f"[GOOGLE_OAUTH] Mobile login initiated, platform={body.platform}")
+
+    id_token = body.id_token
+    if not id_token:
+        logger.error("[GOOGLE_OAUTH] Mobile login: No ID token provided")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ID token is required",
+        )
+
+    # Verify the ID token with Google
+    # Google's tokeninfo endpoint validates the token and returns user info
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": id_token},
+            )
+
+        if response.status_code != 200:
+            logger.error(f"[GOOGLE_OAUTH] Token verification failed: {response.status_code} - {response.text}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired ID token",
+            )
+
+        token_info = response.json()
+        logger.debug(f"[GOOGLE_OAUTH] Token info received: {list(token_info.keys())}")
+
+    except httpx.RequestError as e:
+        logger.error(f"[GOOGLE_OAUTH] Failed to verify token with Google: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to verify token with Google",
+        ) from e
+
+    # Validate the token is for our app
+    # The 'aud' claim should match our Web Client ID
+    aud = token_info.get("aud", "")
+    if aud != settings.google_client_id:
+        logger.error(f"[GOOGLE_OAUTH] Token audience mismatch: expected={settings.google_client_id}, got={aud}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token was not issued for this application",
+        )
+
+    # Extract user info from verified token
+    google_sub = token_info.get("sub")
+    email = token_info.get("email", "").lower().strip()
+    email_verified = token_info.get("email_verified", "false") == "true"
+
+    if not google_sub:
+        logger.error("[GOOGLE_OAUTH] No 'sub' claim in token")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid token: missing user identifier",
+        )
+
+    if not email:
+        logger.error("[GOOGLE_OAUTH] No email in token")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google account must have an email address",
+        )
+
+    if not email_verified:
+        logger.error("[GOOGLE_OAUTH] Email not verified")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google account email must be verified",
+        )
+
+    # Find or create user
+    resolved_user_id: str
+    with get_session() as session:
+        # First check if user exists by google_sub
+        user_by_google_sub = session.execute(
+            select(User).where(User.google_sub == google_sub)
+        ).first()
+
+        if user_by_google_sub:
+            # User exists with this Google account - login
+            resolved_user_id = user_by_google_sub[0].id
+            logger.info(f"[GOOGLE_OAUTH] Mobile: Logging in existing user_id={resolved_user_id}")
+        else:
+            # Check if user exists by email
+            user_by_email = session.execute(
+                select(User).where(User.email == email)
+            ).first()
+
+            if user_by_email:
+                # Link Google account to existing user
+                existing_user = user_by_email[0]
+                resolved_user_id = existing_user.id
+                existing_user.google_sub = google_sub
+                existing_user.auth_provider = AuthProvider.google.value
+                session.commit()
+                logger.info(f"[GOOGLE_OAUTH] Mobile: Linked Google to existing user_id={resolved_user_id}")
+            else:
+                # Create new user
+                resolved_user_id = str(uuid.uuid4())
+                new_user = User(
+                    id=resolved_user_id,
+                    email=email,
+                    auth_provider=AuthProvider.google.value,
+                    google_sub=google_sub,
+                    created_at=datetime.now(timezone.utc),
+                    last_login_at=None,
+                )
+                session.add(new_user)
+                session.commit()
+                logger.info(f"[GOOGLE_OAUTH] Mobile: Created new user_id={resolved_user_id}")
+
+        # Update last_login_at
+        user_result = session.execute(select(User).where(User.id == resolved_user_id)).first()
+        if user_result:
+            user = user_result[0]
+            if isinstance(user.auth_provider, AuthProvider):
+                user.auth_provider = user.auth_provider.value
+            user.last_login_at = datetime.now(timezone.utc)
+            session.commit()
+
+    # Create JWT and set cookie
+    jwt_token = create_access_token(resolved_user_id)
+    logger.info(f"[GOOGLE_OAUTH] Mobile: JWT issued for user_id={resolved_user_id}")
+
+    # Determine cookie domain
+    host = request.headers.get("host", "")
+    cookie_domain: str | None = None
+    if "athletespace.ai" in host or "onrender.com" in host:
+        cookie_domain = ".athletespace.ai"
+
+    # Create response and set cookie
+    from fastapi.responses import JSONResponse
+
+    response = JSONResponse(content={"success": True})
+    response.set_cookie(
+        key="session",
+        value=jwt_token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        path="/",
+        max_age=30 * 24 * 60 * 60,
+        domain=cookie_domain,
+    )
+
+    logger.info(f"[GOOGLE_OAUTH] Mobile login successful for user_id={resolved_user_id}")
+    return response
 
 
 @router.post("/disconnect")

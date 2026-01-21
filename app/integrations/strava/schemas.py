@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel
 
@@ -20,7 +19,7 @@ class StravaActivity(BaseModel):
     average_heartrate: float | None = None
     average_watts: float | None = None
 
-    raw: dict[str, str | int | float | bool | None] | None = None
+    raw: dict | None = None  # Store raw API response (may contain nested dicts and lists)
 
 
 def map_strava_activity(activity: StravaActivity, athlete_id: int) -> ActivityRecord:

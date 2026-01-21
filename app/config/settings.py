@@ -111,6 +111,33 @@ class Settings(BaseSettings):
         validation_alias="WORKOUT_NOTES_PARSING_ENABLED",
         description="Enable LLM-based workout notes parsing (default: false)",
     )
+    
+    # Email settings for support form
+    smtp_host: str = Field(
+        default="",
+        validation_alias="SMTP_HOST",
+        description="SMTP server host (e.g., smtp.gmail.com)",
+    )
+    smtp_port: int = Field(
+        default=587,
+        validation_alias="SMTP_PORT",
+        description="SMTP server port (587 for TLS, 465 for SSL)",
+    )
+    smtp_user: str = Field(
+        default="",
+        validation_alias="SMTP_USER",
+        description="SMTP username/email for authentication",
+    )
+    smtp_password: str = Field(
+        default="",
+        validation_alias="SMTP_PASSWORD",
+        description="SMTP password or app-specific password",
+    )
+    support_email: str = Field(
+        default="support@athletespace.ai",
+        validation_alias="SUPPORT_EMAIL",
+        description="Email address to receive support requests",
+    )
 
     @field_validator("log_level")
     @classmethod

@@ -41,6 +41,7 @@ from app.api.onboarding.onboarding import router as onboarding_router
 from app.api.profile import router as profile_router
 from app.api.settings.settings import router as settings_router
 from app.api.strava.strava import router as strava_router
+from app.api.support.support import router as support_router
 from app.api.training.manual_upload import router as manual_upload_router
 from app.api.training.plan_revisions import router as plan_revisions_router
 from app.api.training.state import router as state_router
@@ -963,6 +964,7 @@ app.include_router(onboarding_router)
 app.include_router(profile_router)
 app.include_router(settings_router)
 app.include_router(strava_router)
+app.include_router(support_router)
 app.include_router(manual_upload_router)
 app.include_router(ops_router)
 app.include_router(ai_ops_router)

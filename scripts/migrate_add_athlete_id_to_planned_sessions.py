@@ -130,6 +130,7 @@ def migrate_add_athlete_id_to_planned_sessions() -> None:
             )
 
             # Fallback: use strava_accounts if athlete_profiles doesn't have athlete_id yet
+            # Note: sa.athlete_id is BIGINT, so we cast directly (no regex check needed for numeric type)
             db.execute(
                 text(
                     """
@@ -138,7 +139,7 @@ def migrate_add_athlete_id_to_planned_sessions() -> None:
                     FROM strava_accounts sa
                     WHERE ps.user_id = sa.user_id
                     AND ps.athlete_id IS NULL
-                    AND sa.athlete_id ~ '^[0-9]+$'
+                    AND sa.athlete_id IS NOT NULL
                     """,
                 ),
             )

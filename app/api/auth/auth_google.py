@@ -30,57 +30,71 @@ router = APIRouter(prefix="/auth/google", tags=["auth", "google"])
 
 # In-memory state storage for OAuth flow (CSRF protection)
 # In production, consider using Redis or database-backed storage
-# state -> (user_id | None, platform, timestamp) - user_id is None for unauthenticated users
+# state -> (user_id | None, platform, mobile_redirect_uri | None, timestamp)
+# user_id is None for unauthenticated users
 # platform: "web" | "mobile" - determines callback behavior
-_oauth_states: dict[str, tuple[str | None, str, float]] = {}
+# mobile_redirect_uri: Custom deep link URL for mobile apps (e.g., "athletespace://auth/callback")
+_oauth_states: dict[str, tuple[str | None, str, str | None, float]] = {}
 
 
-def _generate_oauth_state(user_id: str | None = None, platform: str = "web") -> str:
+def _generate_oauth_state(
+    user_id: str | None = None,
+    platform: str = "web",
+    mobile_redirect_uri: str | None = None,
+) -> str:
     """Generate a secure OAuth state token tied to user session.
 
     Args:
         user_id: Current authenticated user ID (None for unauthenticated users)
         platform: Platform identifier ("web" or "mobile")
+        mobile_redirect_uri: Custom redirect URI for mobile deep linking
 
     Returns:
         Secure random state token
     """
     state = secrets.token_urlsafe(32)
     timestamp = datetime.now(timezone.utc).timestamp()
-    _oauth_states[state] = (user_id, platform, timestamp)
-    logger.debug(f"Generated Google OAuth state for user_id={user_id}, platform={platform}: {state[:16]}...")
+    _oauth_states[state] = (user_id, platform, mobile_redirect_uri, timestamp)
+    logger.debug(
+        f"Generated Google OAuth state for user_id={user_id}, platform={platform}, "
+        f"mobile_redirect_uri={mobile_redirect_uri}: {state[:16]}..."
+    )
     return state
 
 
-def _validate_and_extract_state(state: str) -> tuple[bool, str | None, str]:
-    """Validate OAuth state and extract user_id and platform.
+def _validate_and_extract_state(state: str) -> tuple[bool, str | None, str, str | None]:
+    """Validate OAuth state and extract user_id, platform, and mobile_redirect_uri.
 
     Args:
         state: OAuth state token from callback
 
     Returns:
-        Tuple of (is_valid, user_id, platform)
+        Tuple of (is_valid, user_id, platform, mobile_redirect_uri)
         - is_valid: True if state is valid (not expired, exists)
         - user_id: user_id if state is valid, None otherwise
         - platform: "web" or "mobile"
+        - mobile_redirect_uri: Custom redirect URI for mobile apps
     """
     if state not in _oauth_states:
         logger.warning(f"Invalid Google OAuth state: {state[:16]}... (not found)")
-        return (False, None, "web")
+        return (False, None, "web", None)
 
-    stored_user_id, platform, timestamp = _oauth_states[state]
+    stored_user_id, platform, mobile_redirect_uri, timestamp = _oauth_states[state]
     current_time = datetime.now(timezone.utc).timestamp()
 
     # State expires after 10 minutes
     if current_time - timestamp > 600:
         logger.warning(f"Google OAuth state expired: {state[:16]}...")
         del _oauth_states[state]
-        return (False, None, "web")
+        return (False, None, "web", None)
 
     # Clean up used state
     del _oauth_states[state]
-    logger.debug(f"Extracted user_id={stored_user_id}, platform={platform} from Google OAuth state")
-    return (True, stored_user_id, platform)
+    logger.debug(
+        f"Extracted user_id={stored_user_id}, platform={platform}, "
+        f"mobile_redirect_uri={mobile_redirect_uri} from Google OAuth state"
+    )
+    return (True, stored_user_id, platform, mobile_redirect_uri)
 
 
 def _encrypt_and_store_tokens(
@@ -178,17 +192,19 @@ def _create_error_html(redirect_url: str, error_msg: str = "") -> str:
 @router.get("/login")
 def google_login(
     platform: str = "web",
+    redirect_uri: str | None = None,
     user_id: str | None = Depends(get_optional_user_id),
 ):
     """Initiate Google OAuth login flow (React-compatible).
 
     This endpoint is called by React frontend (web + mobile) and redirects directly to Google.
     Supports platform parameter to determine callback behavior:
-    - platform=web: Sets cookie on callback
-    - platform=mobile: Returns token via deep link
+    - platform=web: Sets cookie and redirects to frontend URL on callback
+    - platform=mobile: Redirects to app deep link URL (redirect_uri) on callback
 
     Args:
         platform: Platform identifier ("web" or "mobile")
+        redirect_uri: Custom redirect URI for mobile deep linking (e.g., "athletespace://auth/callback")
         user_id: Current authenticated user ID (optional)
 
     Returns:
@@ -200,7 +216,22 @@ def google_login(
         platform = "web"
         logger.warning(f"[GOOGLE_OAUTH] Invalid platform '{platform}', defaulting to 'web'")
 
-    logger.info(f"[GOOGLE_OAUTH] Login initiated for user_id={user_id or 'unauthenticated'}, platform={platform}")
+    logger.info(
+        f"[GOOGLE_OAUTH] Login initiated for user_id={user_id or 'unauthenticated'}, "
+        f"platform={platform}, redirect_uri={redirect_uri}"
+    )
+
+    # Validate mobile redirect URI if provided
+    # Only allow our known app URL schemes for security
+    mobile_redirect_uri: str | None = None
+    if platform == "mobile" and redirect_uri:
+        # Validate the redirect_uri is a valid app deep link
+        allowed_schemes = ["athletespace://"]
+        if any(redirect_uri.startswith(scheme) for scheme in allowed_schemes):
+            mobile_redirect_uri = redirect_uri
+            logger.info(f"[GOOGLE_OAUTH] Mobile deep link URI accepted: {mobile_redirect_uri}")
+        else:
+            logger.warning(f"[GOOGLE_OAUTH] Invalid mobile redirect_uri scheme: {redirect_uri}")
 
     # Validate Google credentials are configured
     if not settings.google_client_id or not settings.google_client_secret:
@@ -210,9 +241,10 @@ def google_login(
             detail="Google integration not configured",
         )
 
-    # Get redirect URI from environment variable (NO FALLBACKS)
-    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
-    if not redirect_uri:
+    # Get Google OAuth callback URI from environment variable (NO FALLBACKS)
+    # This is the backend callback URL, not the mobile app deep link
+    google_redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
+    if not google_redirect_uri:
         logger.error("[GOOGLE_OAUTH] GOOGLE_REDIRECT_URI environment variable not set")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -220,29 +252,32 @@ def google_login(
         )
 
     # Validate redirect URI format
-    if "/auth/google/callback" not in redirect_uri:
-        logger.error(f"[GOOGLE_OAUTH] Invalid redirect URI format: {redirect_uri}")
+    if "/auth/google/callback" not in google_redirect_uri:
+        logger.error(f"[GOOGLE_OAUTH] Invalid redirect URI format: {google_redirect_uri}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Google redirect URI must point to /auth/google/callback",
         )
 
-    # Generate CSRF-protected state with platform
-    state = _generate_oauth_state(user_id, platform)
+    # Generate CSRF-protected state with platform and mobile redirect URI
+    state = _generate_oauth_state(user_id, platform, mobile_redirect_uri)
 
     # Build Google OAuth URL
     oauth_url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
         f"?client_id={settings.google_client_id}"
         "&response_type=code"
-        f"&redirect_uri={redirect_uri}"
+        f"&redirect_uri={google_redirect_uri}"
         "&scope=openid email profile"
         f"&state={state}"
         "&access_type=offline"  # Required to get refresh token
         "&prompt=consent"  # Force consent screen to get refresh token
     )
 
-    logger.info(f"[GOOGLE_OAUTH] Redirecting to Google OAuth for user_id={user_id or 'unauthenticated'}, platform={platform}")
+    logger.info(
+        f"[GOOGLE_OAUTH] Redirecting to Google OAuth for user_id={user_id or 'unauthenticated'}, "
+        f"platform={platform}, mobile_redirect_uri={mobile_redirect_uri}"
+    )
     logger.debug(f"[GOOGLE_OAUTH] OAuth URL: {oauth_url[:100]}...")
 
     # Redirect directly to Google (React expects this)
@@ -353,12 +388,15 @@ def google_callback(
     if not redirect_url.endswith("/"):
         redirect_url = f"{redirect_url}/"
 
-    is_valid, user_id, platform = _validate_and_extract_state(state)
+    is_valid, user_id, platform, mobile_redirect_uri = _validate_and_extract_state(state)
     if not is_valid:
         logger.error(f"[GOOGLE_OAUTH] Invalid or expired state: {state[:16]}...")
         return _create_error_html(redirect_url, "Invalid or expired authorization request. Please try again.")
 
-    logger.info(f"[GOOGLE_OAUTH] Callback validated, user_id={user_id or 'unauthenticated'}, platform={platform}")
+    logger.info(
+        f"[GOOGLE_OAUTH] Callback validated, user_id={user_id or 'unauthenticated'}, "
+        f"platform={platform}, mobile_redirect_uri={mobile_redirect_uri}"
+    )
 
     logger.debug(f"[GOOGLE_OAUTH] Callback code: {code[:10]}... (truncated)")
 
@@ -487,34 +525,53 @@ def google_callback(
         if "athletespace.ai" in host or "onrender.com" in host:
             cookie_domain = ".athletespace.ai"
 
-        # CRITICAL: Always set HTTP-only cookie for both web and mobile
-        # Mobile WebView can persist cookies if they're set correctly with secure=True and samesite="none"
-        response = RedirectResponse(url=redirect_url)
-
-        response.set_cookie(
-            key="session",
-            value=jwt_token,
-            httponly=True,
-            secure=True,  # HTTPS only - REQUIRED for mobile cookie persistence
-            samesite="none",  # REQUIRED for cross-origin cookie (mobile WebView)
-            path="/",  # Available for all paths
-            max_age=30 * 24 * 60 * 60,  # 30 days
-            domain=cookie_domain,
-        )
-        logger.info(f"[GOOGLE_OAUTH] Set HTTP-only cookie for user_id={resolved_user_id}, platform={platform}")
-
-        # Branch by platform: web redirects to frontend, mobile also redirects to frontend (cookie is set)
-        # Mobile app will intercept the redirect and navigate appropriately
-        # The cookie will be available for subsequent API calls
-        if platform == "mobile":
-            # For mobile, we still redirect to web URL first to ensure cookie is set
-            # The mobile app can intercept this URL and handle navigation
-            # If deep link is needed, frontend can handle it after cookie is confirmed
-            logger.info(f"[GOOGLE_OAUTH] Redirecting mobile user to frontend URL (cookie set) for user_id={resolved_user_id}")
+        # Branch by platform: web uses cookie, mobile uses deep link
+        if platform == "mobile" and mobile_redirect_uri:
+            # Mobile app: Redirect to custom URL scheme (deep link)
+            # The app will receive this URL and can extract any needed params
+            # Cookie won't work reliably with custom URL schemes, so the app
+            # should re-authenticate via /me after receiving the deep link
+            logger.info(
+                f"[GOOGLE_OAUTH] Redirecting mobile user to deep link: {mobile_redirect_uri} "
+                f"for user_id={resolved_user_id}"
+            )
+            # For mobile deep link, we can optionally pass a success indicator
+            # The app will then call /me to verify authentication
+            mobile_url = mobile_redirect_uri
+            if "?" in mobile_url:
+                mobile_url = f"{mobile_url}&success=true"
+            else:
+                mobile_url = f"{mobile_url}?success=true"
+            
+            # Set cookie anyway - might work in some WebView configurations
+            response = RedirectResponse(url=mobile_url)
+            response.set_cookie(
+                key="session",
+                value=jwt_token,
+                httponly=True,
+                secure=True,
+                samesite="none",
+                path="/",
+                max_age=30 * 24 * 60 * 60,
+                domain=cookie_domain,
+            )
+            return response
         else:
+            # Web platform: Set HTTP-only cookie and redirect to frontend
+            response = RedirectResponse(url=redirect_url)
+            response.set_cookie(
+                key="session",
+                value=jwt_token,
+                httponly=True,
+                secure=True,  # HTTPS only - REQUIRED for mobile cookie persistence
+                samesite="none",  # REQUIRED for cross-origin cookie (mobile WebView)
+                path="/",  # Available for all paths
+                max_age=30 * 24 * 60 * 60,  # 30 days
+                domain=cookie_domain,
+            )
+            logger.info(f"[GOOGLE_OAUTH] Set HTTP-only cookie for user_id={resolved_user_id}, platform={platform}")
             logger.info(f"[GOOGLE_OAUTH] Redirecting web user to frontend URL (cookie set) for user_id={resolved_user_id}")
-
-        return response
+            return response
 
     except HTTPException:
         raise

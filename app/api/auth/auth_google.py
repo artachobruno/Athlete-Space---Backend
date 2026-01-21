@@ -530,10 +530,17 @@ def google_callback(
         logger.info(f"[GOOGLE_OAUTH] JWT token issued for user_id={resolved_user_id}")
 
         # Determine cookie domain
-        host = request.headers.get("host", "")
+        # CRITICAL: For Capacitor apps (capacitor://localhost), cookies MUST NOT have a domain set,
+        # otherwise WKWebView will not send them.
+        origin = request.headers.get("origin", "")
         cookie_domain: str | None = None
-        if "athletespace.ai" in host or "onrender.com" in host:
-            cookie_domain = ".athletespace.ai"
+        if origin and ("capacitor://" in origin or "ionic://" in origin):
+            logger.debug(f"[GOOGLE_OAUTH] Capacitor request detected (origin={origin}), setting cookie domain=None")
+            cookie_domain = None
+        else:
+            host = request.headers.get("host", "")
+            if "athletespace.ai" in host or "onrender.com" in host:
+                cookie_domain = ".athletespace.ai"
 
         # Branch by platform: web uses cookie, mobile uses deep link
         if platform == "mobile" and mobile_redirect_uri:
@@ -740,10 +747,17 @@ def google_mobile_login(
     logger.info(f"[GOOGLE_OAUTH] Mobile: JWT issued for user_id={resolved_user_id}")
 
     # Determine cookie domain
-    host = request.headers.get("host", "")
+    # CRITICAL: For Capacitor apps (capacitor://localhost), cookies MUST NOT have a domain set,
+    # otherwise WKWebView will not send them.
+    origin = request.headers.get("origin", "")
     cookie_domain: str | None = None
-    if "athletespace.ai" in host or "onrender.com" in host:
-        cookie_domain = ".athletespace.ai"
+    if origin and ("capacitor://" in origin or "ionic://" in origin):
+        logger.debug(f"[GOOGLE_OAUTH] Capacitor request detected (origin={origin}), setting cookie domain=None")
+        cookie_domain = None
+    else:
+        host = request.headers.get("host", "")
+        if "athletespace.ai" in host or "onrender.com" in host:
+            cookie_domain = ".athletespace.ai"
 
     # Create response and set cookie
     from fastapi.responses import JSONResponse

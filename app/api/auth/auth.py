@@ -31,14 +31,23 @@ def _get_cookie_domain(request: Request) -> str | None:
     """Get cookie domain from request host.
 
     For production (athletespace.ai), returns '.athletespace.ai' to allow
-    cookie sharing across subdomains. For localhost, returns None (browser default).
+    cookie sharing across subdomains. For localhost or Capacitor, returns None (browser default).
+
+    CRITICAL: For Capacitor apps (capacitor://localhost), cookies MUST NOT have a domain set,
+    otherwise WKWebView will not send them.
 
     Args:
         request: FastAPI request object
 
     Returns:
-        Cookie domain string (with leading dot for subdomain sharing) or None for localhost
+        Cookie domain string (with leading dot for subdomain sharing) or None for localhost/Capacitor
     """
+    # Check if this is a Capacitor request - cookies MUST NOT have domain for Capacitor
+    origin = request.headers.get("origin", "")
+    if origin and ("capacitor://" in origin or "ionic://" in origin):
+        logger.debug(f"[AUTH] Capacitor request detected (origin={origin}), setting cookie domain=None")
+        return None
+    
     host = request.headers.get("host", "")
     if "athletespace.ai" in host or "onrender.com" in host:
         return ".athletespace.ai"

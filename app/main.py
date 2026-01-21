@@ -801,6 +801,14 @@ except KeyError:
         "Set CORS_ALLOWED_ORIGINS environment variable in production."
     )
 
+# CRITICAL: Always include Capacitor origins even if CORS_ALLOWED_ORIGINS is set
+# This ensures mobile apps work in production
+capacitor_origins = ["capacitor://localhost", "ionic://localhost"]
+for origin in capacitor_origins:
+    if origin not in cors_origins:
+        cors_origins.append(origin)
+        logger.info(f"[CORS] Added Capacitor origin to allowed list: {origin}")
+
 logger.info(f"[CORS] Configured allowed origins: {cors_origins}")
 
 # CRITICAL: CORS middleware MUST be added FIRST (before all other middleware)

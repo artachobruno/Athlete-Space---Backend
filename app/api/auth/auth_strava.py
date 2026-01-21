@@ -445,10 +445,17 @@ def strava_callback(
     response = RedirectResponse(url=redirect_url)
 
     # Determine cookie domain
-    host = request.headers.get("host", "")
+    # CRITICAL: For Capacitor apps (capacitor://localhost), cookies MUST NOT have a domain set,
+    # otherwise WKWebView will not send them.
+    origin = request.headers.get("origin", "")
     cookie_domain: str | None = None
-    if "athletespace.ai" in host or "onrender.com" in host:
-        cookie_domain = ".athletespace.ai"
+    if origin and ("capacitor://" in origin or "ionic://" in origin):
+        logger.debug(f"[STRAVA_OAUTH] Capacitor request detected (origin={origin}), setting cookie domain=None")
+        cookie_domain = None
+    else:
+        host = request.headers.get("host", "")
+        if "athletespace.ai" in host or "onrender.com" in host:
+            cookie_domain = ".athletespace.ai"
 
     response.set_cookie(
         key="session",

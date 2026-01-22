@@ -161,6 +161,12 @@ def calendar_session_from_view_row(
         execution_notes = execution_notes.strip()
         if not execution_notes:
             execution_notes = None
+    # Extract must_dos from payload (JSONB array)
+    must_dos: list[str] | None = payload.get("must_dos")
+    if must_dos and not isinstance(must_dos, list):
+        must_dos = None
+    if must_dos and len(must_dos) == 0:
+        must_dos = None
 
     # Determine completed flag and completed_at
     completed = kind == "activity" or status == "completed"
@@ -229,4 +235,5 @@ def calendar_session_from_view_row(
         instructions=instructions or [],
         steps=step_objects,
         coach_insight=coach_insight,
+        must_dos=must_dos or [],
     )

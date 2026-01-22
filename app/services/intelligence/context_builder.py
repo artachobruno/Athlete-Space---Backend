@@ -16,6 +16,7 @@ from app.db.models import Activity, PlannedSession
 from app.db.session import get_session
 from app.services.intelligence.store import IntentStore
 from app.services.overview_service import get_overview_data
+from app.workouts.models import WorkoutStep
 
 
 def _normalize_datetime(dt: datetime) -> datetime:
@@ -309,6 +310,41 @@ def _get_recent_decisions_for_context(user_id: str, decision_date: date) -> list
     return recent_decisions
 
 
+def _convert_workout_step_to_dict(step: WorkoutStep) -> dict[str, Any]:
+    """Convert WorkoutStep to dictionary format for context.
+
+    Args:
+        step: WorkoutStep database model
+
+    Returns:
+        Dictionary with step details
+    """
+    # Extract duration and distance from targets JSONB
+    duration_min = None
+    distance_km = None
+    targets = step.targets or {}
+    duration_info = targets.get("duration", {})
+    if duration_info.get("type") == "time" and duration_info.get("seconds"):
+        duration_min = duration_info["seconds"] // 60
+    elif duration_info.get("type") == "distance" and duration_info.get("meters"):
+        distance_km = duration_info["meters"] / 1000.0
+
+    # Extract intensity from target metric
+    intensity = None
+    target_info = targets.get("target", {})
+    if target_info.get("metric"):
+        intensity = target_info["metric"]
+
+    return {
+        "order": step.step_index + 1,  # Convert 0-indexed to 1-indexed
+        "name": step.step_type or f"Step {step.step_index + 1}",
+        "duration_min": duration_min,
+        "distance_km": distance_km,
+        "intensity": intensity,
+        "notes": step.instructions or step.purpose,
+    }
+
+
 def _get_scheduled_workout_for_date(user_id: str, workout_date: date) -> dict[str, Any] | None:
     """Get scheduled workout for a specific date.
 
@@ -341,19 +377,38 @@ def _get_scheduled_workout_for_date(user_id: str, workout_date: date) -> dict[st
                 .first()
             )
 
-            if planned_sessions:
-                return {
-                    "id": planned_sessions.id,
-                    "title": planned_sessions.title,
-                    "sport": planned_sessions.sport,
-                    "session_type": planned_sessions.session_type,
-                    "duration_seconds": planned_sessions.duration_seconds,
-                    "distance_meters": planned_sessions.distance_meters,
-                    "intensity": planned_sessions.intensity,
-                    "intent": planned_sessions.intent,
-                    "notes": planned_sessions.notes,
-                    "execution_notes": planned_sessions.execution_notes,
-                }
+            if not planned_sessions:
+                return None
+
+            # Get workout steps if workout_id exists
+            workout_steps = None
+            if planned_sessions.workout_id:
+                steps_query = (
+                    session.execute(
+                        select(WorkoutStep)
+                        .where(WorkoutStep.workout_id == planned_sessions.workout_id)
+                        .order_by(WorkoutStep.step_index.asc())
+                    )
+                    .scalars()
+                    .all()
+                )
+                if steps_query:
+                    workout_steps = [_convert_workout_step_to_dict(step) for step in steps_query]
+
+            return {
+                "id": planned_sessions.id,
+                "title": planned_sessions.title,
+                "sport": planned_sessions.sport,
+                "session_type": planned_sessions.session_type,
+                "duration_seconds": planned_sessions.duration_seconds,
+                "distance_meters": planned_sessions.distance_meters,
+                "intensity": planned_sessions.intensity,
+                "intent": planned_sessions.intent,
+                "notes": planned_sessions.notes,
+                "execution_notes": planned_sessions.execution_notes,
+                "must_dos": planned_sessions.must_dos,
+                "steps": workout_steps,
+            }
     except Exception as e:
         logger.warning(f"Failed to get scheduled workout for date {workout_date}: {e}")
     return None

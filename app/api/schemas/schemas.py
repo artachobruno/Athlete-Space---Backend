@@ -88,6 +88,10 @@ class CalendarSession(BaseModel):
         description="LLM-generated coach insight explaining why today matters",
         default=None,
     )
+    must_dos: list[str] = Field(
+        description="Unified must-do instructions (priority execution guidance)",
+        default_factory=list,
+    )
 
 
 class CalendarWeekResponse(BaseModel):

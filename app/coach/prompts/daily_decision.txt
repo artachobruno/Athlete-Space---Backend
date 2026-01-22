@@ -50,9 +50,19 @@ You will receive:
 • Yesterday’s training (what was done and how it felt)
 • Day context (day of week, season timing, upcoming events)
 • Recent daily decisions (planned vs executed)
+• scheduled_workout (if a workout is planned for today):
+  - execution_notes: Execution guidance notes (max 120 chars)
+  - must_dos: Priority must-do instructions (array of strings)
+  - steps: Structured workout steps (order, name, duration, distance, intensity, notes)
 
 You MUST trust these inputs.
 Do NOT re-derive metrics or question their validity.
+
+When scheduled_workout is present:
+• Reference execution_notes and must_dos in your explanation
+• Acknowledge the planned workout structure (steps) if relevant
+• Explain execution or modification rationale based on the scheduled workout
+• If recommending rest, explain why the scheduled workout should be skipped or modified
 
 ----------------------------------------------------------------
 HARD CONSTRAINTS

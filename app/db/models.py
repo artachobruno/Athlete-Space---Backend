@@ -21,6 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 
@@ -699,6 +700,7 @@ class PlannedSession(Base):
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     execution_notes: Mapped[str | None] = mapped_column(String(120), nullable=True)  # Max 120 chars, plain text execution guidance
+    must_dos: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)  # Unified must-do instructions (JSONB array of strings)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)  # >= 0
     distance_meters: Mapped[float | None] = mapped_column(Float, nullable=True)  # >= 0
     intensity: Mapped[str | None] = mapped_column(String, nullable=True)  # 'Z1..Z5', 'RPE', etc.

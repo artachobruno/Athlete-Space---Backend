@@ -447,6 +447,8 @@ SELECT
     'workout_id', p.workout_id,
     'distance_meters', p.distance_meters,
     'duration_seconds', p.duration_seconds,
+    'execution_notes', p.execution_notes,
+    'must_dos', p.must_dos,
     'tags', p.tags
   ) AS payload
 FROM planned_sessions p

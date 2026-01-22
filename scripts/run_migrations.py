@@ -42,11 +42,15 @@ from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athle
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
 from scripts.migrate_add_conversation_summaries_table import migrate_add_conversation_summaries_table
 from scripts.migrate_add_conversation_summary import migrate_add_conversation_summary
+from scripts.migrate_add_execution_notes_to_calendar_view import migrate_add_execution_notes_to_calendar_view
+from scripts.migrate_add_execution_notes_to_planned_sessions import migrate_add_execution_notes_to_planned_sessions
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
 from scripts.migrate_add_llm_interpretation_fields import migrate_add_llm_interpretation_fields
+from scripts.migrate_add_must_dos_to_calendar_view import migrate_add_must_dos_to_calendar_view
+from scripts.migrate_add_must_dos_to_planned_sessions import migrate_add_must_dos_to_planned_sessions
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
 from scripts.migrate_add_profile_health_fields import migrate_add_profile_health_fields
 from scripts.migrate_add_source_to_planned_sessions import migrate_add_source_to_planned_sessions
@@ -113,6 +117,10 @@ def run_all_migrations() -> None:
         ("activities workout_id column", migrate_add_workout_id_to_activities),
         ("LLM interpretation fields", migrate_add_llm_interpretation_fields),
         ("drop calendar_sessions table", migrate_drop_calendar_sessions_table),
+        ("add execution_notes column to planned_sessions", migrate_add_execution_notes_to_planned_sessions),
+        ("add execution_notes to calendar_items view", migrate_add_execution_notes_to_calendar_view),
+        ("add must_dos column to planned_sessions", migrate_add_must_dos_to_planned_sessions),
+        ("add must_dos to calendar_items view", migrate_add_must_dos_to_calendar_view),
         # NOTE: migrate_set_workout_id_not_null should be run AFTER backfill_workouts.py completes
         # It is NOT included here - run it manually after backfilling data
     ]

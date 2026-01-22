@@ -32,6 +32,8 @@ from app.utils.timezone import now_user, to_utc
 from app.workouts.execution_models import WorkoutExecution
 from app.workouts.llm.today_session_generator import generate_today_session_content
 from app.workouts.models import Workout, WorkoutStep
+from app.workouts.step_utils import infer_step_name
+from app.workouts.targets_utils import get_distance_meters, get_duration_seconds, get_target_metric
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
@@ -495,6 +497,226 @@ def get_week(user_id: str = Depends(get_current_user_id)):
         raise HTTPException(status_code=500, detail=f"Failed to get calendar week: {e!s}") from e
 
 
+def _convert_workout_step_to_schema(
+    db_step: WorkoutStep, workout_obj: Workout | None
+) -> dict[str, Any]:
+    """Convert WorkoutStep database model to WorkoutStepSchema format.
+
+    Args:
+        db_step: WorkoutStep database model
+        workout_obj: Optional Workout object for raw_notes context
+
+    Returns:
+        Dictionary matching WorkoutStepSchema format
+    """
+    targets = db_step.targets or {}
+
+    # Extract duration and distance using helper functions
+    duration_seconds = get_duration_seconds(targets)
+    duration_min = duration_seconds // 60 if duration_seconds else None
+    distance_meters = get_distance_meters(targets)
+    distance_km = round(distance_meters / 1000.0, 2) if distance_meters else None
+
+    # Extract intensity from target metric or infer from step_type
+    intensity_str = get_target_metric(targets)
+    if not intensity_str and db_step.step_type:
+        # Map step_type to intensity if no target metric
+        step_type_lower = db_step.step_type.lower()
+        if "interval" in step_type_lower or "vo2" in step_type_lower:
+            intensity_str = "vo2"
+        elif "threshold" in step_type_lower or "tempo" in step_type_lower:
+            intensity_str = "threshold"
+        elif "steady" in step_type_lower:
+            intensity_str = "steady"
+        elif (
+            "easy" in step_type_lower
+            or "recovery" in step_type_lower
+            or "warmup" in step_type_lower
+            or "cooldown" in step_type_lower
+        ):
+            intensity_str = "easy"
+
+    # Use purpose, inferred name, or step_type as name
+    step_name = (
+        db_step.purpose
+        or (infer_step_name(db_step, workout_obj.raw_notes if workout_obj else None))
+        or db_step.step_type
+        or f"Step {db_step.step_index + 1}"
+    )
+
+    return {
+        "order": db_step.step_index + 1,  # Convert 0-indexed to 1-indexed
+        "name": step_name,
+        "duration_min": duration_min,
+        "distance_km": distance_km,
+        "intensity": intensity_str,
+        "notes": db_step.instructions,
+    }
+
+
+async def _process_planned_session_for_today(
+    session: Session, row: dict[str, Any]
+) -> tuple[list[str] | None, list[dict[str, Any]] | None, str | None]:
+    """Process a planned session row and generate LLM content if needed.
+
+    Args:
+        session: Database session
+        row: Calendar item row from view
+
+    Returns:
+        Tuple of (instructions, steps, coach_insight)
+    """
+    try:
+        # Extract session details
+        payload: dict[str, Any] = row.get("payload") or {}
+        session_title = row.get("title") or payload.get("title") or "Training Session"
+        session_type = payload.get("session_type")
+        duration_seconds = payload.get("duration_seconds")
+        duration_minutes = int(duration_seconds // 60) if duration_seconds else None
+        distance_meters = payload.get("distance_meters")
+        distance_km = round(float(distance_meters) / 1000.0, 2) if distance_meters else None
+        intensity = payload.get("intensity")
+        notes = payload.get("notes")
+        intent = payload.get("intent", "").lower()
+        is_rest_day = intent == "rest" or "rest" in (session_title or "").lower()
+        workout_id = payload.get("workout_id")
+
+        # ❗ SINGLE SOURCE OF TRUTH: Use canonical workout steps from database
+        # Only generate LLM steps if no workout_id or no steps exist
+        instructions: list[str] | None = None
+        steps: list[dict[str, Any]] | None = None
+        coach_insight: str | None = None
+
+        if workout_id:
+            # ❗ SINGLE SOURCE OF TRUTH: Fetch actual workout steps from database
+            # Use canonical workout steps, not LLM-generated generic "Warm-up, Main, Cooldown"
+            canonical_steps = _load_canonical_workout_steps(session, workout_id)
+            if canonical_steps:
+                steps = canonical_steps
+                logger.info(
+                    "Using canonical workout steps",
+                    session_id=row.get("item_id"),
+                    workout_id=workout_id,
+                    steps_count=len(steps),
+                )
+            else:
+                # No steps found, fall back to LLM generation
+                workout_id = None
+
+        # Only generate LLM content if no workout_id or no steps found
+        if not workout_id or not steps:
+            # Generate LLM content (fallback for sessions without structured workout)
+            content = await generate_today_session_content(
+                session_title=session_title,
+                session_type=session_type,
+                duration_minutes=duration_minutes,
+                distance_km=distance_km,
+                intensity=intensity,
+                notes=notes,
+                is_rest_day=is_rest_day,
+            )
+
+            instructions = content.instructions
+            if not steps:  # Only use LLM steps if we didn't get canonical steps
+                steps = [
+                    {
+                        "order": step.order,
+                        "name": step.name,
+                        "duration_min": step.duration_min,
+                        "distance_km": step.distance_km,
+                        "intensity": step.intensity,
+                        "notes": step.notes,
+                    }
+                    for step in content.steps
+                ]
+            coach_insight = content.coach_insight
+
+            logger.info(
+                "Generated LLM content for today session",
+                session_id=row.get("item_id"),
+                instructions_count=len(instructions) if instructions else 0,
+                steps_count=len(steps) if steps else 0,
+                used_canonical_steps=bool(workout_id and steps),
+            )
+        else:
+            # We have canonical steps, but still generate instructions and coach_insight
+            # (steps are already set from database)
+            content = await generate_today_session_content(
+                session_title=session_title,
+                session_type=session_type,
+                duration_minutes=duration_minutes,
+                distance_km=distance_km,
+                intensity=intensity,
+                notes=notes,
+                is_rest_day=is_rest_day,
+            )
+            instructions = content.instructions
+            coach_insight = content.coach_insight
+    except Exception as e:
+        # Log error but don't fail the request - return session without LLM content
+        logger.warning(
+            "Failed to generate LLM content for today session",
+            session_id=row.get("item_id"),
+            error=str(e),
+        )
+        return None, None, None
+    else:
+        return instructions, steps, coach_insight
+
+
+def _load_canonical_workout_steps(
+    session: Session, workout_id: str
+) -> list[dict[str, Any]] | None:
+    """Load canonical workout steps from database.
+
+    Args:
+        session: Database session
+        workout_id: Workout ID
+
+    Returns:
+        List of step dictionaries or None if not found
+    """
+    try:
+        # Fetch workout for raw_notes (needed for step name inference)
+        workout_obj = session.execute(
+            select(Workout).where(Workout.id == workout_id)
+        ).scalar_one_or_none()
+
+        workout_steps_query = (
+            session.execute(
+                select(WorkoutStep)
+                .where(WorkoutStep.workout_id == workout_id)
+                .order_by(WorkoutStep.step_index.asc())
+            )
+            .scalars()
+            .all()
+        )
+
+        if not workout_steps_query:
+            return None
+
+        # Convert WorkoutStep to WorkoutStepSchema format
+        steps = [
+            _convert_workout_step_to_schema(db_step, workout_obj)
+            for db_step in workout_steps_query
+        ]
+
+        logger.info(
+            "Loaded canonical workout steps from database",
+            workout_id=workout_id,
+            steps_count=len(steps),
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to load workout steps from database",
+            workout_id=workout_id,
+            error=str(e),
+        )
+        return None
+    else:
+        return steps
+
+
 @router.get("/today", response_model=CalendarTodayResponse)
 async def get_today(user_id: str = Depends(get_current_user_id)):
     """Get calendar data for today from real activities.
@@ -554,58 +776,9 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                 coach_insight: str | None = None
 
                 if is_planned:
-                    try:
-                        # Extract session details for LLM generation
-                        payload: dict[str, Any] = row.get("payload") or {}
-                        session_title = row.get("title") or payload.get("title") or "Training Session"
-                        session_type = payload.get("session_type")
-                        duration_seconds = payload.get("duration_seconds")
-                        duration_minutes = int(duration_seconds // 60) if duration_seconds else None
-                        distance_meters = payload.get("distance_meters")
-                        distance_km = round(float(distance_meters) / 1000.0, 2) if distance_meters else None
-                        intensity = payload.get("intensity")
-                        notes = payload.get("notes")
-                        intent = payload.get("intent", "").lower()
-                        is_rest_day = intent == "rest" or "rest" in (session_title or "").lower()
-
-                        # Generate LLM content
-                        content = await generate_today_session_content(
-                            session_title=session_title,
-                            session_type=session_type,
-                            duration_minutes=duration_minutes,
-                            distance_km=distance_km,
-                            intensity=intensity,
-                            notes=notes,
-                            is_rest_day=is_rest_day,
-                        )
-
-                        instructions = content.instructions
-                        steps = [
-                            {
-                                "order": step.order,
-                                "name": step.name,
-                                "duration_min": step.duration_min,
-                                "distance_km": step.distance_km,
-                                "intensity": step.intensity,
-                                "notes": step.notes,
-                            }
-                            for step in content.steps
-                        ]
-                        coach_insight = content.coach_insight
-
-                        logger.info(
-                            "Generated LLM content for today session",
-                            session_id=row.get("item_id"),
-                            instructions_count=len(instructions) if instructions else 0,
-                            steps_count=len(steps) if steps else 0,
-                        )
-                    except Exception as e:
-                        # Log error but don't fail the request - return session without LLM content
-                        logger.warning(
-                            "Failed to generate LLM content for today session",
-                            session_id=row.get("item_id"),
-                            error=str(e),
-                        )
+                    instructions, steps, coach_insight = await _process_planned_session_for_today(
+                        session, row
+                    )
 
                 sessions.append(
                     calendar_session_from_view_row(

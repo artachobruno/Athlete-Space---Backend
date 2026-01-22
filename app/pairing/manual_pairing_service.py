@@ -19,6 +19,12 @@ from app.plans.reconciliation.service import reconcile_activity_if_paired
 from app.workouts.execution_models import MatchType
 from app.workouts.workout_factory import WorkoutFactory
 
+# DB pairing_decisions.decision CHECK: accept | reject | manual_link | manual_unlink
+_DECISION_TO_DB: dict[str, str] = {
+    "manual_pair": "manual_link",
+    "manual_unpair": "manual_unlink",
+}
+
 
 def _log_decision(
     *,
@@ -31,6 +37,8 @@ def _log_decision(
 ) -> None:
     """Log pairing decision to audit table.
 
+    Uses DB-allowed decision values (manual_link, manual_unlink).
+
     Args:
         user_id: User ID
         activity: Activity (may be None)
@@ -41,12 +49,13 @@ def _log_decision(
     """
     activity_id = activity.id if activity else None
     planned_session_id = planned.id if planned else None
+    decision_db = _DECISION_TO_DB.get(decision, decision)
 
     pairing_decision = PairingDecision(
         user_id=user_id,
         planned_session_id=planned_session_id,
         activity_id=activity_id,
-        decision=decision,
+        decision=decision_db,
         duration_diff_pct=None,
         reason=reason,
         created_at=datetime.now(timezone.utc),

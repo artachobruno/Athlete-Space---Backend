@@ -25,6 +25,14 @@ from app.workouts.workout_factory import WorkoutFactory
 
 DURATION_TOLERANCE = 0.30
 
+# DB pairing_decisions.decision CHECK: accept | reject | manual_link | manual_unlink
+_DECISION_TO_DB: dict[str, str] = {
+    "paired": "accept",
+    "rejected": "reject",
+    "manual_pair": "manual_link",
+    "manual_unpair": "manual_unlink",
+}
+
 
 def _normalize_activity_type(activity_type: str | None) -> str | None:
     """Normalize activity type for comparison.
@@ -105,7 +113,7 @@ def _get_unpaired_plans(
     activity_date: date,
     activity_type: str | None,
     session: Session,
-) -> list[PlannedSession]:
+) -> tuple[list[PlannedSession], dict[str, int]]:
     """Get unpaired planned sessions matching criteria.
 
     Args:
@@ -115,7 +123,8 @@ def _get_unpaired_plans(
         session: Database session
 
     Returns:
-        List of unpaired planned sessions
+        Tuple of (list of unpaired planned sessions, diagnostics dict with
+        total_on_day, unpaired, after_type_match).
     """
     # Schema v2: Build query for unpaired plans on the same day (check SessionLink)
     day_start = datetime.combine(activity_date, datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -127,23 +136,34 @@ def _get_unpaired_plans(
             PlannedSession.user_id == user_id,
             PlannedSession.starts_at >= day_start,
             PlannedSession.starts_at <= day_end,
+            # Hard rule: Exclude cancelled/deleted sessions from pairing
+            PlannedSession.status.notin_(['cancelled', 'deleted']),
         )
         .order_by(PlannedSession.created_at, PlannedSession.id)
     )
 
-    plans = list(session.scalars(query).all())
+    all_on_day = list(session.scalars(query).all())
+    total_on_day = len(all_on_day)
 
     # Schema v2: Filter out plans that already have SessionLink (already paired)
-    unpaired_plans = []
-    for plan in plans:
+    unpaired_plans: list[PlannedSession] = []
+    for plan in all_on_day:
         link = get_link_for_planned(session, plan.id)
         if not link:
             unpaired_plans.append(plan)
 
-    plans = unpaired_plans
+    unpaired_count = len(unpaired_plans)
 
     # Filter by type match
-    return [plan for plan in plans if _types_match(plan.type, activity_type)]
+    after_type = [p for p in unpaired_plans if _types_match(p.type, activity_type)]
+    after_type_count = len(after_type)
+
+    stats: dict[str, int] = {
+        "total_on_day": total_on_day,
+        "unpaired": unpaired_count,
+        "after_type_match": after_type_count,
+    }
+    return (after_type, stats)
 
 
 def _get_unpaired_activities(
@@ -206,22 +226,29 @@ def _log_decision(
     duration_diff_pct: float | None,
     session: Session,
 ) -> None:
-    """Log pairing decision to audit table.
+    """Log pairing decision to audit table (only when we actually pair).
+
+    Skips audit for rejections (no_candidate, no_activity_duration, no_planned_duration,
+    duration_mismatch). Uses DB-allowed decision values: accept | reject | manual_link |
+    manual_unlink.
 
     Args:
         user_id: User ID
         activity: Activity (may be None)
         planned: Planned session (may be None)
-        decision: Decision type (paired, rejected, manual_unpair)
+        decision: Decision type (paired, rejected, manual_pair, manual_unpair)
         reason: Reason for decision
         duration_diff_pct: Duration difference percentage (nullable)
         session: Database session
     """
+    skip_reasons = {"no_candidate", "no_activity_duration", "no_planned_duration", "duration_mismatch"}
+    if reason in skip_reasons:
+        return
+
     activity_id = activity.id if activity else None
     planned_session_id = planned.id if planned else None
+    decision_db = _DECISION_TO_DB.get(decision, decision)
 
-    # Log pairing decision to audit table (non-critical, failures don't break pairing)
-    # Use a savepoint to isolate logging failures from the main transaction
     in_transaction = session.in_transaction()
     savepoint = session.begin_nested() if in_transaction else None
     try:
@@ -229,7 +256,7 @@ def _log_decision(
             user_id=user_id,
             planned_session_id=planned_session_id,
             activity_id=activity_id,
-            decision=decision,
+            decision=decision_db,
             duration_diff_pct=duration_diff_pct,
             reason=reason,
             created_at=datetime.now(timezone.utc),
@@ -239,16 +266,14 @@ def _log_decision(
         if savepoint:
             savepoint.commit()
     except Exception as e:
-        # Audit logging is non-critical - rollback savepoint only, not main transaction
         if savepoint:
             savepoint.rollback()
-        logger.warning(
-            "Failed to log pairing decision to audit table (non-critical)",
+        logger.opt(exception=True).warning(
+            "Failed to log pairing decision to audit table (non-critical): {}",
+            str(e),
             user_id=user_id,
-            decision=decision,
+            decision=decision_db,
             reason=reason,
-            error=str(e),
-            exc_info=True,
         )
 
 
@@ -275,7 +300,8 @@ def _pair_from_activity(activity: Activity, session: Session) -> None:
 
     # Get candidate planned sessions
     # Use activity.sport directly (schema v2) - activity.type is a property that maps to sport
-    plans = _get_unpaired_plans(
+    # Exclude cancelled/deleted sessions from pairing
+    plans, stats = _get_unpaired_plans(
         user_id=activity.user_id,
         activity_date=activity_date,
         activity_type=activity.sport,
@@ -283,32 +309,36 @@ def _pair_from_activity(activity: Activity, session: Session) -> None:
     )
 
     if not plans:
-        _log_decision(
-            user_id=activity.user_id,
-            activity=activity,
-            planned=None,
-            decision="rejected",
-            reason="no_candidate",
-            duration_diff_pct=None,
-            session=session,
-        )
-        logger.debug(
-            f"No unpaired planned sessions found for activity {activity.id} on {activity_date}",
+        if stats["total_on_day"] == 0:
+            reason_detail = "no_plans_on_day"
+        elif stats["unpaired"] > 0 and stats["after_type_match"] == 0:
+            reason_detail = "type_filter_removed_all"
+        else:
+            reason_detail = "no_unpaired_plans"
+        logger.info(
+            "Could not pair activity: activity_id={} user_id={} date={} duration_sec={} sport={} "
+            "reason={} total_on_day={} unpaired={} after_type_match={}",
+            activity.id,
+            activity.user_id,
+            activity_date,
+            activity.duration_seconds,
+            activity.sport,
+            reason_detail,
+            stats["total_on_day"],
+            stats["unpaired"],
+            stats["after_type_match"],
         )
         return
 
-    # Calculate duration matches
     if activity.duration_seconds is None:
-        _log_decision(
-            user_id=activity.user_id,
-            activity=activity,
-            planned=None,
-            decision="rejected",
-            reason="no_activity_duration",
-            duration_diff_pct=None,
-            session=session,
+        logger.info(
+            "Could not pair activity: activity_id={} user_id={} date={} sport={} "
+            "reason=no_activity_duration (missing duration_sec)",
+            activity.id,
+            activity.user_id,
+            activity_date,
+            activity.sport,
         )
-        logger.debug(f"Activity {activity.id} has no duration, cannot pair")
         return
 
     activity_duration_minutes = activity.duration_seconds / 60.0
@@ -325,21 +355,18 @@ def _pair_from_activity(activity: Activity, session: Session) -> None:
             matches.append((diff_pct, plan))
 
     if not matches:
-        _log_decision(
-            user_id=activity.user_id,
-            activity=activity,
-            planned=None,
-            decision="rejected",
-            reason="duration_mismatch",
-            duration_diff_pct=None,
-            session=session,
-        )
-        logger.debug(
-            f"No planned sessions within duration tolerance for activity {activity.id}",
+        logger.info(
+            "Could not pair activity: activity_id={} user_id={} date={} duration_sec={} sport={} "
+            "reason=duration_mismatch (no plans within ±{}% duration)",
+            activity.id,
+            activity.user_id,
+            activity_date,
+            activity.duration_seconds,
+            activity.sport,
+            int(DURATION_TOLERANCE * 100),
         )
         return
 
-    # Sort by: score ASC, created_at ASC, id ASC (deterministic)
     matches.sort(key=lambda x: (x[0], x[1].created_at, x[1].id))
     chosen_plan = matches[0][1]
     chosen_diff_pct = matches[0][0]
@@ -355,6 +382,13 @@ def _pair_from_planned(planned: PlannedSession, session: Session) -> None:
         planned: Planned session to pair
         session: Database session
     """
+    # Hard rule: Exclude cancelled/deleted planned sessions from pairing
+    if planned.status in ('cancelled', 'deleted'):
+        logger.debug(
+            f"Planned session {planned.id} is {planned.status}, skipping pairing",
+        )
+        return
+
     # Schema v2: Skip if already paired (check SessionLink)
     link = get_link_for_planned(session, planned.id)
     if link:
@@ -378,32 +412,26 @@ def _pair_from_planned(planned: PlannedSession, session: Session) -> None:
     )
 
     if not activities:
-        _log_decision(
-            user_id=planned.user_id,
-            activity=None,
-            planned=planned,
-            decision="rejected",
-            reason="no_candidate",
-            duration_diff_pct=None,
-            session=session,
-        )
-        logger.debug(
-            f"No unpaired activities found for planned session {planned.id} on {planned_date}",
+        logger.info(
+            "Could not pair planned session: planned_id={} user_id={} date={} type={} duration_min={} "
+            "reason=no_unpaired_activities_on_day",
+            planned.id,
+            planned.user_id,
+            planned_date,
+            planned.type,
+            planned.duration_minutes,
         )
         return
 
-    # Calculate duration matches
     if planned.duration_minutes is None:
-        _log_decision(
-            user_id=planned.user_id,
-            activity=None,
-            planned=planned,
-            decision="rejected",
-            reason="no_planned_duration",
-            duration_diff_pct=None,
-            session=session,
+        logger.info(
+            "Could not pair planned session: planned_id={} user_id={} date={} type={} "
+            "reason=no_planned_duration (missing duration_min)",
+            planned.id,
+            planned.user_id,
+            planned_date,
+            planned.type,
         )
-        logger.debug(f"Planned session {planned.id} has no duration, cannot pair")
         return
 
     matches = []
@@ -419,21 +447,18 @@ def _pair_from_planned(planned: PlannedSession, session: Session) -> None:
             matches.append((diff_pct, activity))
 
     if not matches:
-        _log_decision(
-            user_id=planned.user_id,
-            activity=None,
-            planned=planned,
-            decision="rejected",
-            reason="duration_mismatch",
-            duration_diff_pct=None,
-            session=session,
-        )
-        logger.debug(
-            f"No activities within duration tolerance for planned session {planned.id}",
+        logger.info(
+            "Could not pair planned session: planned_id={} user_id={} date={} type={} duration_min={} "
+            "reason=duration_mismatch (no activities within ±{}% duration)",
+            planned.id,
+            planned.user_id,
+            planned_date,
+            planned.type,
+            planned.duration_minutes,
+            int(DURATION_TOLERANCE * 100),
         )
         return
 
-    # Sort by: score ASC, created_at ASC, id ASC (deterministic)
     matches.sort(key=lambda x: (x[0], x[1].created_at, x[1].id))
     chosen_activity = matches[0][1]
     chosen_diff_pct = matches[0][0]

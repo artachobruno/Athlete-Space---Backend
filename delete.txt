@@ -1,0 +1,40 @@
+pace_ai=> SELECT 
+    a.id AS activity_id,
+    a.starts_at::date AS activity_date,
+    a.title AS activity_title,
+    a.sport AS activity_sport,
+    a.duration_seconds,
+    a.distance_meters,
+    a.tss,
+    CASE 
+        WHEN sl.id IS NOT NULL THEN 'PAIRED'
+        ELSE 'UNPAIRED'
+    END AS pairing_status,
+    sl.planned_session_id AS paired_with_planned_session_id,
+    ps.title AS paired_planned_session_title
+FROM activities a
+LEFT JOIN session_links sl ON sl.activity_id = a.id
+ORDER BY a.starts_at ASC;NT_DATE + INTERVAL '1 day's'ession_id
+             activity_id              | activity_date |  activity_title  | activity_sport | duration_seconds | distance_meters |  tss  | pa
+iring_status |    paired_with_planned_session_id    | paired_planned_session_title 
+--------------------------------------+---------------+------------------+----------------+------------------+-----------------+-------+---
+-------------+--------------------------------------+------------------------------
+ 5182a6a7-1c62-4570-9421-bdcbdbd24cf8 | 2026-01-13    | Steady Run (12K) | run            |             2638 |         11915.4 |  88.4 | UN
+PAIRED       |                                      | 
+ 61c34d29-4c33-4fb4-8a2f-c477f499cca2 | 2026-01-14    | Half Marathon    | run            |             5204 |         21080.2 | 141.5 | UN
+PAIRED       |                                      | 
+ 1efa729a-6db9-46cd-bcb4-7927f94ca3dd | 2026-01-15    | Long Run (11 mi) | run            |             4144 |         16903.1 | 113.7 | PA
+IRED         | 109f8596-258e-482a-8f22-c59f572512c4 | Workout Run
+ 9a633114-725f-489f-8627-d78c01709bf2 | 2026-01-16    | Steady Run (10K) | run            |             2625 |         10301.3 |  67.3 | UN
+PAIRED       |                                      | 
+ d6bf47b2-69ad-40e3-a0ef-972ea9e03819 | 2026-01-17    | Long Run (29K)   | run            |             6996 |         29288.4 | 201.7 | PA
+IRED         | 5f8b89c9-6515-4d83-a679-a29957f2d891 | Long Run
+ 8b442c9f-57d8-42aa-b9e7-d4d9d301f341 | 2026-01-18    | Steady Run (10K) | run            |             2570 |         10308.1 |  69.2 | PA
+IRED         | 4a73ab0d-848b-4139-9bc4-6b2b1e12eae6 | Easy Run
+ b95c3a25-2bd7-4aad-9c7c-b0197bfbb504 | 2026-01-19    | Long Run (11 mi) | run            |             4229 |         17068.8 |   115 | PA
+IRED         | 88a2b276-c48e-474e-b78d-ba19d6920d63 | Easy Run
+ d059207b-819e-443e-9c86-98fbe2761a9b | 2026-01-20    | Long Run (12 mi) | run            |             4672 |         19961.5 | 139.2 | PA
+IRED         | e606e9ed-9d34-47de-a590-63c3d61d789a | Workout Run
+ 67ec5ccc-f734-4c1c-a201-dbc8c406bb13 | 2026-01-21    | Long Run (23K)   | run            |             5644 |         22530.8 | 150.1 | UN
+PAIRED       |                                      | 
+(9 rows)

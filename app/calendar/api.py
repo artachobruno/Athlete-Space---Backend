@@ -8,11 +8,11 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import InternalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
@@ -958,6 +958,7 @@ def update_session_status(
     """Update the status of a planned session.
 
     This endpoint allows marking planned sessions as completed, skipped, or cancelled.
+    When status is set to "cancelled", the planned session is DELETED from the database.
     When marking as completed, you can optionally link it to an actual activity.
 
     Args:
@@ -966,7 +967,7 @@ def update_session_status(
         user_id: Current authenticated user ID (from auth dependency)
 
     Returns:
-        Updated CalendarSession
+        Updated CalendarSession, or 204 No Content if status is "cancelled" (session deleted)
     """
     logger.info(f"[CALENDAR] PATCH /calendar/sessions/{session_id}/status called for user_id={user_id}")
 
@@ -978,6 +979,109 @@ def update_session_status(
         )
 
     with get_session() as session:
+        # Special handling: if status is "cancelled", delete the session instead of updating
+        if request.status == "cancelled":
+            # Find the planned session first
+            try:
+                planned_session = session.execute(
+                    select(PlannedSession).where(
+                        PlannedSession.id == session_id,
+                        PlannedSession.user_id == user_id,
+                    )
+                ).scalar_one_or_none()
+            except (InternalError, ProgrammingError) as e:
+                error_msg = str(e).lower()
+                if "current transaction is aborted" in error_msg:
+                    logger.error(
+                        "Transaction aborted during SELECT for deletion, rolling back",
+                        session_id=session_id,
+                        user_id=user_id,
+                        error=str(e),
+                    )
+                    session.rollback()
+                raise
+
+            if not planned_session:
+                raise HTTPException(status_code=404, detail="Planned session not found")
+
+            # Unlink any session links
+            try:
+                unlink_by_planned(session, session_id, reason="Session cancelled and deleted")
+            except Exception as e:
+                logger.warning(
+                    "Failed to unlink session during cancellation (continuing with deletion)",
+                    session_id=session_id,
+                    user_id=user_id,
+                    error=str(e),
+                )
+                # Continue with deletion even if unlinking fails
+
+            # Handle cascading deletes for workout and workout_steps
+            # Only delete workout if it's not referenced by any activities
+            workout_id = planned_session.workout_id
+            if workout_id:
+                try:
+                    # Check if workout is referenced by any activities
+                    activity_count = session.execute(
+                        select(func.count(WorkoutExecution.id)).where(WorkoutExecution.workout_id == workout_id)
+                    ).scalar() or 0
+
+                    # Check if workout is referenced by any other planned sessions
+                    other_planned_count = session.execute(
+                        select(func.count(PlannedSession.id)).where(
+                            PlannedSession.workout_id == workout_id,
+                            PlannedSession.id != session_id,
+                        )
+                    ).scalar() or 0
+
+                    # Only delete workout if it's not referenced elsewhere
+                    if activity_count == 0 and other_planned_count == 0:
+                        # Delete workout_steps first (cascade order)
+                        workout_steps = session.execute(
+                            select(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
+                        ).scalars().all()
+                        for step in workout_steps:
+                            session.delete(step)
+
+                        # Delete workout
+                        workout = session.execute(
+                            select(Workout).where(Workout.id == workout_id)
+                        ).scalar_one_or_none()
+                        if workout:
+                            session.delete(workout)
+                            logger.info(
+                                "Deleted orphaned workout during session cancellation",
+                                workout_id=workout_id,
+                                session_id=session_id,
+                                user_id=user_id,
+                            )
+                    else:
+                        logger.info(
+                            "Keeping workout (referenced elsewhere) during session cancellation",
+                            workout_id=workout_id,
+                            session_id=session_id,
+                            activity_count=activity_count,
+                            other_planned_count=other_planned_count,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to cleanup workout during cancellation (continuing with deletion)",
+                        workout_id=workout_id,
+                        session_id=session_id,
+                        user_id=user_id,
+                        error=str(e),
+                    )
+                    # Continue with deletion even if workout cleanup fails
+
+            # Delete planned session
+            session.delete(planned_session)
+            logger.info(
+                "Deleted planned session (cancelled)",
+                session_id=session_id,
+                user_id=user_id,
+            )
+            # Return 204 No Content to indicate successful deletion
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
         # Find the planned session
         # Handle missing execution_notes column gracefully (migration may not have run yet)
         use_workaround = False
@@ -992,6 +1096,8 @@ def update_session_status(
             error_msg = str(e).lower()
             if "execution_notes" in error_msg and ("does not exist" in error_msg or "undefinedcolumn" in error_msg):
                 # Column doesn't exist - use workaround with raw SQL
+                # Rollback the transaction since it may be in a failed state
+                session.rollback()
                 logger.warning(
                     "execution_notes column missing, using workaround",
                     session_id=session_id,
@@ -999,21 +1105,48 @@ def update_session_status(
                 )
                 use_workaround = True
             else:
-                # Different error - re-raise
+                # Different error - rollback and re-raise
+                session.rollback()
                 raise
+        except InternalError as e:
+            # Transaction is in a failed state - rollback and re-raise
+            # This can happen if a previous operation in the transaction failed
+            error_msg = str(e).lower()
+            if "current transaction is aborted" in error_msg:
+                logger.error(
+                    "Transaction aborted, rolling back",
+                    session_id=session_id,
+                    user_id=user_id,
+                    error=str(e),
+                )
+                session.rollback()
+            raise
 
         if use_workaround:
             # Use raw SQL to query and update (excluding execution_notes)
-            result = session.execute(
-                text("""
-                    SELECT id, user_id, season_plan_id, revision_id, starts_at, ends_at, sport,
-                           session_type, title, notes, must_dos, duration_seconds, distance_meters,
-                           intensity, intent, workout_id, status, tags, created_at, updated_at
-                    FROM planned_sessions
-                    WHERE id = :session_id AND user_id = :user_id
-                """),
-                {"session_id": session_id, "user_id": user_id},
-            ).fetchone()
+            try:
+                result = session.execute(
+                    text("""
+                        SELECT id, user_id, season_plan_id, revision_id, starts_at, ends_at, sport,
+                               session_type, title, notes, must_dos, duration_seconds, distance_meters,
+                               intensity, intent, workout_id, status, tags, created_at, updated_at
+                        FROM planned_sessions
+                        WHERE id = :session_id AND user_id = :user_id
+                    """),
+                    {"session_id": session_id, "user_id": user_id},
+                ).fetchone()
+            except (InternalError, ProgrammingError) as e:
+                # Transaction may be in a failed state - rollback and re-raise
+                error_msg = str(e).lower()
+                if "current transaction is aborted" in error_msg:
+                    logger.error(
+                        "Transaction aborted during SELECT, rolling back",
+                        session_id=session_id,
+                        user_id=user_id,
+                        error=str(e),
+                    )
+                    session.rollback()
+                raise
             if not result:
                 raise HTTPException(status_code=404, detail="Planned session not found")
 
@@ -1021,17 +1154,41 @@ def update_session_status(
 
             # If changing from completed to another status, unlink the session
             if old_status == "completed" and request.status != "completed":
-                unlink_by_planned(session, session_id, reason=f"Status changed from completed to {request.status}")
+                try:
+                    unlink_by_planned(session, session_id, reason=f"Status changed from completed to {request.status}")
+                except Exception as e:
+                    # If unlinking fails, rollback and re-raise
+                    logger.error(
+                        "Failed to unlink session, rolling back",
+                        session_id=session_id,
+                        user_id=user_id,
+                        error=str(e),
+                    )
+                    session.rollback()
+                    raise
 
             # Update status using raw SQL
-            session.execute(
-                text("""
-                    UPDATE planned_sessions
-                    SET status = :status, updated_at = NOW()
-                    WHERE id = :session_id AND user_id = :user_id
-                """),
-                {"status": request.status, "session_id": session_id, "user_id": user_id},
-            )
+            try:
+                session.execute(
+                    text("""
+                        UPDATE planned_sessions
+                        SET status = :status, updated_at = NOW()
+                        WHERE id = :session_id AND user_id = :user_id
+                    """),
+                    {"status": request.status, "session_id": session_id, "user_id": user_id},
+                )
+            except (InternalError, ProgrammingError) as e:
+                # Transaction may be in a failed state - rollback and re-raise
+                error_msg = str(e).lower()
+                if "current transaction is aborted" in error_msg:
+                    logger.error(
+                        "Transaction aborted during UPDATE, rolling back",
+                        session_id=session_id,
+                        user_id=user_id,
+                        error=str(e),
+                    )
+                    session.rollback()
+                raise
 
             # Schema v2: Create SessionLink if marking as completed with activity ID
             if request.status == "completed" and request.completed_activity_id:
@@ -1064,8 +1221,18 @@ def update_session_status(
                         status_code=404,
                         detail=f"Activity not found or invalid: {e!s}",
                     ) from e
-
-            session.commit()
+                except (InternalError, ProgrammingError) as e:
+                    # Transaction may be in a failed state - rollback and re-raise
+                    error_msg = str(e).lower()
+                    if "current transaction is aborted" in error_msg:
+                        logger.error(
+                            "Transaction aborted during upsert_link, rolling back",
+                            session_id=session_id,
+                            user_id=user_id,
+                            error=str(e),
+                        )
+                        session.rollback()
+                    raise
 
             # Construct PlannedSession-like object for response (without execution_notes)
             planned_session = PlannedSession(
@@ -1098,7 +1265,18 @@ def update_session_status(
 
             # If changing from completed to another status, unlink the session
             if planned_session.status == "completed" and request.status != "completed":
-                unlink_by_planned(session, session_id, reason=f"Status changed from completed to {request.status}")
+                try:
+                    unlink_by_planned(session, session_id, reason=f"Status changed from completed to {request.status}")
+                except Exception as e:
+                    # If unlinking fails, rollback and re-raise
+                    logger.error(
+                        "Failed to unlink session, rolling back",
+                        session_id=session_id,
+                        user_id=user_id,
+                        error=str(e),
+                    )
+                    session.rollback()
+                    raise
 
             # Update status
             planned_session.status = request.status
@@ -1135,8 +1313,19 @@ def update_session_status(
                         status_code=404,
                         detail=f"Activity not found or invalid: {e!s}",
                     ) from e
+                except (InternalError, ProgrammingError) as e:
+                    # Transaction may be in a failed state - rollback and re-raise
+                    error_msg = str(e).lower()
+                    if "current transaction is aborted" in error_msg:
+                        logger.error(
+                            "Transaction aborted during upsert_link, rolling back",
+                            session_id=session_id,
+                            user_id=user_id,
+                            error=str(e),
+                        )
+                        session.rollback()
+                    raise
 
-            session.commit()
             session.refresh(planned_session)
 
         return _planned_session_to_calendar(planned_session)

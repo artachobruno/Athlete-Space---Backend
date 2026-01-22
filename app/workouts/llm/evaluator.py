@@ -79,12 +79,7 @@ class WorkoutLLMEvaluator:
                 system_prompt=system_prompt,
                 output_type=StepLLMInterpretation,
             )
-            from app.workouts.llm.logging_helpers import (
-                log_llm_extracted_fields,
-                log_llm_raw_response,
-                log_llm_request,
-            )
-            
+
             # Log the actual prompt submitted to LLM
             log_llm_request(
                 context="Step Interpretation",
@@ -93,15 +88,15 @@ class WorkoutLLMEvaluator:
             )
 
             result = await agent.run(prompt)
-            
+
             # Log raw response from LLM (before parsing)
             log_llm_raw_response(
                 context="Step Interpretation",
                 result=result,
             )
-            
+
             interpretation = result.output
-            
+
             # Log extracted/parsed fields
             log_llm_extracted_fields(
                 context="Step Interpretation",
@@ -171,15 +166,15 @@ class WorkoutLLMEvaluator:
             )
 
             result = await agent.run(prompt)
-            
+
             # Log raw response from LLM (before parsing)
             log_llm_raw_response(
                 context="Workout Interpretation",
                 result=result,
             )
-            
+
             interpretation = result.output
-            
+
             # Log extracted/parsed fields
             log_llm_extracted_fields(
                 context="Workout Interpretation",

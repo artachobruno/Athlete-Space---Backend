@@ -88,18 +88,18 @@ Please fix these errors and output valid JSON only."""
                 user_prompt=current_prompt,
                 attempt=attempt + 1,
             )
-            
+
             result = await agent.run(current_prompt)
-            
+
             # Log raw response from LLM (before parsing)
             log_llm_raw_response(
                 context="Workout Step Generation (Retry)",
                 result=result,
                 attempt=attempt + 1,
             )
-            
+
             workout = result.output
-            
+
             # Log extracted/parsed fields
             log_llm_extracted_fields(
                 context="Workout Step Generation (Retry)",

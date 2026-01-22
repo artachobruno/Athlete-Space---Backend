@@ -108,29 +108,29 @@ async def generate_steps_from_notes(activity: ActivityInput) -> StructuredWorkou
 
     try:
         logger.info(f"Generating workout steps from notes for sport: {activity.sport}")
-        
+
         # Log the actual prompt submitted to LLM
         log_llm_request(
             context="Workout Step Generation",
             system_prompt=system_prompt,
             user_prompt=prompt,
         )
-        
+
         result = await agent.run(prompt)
-        
+
         # Log raw response from LLM (before parsing)
         log_llm_raw_response(
             context="Workout Step Generation",
             result=result,
         )
-        
+
         # Log extracted/parsed fields
         parsed_output = result.output
         log_llm_extracted_fields(
             context="Workout Step Generation",
             parsed_output=parsed_output,
         )
-        
+
         logger.info(f"Successfully generated workout with {len(result.output.steps)} steps")
     except ValidationError as e:
         logger.error(f"LLM output validation failed: {e}")

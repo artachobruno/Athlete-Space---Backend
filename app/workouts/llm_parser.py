@@ -130,24 +130,24 @@ RULES:
         )
 
         logger.info("Calling LLM to parse workout notes", extra={"sport": sport, "notes_length": len(notes)})
-        
+
         # Log the actual prompt submitted to LLM
         log_llm_request(
             context="Workout Notes Parsing",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
-        
+
         result = agent.run_sync(user_prompt)
-        
+
         # Log raw response from LLM (before parsing)
         log_llm_raw_response(
             context="Workout Notes Parsing",
             result=result,
         )
-        
+
         parsed_workout = result.output
-        
+
         # Log extracted/parsed fields
         log_llm_extracted_fields(
             context="Workout Notes Parsing",

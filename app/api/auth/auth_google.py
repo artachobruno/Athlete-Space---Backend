@@ -563,10 +563,10 @@ def google_callback(
                 f"[GOOGLE_OAUTH] Redirecting mobile user to deep link: {mobile_redirect_uri} "
                 f"for user_id={resolved_user_id}"
             )
-            
+
             # Calculate expires_in in seconds (from days)
             expires_in_seconds = settings.auth_token_expire_days * 24 * 60 * 60
-            
+
             # Build mobile redirect URL with access token and expires_in
             # URL-encode the token to handle special characters
             mobile_params = {
@@ -574,13 +574,13 @@ def google_callback(
                 "access_token": jwt_token,
                 "expires_in": str(expires_in_seconds),
             }
-            
+
             mobile_url = mobile_redirect_uri
             if "?" in mobile_url:
                 mobile_url = f"{mobile_url}&{urlencode(mobile_params)}"
             else:
                 mobile_url = f"{mobile_url}?{urlencode(mobile_params)}"
-            
+
             logger.info(
                 f"[GOOGLE_OAUTH] Mobile redirect URL includes access_token and expires_in={expires_in_seconds}s"
             )
@@ -625,7 +625,7 @@ def google_callback(
 @router.post("/mobile")
 def google_mobile_login(
     body: MobileGoogleLoginRequest,
-) -> dict[str, bool]:
+) -> JSONResponse:
     """Authenticate user via native mobile Google Sign-In SDK.
 
     This endpoint verifies the ID token from the native Google Sign-In SDK

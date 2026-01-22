@@ -233,7 +233,7 @@ def signup(request: SignupRequest, http_request: Request):
         # Calculate token expiration in seconds
         expires_in = settings.auth_token_expire_days * 24 * 60 * 60
 
-        response_data = {
+        response_data: dict[str, str | int] = {
             "access_token": token,
             "token_type": "bearer",
             "user_id": user_id,

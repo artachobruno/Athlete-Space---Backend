@@ -211,6 +211,10 @@ def get_activities(
         activities = []
         for row in activities_result:
             activity = row[0]
+            # Get pairing info from session_links
+            link = get_link_for_activity(session, activity.id)
+            planned_session_id = link.planned_session_id if link else None
+
             activities.append({
                 "id": activity.id,
                 "user_id": activity.user_id,
@@ -225,6 +229,7 @@ def get_activities(
                 "created_at": activity.created_at.isoformat(),
                 "has_raw_json": activity.raw_json is not None,
                 "has_streams": getattr(activity, "streams_data", None) is not None,
+                "planned_session_id": planned_session_id,  # Include pairing info
             })
 
         logger.info(f"[ACTIVITIES] Returning {len(activities)} activities (total: {total})")

@@ -137,7 +137,7 @@ def _get_unpaired_plans(
             PlannedSession.starts_at >= day_start,
             PlannedSession.starts_at <= day_end,
             # Hard rule: Exclude cancelled/deleted sessions from pairing
-            PlannedSession.status.notin_(['cancelled', 'deleted']),
+            PlannedSession.status.notin_(["cancelled", "deleted"]),
         )
         .order_by(PlannedSession.created_at, PlannedSession.id)
     )
@@ -383,7 +383,7 @@ def _pair_from_planned(planned: PlannedSession, session: Session) -> None:
         session: Database session
     """
     # Hard rule: Exclude cancelled/deleted planned sessions from pairing
-    if planned.status in ('cancelled', 'deleted'):
+    if planned.status in {"cancelled", "deleted"}:
         logger.debug(
             f"Planned session {planned.id} is {planned.status}, skipping pairing",
         )

@@ -28,7 +28,12 @@ from app.calendar.reconciliation_service import reconcile_calendar
 from app.calendar.view_helper import calendar_session_from_view_row, get_calendar_items_from_view
 from app.db.models import Activity, PlannedSession, StravaAccount, User
 from app.db.session import get_session
-from app.pairing.session_links import unlink_by_planned, upsert_link
+from app.pairing.session_links import (
+    get_link_for_activity,
+    get_link_for_planned,
+    unlink_by_planned,
+    upsert_link,
+)
 from app.utils.timezone import now_user, to_utc
 from app.workouts.execution_models import WorkoutExecution
 from app.workouts.llm.today_session_generator import generate_today_session_content
@@ -383,18 +388,52 @@ def get_season(user_id: str = Depends(get_current_user_id)):
             season_end.isoformat() if season_end else None,
             len(view_rows),
         )
-        all_sessions = [calendar_session_from_view_row(row) for row in view_rows]
+
+        # Build pairing maps for efficient lookup
+        pairing_map: dict[str, str] = {}  # planned_session_id -> activity_id
+        activity_pairing_map: dict[str, str] = {}  # activity_id -> planned_session_id
+
+        for row in view_rows:
+            item_id = str(row.get("item_id", ""))
+            kind = str(row.get("kind", ""))
+
+            if kind == "planned":
+                link = get_link_for_planned(session, item_id)
+                if link:
+                    pairing_map[item_id] = link.activity_id
+            elif kind == "activity":
+                link = get_link_for_activity(session, item_id)
+                if link:
+                    activity_pairing_map[item_id] = link.planned_session_id
+
+        # Enrich view rows with pairing info before converting to CalendarSession
+        enriched_rows = []
+        for row in view_rows:
+            item_id = str(row.get("item_id", ""))
+            kind = str(row.get("kind", ""))
+            payload = row.get("payload") or {}
+
+            # Add pairing info to payload
+            if kind == "planned" and item_id in pairing_map:
+                payload = {**payload, "paired_activity_id": pairing_map[item_id]}
+            elif kind == "activity" and item_id in activity_pairing_map:
+                payload = {**payload, "paired_planned_session_id": activity_pairing_map[item_id]}
+
+            enriched_row = {**row, "payload": payload}
+            enriched_rows.append(enriched_row)
+
+        all_sessions = [calendar_session_from_view_row(row) for row in enriched_rows]
 
         # Sort by date
         all_sessions.sort(key=lambda s: s.date)
 
-        # Compute stats from view rows
+        # Compute stats from enriched rows
         # Count by kind and status
-        db_planned = sum(1 for row in view_rows if row.get("kind") == "planned" and row.get("status") == "planned")
-        db_completed = sum(1 for row in view_rows if row.get("kind") == "planned" and row.get("status") == "completed")
+        db_planned = sum(1 for row in enriched_rows if row.get("kind") == "planned" and row.get("status") == "planned")
+        db_completed = sum(1 for row in enriched_rows if row.get("kind") == "planned" and row.get("status") == "completed")
 
         # Count activities (all are "completed")
-        activity_count = sum(1 for row in view_rows if row.get("kind") == "activity")
+        activity_count = sum(1 for row in enriched_rows if row.get("kind") == "activity")
 
         # Final counts (activities always count as completed)
         planned_sessions_from_view = [s for s in all_sessions if s.status == "planned"]
@@ -465,7 +504,41 @@ def get_week(user_id: str = Depends(get_current_user_id)):
                 sunday.isoformat() if sunday else None,
                 len(view_rows),
             )
-            sessions = [calendar_session_from_view_row(row) for row in view_rows]
+
+            # Build pairing maps for efficient lookup
+            pairing_map: dict[str, str] = {}  # planned_session_id -> activity_id
+            activity_pairing_map: dict[str, str] = {}  # activity_id -> planned_session_id
+
+            for row in view_rows:
+                item_id = str(row.get("item_id", ""))
+                kind = str(row.get("kind", ""))
+
+                if kind == "planned":
+                    link = get_link_for_planned(session, item_id)
+                    if link:
+                        pairing_map[item_id] = link.activity_id
+                elif kind == "activity":
+                    link = get_link_for_activity(session, item_id)
+                    if link:
+                        activity_pairing_map[item_id] = link.planned_session_id
+
+            # Enrich view rows with pairing info before converting to CalendarSession
+            enriched_rows = []
+            for row in view_rows:
+                item_id = str(row.get("item_id", ""))
+                kind = str(row.get("kind", ""))
+                payload = row.get("payload") or {}
+
+                # Add pairing info to payload
+                if kind == "planned" and item_id in pairing_map:
+                    payload = {**payload, "paired_activity_id": pairing_map[item_id]}
+                elif kind == "activity" and item_id in activity_pairing_map:
+                    payload = {**payload, "paired_planned_session_id": activity_pairing_map[item_id]}
+
+                enriched_row = {**row, "payload": payload}
+                enriched_rows.append(enriched_row)
+
+            sessions = [calendar_session_from_view_row(row) for row in enriched_rows]
 
             # Sort by date and time
             sessions.sort(key=lambda s: (s.date, s.time or ""))
@@ -764,9 +837,42 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                 len(view_rows),
             )
 
+            # Build pairing maps for efficient lookup
+            pairing_map: dict[str, str] = {}  # planned_session_id -> activity_id
+            activity_pairing_map: dict[str, str] = {}  # activity_id -> planned_session_id
+
+            for row in view_rows:
+                item_id = str(row.get("item_id", ""))
+                kind = str(row.get("kind", ""))
+
+                if kind == "planned":
+                    link = get_link_for_planned(session, item_id)
+                    if link:
+                        pairing_map[item_id] = link.activity_id
+                elif kind == "activity":
+                    link = get_link_for_activity(session, item_id)
+                    if link:
+                        activity_pairing_map[item_id] = link.planned_session_id
+
+            # Enrich view rows with pairing info before processing
+            enriched_rows = []
+            for row in view_rows:
+                item_id = str(row.get("item_id", ""))
+                kind = str(row.get("kind", ""))
+                payload = row.get("payload") or {}
+
+                # Add pairing info to payload
+                if kind == "planned" and item_id in pairing_map:
+                    payload = {**payload, "paired_activity_id": pairing_map[item_id]}
+                elif kind == "activity" and item_id in activity_pairing_map:
+                    payload = {**payload, "paired_planned_session_id": activity_pairing_map[item_id]}
+
+                enriched_row = {**row, "payload": payload}
+                enriched_rows.append(enriched_row)
+
             # Generate LLM content for planned sessions (not completed ones)
             sessions = []
-            for row in view_rows:
+            for row in enriched_rows:
                 # Only generate LLM content for planned sessions (not activities or completed)
                 kind = str(row.get("kind", ""))
                 status = str(row.get("status", "planned"))

@@ -178,9 +178,13 @@ def calendar_session_from_view_row(
             completed_at_str = str(starts_at)
 
     # Extract activity_id from payload for activities
+    # Also check for pairing info
     completed_activity_id: str | None = None
     if kind == "activity":
         completed_activity_id = payload.get("activity_id")
+    elif kind == "planned":
+        # For planned sessions, check if there's a paired activity
+        completed_activity_id = payload.get("paired_activity_id")
 
     # Determine intensity (simple heuristic based on duration)
     intensity: str | None = None

@@ -13,6 +13,7 @@ import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -553,25 +554,39 @@ def google_callback(
             if "athletespace.ai" in host or "onrender.com" in host:
                 cookie_domain = ".athletespace.ai"
 
-        # Branch by platform: web uses cookie, mobile uses deep link
+        # Branch by platform: web uses cookie, mobile uses deep link with tokens
         if platform == "mobile" and mobile_redirect_uri:
-            # Mobile app: Redirect to custom URL scheme (deep link)
-            # The app will receive this URL and can extract any needed params
-            # Cookie won't work reliably with custom URL schemes, so the app
-            # should re-authenticate via /me after receiving the deep link
+            # Mobile app: Redirect to custom URL scheme (deep link) with access token
+            # CRITICAL: Mobile apps cannot rely on cookies from external browser (Safari)
+            # Must pass token in URL for app to store in secure storage
             logger.info(
                 f"[GOOGLE_OAUTH] Redirecting mobile user to deep link: {mobile_redirect_uri} "
                 f"for user_id={resolved_user_id}"
             )
-            # For mobile deep link, we can optionally pass a success indicator
-            # The app will then call /me to verify authentication
+            
+            # Calculate expires_in in seconds (from days)
+            expires_in_seconds = settings.auth_token_expire_days * 24 * 60 * 60
+            
+            # Build mobile redirect URL with access token and expires_in
+            # URL-encode the token to handle special characters
+            mobile_params = {
+                "success": "true",
+                "access_token": jwt_token,
+                "expires_in": str(expires_in_seconds),
+            }
+            
             mobile_url = mobile_redirect_uri
             if "?" in mobile_url:
-                mobile_url = f"{mobile_url}&success=true"
+                mobile_url = f"{mobile_url}&{urlencode(mobile_params)}"
             else:
-                mobile_url = f"{mobile_url}?success=true"
+                mobile_url = f"{mobile_url}?{urlencode(mobile_params)}"
+            
+            logger.info(
+                f"[GOOGLE_OAUTH] Mobile redirect URL includes access_token and expires_in={expires_in_seconds}s"
+            )
 
             # Set cookie anyway - might work in some WebView configurations
+            # But app should primarily use token from URL
             response = RedirectResponse(url=mobile_url)
             response.set_cookie(
                 key="session",

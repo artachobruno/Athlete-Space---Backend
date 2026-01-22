@@ -147,6 +147,12 @@ def calendar_session_from_view_row(row: dict[str, Any]) -> CalendarSession:
     # Extract other fields from payload
     workout_id: str | None = payload.get("workout_id")
     notes: str | None = None  # Notes not in view payload currently
+    execution_notes: str | None = payload.get("execution_notes")
+    # Normalize execution_notes: trim whitespace, empty string → None
+    if execution_notes:
+        execution_notes = execution_notes.strip()
+        if not execution_notes:
+            execution_notes = None
 
     # Determine completed flag and completed_at
     completed = kind == "activity" or status == "completed"
@@ -190,6 +196,7 @@ def calendar_session_from_view_row(row: dict[str, Any]) -> CalendarSession:
         intensity=intensity,
         status=status,
         notes=notes,
+        execution_notes=execution_notes,
         workout_id=workout_id,
         completed_activity_id=completed_activity_id,
         completed=completed,

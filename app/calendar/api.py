@@ -254,6 +254,13 @@ def _planned_session_to_calendar(
 
     # Schema v2: use starts_at, duration_seconds, distance_meters
     # CalendarSession schema may still expect old names in response (compatibility)
+    # Normalize execution_notes: trim whitespace, empty string → None
+    execution_notes = planned.execution_notes
+    if execution_notes:
+        execution_notes = execution_notes.strip()
+        if not execution_notes:
+            execution_notes = None
+    
     return CalendarSession(
         id=planned.id,
         date=planned.starts_at.strftime("%Y-%m-%d") if planned.starts_at else "",
@@ -265,6 +272,7 @@ def _planned_session_to_calendar(
         intensity=planned.intensity,
         status=status,
         notes=planned.notes,
+        execution_notes=execution_notes,
         workout_id=planned.workout_id,
         completed_activity_id=None,  # Schema v2: removed, use session_links
         completed=status == "completed",
@@ -319,6 +327,7 @@ def _activity_to_session(activity: Activity) -> CalendarSession:
         intensity=intensity,
         status="completed",  # All activities from Strava are completed
         notes=None,
+        execution_notes=None,  # Activities don't have execution notes
         workout_id=None,  # Schema v2: activity.workout_id does not exist - relationships through session_links/executions
     )
 

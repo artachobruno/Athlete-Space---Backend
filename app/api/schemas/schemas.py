@@ -57,6 +57,7 @@ class CalendarSession(BaseModel):
     intensity: str | None = Field(description="Intensity level: easy | moderate | hard | race", default=None)
     status: str = Field(description="Session status: planned | completed | skipped | cancelled | missed")
     notes: str | None = Field(description="Optional session notes", default=None)
+    execution_notes: str | None = Field(description="Execution guidance notes (max 120 chars, plain text only)", default=None)
     workout_id: str | None = Field(description="Workout ID if this session has a structured workout", default=None)
     completed_activity_id: str | None = Field(
         description="External activity ID (e.g., Strava activity ID) if session is completed",

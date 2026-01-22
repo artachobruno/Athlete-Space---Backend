@@ -698,6 +698,7 @@ class PlannedSession(Base):
     session_type: Mapped[str | None] = mapped_column(String, nullable=True)  # 'easy', 'tempo', 'long', 'interval', etc.
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    execution_notes: Mapped[str | None] = mapped_column(String(120), nullable=True)  # Max 120 chars, plain text execution guidance
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)  # >= 0
     distance_meters: Mapped[float | None] = mapped_column(Float, nullable=True)  # >= 0
     intensity: Mapped[str | None] = mapped_column(String, nullable=True)  # 'Z1..Z5', 'RPE', etc.

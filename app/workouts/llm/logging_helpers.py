@@ -51,9 +51,12 @@ def log_llm_raw_response(
     raw_response_text = None
     
     # Try to extract raw response from result object
-    if hasattr(result, "all_messages") and result.all_messages:
-        # Get the last assistant message which contains the raw response
-        for msg in reversed(result.all_messages):
+    if hasattr(result, "all_messages"):
+        # Handle both method and property access
+        all_messages = result.all_messages() if callable(result.all_messages) else result.all_messages
+        if all_messages:
+            # Get the last assistant message which contains the raw response
+            for msg in reversed(all_messages):
             if hasattr(msg, "content") and msg.content:
                 raw_response_text = str(msg.content)
                 break

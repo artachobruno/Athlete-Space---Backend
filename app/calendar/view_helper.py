@@ -4,6 +4,7 @@ This module provides unified access to planned sessions and activities
 via the calendar_items view, avoiding schema mismatches.
 """
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -96,6 +97,13 @@ def get_calendar_items_from_view(
         return items
 
 
+def _ensure_str_id(val: str | uuid.UUID | None) -> str | None:
+    """Normalize ID to str for CalendarSession (schema expects str, DB may return UUID)."""
+    if val is None:
+        return None
+    return str(val)
+
+
 def calendar_session_from_view_row(
     row: dict[str, Any],
     instructions: list[str] | None = None,
@@ -153,7 +161,7 @@ def calendar_session_from_view_row(
         distance_km = round(float(distance_meters) / 1000.0, 2)
 
     # Extract other fields from payload
-    workout_id: str | None = payload.get("workout_id")
+    workout_id = _ensure_str_id(payload.get("workout_id"))
     notes: str | None = None  # Notes not in view payload currently
     execution_notes: str | None = payload.get("execution_notes")
     # Normalize execution_notes: trim whitespace, empty string → None
@@ -177,14 +185,13 @@ def calendar_session_from_view_row(
         else:
             completed_at_str = str(starts_at)
 
-    # Extract activity_id from payload for activities
-    # Also check for pairing info
-    completed_activity_id: str | None = None
+    # Extract activity_id from payload for activities; normalize to str (view/links may use UUID)
+    raw_activity_id: str | uuid.UUID | None = None
     if kind == "activity":
-        completed_activity_id = payload.get("activity_id")
+        raw_activity_id = payload.get("activity_id")
     elif kind == "planned":
-        # For planned sessions, check if there's a paired activity
-        completed_activity_id = payload.get("paired_activity_id")
+        raw_activity_id = payload.get("paired_activity_id")
+    completed_activity_id = _ensure_str_id(raw_activity_id)
 
     # Determine intensity (simple heuristic based on duration)
     intensity: str | None = None

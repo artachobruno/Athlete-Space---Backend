@@ -91,14 +91,14 @@ def process_unpaired_activities(
     query = query.order_by(Activity.starts_at.desc())
 
     all_activities = list(db.scalars(query).all())
-    
+
     # Schema v2: Filter to only unpaired activities (those without SessionLink)
     activities = []
     for activity in all_activities:
         link = get_link_for_activity(db, activity.id)
         if not link:
             activities.append(activity)
-    
+
     stats["activities_found"] = len(activities)
 
     logger.info(

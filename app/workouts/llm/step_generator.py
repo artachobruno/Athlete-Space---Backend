@@ -1,3 +1,7 @@
+# ❗ Workout instructions and steps must be generated once (planner)
+# Never reconstructed downstream
+# All workout structure must come from workout.steps - never parse from text
+
 """LLM-based workout step generation.
 
 This module handles the CORE SYSTEM: converting notes → structured workout.

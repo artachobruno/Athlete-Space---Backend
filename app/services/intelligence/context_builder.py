@@ -12,7 +12,7 @@ from sqlalchemy import select
 from app.calendar.training_summary import build_training_summary
 from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent
 from app.coach.utils.reconciliation_context import get_recent_missed_workouts, get_reconciliation_stats
-from app.db.models import Activity
+from app.db.models import Activity, PlannedSession
 from app.db.session import get_session
 from app.services.intelligence.store import IntentStore
 from app.services.overview_service import get_overview_data
@@ -309,6 +309,56 @@ def _get_recent_decisions_for_context(user_id: str, decision_date: date) -> list
     return recent_decisions
 
 
+def _get_scheduled_workout_for_date(user_id: str, workout_date: date) -> dict[str, Any] | None:
+    """Get scheduled workout for a specific date.
+
+    Args:
+        user_id: User ID
+        workout_date: Date to check for scheduled workout
+
+    Returns:
+        Dictionary with workout details if found, None otherwise
+    """
+    try:
+        with get_session() as session:
+            # Get start and end of day in UTC
+            day_start = datetime.combine(workout_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            day_end = day_start + timedelta(days=1)
+
+            # Query for planned sessions on this date
+            planned_sessions = (
+                session.execute(
+                    select(PlannedSession)
+                    .where(
+                        PlannedSession.user_id == user_id,
+                        PlannedSession.starts_at >= day_start,
+                        PlannedSession.starts_at < day_end,
+                        PlannedSession.status == "planned",
+                    )
+                    .order_by(PlannedSession.starts_at.asc())
+                )
+                .scalars()
+                .first()
+            )
+
+            if planned_sessions:
+                return {
+                    "id": planned_sessions.id,
+                    "title": planned_sessions.title,
+                    "sport": planned_sessions.sport,
+                    "session_type": planned_sessions.session_type,
+                    "duration_seconds": planned_sessions.duration_seconds,
+                    "distance_meters": planned_sessions.distance_meters,
+                    "intensity": planned_sessions.intensity,
+                    "intent": planned_sessions.intent,
+                    "notes": planned_sessions.notes,
+                    "execution_notes": planned_sessions.execution_notes,
+                }
+    except Exception as e:
+        logger.warning(f"Failed to get scheduled workout for date {workout_date}: {e}")
+    return None
+
+
 def build_daily_decision_context(
     user_id: str,
     athlete_id: int,
@@ -369,6 +419,9 @@ def build_daily_decision_context(
     weekly_intent = _get_weekly_intent_for_context(athlete_id, decision_date)
     recent_decisions = _get_recent_decisions_for_context(user_id, decision_date)
 
+    # Get scheduled workout for today (if any)
+    scheduled_workout = _get_scheduled_workout_for_date(user_id, decision_date)
+
     # Get reconciliation statistics (missed workouts, compliance)
     try:
         reconciliation_stats = get_reconciliation_stats(user_id=user_id, athlete_id=athlete_id, days=30)
@@ -404,8 +457,12 @@ def build_daily_decision_context(
     if recent_decisions:
         context["recent_decisions"] = [d.model_dump() for d in recent_decisions]
 
+    if scheduled_workout:
+        context["scheduled_workout"] = scheduled_workout
+
     logger.info(
         f"Built context with athlete_state, training_history, weekly_intent={'present' if weekly_intent else 'none'}, "
+        f"scheduled_workout={'present' if scheduled_workout else 'none'}, "
         f"compliance_rate={reconciliation_stats.get('compliance_rate', 0.0):.2f}"
     )
     return context

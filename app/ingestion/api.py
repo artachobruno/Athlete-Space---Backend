@@ -21,6 +21,7 @@ from app.db.session import get_session
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
+from app.pairing.auto_pairing_service import try_auto_pair
 from app.utils.sport_utils import normalize_sport_type
 from app.utils.title_utils import normalize_activity_title
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
@@ -306,6 +307,12 @@ def ingest_activities(
             except Exception as e:
                 logger.warning(f"[INGESTION] Failed to compute TSS for activity {strava_id}: {e}")
 
+            # Attempt auto-pairing with planned sessions
+            try:
+                try_auto_pair(activity=activity, session=session)
+            except Exception as e:
+                logger.warning(f"[INGESTION] Auto-pairing failed for activity {strava_id}: {e}")
+
             created_activities.append(activity)
             imported_count += 1
 
@@ -396,6 +403,12 @@ def ingest_activities(
                         )
                     except Exception as e:
                         logger.warning(f"[INGESTION] Failed to compute TSS for activity {strava_id} (retry): {e}")
+
+                    # Attempt auto-pairing with planned sessions
+                    try:
+                        try_auto_pair(activity=activity, session=session)
+                    except Exception as e:
+                        logger.warning(f"[INGESTION] Auto-pairing failed for activity {strava_id} (retry): {e}")
 
                     session.commit()
                     retry_imported += 1

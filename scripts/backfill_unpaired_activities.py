@@ -48,6 +48,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Activity
 from app.db.session import SessionLocal
 from app.pairing.auto_pairing_service import try_auto_pair
+from app.pairing.session_links import get_link_for_activity
 
 
 def process_unpaired_activities(
@@ -74,10 +75,9 @@ def process_unpaired_activities(
         "skipped": 0,
     }
 
-    # Build query for unpaired activities
+    # Build query for all activities (we'll filter unpaired ones below)
     # Filter out activities with null user_id (invalid data that would cause pairing decision errors)
     query = select(Activity).where(
-        Activity.planned_session_id.is_(None),
         Activity.user_id.isnot(None),
     )
 
@@ -90,7 +90,15 @@ def process_unpaired_activities(
 
     query = query.order_by(Activity.starts_at.desc())
 
-    activities = list(db.scalars(query).all())
+    all_activities = list(db.scalars(query).all())
+    
+    # Schema v2: Filter to only unpaired activities (those without SessionLink)
+    activities = []
+    for activity in all_activities:
+        link = get_link_for_activity(db, activity.id)
+        if not link:
+            activities.append(activity)
+    
     stats["activities_found"] = len(activities)
 
     logger.info(
@@ -107,10 +115,10 @@ def process_unpaired_activities(
                 stats["skipped"] += 1
                 continue
 
-            activity_date = activity.start_time.date()
+            activity_date = activity.starts_at.date() if activity.starts_at else None
             logger.debug(
                 f"Processing activity {activity.id}: "
-                f"type={activity.type}, date={activity_date}, "
+                f"sport={activity.sport}, date={activity_date}, "
                 f"duration={activity.duration_seconds}s, "
                 f"distance={activity.distance_meters}m"
             )
@@ -118,7 +126,7 @@ def process_unpaired_activities(
             if dry_run:
                 logger.info(
                     f"[DRY RUN] Would attempt to pair activity {activity.id} "
-                    f"({activity.type} on {activity_date}, "
+                    f"({activity.sport} on {activity_date}, "
                     f"duration={activity.duration_seconds}s, "
                     f"distance={activity.distance_meters}m)"
                 )
@@ -128,12 +136,13 @@ def process_unpaired_activities(
                 try_auto_pair(activity=activity, session=db)
                 db.commit()
 
-                # Check if pairing succeeded
+                # Schema v2: Check if pairing succeeded by checking SessionLink
                 db.refresh(activity)
-                if activity.planned_session_id:
+                link = get_link_for_activity(db, activity.id)
+                if link:
                     stats["paired"] += 1
                     logger.info(
-                        f"✅ Paired activity {activity.id} with planned session {activity.planned_session_id}"
+                        f"✅ Paired activity {activity.id} with planned session {link.planned_session_id}"
                     )
                 else:
                     stats["failed"] += 1

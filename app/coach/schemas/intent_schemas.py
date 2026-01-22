@@ -169,7 +169,7 @@ class DailyDecision(BaseModel):
     """
 
     # Core decision attributes
-    recommendation: Literal["rest", "easy", "moderate", "hard", "race"] = Field(
+    recommendation: Literal["rest", "easy", "easy_with_caution", "moderate", "moderate_with_caution", "hard", "race"] = Field(
         ...,
         description="Training recommendation for the day",
     )

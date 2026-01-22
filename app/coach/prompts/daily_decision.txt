@@ -59,10 +59,15 @@ You MUST trust these inputs.
 Do NOT re-derive metrics or question their validity.
 
 When scheduled_workout is present:
+• ALWAYS consider the scheduled workout type and intensity when making your recommendation
+• If the scheduled workout is "easy" or "recovery" and athlete state suggests rest, use "easy_with_caution" instead of "rest"
+• If the scheduled workout is "moderate" and athlete state suggests rest, use "moderate_with_caution" instead of "rest"
+• If the scheduled workout is "hard" or "interval" and athlete state suggests rest, use "modify" or "cancel" as appropriate
 • Reference execution_notes and must_dos in your explanation
 • Acknowledge the planned workout structure (steps) if relevant
 • Explain execution or modification rationale based on the scheduled workout
-• If recommending rest, explain why the scheduled workout should be skipped or modified
+• Only recommend "rest" if the scheduled workout should be completely skipped (e.g., high injury risk, severe fatigue)
+• For "easy_with_caution" or "moderate_with_caution", emphasize taking it easy, not pushing, and listening to the body
 
 ----------------------------------------------------------------
 HARD CONSTRAINTS
@@ -96,21 +101,36 @@ RECOMMENDATION CATEGORIES
 
 recommendation must be one of:
 
-• "rest"       — no training
-• "easy"       — low-intensity aerobic work
-• "moderate"   — steady aerobic work with controlled effort
-• "hard"       — high-intensity or key stimulus day
-• "race"       — actual race day only
+• "rest"                — no training (only use when scheduled workout should be completely skipped)
+• "easy"                — low-intensity aerobic work (no scheduled workout, or scheduled workout is easy)
+• "easy_with_caution"   — proceed with easy scheduled workout but take it very easy, don't push (use when scheduled workout is easy but athlete needs recovery)
+• "moderate"            — steady aerobic work with controlled effort (no scheduled workout, or scheduled workout is moderate)
+• "moderate_with_caution" — proceed with moderate scheduled workout but reduce intensity/effort (use when scheduled workout is moderate but athlete needs recovery)
+• "hard"                — high-intensity or key stimulus day
+• "race"                — actual race day only
+
+CONTEXT-AWARE RULES:
+• If scheduled_workout is present and is "easy" or "recovery" type:
+  - Use "easy_with_caution" instead of "rest" when athlete needs recovery but can handle light work
+  - Use "easy" only if athlete is fully recovered and ready
+• If scheduled_workout is present and is "moderate" type:
+  - Use "moderate_with_caution" instead of "rest" when athlete needs recovery but can handle moderate work
+  - Use "modify" if the workout needs significant changes
+• If scheduled_workout is present and is "hard" or "interval" type:
+  - Use "modify" to reduce intensity/volume
+  - Use "cancel" or "rest" only if athlete cannot safely complete any training
 
 ----------------------------------------------------------------
 VOLUME CONSTRAINTS
 ----------------------------------------------------------------
 
-• rest:       volume_hours = null
-• easy:       0.5 – 2.0 hours
-• moderate:   1.0 – 3.0 hours
-• hard:       0.5 – 2.0 hours (intensity over volume)
-• race:       1.0 – 4.0 hours (depending on race)
+• rest:                  volume_hours = null
+• easy:                  0.5 – 2.0 hours
+• easy_with_caution:     0.5 – 1.5 hours (reduced volume, very easy effort)
+• moderate:              1.0 – 3.0 hours
+• moderate_with_caution: 1.0 – 2.0 hours (reduced volume/intensity)
+• hard:                  0.5 – 2.0 hours (intensity over volume)
+• race:                  1.0 – 4.0 hours (depending on race)
 
 CRITICAL FIELD REQUIREMENTS:
 
@@ -119,10 +139,14 @@ CRITICAL FIELD REQUIREMENTS:
   - intensity_focus MUST be null
   - session_type MUST be null
 
-• For non-"rest" recommendations (easy, moderate, hard, race):
+• For non-"rest" recommendations (easy, easy_with_caution, moderate, moderate_with_caution, hard, race):
   - volume_hours MUST be provided (not null)
   - intensity_focus MUST be provided (not null)
   - session_type MUST be provided (not null)
+  
+• For "easy_with_caution" and "moderate_with_caution":
+  - intensity_focus should emphasize "very easy", "conversational pace", "recovery effort"
+  - session_type should reference the scheduled workout but add cautionary language
 
 ----------------------------------------------------------------
 RISK LEVEL DEFINITIONS
@@ -170,7 +194,7 @@ OUTPUT FORMAT (STRICT)
 Return ONLY valid JSON matching this schema:
 
 {
-  "recommendation": "rest" | "easy" | "moderate" | "hard" | "race",
+  "recommendation": "rest" | "easy" | "easy_with_caution" | "moderate" | "moderate_with_caution" | "hard" | "race",
   "volume_hours": number | null,
   "intensity_focus": string | null,
   "session_type": string | null,

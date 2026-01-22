@@ -76,11 +76,28 @@ def canonical_step_to_db_step(
         )
         if calculated_target_type != StepTargetType.NONE:
             target_metric = calculated_target_type.value
-            target_min = calc_min
-            target_max = calc_max
-            target_value = calc_value
-    # Fallback to canonical target_type if no user settings
-    elif canonical_step.target_type != StepTargetType.NONE:
+            # Convert pace from m/s to min/km if needed
+            if calculated_target_type == StepTargetType.PACE:
+                # Convert m/s to min/km: (1000 meters) / (velocity m/s * 60 seconds/min)
+                if calc_min is not None:
+                    target_min = 1000.0 / (calc_min * 60.0) if calc_min > 0 else None
+                if calc_max is not None:
+                    target_max = 1000.0 / (calc_max * 60.0) if calc_max > 0 else None
+                if calc_value is not None:
+                    target_value = 1000.0 / (calc_value * 60.0) if calc_value > 0 else None
+            else:
+                target_min = calc_min
+                target_max = calc_max
+                target_value = calc_value
+    
+    # Default to pace for running if no target was calculated and sport is running
+    if not target_metric and sport and sport.lower() == "run":
+        target_metric = StepTargetType.PACE.value
+        # If we have user_settings but no threshold_pace_ms, leave min/max as None
+        # The frontend can handle displaying pace targets even without specific values
+    
+    # Fallback to canonical target_type if no user settings and no default
+    if not target_metric and canonical_step.target_type != StepTargetType.NONE:
         target_metric = canonical_step.target_type.value
 
     # Ensure step has a name - use canonical name or infer from attributes

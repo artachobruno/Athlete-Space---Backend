@@ -11,7 +11,7 @@ from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.schemas.schemas import CalendarSession
+from app.api.schemas.schemas import CalendarSession, WorkoutStepSchema
 
 # Schema v2: Use calendar_items view for unified querying
 SQL_CALENDAR_ITEMS = text("""
@@ -96,11 +96,19 @@ def get_calendar_items_from_view(
         return items
 
 
-def calendar_session_from_view_row(row: dict[str, Any]) -> CalendarSession:
+def calendar_session_from_view_row(
+    row: dict[str, Any],
+    instructions: list[str] | None = None,
+    steps: list[dict[str, Any]] | None = None,
+    coach_insight: str | None = None,
+) -> CalendarSession:
     """Convert a calendar_items view row to CalendarSession DTO (schema v2).
 
     Args:
         row: Dictionary with keys: item_id, kind, starts_at, ends_at, sport, title, status, payload
+        instructions: Optional LLM-generated instructions
+        steps: Optional LLM-generated steps (list of dicts with order, name, duration_min, distance_km, intensity, notes)
+        coach_insight: Optional LLM-generated coach insight
 
     Returns:
         CalendarSession object with mapped fields
@@ -185,6 +193,23 @@ def calendar_session_from_view_row(row: dict[str, Any]) -> CalendarSession:
     elif not title:
         title = type_str
 
+    # Convert steps dicts to WorkoutStepSchema objects if provided
+    step_objects: list[WorkoutStepSchema] = []
+    if steps:
+        step_objects.extend(
+            [
+                WorkoutStepSchema(
+                    order=step_dict.get("order", 0),
+                    name=step_dict.get("name", ""),
+                    duration_min=step_dict.get("duration_min"),
+                    distance_km=step_dict.get("distance_km"),
+                    intensity=step_dict.get("intensity"),
+                    notes=step_dict.get("notes"),
+                )
+                for step_dict in steps
+            ]
+        )
+
     return CalendarSession(
         id=item_id,
         date=date_str,
@@ -201,4 +226,7 @@ def calendar_session_from_view_row(row: dict[str, Any]) -> CalendarSession:
         completed_activity_id=completed_activity_id,
         completed=completed,
         completed_at=completed_at_str,
+        instructions=instructions or [],
+        steps=step_objects,
+        coach_insight=coach_insight,
     )

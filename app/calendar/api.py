@@ -6,6 +6,7 @@ Step 6: Replaces mock data with real activities from database.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
@@ -29,6 +30,7 @@ from app.db.session import get_session
 from app.pairing.session_links import unlink_by_planned, upsert_link
 from app.utils.timezone import now_user, to_utc
 from app.workouts.execution_models import WorkoutExecution
+from app.workouts.llm.today_session_generator import generate_today_session_content
 from app.workouts.models import Workout, WorkoutStep
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
@@ -260,7 +262,7 @@ def _planned_session_to_calendar(
         execution_notes = execution_notes.strip()
         if not execution_notes:
             execution_notes = None
-    
+
     return CalendarSession(
         id=planned.id,
         date=planned.starts_at.strftime("%Y-%m-%d") if planned.starts_at else "",
@@ -494,7 +496,7 @@ def get_week(user_id: str = Depends(get_current_user_id)):
 
 
 @router.get("/today", response_model=CalendarTodayResponse)
-def get_today(user_id: str = Depends(get_current_user_id)):
+async def get_today(user_id: str = Depends(get_current_user_id)):
     """Get calendar data for today from real activities.
 
     **Data Source**: Reads from database (not from Strava API).
@@ -538,7 +540,81 @@ def get_today(user_id: str = Depends(get_current_user_id)):
                 today_end.isoformat() if today_end else None,
                 len(view_rows),
             )
-            sessions = [calendar_session_from_view_row(row) for row in view_rows]
+
+            # Generate LLM content for planned sessions (not completed ones)
+            sessions = []
+            for row in view_rows:
+                # Only generate LLM content for planned sessions (not activities or completed)
+                kind = str(row.get("kind", ""))
+                status = str(row.get("status", "planned"))
+                is_planned = kind == "planned" and status == "planned"
+
+                instructions: list[str] | None = None
+                steps: list[dict[str, Any]] | None = None
+                coach_insight: str | None = None
+
+                if is_planned:
+                    try:
+                        # Extract session details for LLM generation
+                        payload: dict[str, Any] = row.get("payload") or {}
+                        session_title = row.get("title") or payload.get("title") or "Training Session"
+                        session_type = payload.get("session_type")
+                        duration_seconds = payload.get("duration_seconds")
+                        duration_minutes = int(duration_seconds // 60) if duration_seconds else None
+                        distance_meters = payload.get("distance_meters")
+                        distance_km = round(float(distance_meters) / 1000.0, 2) if distance_meters else None
+                        intensity = payload.get("intensity")
+                        notes = payload.get("notes")
+                        intent = payload.get("intent", "").lower()
+                        is_rest_day = intent == "rest" or "rest" in (session_title or "").lower()
+
+                        # Generate LLM content
+                        content = await generate_today_session_content(
+                            session_title=session_title,
+                            session_type=session_type,
+                            duration_minutes=duration_minutes,
+                            distance_km=distance_km,
+                            intensity=intensity,
+                            notes=notes,
+                            is_rest_day=is_rest_day,
+                        )
+
+                        instructions = content.instructions
+                        steps = [
+                            {
+                                "order": step.order,
+                                "name": step.name,
+                                "duration_min": step.duration_min,
+                                "distance_km": step.distance_km,
+                                "intensity": step.intensity,
+                                "notes": step.notes,
+                            }
+                            for step in content.steps
+                        ]
+                        coach_insight = content.coach_insight
+
+                        logger.info(
+                            "Generated LLM content for today session",
+                            session_id=row.get("item_id"),
+                            instructions_count=len(instructions) if instructions else 0,
+                            steps_count=len(steps) if steps else 0,
+                        )
+                    except Exception as e:
+                        # Log error but don't fail the request - return session without LLM content
+                        logger.warning(
+                            "Failed to generate LLM content for today session",
+                            session_id=row.get("item_id"),
+                            error=str(e),
+                        )
+
+                sessions.append(
+                    calendar_session_from_view_row(
+                        row,
+                        instructions=instructions,
+                        steps=steps,
+                        coach_insight=coach_insight,
+                    )
+                )
 
             # Sort by time
             sessions.sort(key=lambda s: s.time or "23:59")

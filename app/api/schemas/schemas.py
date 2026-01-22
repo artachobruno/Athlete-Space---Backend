@@ -44,6 +44,17 @@ class DashboardOverviewResponse(BaseModel):
 # ============================================================================
 
 
+class WorkoutStepSchema(BaseModel):
+    """Workout step schema for today session execution."""
+
+    order: int = Field(description="Step order (1-indexed)")
+    name: str = Field(description="Step name (e.g., Warm-up, Main, Cooldown)")
+    duration_min: int | None = Field(description="Step duration in minutes", default=None)
+    distance_km: float | None = Field(description="Step distance in kilometers", default=None)
+    intensity: str | None = Field(description="Step intensity: easy | steady | tempo | threshold | vo2", default=None)
+    notes: str | None = Field(description="Optional step-specific notes", default=None)
+
+
 class CalendarSession(BaseModel):
     """A training session in the calendar."""
 
@@ -65,6 +76,18 @@ class CalendarSession(BaseModel):
     )
     completed: bool = Field(description="Completion flag (true if session was completed)", default=False)
     completed_at: str | None = Field(description="ISO 8601 datetime when session was completed", default=None)
+    instructions: list[str] = Field(
+        description="LLM-generated execution instructions (3-5 bullets max)",
+        default_factory=list,
+    )
+    steps: list[WorkoutStepSchema] = Field(
+        description="Structured workout steps for execution",
+        default_factory=list,
+    )
+    coach_insight: str | None = Field(
+        description="LLM-generated coach insight explaining why today matters",
+        default=None,
+    )
 
 
 class CalendarWeekResponse(BaseModel):

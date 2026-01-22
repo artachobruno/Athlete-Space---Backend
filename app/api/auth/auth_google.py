@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -35,6 +35,7 @@ class MobileGoogleLoginRequest(BaseModel):
 
     id_token: str
     platform: str = "mobile"
+
 
 router = APIRouter(prefix="/auth/google", tags=["auth", "google"])
 
@@ -530,13 +531,23 @@ def google_callback(
         logger.info(f"[GOOGLE_OAUTH] JWT token issued for user_id={resolved_user_id}")
 
         # Determine cookie domain
-        # CRITICAL: For Capacitor apps (capacitor://localhost), cookies MUST NOT have a domain set,
-        # otherwise WKWebView will not send them.
+        # CRITICAL: For Capacitor apps (capacitor://localhost) making cross-origin requests,
+        # cookies MUST have domain set to the backend domain for WKWebView to send them.
         origin = request.headers.get("origin", "")
         cookie_domain: str | None = None
         if origin and ("capacitor://" in origin or "ionic://" in origin):
-            logger.debug(f"[GOOGLE_OAUTH] Capacitor request detected (origin={origin}), setting cookie domain=None")
-            cookie_domain = None
+            # For Capacitor cross-origin cookies, domain must be set to backend domain
+            host = request.headers.get("host", "")
+            if "onrender.com" in host:
+                backend_domain = host.split(":")[0]  # Remove port if present
+                logger.debug(f"[GOOGLE_OAUTH] Capacitor request detected (origin={origin}), setting cookie domain={backend_domain}")
+                cookie_domain = backend_domain
+            else:
+                logger.debug(
+                f"[GOOGLE_OAUTH] Capacitor request detected (origin={origin}), "
+                "but host not recognized, setting cookie domain=None"
+            )
+                cookie_domain = None
         else:
             host = request.headers.get("host", "")
             if "athletespace.ai" in host or "onrender.com" in host:
@@ -559,7 +570,7 @@ def google_callback(
                 mobile_url = f"{mobile_url}&success=true"
             else:
                 mobile_url = f"{mobile_url}?success=true"
-            
+
             # Set cookie anyway - might work in some WebView configurations
             response = RedirectResponse(url=mobile_url)
             response.set_cookie(
@@ -568,27 +579,26 @@ def google_callback(
                 httponly=True,
                 secure=True,
                 samesite="none",
-                path="/",
+                path="/",  # CRITICAL: Required for WKWebView cross-origin cookies
                 max_age=30 * 24 * 60 * 60,
                 domain=cookie_domain,
             )
             return response
-        else:
-            # Web platform: Set HTTP-only cookie and redirect to frontend
-            response = RedirectResponse(url=redirect_url)
-            response.set_cookie(
-                key="session",
-                value=jwt_token,
-                httponly=True,
-                secure=True,  # HTTPS only - REQUIRED for mobile cookie persistence
-                samesite="none",  # REQUIRED for cross-origin cookie (mobile WebView)
-                path="/",  # Available for all paths
-                max_age=30 * 24 * 60 * 60,  # 30 days
-                domain=cookie_domain,
-            )
-            logger.info(f"[GOOGLE_OAUTH] Set HTTP-only cookie for user_id={resolved_user_id}, platform={platform}")
-            logger.info(f"[GOOGLE_OAUTH] Redirecting web user to frontend URL (cookie set) for user_id={resolved_user_id}")
-            return response
+        # Web platform: Set HTTP-only cookie and redirect to frontend
+        response = RedirectResponse(url=redirect_url)
+        response.set_cookie(
+            key="session",
+            value=jwt_token,
+            httponly=True,
+            secure=True,  # HTTPS only - REQUIRED for mobile cookie persistence
+            samesite="none",  # REQUIRED for cross-origin cookie (mobile WebView)
+            path="/",  # CRITICAL: Required for WKWebView cross-origin cookies
+            max_age=30 * 24 * 60 * 60,  # 30 days
+            domain=cookie_domain,
+        )
+        logger.info(f"[GOOGLE_OAUTH] Set HTTP-only cookie for user_id={resolved_user_id}, platform={platform}")
+        logger.info(f"[GOOGLE_OAUTH] Redirecting web user to frontend URL (cookie set) for user_id={resolved_user_id}")
+        return response
 
     except HTTPException:
         raise
@@ -600,7 +610,6 @@ def google_callback(
 @router.post("/mobile")
 def google_mobile_login(
     body: MobileGoogleLoginRequest,
-    request: Request,
 ) -> dict[str, bool]:
     """Authenticate user via native mobile Google Sign-In SDK.
 
@@ -746,35 +755,24 @@ def google_mobile_login(
     jwt_token = create_access_token(resolved_user_id)
     logger.info(f"[GOOGLE_OAUTH] Mobile: JWT issued for user_id={resolved_user_id}")
 
-    # Determine cookie domain
-    # CRITICAL: For Capacitor apps (capacitor://localhost), cookies MUST NOT have a domain set,
-    # otherwise WKWebView will not send them.
-    origin = request.headers.get("origin", "")
-    cookie_domain: str | None = None
-    if origin and ("capacitor://" in origin or "ionic://" in origin):
-        logger.debug(f"[GOOGLE_OAUTH] Capacitor request detected (origin={origin}), setting cookie domain=None")
-        cookie_domain = None
-    else:
-        host = request.headers.get("host", "")
-        if "athletespace.ai" in host or "onrender.com" in host:
-            cookie_domain = ".athletespace.ai"
+    # Mobile clients should receive tokens in response body, not cookies
+    # Calculate token expiration in seconds
+    expires_in = settings.auth_token_expire_days * 24 * 60 * 60
 
-    # Create response and set cookie
-    from fastapi.responses import JSONResponse
+    # Create response with token for mobile
 
-    response = JSONResponse(content={"success": True})
-    response.set_cookie(
-        key="session",
-        value=jwt_token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        path="/",
-        max_age=30 * 24 * 60 * 60,
-        domain=cookie_domain,
-    )
+    response_data = {
+        "success": True,
+        "access_token": jwt_token,
+        "token_type": "bearer",
+        "expires_in": expires_in,
+        "user_id": resolved_user_id,
+    }
 
-    logger.info(f"[GOOGLE_OAUTH] Mobile login successful for user_id={resolved_user_id}")
+    response = JSONResponse(content=response_data)
+    # Do NOT set cookie for mobile - tokens are returned in response body
+
+    logger.info(f"[GOOGLE_OAUTH] Mobile login successful for user_id={resolved_user_id}, token returned in response")
     return response
 
 

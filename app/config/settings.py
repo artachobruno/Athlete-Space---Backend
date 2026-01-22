@@ -111,7 +111,7 @@ class Settings(BaseSettings):
         validation_alias="WORKOUT_NOTES_PARSING_ENABLED",
         description="Enable LLM-based workout notes parsing (default: false)",
     )
-    
+
     # Email settings for support form
     smtp_host: str = Field(
         default="",

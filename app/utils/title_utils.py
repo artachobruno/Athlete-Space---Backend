@@ -6,7 +6,6 @@ based on activity metrics (distance, duration, sport).
 
 from __future__ import annotations
 
-
 # Time-of-day prefixes used by Strava
 _TIME_PREFIXES = frozenset({"morning", "lunch", "afternoon", "evening", "night"})
 
@@ -82,18 +81,17 @@ def normalize_activity_title(
     distance_mi = distance_km * 0.621371
     duration_min = duration_sec / 60.0
 
-    if sport_lower in ("run", "running"):
+    if sport_lower in {"run", "running"}:
         return _generate_run_title(distance_km, distance_mi, duration_min)
-    elif sport_lower in ("ride", "cycling", "bike"):
+    if sport_lower in {"ride", "cycling", "bike"}:
         return _generate_ride_title(distance_km, distance_mi, duration_min)
-    elif sport_lower in ("swim", "swimming"):
+    if sport_lower in {"swim", "swimming"}:
         return _generate_swim_title(distance_m, duration_min)
-    elif sport_lower in ("walk", "walking"):
+    if sport_lower in {"walk", "walking"}:
         return _generate_walk_title(distance_km, duration_min)
-    elif sport_lower in ("hike", "hiking"):
+    if sport_lower in {"hike", "hiking"}:
         return _generate_hike_title(distance_km, duration_min)
-    else:
-        return _generate_generic_title(sport_lower, duration_min)
+    return _generate_generic_title(sport_lower, duration_min)
 
 
 def _generate_run_title(distance_km: float, distance_mi: float, duration_min: float) -> str:
@@ -101,89 +99,84 @@ def _generate_run_title(distance_km: float, distance_mi: float, duration_min: fl
     # Check for race distances first
     if 4.8 <= distance_km <= 5.2:
         return "5K Run"
-    elif 9.8 <= distance_km <= 10.2:
+    if 9.8 <= distance_km <= 10.2:
         return "10K Run"
-    elif 14.8 <= distance_km <= 15.2:
+    if 14.8 <= distance_km <= 15.2:
         return "15K Run"
-    elif 20.5 <= distance_km <= 21.5:
+    if 20.5 <= distance_km <= 21.5:
         return "Half Marathon"
-    elif 41.5 <= distance_km <= 43.0:
+    if 41.5 <= distance_km <= 43.0:
         return "Marathon"
 
     # Distance-based titles
     if distance_km >= 20:
         return f"Long Run ({distance_km:.0f}K)"
-    elif distance_km >= 15:
+    if distance_km >= 15:
         return f"Long Run ({distance_mi:.0f} mi)"
-    elif distance_km >= 10:
+    if distance_km >= 10:
         return f"Steady Run ({distance_km:.0f}K)"
-    elif distance_km >= 5:
+    if distance_km >= 5:
         return f"Easy Run ({distance_km:.1f}K)"
-    elif distance_km >= 2:
+    if distance_km >= 2:
         return "Short Run"
-    elif duration_min >= 20:
+    if duration_min >= 20:
         return f"Run ({duration_min:.0f} min)"
-    else:
-        return "Quick Run"
+    return "Quick Run"
 
 
-def _generate_ride_title(distance_km: float, distance_mi: float, duration_min: float) -> str:
+def _generate_ride_title(distance_km: float, distance_mi: float, duration_min: float) -> str:  # noqa: ARG001
     """Generate title for cycling activities."""
     if distance_km >= 100:
         return f"Century Ride ({distance_km:.0f}K)"
-    elif distance_km >= 50:
+    if distance_km >= 50:
         return f"Long Ride ({distance_km:.0f}K)"
-    elif distance_km >= 30:
+    if distance_km >= 30:
         return f"Ride ({distance_km:.0f}K)"
-    elif distance_km >= 15:
+    if distance_km >= 15:
         return f"Easy Ride ({distance_km:.0f}K)"
-    elif duration_min >= 30:
+    if duration_min >= 30:
         return f"Ride ({duration_min:.0f} min)"
-    else:
-        return "Quick Ride"
+    return "Quick Ride"
 
 
 def _generate_swim_title(distance_m: float, duration_min: float) -> str:
     """Generate title for swimming activities."""
     if distance_m >= 3800:
         return "Iron Distance Swim"
-    elif distance_m >= 1900:
+    if distance_m >= 1900:
         return "Half Iron Swim"
-    elif distance_m >= 1500:
+    if distance_m >= 1500:
         return "Olympic Swim"
-    elif distance_m >= 750:
+    if distance_m >= 750:
         return "Sprint Swim"
-    elif distance_m >= 400:
+    if distance_m >= 400:
         return f"Swim ({distance_m:.0f}m)"
-    elif duration_min >= 20:
+    if duration_min >= 20:
         return f"Swim ({duration_min:.0f} min)"
-    else:
-        return "Quick Swim"
+    return "Quick Swim"
 
 
 def _generate_walk_title(distance_km: float, duration_min: float) -> str:
     """Generate title for walking activities."""
     if distance_km >= 10:
         return f"Long Walk ({distance_km:.0f}K)"
-    elif distance_km >= 5:
+    if distance_km >= 5:
         return f"Walk ({distance_km:.1f}K)"
-    elif duration_min >= 30:
+    if duration_min >= 30:
         return f"Walk ({duration_min:.0f} min)"
-    else:
-        return "Short Walk"
+    return "Short Walk"
 
 
 def _generate_hike_title(distance_km: float, duration_min: float) -> str:
     """Generate title for hiking activities."""
     if distance_km >= 15:
         return f"Long Hike ({distance_km:.0f}K)"
-    elif distance_km >= 8:
+    if distance_km >= 8:
         return f"Hike ({distance_km:.0f}K)"
-    elif duration_min >= 60:
+    if duration_min >= 60:
         hours = duration_min / 60
         return f"Hike ({hours:.1f} hrs)"
-    else:
-        return "Short Hike"
+    return "Short Hike"
 
 
 def _generate_generic_title(sport: str, duration_min: float) -> str:
@@ -192,7 +185,6 @@ def _generate_generic_title(sport: str, duration_min: float) -> str:
     if duration_min >= 60:
         hours = duration_min / 60
         return f"{sport_display} ({hours:.1f} hrs)"
-    elif duration_min >= 10:
+    if duration_min >= 10:
         return f"{sport_display} ({duration_min:.0f} min)"
-    else:
-        return sport_display
+    return sport_display

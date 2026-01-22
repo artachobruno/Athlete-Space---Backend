@@ -909,7 +909,7 @@ class AthleteProfile(Base):
     )
 
 
-class UserSettings(Base):
+class UserSettings(Base):  # noqa: PLR0904
     """User settings for training preferences, privacy, and notifications.
 
     Stores user preferences that affect the application behavior.

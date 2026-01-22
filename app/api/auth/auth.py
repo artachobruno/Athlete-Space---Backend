@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from app.api.dependencies.auth import get_current_user_id
 from app.api.schemas.schemas import ChangeEmailRequest
+from app.config.settings import settings
 from app.core.auth_jwt import create_access_token
 from app.core.password import hash_password, verify_password
 from app.db.models import AuthProvider, User
@@ -27,27 +28,61 @@ from app.db.session import get_session
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _get_cookie_domain(request: Request) -> str | None:
-    """Get cookie domain from request host.
+def _is_mobile_client(request: Request) -> bool:
+    """Detect if request is from a mobile client (Capacitor app).
 
-    For production (athletespace.ai), returns '.athletespace.ai' to allow
-    cookie sharing across subdomains. For localhost or Capacitor, returns None (browser default).
-
-    CRITICAL: For Capacitor apps (capacitor://localhost), cookies MUST NOT have a domain set,
-    otherwise WKWebView will not send them.
+    Checks for:
+    - Origin header containing 'capacitor://' or 'ionic://'
+    - X-Client header set to 'mobile'
+    - User-Agent containing 'Capacitor' or 'Ionic'
 
     Args:
         request: FastAPI request object
 
     Returns:
-        Cookie domain string (with leading dot for subdomain sharing) or None for localhost/Capacitor
+        True if mobile client, False otherwise
     """
-    # Check if this is a Capacitor request - cookies MUST NOT have domain for Capacitor
     origin = request.headers.get("origin", "")
     if origin and ("capacitor://" in origin or "ionic://" in origin):
-        logger.debug(f"[AUTH] Capacitor request detected (origin={origin}), setting cookie domain=None")
+        return True
+
+    client_header = request.headers.get("X-Client", "").lower()
+    if client_header == "mobile":
+        return True
+
+    user_agent = request.headers.get("User-Agent", "").lower()
+    return "capacitor" in user_agent or "ionic" in user_agent
+
+
+def _get_cookie_domain(request: Request) -> str | None:
+    """Get cookie domain from request host.
+
+    For production (athletespace.ai), returns '.athletespace.ai' to allow
+    cookie sharing across subdomains. For Capacitor, returns the backend domain.
+
+    CRITICAL: For Capacitor apps (capacitor://localhost) making cross-origin requests,
+    cookies MUST have domain set to the backend domain (e.g., 'virtus-ai.onrender.com')
+    for WKWebView to send them.
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        Cookie domain string (with leading dot for subdomain sharing) or backend domain for Capacitor
+    """
+    # Check if this is a Capacitor request
+    origin = request.headers.get("origin", "")
+    if origin and ("capacitor://" in origin or "ionic://" in origin):
+        # For Capacitor cross-origin cookies, domain must be set to backend domain
+        host = request.headers.get("host", "")
+        if "onrender.com" in host:
+            # Extract domain from host (e.g., "virtus-ai.onrender.com")
+            backend_domain = host.split(":")[0]  # Remove port if present
+            logger.debug(f"[AUTH] Capacitor request detected (origin={origin}), setting cookie domain={backend_domain}")
+            return backend_domain
+        logger.debug(f"[AUTH] Capacitor request detected (origin={origin}), but host not recognized, setting cookie domain=None")
         return None
-    
+
     host = request.headers.get("host", "")
     if "athletespace.ai" in host or "onrender.com" in host:
         return ".athletespace.ai"
@@ -76,6 +111,7 @@ def _set_auth_cookie(response: Response, token: str, request: Request) -> None:
         httponly=True,
         secure=True,
         samesite="none",
+        path="/",  # CRITICAL: Required for WKWebView cross-origin cookies
         max_age=60 * 60 * 24 * 7,  # 7 days
         domain=cookie_domain,
     )
@@ -191,18 +227,36 @@ def signup(request: SignupRequest, http_request: Request):
 
         logger.info(f"[AUTH] Signup successful for user_id={user_id}, email={normalized_email}")
 
+        # Detect if this is a mobile client
+        is_mobile = _is_mobile_client(http_request)
+
+        # Calculate token expiration in seconds
+        expires_in = settings.auth_token_expire_days * 24 * 60 * 60
+
         response_data = {
             "access_token": token,
             "token_type": "bearer",
             "user_id": user_id,
             "email": normalized_email,
         }
-        logger.debug(f"[AUTH] Returning signup response with token for user_id={user_id}")
 
-        # Create response and set cookie
+        # Add expires_in for mobile clients
+        if is_mobile:
+            response_data["expires_in"] = expires_in
+            logger.debug(f"[AUTH] Mobile client detected, returning token with expires_in={expires_in}")
+
+        logger.debug(f"[AUTH] Returning signup response with token for user_id={user_id}, is_mobile={is_mobile}")
+
+        # Create response
         response = JSONResponse(content=response_data)
-        _set_auth_cookie(response, token, http_request)
-        logger.debug(f"[AUTH] Set authentication cookie for user_id={user_id}")
+
+        # Only set cookie for web clients (not mobile)
+        if not is_mobile:
+            _set_auth_cookie(response, token, http_request)
+            logger.debug(f"[AUTH] Set authentication cookie for user_id={user_id} (web client)")
+        else:
+            logger.debug("[AUTH] Skipping cookie for mobile client, token returned in response body")
+
         return response
 
 
@@ -296,6 +350,12 @@ def login(request: LoginRequest, http_request: Request):
 
         logger.info(f"[AUTH] Login successful for user_id={user.id}, email={normalized_email}")
 
+        # Detect if this is a mobile client
+        is_mobile = _is_mobile_client(http_request)
+
+        # Calculate token expiration in seconds
+        expires_in = settings.auth_token_expire_days * 24 * 60 * 60
+
         response_data = {
             "access_token": token,
             "token_type": "bearer",
@@ -303,10 +363,21 @@ def login(request: LoginRequest, http_request: Request):
             "email": user.email,
         }
 
-        # Create response and set cookie
+        # Add expires_in for mobile clients
+        if is_mobile:
+            response_data["expires_in"] = expires_in
+            logger.debug(f"[AUTH] Mobile client detected, returning token with expires_in={expires_in}")
+
+        # Create response
         response = JSONResponse(content=response_data)
-        _set_auth_cookie(response, token, http_request)
-        logger.debug(f"[AUTH] Set authentication cookie for user_id={user.id}")
+
+        # Only set cookie for web clients (not mobile)
+        if not is_mobile:
+            _set_auth_cookie(response, token, http_request)
+            logger.debug(f"[AUTH] Set authentication cookie for user_id={user.id} (web client)")
+        else:
+            logger.debug("[AUTH] Skipping cookie for mobile client, token returned in response body")
+
         return response
 
 

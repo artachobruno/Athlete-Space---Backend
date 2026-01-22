@@ -445,13 +445,23 @@ def strava_callback(
     response = RedirectResponse(url=redirect_url)
 
     # Determine cookie domain
-    # CRITICAL: For Capacitor apps (capacitor://localhost), cookies MUST NOT have a domain set,
-    # otherwise WKWebView will not send them.
+    # CRITICAL: For Capacitor apps (capacitor://localhost) making cross-origin requests,
+    # cookies MUST have domain set to the backend domain for WKWebView to send them.
     origin = request.headers.get("origin", "")
     cookie_domain: str | None = None
     if origin and ("capacitor://" in origin or "ionic://" in origin):
-        logger.debug(f"[STRAVA_OAUTH] Capacitor request detected (origin={origin}), setting cookie domain=None")
-        cookie_domain = None
+        # For Capacitor cross-origin cookies, domain must be set to backend domain
+        host = request.headers.get("host", "")
+        if "onrender.com" in host:
+            backend_domain = host.split(":")[0]  # Remove port if present
+            logger.debug(f"[STRAVA_OAUTH] Capacitor request detected (origin={origin}), setting cookie domain={backend_domain}")
+            cookie_domain = backend_domain
+        else:
+            logger.debug(
+                f"[STRAVA_OAUTH] Capacitor request detected (origin={origin}), "
+                "but host not recognized, setting cookie domain=None"
+            )
+            cookie_domain = None
     else:
         host = request.headers.get("host", "")
         if "athletespace.ai" in host or "onrender.com" in host:
@@ -463,7 +473,7 @@ def strava_callback(
         httponly=True,
         secure=True,  # HTTPS only in production
         samesite="none",  # Required for cross-origin cookie
-        path="/",  # Available for all paths
+        path="/",  # CRITICAL: Required for WKWebView cross-origin cookies
         max_age=30 * 24 * 60 * 60,  # 30 days
         domain=cookie_domain,
     )

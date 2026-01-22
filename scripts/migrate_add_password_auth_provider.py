@@ -11,10 +11,12 @@ Run with:
 import os
 import sys
 
+# Add the app directory to the path
+from pathlib import Path
+
 from sqlalchemy import create_engine, text
 
-# Add the app directory to the path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def migrate() -> None:

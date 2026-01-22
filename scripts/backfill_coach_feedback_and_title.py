@@ -93,10 +93,7 @@ def _is_generic_title(title: str | None) -> bool:
         "run", "running", "ride", "cycling", "swim", "swimming",
         "activity", "workout", "exercise", "training",
     }
-    if title_lower in generic_exact:
-        return True
-
-    return False
+    return title_lower in generic_exact
 
 
 def _get_workout_type(workout: Workout) -> str:
@@ -169,7 +166,7 @@ def _get_title_from_workout(workout: Workout) -> str:
     return "Training Run"
 
 
-def _needs_title_update(activity: Activity, workout: Workout) -> bool:
+def _needs_title_update(activity: Activity, workout: Workout) -> bool:  # noqa: ARG001
     """Check if activity needs a title update.
 
     Args:
@@ -196,7 +193,7 @@ def _needs_interpretation(compliance: WorkoutComplianceSummary) -> bool:
 
 async def _process_interpretation(
     db: Session,
-    workout: Workout,
+    workout: Workout,  # noqa: ARG001
     compliance: WorkoutComplianceSummary,
     stats: dict[str, int],
     dry_run: bool,

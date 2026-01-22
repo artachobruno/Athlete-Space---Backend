@@ -20,7 +20,7 @@ router = APIRouter(prefix="/support", tags=["support"])
 
 class SupportRequest(BaseModel):
     """Support form submission request."""
-    
+
     name: str = Field(..., min_length=1, max_length=100, description="Sender's name")
     email: EmailStr = Field(..., description="Sender's email address")
     subject: str = Field(..., min_length=1, max_length=200, description="Support request subject")
@@ -29,24 +29,24 @@ class SupportRequest(BaseModel):
 
 class SupportResponse(BaseModel):
     """Support form submission response."""
-    
+
     success: bool
     message: str
 
 
 def send_support_email(request: SupportRequest) -> bool:
     """Send support email via SMTP.
-    
+
     Args:
         request: Support request with name, email, subject, and message
-        
+
     Returns:
         True if email sent successfully, False otherwise
     """
     if not settings.smtp_host or not settings.smtp_user or not settings.smtp_password:
         logger.warning("[SUPPORT] SMTP not configured, cannot send email")
         return False
-    
+
     try:
         # Create message
         msg = MIMEMultipart("alternative")
@@ -54,7 +54,7 @@ def send_support_email(request: SupportRequest) -> bool:
         msg["From"] = settings.smtp_user
         msg["To"] = settings.support_email
         msg["Reply-To"] = request.email
-        
+
         # Plain text version
         text_body = f"""
 New Support Request from AthleteSpace
@@ -69,7 +69,7 @@ Message:
 ---
 This message was sent via the AthleteSpace support form.
 """
-        
+
         # HTML version
         html_body = f"""
 <!DOCTYPE html>
@@ -117,21 +117,19 @@ This message was sent via the AthleteSpace support form.
 </body>
 </html>
 """
-        
+
         msg.attach(MIMEText(text_body, "plain"))
         msg.attach(MIMEText(html_body, "html"))
-        
+
         # Send email
         logger.info(f"[SUPPORT] Connecting to SMTP server {settings.smtp_host}:{settings.smtp_port}")
-        
+
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
             server.starttls()
             server.login(settings.smtp_user, settings.smtp_password)
             server.send_message(msg)
-        
+
         logger.info(f"[SUPPORT] Email sent successfully from {request.email} to {settings.support_email}")
-        return True
-        
     except smtplib.SMTPAuthenticationError as e:
         logger.error(f"[SUPPORT] SMTP authentication failed: {e}")
         return False
@@ -141,26 +139,28 @@ This message was sent via the AthleteSpace support form.
     except Exception as e:
         logger.exception(f"[SUPPORT] Unexpected error sending email: {e}")
         return False
+    else:
+        return True
 
 
 @router.post("", response_model=SupportResponse)
 async def submit_support_request(request: SupportRequest) -> SupportResponse:
     """Submit a support request.
-    
+
     Sends an email to support@athletespace.ai with the user's message.
     No authentication required - this is a public endpoint.
-    
+
     Args:
         request: Support request with name, email, subject, and message
-        
+
     Returns:
         Success response with confirmation message
-        
+
     Raises:
         HTTPException: If email sending fails
     """
     logger.info(f"[SUPPORT] Received support request from {request.email}: {request.subject}")
-    
+
     # Check if SMTP is configured
     if not settings.smtp_host:
         logger.error("[SUPPORT] SMTP not configured - cannot process support request")
@@ -168,16 +168,16 @@ async def submit_support_request(request: SupportRequest) -> SupportResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Support email service is not configured. Please email support@athletespace.ai directly.",
         )
-    
+
     # Send the email
     success = send_support_email(request)
-    
+
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to send support request. Please try again or email support@athletespace.ai directly.",
         )
-    
+
     return SupportResponse(
         success=True,
         message="Your support request has been sent. We'll get back to you as soon as possible.",

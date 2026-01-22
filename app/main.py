@@ -132,8 +132,9 @@ def _check_migrations_complete() -> bool:
 
     Returns True if we can skip migrations (schema is current), False if migrations need to run.
     """
-    from sqlalchemy import text
-    from app.db.session import engine
+    from sqlalchemy import text  # noqa: PLC0415
+
+    from app.db.session import engine  # noqa: PLC0415
 
     try:
         with engine.connect() as conn:
@@ -147,14 +148,17 @@ def _check_migrations_complete() -> bool:
             # Also check for preferences JSONB in user_settings (schema v2 marker)
             if has_compliance_table:
                 result = conn.execute(
-                    text("SELECT column_name FROM information_schema.columns WHERE table_name = 'user_settings' AND column_name = 'preferences'")
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'user_settings' AND column_name = 'preferences'"
+                    )
                 )
                 has_preferences = result.fetchone() is not None
                 if has_preferences:
                     logger.info("Schema markers found - migrations already complete, skipping")
                     return True
-
-        return False
+                return False
+            return False
     except Exception as e:
         logger.warning(f"Could not check migration status: {e} - will run migrations")
         return False
@@ -202,15 +206,13 @@ def initialize_database() -> None:
             logger.info("Verifying database schema...")
             verify_schema()
             logger.info("✓ Database schema verification completed")
-            logging.info(">>> database initialized (fast path) <<<")
-            print("DB INIT DONE (FAST)", flush=True)
-            return
         except RuntimeError as e:
             logger.warning(f"Schema verification failed on fast path: {e} - will run migrations")
             # Fall through to run migrations
-        except Exception:
-            logger.warning("Schema verification failed on fast path - will run migrations")
-            # Fall through to run migrations
+        else:
+            logging.info(">>> database initialized (fast path) <<<")
+            print("DB INIT DONE (FAST)", flush=True)
+            return
 
     # Run migrations for derived tables
     logger.info("Running database migrations (full path)")

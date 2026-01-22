@@ -89,13 +89,13 @@ def canonical_step_to_db_step(
                 target_min = calc_min
                 target_max = calc_max
                 target_value = calc_value
-    
+
     # Default to pace for running if no target was calculated and sport is running
     if not target_metric and sport and sport.lower() == "run":
         target_metric = StepTargetType.PACE.value
         # If we have user_settings but no threshold_pace_ms, leave min/max as None
         # The frontend can handle displaying pace targets even without specific values
-    
+
     # Fallback to canonical target_type if no user settings and no default
     if not target_metric and canonical_step.target_type != StepTargetType.NONE:
         target_metric = canonical_step.target_type.value

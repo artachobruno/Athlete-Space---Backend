@@ -59,7 +59,7 @@ def get_session_compliance(session_id: str, user_id: str) -> SessionCompliance |
                 status="completed",
                 completed_duration_min=planned[0].duration_minutes,
             )
-        if planned[0].status == "skipped" or planned[0].status == "cancelled":
+        if planned[0].status == "skipped" or planned[0].status == "deleted":
             return SessionCompliance(
                 session_id=session_id,
                 status="skipped",

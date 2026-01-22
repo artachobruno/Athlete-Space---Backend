@@ -34,7 +34,7 @@ async def execute_regeneration(
 
     Flow:
     1. Fetch future sessions in range
-    2. Mark them as replaced (status="cancelled" with note)
+    2. Mark them as replaced (status="deleted" with note)
     3. Determine plan context from existing sessions
     4. Call plan generator
     5. Persist new sessions with revision_id
@@ -78,7 +78,7 @@ async def execute_regeneration(
 
     # Only replace non-completed sessions
     query = query.where(
-        PlannedSession.status.notin_(["completed", "cancelled", "skipped"]),
+        PlannedSession.status.notin_(["completed", "deleted", "skipped"]),
     )
 
     existing_sessions = list(session.execute(query).scalars().all())
@@ -92,7 +92,7 @@ async def execute_regeneration(
     replacement_note = f"[Replaced by regeneration {revision_id}]"
 
     for existing_session in existing_sessions:
-        existing_session.status = "cancelled"
+        existing_session.status = "deleted"
         if existing_session.notes:
             existing_session.notes = f"{existing_session.notes}\n{replacement_note}"
         else:

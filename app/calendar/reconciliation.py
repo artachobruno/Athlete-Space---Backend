@@ -182,7 +182,7 @@ def _reconcile_single_session(
         Reconciliation result for this session
     """
     # Check for explicit skip
-    if planned.status in {"skipped", "cancelled"}:
+    if planned.status in {"skipped", "deleted"}:
         return ReconciliationResult(
             session_id=planned.session_id,
             date=planned.date.isoformat(),
@@ -190,7 +190,7 @@ def _reconcile_single_session(
             matched_activity_id=None,
             confidence=1.0,
             reason_code=ReasonCode.USER_MARKED_SKIPPED,
-            explanation="Session was marked as skipped or cancelled",
+            explanation="Session was marked as skipped or deleted",
         )
 
     # Check for rest day

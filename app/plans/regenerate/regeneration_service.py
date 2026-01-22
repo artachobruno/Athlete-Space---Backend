@@ -209,7 +209,7 @@ def regenerate_plan(
 
             # Only get non-completed sessions (those that will be replaced)
             old_sessions_query = old_sessions_query.where(
-                PlannedSession.status.notin_(["completed", "cancelled", "skipped"]),
+                PlannedSession.status.notin_(["completed", "deleted", "skipped"]),
             )
 
             old_sessions = list(session.execute(old_sessions_query).scalars().all())

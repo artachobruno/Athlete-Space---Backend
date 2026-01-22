@@ -85,9 +85,9 @@ def validate_regeneration(
     if end_datetime:
         query = query.where(PlannedSession.starts_at <= end_datetime)
 
-    # Exclude completed/cancelled/skipped sessions
+    # Exclude completed/deleted/skipped sessions
     query = query.where(
-        PlannedSession.status.notin_(["completed", "cancelled", "skipped"]),
+        PlannedSession.status.notin_(["completed", "deleted", "skipped"]),
     )
 
     existing_sessions = list(session.execute(query).scalars().all())

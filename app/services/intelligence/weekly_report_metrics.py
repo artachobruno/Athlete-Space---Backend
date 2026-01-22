@@ -49,7 +49,7 @@ def compute_weekly_report_metrics(athlete_id: int, week_start: datetime) -> dict
                     PlannedSession.user_id == user_id,
                     PlannedSession.starts_at >= week_start,
                     PlannedSession.starts_at <= week_end_datetime,
-                    PlannedSession.status != "cancelled",
+                    PlannedSession.status != "deleted",
                 )
             )
             .scalars()

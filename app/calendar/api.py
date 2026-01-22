@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user_id
@@ -978,58 +979,165 @@ def update_session_status(
 
     with get_session() as session:
         # Find the planned session
-        planned_session = session.execute(
-            select(PlannedSession).where(
-                PlannedSession.id == session_id,
-                PlannedSession.user_id == user_id,
-            )
-        ).scalar_one_or_none()
-
-        if not planned_session:
-            raise HTTPException(status_code=404, detail="Planned session not found")
-
-        # If changing from completed to another status, unlink the session
-        if planned_session.status == "completed" and request.status != "completed":
-            unlink_by_planned(session, session_id, reason=f"Status changed from completed to {request.status}")
-
-        # Update status
-        planned_session.status = request.status
-
-        # Schema v2: Create SessionLink if marking as completed with activity ID
-        if request.status == "completed" and request.completed_activity_id:
-            try:
-                upsert_link(
-                    session=session,
-                    user_id=user_id,
-                    planned_session_id=session_id,
-                    activity_id=request.completed_activity_id,
-                    status="confirmed",  # Manual status updates are confirmed
-                    method="manual",
-                    confidence=1.0,  # Manual actions have full confidence
-                    notes="Status updated to completed via update_session_status endpoint",
+        # Handle missing execution_notes column gracefully (migration may not have run yet)
+        use_workaround = False
+        try:
+            planned_session = session.execute(
+                select(PlannedSession).where(
+                    PlannedSession.id == session_id,
+                    PlannedSession.user_id == user_id,
                 )
-                logger.info(
-                    "Created session link when marking as completed",
-                    planned_session_id=session_id,
-                    activity_id=request.completed_activity_id,
-                    user_id=user_id,
-                )
-            except ValueError as e:
-                # Activity not found or validation error
+            ).scalar_one_or_none()
+        except ProgrammingError as e:
+            error_msg = str(e).lower()
+            if "execution_notes" in error_msg and ("does not exist" in error_msg or "undefinedcolumn" in error_msg):
+                # Column doesn't exist - use workaround with raw SQL
                 logger.warning(
-                    "Failed to create session link",
-                    planned_session_id=session_id,
-                    activity_id=request.completed_activity_id,
-                    error=str(e),
+                    "execution_notes column missing, using workaround",
+                    session_id=session_id,
                     user_id=user_id,
                 )
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Activity not found or invalid: {e!s}",
-                ) from e
+                use_workaround = True
+            else:
+                # Different error - re-raise
+                raise
 
-        session.commit()
-        session.refresh(planned_session)
+        if use_workaround:
+            # Use raw SQL to query and update (excluding execution_notes)
+            result = session.execute(
+                text("""
+                    SELECT id, user_id, season_plan_id, revision_id, starts_at, ends_at, sport,
+                           session_type, title, notes, must_dos, duration_seconds, distance_meters,
+                           intensity, intent, workout_id, status, tags, created_at, updated_at
+                    FROM planned_sessions
+                    WHERE id = :session_id AND user_id = :user_id
+                """),
+                {"session_id": session_id, "user_id": user_id},
+            ).fetchone()
+            if not result:
+                raise HTTPException(status_code=404, detail="Planned session not found")
+
+            old_status = result[16]  # status is at index 16
+
+            # If changing from completed to another status, unlink the session
+            if old_status == "completed" and request.status != "completed":
+                unlink_by_planned(session, session_id, reason=f"Status changed from completed to {request.status}")
+
+            # Update status using raw SQL
+            session.execute(
+                text("""
+                    UPDATE planned_sessions
+                    SET status = :status, updated_at = NOW()
+                    WHERE id = :session_id AND user_id = :user_id
+                """),
+                {"status": request.status, "session_id": session_id, "user_id": user_id},
+            )
+
+            # Schema v2: Create SessionLink if marking as completed with activity ID
+            if request.status == "completed" and request.completed_activity_id:
+                try:
+                    upsert_link(
+                        session=session,
+                        user_id=user_id,
+                        planned_session_id=session_id,
+                        activity_id=request.completed_activity_id,
+                        status="confirmed",
+                        method="manual",
+                        confidence=1.0,
+                        notes="Status updated to completed via update_session_status endpoint",
+                    )
+                    logger.info(
+                        "Created session link when marking as completed",
+                        planned_session_id=session_id,
+                        activity_id=request.completed_activity_id,
+                        user_id=user_id,
+                    )
+                except ValueError as e:
+                    logger.warning(
+                        "Failed to create session link",
+                        planned_session_id=session_id,
+                        activity_id=request.completed_activity_id,
+                        error=str(e),
+                        user_id=user_id,
+                    )
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Activity not found or invalid: {e!s}",
+                    ) from e
+
+            session.commit()
+
+            # Construct PlannedSession-like object for response (without execution_notes)
+            planned_session = PlannedSession(
+                id=result[0],
+                user_id=result[1],
+                season_plan_id=result[2],
+                revision_id=result[3],
+                starts_at=result[4],
+                ends_at=result[5],
+                sport=result[6],
+                session_type=result[7],
+                title=result[8],
+                notes=result[9],
+                execution_notes=None,  # Column doesn't exist
+                must_dos=result[10],
+                duration_seconds=result[11],
+                distance_meters=result[12],
+                intensity=result[13],
+                intent=result[14],
+                workout_id=result[15],
+                status=request.status,  # Updated status
+                tags=result[17],
+                created_at=result[18],
+                updated_at=result[19],
+            )
+        else:
+            # Normal path - column exists
+            if not planned_session:
+                raise HTTPException(status_code=404, detail="Planned session not found")
+
+            # If changing from completed to another status, unlink the session
+            if planned_session.status == "completed" and request.status != "completed":
+                unlink_by_planned(session, session_id, reason=f"Status changed from completed to {request.status}")
+
+            # Update status
+            planned_session.status = request.status
+
+            # Schema v2: Create SessionLink if marking as completed with activity ID
+            if request.status == "completed" and request.completed_activity_id:
+                try:
+                    upsert_link(
+                        session=session,
+                        user_id=user_id,
+                        planned_session_id=session_id,
+                        activity_id=request.completed_activity_id,
+                        status="confirmed",  # Manual status updates are confirmed
+                        method="manual",
+                        confidence=1.0,  # Manual actions have full confidence
+                        notes="Status updated to completed via update_session_status endpoint",
+                    )
+                    logger.info(
+                        "Created session link when marking as completed",
+                        planned_session_id=session_id,
+                        activity_id=request.completed_activity_id,
+                        user_id=user_id,
+                    )
+                except ValueError as e:
+                    # Activity not found or validation error
+                    logger.warning(
+                        "Failed to create session link",
+                        planned_session_id=session_id,
+                        activity_id=request.completed_activity_id,
+                        error=str(e),
+                        user_id=user_id,
+                    )
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Activity not found or invalid: {e!s}",
+                    ) from e
+
+            session.commit()
+            session.refresh(planned_session)
 
         return _planned_session_to_calendar(planned_session)
 

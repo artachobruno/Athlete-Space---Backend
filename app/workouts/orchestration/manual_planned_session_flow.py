@@ -25,7 +25,7 @@ from app.db.models import UserSettings
 from app.workouts.attribute_extraction import extract_workout_signals
 from app.workouts.canonical import StepIntensity, StepTargetType, StructuredWorkout, WorkoutStep
 from app.workouts.input import ActivityInput
-from app.workouts.llm.step_generator import generate_steps_from_notes
+from app.workouts.llm.retry import generate_with_retry
 from app.workouts.models import Workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -169,7 +169,10 @@ async def create_structured_workout_from_manual_session(
             user_id=user_id,
             sport=sport,
         )
-        structured_workout = await generate_steps_from_notes(activity_input)
+        structured_workout = await generate_with_retry(
+            activity_input,
+            activity_distance=total_distance_meters,
+        )
 
     # Step 3.5: Fetch user settings for target calculation
     # Defensive query: handle schema drift (missing ftp_watts column)

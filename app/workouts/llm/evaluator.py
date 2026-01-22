@@ -12,6 +12,11 @@ from pydantic_ai import Agent
 
 from app.coach.config.models import USER_FACING_MODEL
 from app.services.llm.model import get_model
+from app.workouts.llm.logging_helpers import (
+    log_llm_extracted_fields,
+    log_llm_raw_response,
+    log_llm_request,
+)
 from app.workouts.llm.prompts import build_step_prompt, build_workout_prompt
 from app.workouts.llm.schemas import StepLLMInterpretation, WorkoutLLMInterpretation
 
@@ -74,16 +79,34 @@ class WorkoutLLMEvaluator:
                 system_prompt=system_prompt,
                 output_type=StepLLMInterpretation,
             )
-            logger.debug(
-                f"LLM Prompt: Step Interpretation\n"
-                f"System Prompt:\n{system_prompt}\n\n"
-                f"User Prompt:\n{prompt}",
+            from app.workouts.llm.logging_helpers import (
+                log_llm_extracted_fields,
+                log_llm_raw_response,
+                log_llm_request,
+            )
+            
+            # Log the actual prompt submitted to LLM
+            log_llm_request(
+                context="Step Interpretation",
                 system_prompt=system_prompt,
                 user_prompt=prompt,
             )
 
             result = await agent.run(prompt)
+            
+            # Log raw response from LLM (before parsing)
+            log_llm_raw_response(
+                context="Step Interpretation",
+                result=result,
+            )
+            
             interpretation = result.output
+            
+            # Log extracted/parsed fields
+            log_llm_extracted_fields(
+                context="Step Interpretation",
+                parsed_output=interpretation,
+            )
 
             logger.info(
                 "Step LLM interpretation generated",
@@ -140,16 +163,28 @@ class WorkoutLLMEvaluator:
                 system_prompt=system_prompt,
                 output_type=WorkoutLLMInterpretation,
             )
-            logger.debug(
-                f"LLM Prompt: Workout Interpretation\n"
-                f"System Prompt:\n{system_prompt}\n\n"
-                f"User Prompt:\n{prompt}",
+            # Log the actual prompt submitted to LLM
+            log_llm_request(
+                context="Workout Interpretation",
                 system_prompt=system_prompt,
                 user_prompt=prompt,
             )
 
             result = await agent.run(prompt)
+            
+            # Log raw response from LLM (before parsing)
+            log_llm_raw_response(
+                context="Workout Interpretation",
+                result=result,
+            )
+            
             interpretation = result.output
+            
+            # Log extracted/parsed fields
+            log_llm_extracted_fields(
+                context="Workout Interpretation",
+                parsed_output=interpretation,
+            )
 
             logger.info(
                 "Workout LLM interpretation generated",

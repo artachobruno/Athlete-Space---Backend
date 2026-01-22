@@ -16,6 +16,11 @@ from app.coach.config.models import USER_FACING_MODEL
 from app.services.llm.model import get_model
 from app.workouts.canonical import StructuredWorkout
 from app.workouts.input import ActivityInput
+from app.workouts.llm.logging_helpers import (
+    log_llm_extracted_fields,
+    log_llm_raw_response,
+    log_llm_request,
+)
 
 
 def build_workout_prompt(activity: ActivityInput) -> str:
@@ -90,7 +95,11 @@ async def generate_steps_from_notes(activity: ActivityInput) -> StructuredWorkou
     model = get_model("openai", USER_FACING_MODEL)
     prompt = build_workout_prompt(activity)
 
-    system_prompt = "You are a workout structuring engine. Output JSON only."
+    system_prompt = (
+        "You are a workout structuring engine. "
+        "You MUST output valid JSON only, without any markdown code blocks, explanations, or extra text. "
+        "The JSON must be parseable and start with '{' and end with '}'."
+    )
     agent = Agent(
         model=model,
         system_prompt=system_prompt,
@@ -99,20 +108,50 @@ async def generate_steps_from_notes(activity: ActivityInput) -> StructuredWorkou
 
     try:
         logger.info(f"Generating workout steps from notes for sport: {activity.sport}")
-        logger.debug(
-            f"LLM Prompt: Workout Step Generation\n"
-            f"System Prompt:\n{system_prompt}\n\n"
-            f"User Prompt:\n{prompt}",
+        
+        # Log the actual prompt submitted to LLM
+        log_llm_request(
+            context="Workout Step Generation",
             system_prompt=system_prompt,
             user_prompt=prompt,
         )
+        
         result = await agent.run(prompt)
+        
+        # Log raw response from LLM (before parsing)
+        log_llm_raw_response(
+            context="Workout Step Generation",
+            result=result,
+        )
+        
+        # Log extracted/parsed fields
+        parsed_output = result.output
+        log_llm_extracted_fields(
+            context="Workout Step Generation",
+            parsed_output=parsed_output,
+        )
+        
         logger.info(f"Successfully generated workout with {len(result.output.steps)} steps")
     except ValidationError as e:
         logger.error(f"LLM output validation failed: {e}")
+        logger.error(f"Validation error details: {e.errors() if hasattr(e, 'errors') else 'No details available'}")
         raise ValueError(f"LLM generated invalid workout structure: {e}") from e
+    except KeyError as e:
+        logger.error(f"KeyError during JSON parsing: {e}")
+        logger.error(
+            "This usually indicates the LLM response format is incorrect. "
+            "The response may be wrapped in markdown code blocks or contain formatting issues."
+        )
+        raise RuntimeError(
+            f"Failed to parse LLM response: KeyError accessing '{e}'. "
+            "The LLM may have returned improperly formatted JSON. "
+            "Please try again or check the workout notes format."
+        ) from e
     except Exception as e:
         logger.exception("LLM call failed")
-        raise RuntimeError(f"Failed to generate workout steps: {type(e).__name__}: {e}") from e
+        error_type = type(e).__name__
+        error_msg = str(e)
+        logger.error(f"Exception type: {error_type}, message: {error_msg}")
+        raise RuntimeError(f"Failed to generate workout steps: {error_type}: {error_msg}") from e
     else:
         return result.output

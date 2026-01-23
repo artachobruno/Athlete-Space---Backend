@@ -22,7 +22,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
+from sqlalchemy.orm import DeclarativeBase, Mapped, deferred, mapped_column, relationship, validates
 
 
 class Base(DeclarativeBase):
@@ -424,11 +424,12 @@ class SeasonPlan(Base):
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
 
     # Full plan data (stored as JSON - all metadata is in plan_data)
-    plan_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Use deferred to handle cases where column doesn't exist yet
+    plan_data: Mapped[dict | None] = deferred(mapped_column(JSON, nullable=True))
 
-    # Versioning
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Versioning (optional - may not exist in all database schemas)
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True, default=1)
+    is_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

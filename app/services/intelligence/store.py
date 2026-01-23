@@ -169,14 +169,27 @@ class IntentStore:
                 logger.warning("get_latest_season_plan called without user_id or valid athlete_id")
                 return None
 
-            query = select(SeasonPlanModel).where(
-                SeasonPlanModel.user_id == user_id,
-            )
+            # Query season plan - handle missing columns gracefully
+            try:
+                query = select(SeasonPlanModel).where(
+                    SeasonPlanModel.user_id == user_id,
+                )
 
-            if active_only:
-                query = query.where(SeasonPlanModel.is_active.is_(True))
+                if active_only:
+                    query = query.where(SeasonPlanModel.is_active.is_(True))
 
-            return session.execute(query.order_by(SeasonPlanModel.version.desc())).scalar_one_or_none()
+                return session.execute(query.order_by(SeasonPlanModel.version.desc())).scalar_one_or_none()
+            except ProgrammingError as e:
+                # Handle case where columns don't exist in database
+                if "does not exist" in str(e).lower() or "column" in str(e).lower():
+                    logger.warning(
+                        f"SeasonPlan table missing expected columns (plan_data, version, or is_active). "
+                        f"Database schema needs migration. Error: {e}"
+                    )
+                    # Return None since we can't query without the required columns
+                    return None
+                # Re-raise if it's a different programming error
+                raise
 
     @staticmethod
     def save_weekly_intent(

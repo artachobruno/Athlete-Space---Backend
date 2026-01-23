@@ -205,6 +205,13 @@ def get_season_plan(user_id: str = Depends(get_current_user_id)):
                 detail="Season plan not available. The coach is still learning about your training patterns.",
             )
 
+    # Handle case where plan_data might be None (missing column)
+    if not plan_model.plan_data:
+        raise HTTPException(
+            status_code=503,
+            detail="Season plan data not available. Database schema needs migration.",
+        )
+
     try:
         plan = SeasonPlan(**plan_model.plan_data)
     except Exception as e:

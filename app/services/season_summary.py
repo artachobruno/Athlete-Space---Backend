@@ -266,6 +266,10 @@ async def build_season_summary(
         if not plan_model:
             raise ValueError("Season plan not available")
 
+        # Handle case where plan_data might be None (missing column)
+        if not plan_model.plan_data:
+            raise ValueError("Season plan data not available (database schema mismatch)")
+
         try:
             plan = SeasonPlan(**plan_model.plan_data)
         except Exception as e:

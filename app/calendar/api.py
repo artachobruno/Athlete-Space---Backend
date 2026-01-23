@@ -26,7 +26,7 @@ from app.api.schemas.schemas import (
 from app.calendar.auto_match_service import auto_match_sessions
 from app.calendar.reconciliation_service import reconcile_calendar
 from app.calendar.view_helper import calendar_session_from_view_row, get_calendar_items_from_view
-from app.db.models import Activity, PlannedSession, StravaAccount, User
+from app.db.models import Activity, CoachFeedback, PlannedSession, StravaAccount, User
 from app.db.session import get_session
 from app.pairing.session_links import (
     get_link_for_activity,
@@ -637,14 +637,75 @@ def _convert_workout_step_to_schema(
     }
 
 
+def _persist_coach_feedback(
+    session: Session,
+    planned_session_id: str,
+    user_id: str,
+    instructions: list[str],
+    steps: list[dict[str, Any]],
+    coach_insight: str,
+) -> None:
+    """Persist coach feedback to database.
+
+    Args:
+        session: Database session
+        planned_session_id: ID of the planned session
+        user_id: User ID
+        instructions: List of execution instructions
+        steps: List of workout step dictionaries
+        coach_insight: Coach insight text
+    """
+    try:
+        # Check if feedback already exists
+        existing = session.execute(
+            select(CoachFeedback).where(CoachFeedback.planned_session_id == planned_session_id)
+        ).scalar_one_or_none()
+
+        if existing:
+            # Update existing feedback
+            existing.instructions = instructions
+            existing.steps = steps
+            existing.coach_insight = coach_insight
+            existing.updated_at = datetime.now(timezone.utc)
+            logger.debug(
+                "Updated existing coach feedback",
+                planned_session_id=planned_session_id,
+            )
+        else:
+            # Create new feedback
+            feedback = CoachFeedback(
+                planned_session_id=planned_session_id,
+                user_id=user_id,
+                instructions=instructions,
+                steps=steps,
+                coach_insight=coach_insight,
+            )
+            session.add(feedback)
+            logger.debug(
+                "Created new coach feedback",
+                planned_session_id=planned_session_id,
+            )
+
+        session.commit()
+    except Exception as e:
+        logger.warning(
+            "Failed to persist coach feedback",
+            planned_session_id=planned_session_id,
+            error=str(e),
+        )
+        session.rollback()
+        # Don't raise - allow request to continue without persisted feedback
+
+
 async def _process_planned_session_for_today(
-    session: Session, row: dict[str, Any]
+    session: Session, row: dict[str, Any], user_id: str
 ) -> tuple[list[str] | None, list[dict[str, Any]] | None, str | None]:
     """Process a planned session row and generate LLM content if needed.
 
     Args:
         session: Database session
         row: Calendar item row from view
+        user_id: User ID for the session
 
     Returns:
         Tuple of (instructions, steps, coach_insight)
@@ -714,6 +775,18 @@ async def _process_planned_session_for_today(
                 ]
             coach_insight = content.coach_insight
 
+            # Persist coach feedback to database
+            item_id = row.get("item_id")
+            if item_id:
+                _persist_coach_feedback(
+                    session,
+                    planned_session_id=str(item_id),
+                    user_id=user_id,
+                    instructions=instructions or [],
+                    steps=steps or [],
+                    coach_insight=coach_insight or "",
+                )
+
             logger.info(
                 "Generated LLM content for today session",
                 session_id=row.get("item_id"),
@@ -735,6 +808,18 @@ async def _process_planned_session_for_today(
             )
             instructions = content.instructions
             coach_insight = content.coach_insight
+
+            # Persist coach feedback to database
+            item_id = row.get("item_id")
+            if item_id:
+                _persist_coach_feedback(
+                    session,
+                    planned_session_id=str(item_id),
+                    user_id=user_id,
+                    instructions=instructions or [],
+                    steps=steps or [],
+                    coach_insight=coach_insight or "",
+                )
     except Exception as e:
         # Log error but don't fail the request - return session without LLM content
         logger.warning(
@@ -882,21 +967,25 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                 enriched_row = {**row, "payload": payload}
                 enriched_rows.append(enriched_row)
 
-            # Generate LLM content for planned sessions (not completed ones)
+            # Generate LLM content for planned sessions (not completed ones) if not already persisted
             sessions = []
             for row in enriched_rows:
                 # Only generate LLM content for planned sessions (not activities or completed)
+                # and only if feedback is not already in the view
                 kind = str(row.get("kind", ""))
                 status = str(row.get("status", "planned"))
                 is_planned = kind == "planned" and status == "planned"
+                payload = row.get("payload") or {}
+                has_persisted_feedback = bool(payload.get("coach_insight") or payload.get("instructions"))
 
                 instructions: list[str] | None = None
                 steps: list[dict[str, Any]] | None = None
                 coach_insight: str | None = None
 
-                if is_planned:
+                # Only generate if it's a planned session and feedback is not already persisted
+                if is_planned and not has_persisted_feedback:
                     instructions, steps, coach_insight = await _process_planned_session_for_today(
-                        session, row
+                        session, row, user_id
                     )
 
                 sessions.append(
@@ -905,6 +994,7 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                         instructions=instructions,
                         steps=steps,
                         coach_insight=coach_insight,
+                        prefer_view_data=True,  # Prefer persisted data from view
                     )
                 )
 

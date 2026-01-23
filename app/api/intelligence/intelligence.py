@@ -228,8 +228,8 @@ def get_season_plan(user_id: str = Depends(get_current_user_id)):
         user_id=plan_model.user_id,
         athlete_id=athlete_id,  # Use computed athlete_id from user_id
         plan=plan,
-        version=plan_model.version,
-        is_active=plan_model.is_active,
+        version=plan_model.version if plan_model.version is not None else 1,
+        is_active=plan_model.is_active if plan_model.is_active is not None else True,
         created_at=plan_model.created_at,
         updated_at=plan_model.updated_at,
     )
@@ -616,8 +616,8 @@ def list_season_plans(
                     primary_race_date=primary_race_date,
                     primary_race_name=primary_race_name,
                     total_weeks=total_weeks,
-                    version=plan_model.version,
-                    is_active=plan_model.is_active,
+                    version=plan_model.version if plan_model.version is not None else 1,
+                    is_active=plan_model.is_active if plan_model.is_active is not None else True,
                     created_at=plan_model.created_at,
                 )
             )

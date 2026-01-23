@@ -40,6 +40,8 @@ from scripts.migrate_add_activity_effort_fields import migrate_add_activity_effo
 from scripts.migrate_add_activity_tss import migrate_add_activity_tss
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
+from scripts.migrate_add_coach_feedback_table import migrate_add_coach_feedback_table
+from scripts.migrate_add_coach_feedback_to_calendar_view import migrate_add_coach_feedback_to_calendar_view
 from scripts.migrate_add_conversation_summaries_table import migrate_add_conversation_summaries_table
 from scripts.migrate_add_conversation_summary import migrate_add_conversation_summary
 from scripts.migrate_add_execution_notes_to_calendar_view import migrate_add_execution_notes_to_calendar_view
@@ -121,6 +123,8 @@ def run_all_migrations() -> None:
         ("add execution_notes to calendar_items view", migrate_add_execution_notes_to_calendar_view),
         ("add must_dos column to planned_sessions", migrate_add_must_dos_to_planned_sessions),
         ("add must_dos to calendar_items view", migrate_add_must_dos_to_calendar_view),
+        ("coach_feedback table", migrate_add_coach_feedback_table),
+        ("add coach_feedback to calendar_items view", migrate_add_coach_feedback_to_calendar_view),
         # NOTE: migrate_set_workout_id_not_null should be run AFTER backfill_workouts.py completes
         # It is NOT included here - run it manually after backfilling data
     ]

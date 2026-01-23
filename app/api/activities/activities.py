@@ -20,7 +20,6 @@ from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
 from app.db.models import Activity, PairingDecision, PlannedSession, StravaAccount
 from app.db.session import get_session
-from app.workouts.execution_models import WorkoutComplianceSummary, WorkoutExecution
 from app.ingestion.fetch_streams import fetch_and_save_streams
 from app.ingestion.file_parser import parse_activity_file
 from app.integrations.strava.client import StravaClient
@@ -28,6 +27,7 @@ from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.pairing.auto_pairing_service import try_auto_pair
 from app.pairing.session_links import get_link_for_activity, unlink_by_activity
+from app.workouts.execution_models import WorkoutComplianceSummary, WorkoutExecution
 from app.workouts.guards import assert_activity_has_execution, assert_activity_has_workout
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -212,7 +212,7 @@ def get_activities(
 
         # Get all activity IDs for batch lookup
         activity_ids = [activity.id for activity in activities_result]
-        
+
         # Batch fetch workout executions for all activities
         workout_executions = {}
         if activity_ids:
@@ -221,7 +221,7 @@ def get_activities(
             ).scalars().all()
             for execution in execution_results:
                 workout_executions[execution.activity_id] = execution
-        
+
         # Batch fetch workout compliance summaries for all workout IDs
         # Convert workout_id to string to match database column type (VARCHAR)
         workout_ids = [str(exec.workout_id) for exec in workout_executions.values()]

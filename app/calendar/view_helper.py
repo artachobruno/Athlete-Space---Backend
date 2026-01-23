@@ -109,6 +109,7 @@ def calendar_session_from_view_row(
     instructions: list[str] | None = None,
     steps: list[dict[str, Any]] | None = None,
     coach_insight: str | None = None,
+    prefer_view_data: bool = True,
 ) -> CalendarSession:
     """Convert a calendar_items view row to CalendarSession DTO (schema v2).
 
@@ -117,6 +118,7 @@ def calendar_session_from_view_row(
         instructions: Optional LLM-generated instructions
         steps: Optional LLM-generated steps (list of dicts with order, name, duration_min, distance_km, intensity, notes)
         coach_insight: Optional LLM-generated coach insight
+        prefer_view_data: If True, prefer persisted coach feedback from view payload over provided parameters
 
     Returns:
         CalendarSession object with mapped fields
@@ -176,6 +178,11 @@ def calendar_session_from_view_row(
     if must_dos and len(must_dos) == 0:
         must_dos = None
 
+    # Extract coach feedback from payload (if present in view)
+    coach_insight_from_view: str | None = payload.get("coach_insight")
+    instructions_from_view: list[str] | None = payload.get("instructions")
+    steps_from_view: list[dict[str, Any]] | None = payload.get("steps")
+
     # Extract activity_id from payload for activities; normalize to str (view/links may use UUID)
     raw_activity_id: str | uuid.UUID | None = None
     if kind == "activity":
@@ -211,9 +218,37 @@ def calendar_session_from_view_row(
     elif not title:
         title = type_str
 
-    # Convert steps dicts to WorkoutStepSchema objects if provided
+    # Use coach feedback from view if available and prefer_view_data is True
+    # Otherwise use provided parameters (for backward compatibility)
+    final_instructions: list[str] = []
+    final_steps: list[dict[str, Any]] = []
+    final_coach_insight: str | None = None
+
+    if prefer_view_data:
+        # Prefer data from view (persisted feedback)
+        if instructions_from_view is not None:
+            final_instructions = instructions_from_view if isinstance(instructions_from_view, list) else []
+        elif instructions is not None:
+            final_instructions = instructions
+
+        if steps_from_view is not None:
+            final_steps = steps_from_view if isinstance(steps_from_view, list) else []
+        elif steps is not None:
+            final_steps = steps
+
+        if coach_insight_from_view is not None:
+            final_coach_insight = coach_insight_from_view
+        elif coach_insight is not None:
+            final_coach_insight = coach_insight
+    else:
+        # Use provided parameters (for backward compatibility)
+        final_instructions = instructions or []
+        final_steps = steps or []
+        final_coach_insight = coach_insight
+
+    # Convert steps dicts to WorkoutStepSchema objects
     step_objects: list[WorkoutStepSchema] = []
-    if steps:
+    if final_steps:
         step_objects.extend(
             [
                 WorkoutStepSchema(
@@ -224,7 +259,7 @@ def calendar_session_from_view_row(
                     intensity=step_dict.get("intensity"),
                     notes=step_dict.get("notes"),
                 )
-                for step_dict in steps
+                for step_dict in final_steps
             ]
         )
 
@@ -244,8 +279,8 @@ def calendar_session_from_view_row(
         completed_activity_id=completed_activity_id,
         completed=completed,
         completed_at=completed_at_str,
-        instructions=instructions or [],
+        instructions=final_instructions,
         steps=step_objects,
-        coach_insight=coach_insight,
+        coach_insight=final_coach_insight,
         must_dos=must_dos or [],
     )

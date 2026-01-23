@@ -78,7 +78,14 @@ def _column_exists(db, table_name: str, column_name: str) -> bool:
     return any(col[1] == column_name for col in result)
 
 
-def _add_column(db, table_name: str, column_name: str, column_type: str, nullable: bool = True) -> None:
+def _add_column(
+    db,
+    table_name: str,
+    column_name: str,
+    column_type: str,
+    nullable: bool = True,
+    default_value: str | None = None,
+) -> None:
     """Add a column to a table if it doesn't exist.
 
     Args:
@@ -87,6 +94,7 @@ def _add_column(db, table_name: str, column_name: str, column_type: str, nullabl
         column_name: Name of the column
         column_type: SQL type for the column
         nullable: Whether the column is nullable
+        default_value: Default value for the column (used when adding NOT NULL to existing table)
     """
     if _column_exists(db, table_name, column_name):
         logger.info(f"Column {table_name}.{column_name} already exists, skipping")
@@ -94,12 +102,13 @@ def _add_column(db, table_name: str, column_name: str, column_type: str, nullabl
 
     logger.info(f"Adding column {table_name}.{column_name}")
     null_clause = "" if nullable else " NOT NULL"
+    default_clause = f" DEFAULT {default_value}" if default_value is not None else ""
 
     db.execute(
         text(
             f"""
             ALTER TABLE {table_name}
-            ADD COLUMN {column_name} {column_type}{null_clause}
+            ADD COLUMN {column_name} {column_type}{default_clause}{null_clause}
             """,
         ),
     )
@@ -111,73 +120,58 @@ def migrate_user_settings_fields() -> None:
 
     db = SessionLocal()
     try:
-        # Add fields to user_settings table
+        # Add fields to user_settings table with default values
+        # This allows adding NOT NULL columns to tables with existing rows
         logger.info("Adding fields to user_settings table")
         if _is_postgresql():
-            _add_column(db, "user_settings", "units", "VARCHAR(20)", nullable=False)
-            _add_column(db, "user_settings", "timezone", "VARCHAR(100)", nullable=False)
-            _add_column(db, "user_settings", "notifications_enabled", "BOOLEAN", nullable=False)
-        else:
-            _add_column(db, "user_settings", "units", "TEXT", nullable=False)
-            _add_column(db, "user_settings", "timezone", "TEXT", nullable=False)
-            _add_column(db, "user_settings", "notifications_enabled", "BOOLEAN", nullable=False)
-
-        # Set default values for existing rows
-        if _is_postgresql():
-            db.execute(
-                text(
-                    """
-                    UPDATE user_settings
-                    SET units = 'metric'
-                    WHERE units IS NULL
-                    """,
-                ),
+            _add_column(
+                db,
+                "user_settings",
+                "units",
+                "VARCHAR(20)",
+                nullable=False,
+                default_value="'metric'",
             )
-            db.execute(
-                text(
-                    """
-                    UPDATE user_settings
-                    SET timezone = 'UTC'
-                    WHERE timezone IS NULL
-                    """,
-                ),
+            _add_column(
+                db,
+                "user_settings",
+                "timezone",
+                "VARCHAR(100)",
+                nullable=False,
+                default_value="'UTC'",
             )
-            db.execute(
-                text(
-                    """
-                    UPDATE user_settings
-                    SET notifications_enabled = TRUE
-                    WHERE notifications_enabled IS NULL
-                    """,
-                ),
+            _add_column(
+                db,
+                "user_settings",
+                "notifications_enabled",
+                "BOOLEAN",
+                nullable=False,
+                default_value="TRUE",
             )
         else:
-            db.execute(
-                text(
-                    """
-                    UPDATE user_settings
-                    SET units = 'metric'
-                    WHERE units IS NULL
-                    """,
-                ),
+            _add_column(
+                db,
+                "user_settings",
+                "units",
+                "TEXT",
+                nullable=False,
+                default_value="'metric'",
             )
-            db.execute(
-                text(
-                    """
-                    UPDATE user_settings
-                    SET timezone = 'UTC'
-                    WHERE timezone IS NULL
-                    """,
-                ),
+            _add_column(
+                db,
+                "user_settings",
+                "timezone",
+                "TEXT",
+                nullable=False,
+                default_value="'UTC'",
             )
-            db.execute(
-                text(
-                    """
-                    UPDATE user_settings
-                    SET notifications_enabled = 1
-                    WHERE notifications_enabled IS NULL
-                    """,
-                ),
+            _add_column(
+                db,
+                "user_settings",
+                "notifications_enabled",
+                "BOOLEAN",
+                nullable=False,
+                default_value="1",
             )
 
         db.commit()

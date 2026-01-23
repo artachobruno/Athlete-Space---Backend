@@ -10,7 +10,9 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel
 
-from app.tools.read.plans import get_planned_sessions
+from datetime import timedelta
+
+from app.tools.read.plans import get_planned_activities
 
 
 class SessionChange(BaseModel):
@@ -66,12 +68,25 @@ async def preview_plan_change(
         proposal_type=proposal.get("type"),
     )
 
-    # Get current plan state
-    current_sessions = await get_planned_sessions(
+    # Calculate date range based on horizon
+    if horizon == "day":
+        start_date = today
+        end_date = today
+    elif horizon == "week":
+        start_date = today
+        end_date = today + timedelta(days=7)
+    elif horizon == "season":
+        start_date = today
+        end_date = today + timedelta(days=90)
+    else:  # race
+        start_date = today
+        end_date = today + timedelta(days=180)
+
+    # Get current plan state (sync function)
+    current_sessions = get_planned_activities(
         user_id=user_id,
-        athlete_id=athlete_id,
-        start_date=today,
-        end_date=None,
+        start=start_date,
+        end=end_date,
     )
 
     # Build diff (v1 - simplified)

@@ -10,7 +10,9 @@ from typing import Literal
 from loguru import logger
 from pydantic import BaseModel
 
-from app.tools.read.plans import get_planned_sessions
+from datetime import timedelta
+
+from app.tools.read.plans import get_planned_activities
 
 
 class PlanStructureExplanation(BaseModel):
@@ -51,12 +53,22 @@ async def explain_plan_structure(
         horizon=horizon,
     )
 
-    # Get current plan state
-    planned_sessions = await get_planned_sessions(
+    # Calculate date range based on horizon
+    if horizon == "week":
+        start_date = today
+        end_date = today + timedelta(days=7)
+    elif horizon == "season":
+        start_date = today
+        end_date = today + timedelta(days=90)
+    else:  # race
+        start_date = today
+        end_date = today + timedelta(days=180)
+
+    # Get current plan state (sync function)
+    planned_sessions = get_planned_activities(
         user_id=user_id,
-        athlete_id=athlete_id,
-        start_date=today,
-        end_date=None,
+        start=start_date,
+        end=end_date,
     )
 
     # Analyze structure (v1 - simplified)

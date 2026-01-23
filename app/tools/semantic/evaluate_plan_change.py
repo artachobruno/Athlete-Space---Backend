@@ -10,9 +10,11 @@ from typing import Literal
 from loguru import logger
 from pydantic import BaseModel
 
-from app.tools.read.activities import get_recent_activities
+from datetime import datetime, timedelta, timezone
+
+from app.tools.read.activities import get_completed_activities
 from app.tools.read.compliance import get_plan_compliance
-from app.tools.read.plans import get_planned_sessions
+from app.tools.read.plans import get_planned_activities
 from app.tools.read.risk import get_risk_flags
 
 
@@ -62,29 +64,48 @@ async def evaluate_plan_change(
         horizon=horizon,
     )
 
-    # Gather data
-    planned_sessions = await get_planned_sessions(
+    # Calculate date range based on horizon
+    if horizon == "week":
+        start_date = today
+        end_date = today + timedelta(days=7)
+        activity_days = 7
+    elif horizon == "season":
+        start_date = today
+        end_date = today + timedelta(days=90)
+        activity_days = 30
+    else:  # race
+        start_date = today
+        end_date = today + timedelta(days=180)
+        activity_days = 30
+
+    # Gather data (these are sync functions, not async)
+    planned_sessions = get_planned_activities(
         user_id=user_id,
-        athlete_id=athlete_id,
-        start_date=today,
-        end_date=None,  # Will be filtered by horizon
+        start=start_date,
+        end=end_date,
     )
 
-    recent_activities = await get_recent_activities(
+    # Get recent activities (needs datetime, not date)
+    start_datetime = datetime.combine(today - timedelta(days=activity_days), datetime.min.time()).replace(
+        tzinfo=timezone.utc
+    )
+    end_datetime = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc)
+    recent_activities = get_completed_activities(
         user_id=user_id,
-        athlete_id=athlete_id,
-        days=7 if horizon == "week" else 30,
+        start=start_datetime,
+        end=end_datetime,
     )
 
-    compliance = await get_plan_compliance(
+    compliance = get_plan_compliance(
         user_id=user_id,
-        athlete_id=athlete_id,
-        horizon=horizon,
+        start=start_date,
+        end=end_date,
     )
 
-    risk_flags = await get_risk_flags(
+    risk_flags_list = get_risk_flags(
         user_id=user_id,
-        athlete_id=athlete_id,
+        start=start_date,
+        end=end_date,
     )
 
     # Decision logic (v1 - simple deterministic)
@@ -92,18 +113,21 @@ async def evaluate_plan_change(
     reasons: list[str] = []
     recommended_actions: list[str] = []
 
-    # Check compliance
-    if compliance.compliance_rate < 0.7:
+    # Check compliance (compliance is a dict)
+    compliance_rate = compliance.get("completion_pct", 1.0)
+    if compliance_rate < 0.7:
         decision = "modification_required"
-        reasons.append(f"Low compliance rate: {compliance.compliance_rate:.0%}")
+        reasons.append(f"Low compliance rate: {compliance_rate:.0%}")
         recommended_actions.append("Adjust plan to match actual execution patterns")
 
-    # Check risk flags
-    if risk_flags.has_high_risk:
+    # Check risk flags (risk_flags is a list of dicts)
+    has_high_risk = any(flag.get("severity") == "high" for flag in risk_flags_list)
+    if has_high_risk:
         decision = "modification_required"
         reasons.append("High risk flags detected")
-        if risk_flags.risk_items:
-            recommended_actions.extend([f"Address: {item}" for item in risk_flags.risk_items[:3]])
+        high_risk_items = [flag.get("description", "") for flag in risk_flags_list if flag.get("severity") == "high"]
+        if high_risk_items:
+            recommended_actions.extend([f"Address: {item}" for item in high_risk_items[:3]])
 
     # Check activity patterns
     if recent_activities and len(recent_activities) < 3:
@@ -114,7 +138,7 @@ async def evaluate_plan_change(
     # Build summary
     state_summary = f"Plan evaluation for {horizon}: {len(planned_sessions)} sessions planned, "
     state_summary += f"{len(recent_activities)} recent activities, "
-    state_summary += f"compliance: {compliance.compliance_rate:.0%}"
+    state_summary += f"compliance: {compliance_rate:.0%}"
 
     # Confidence based on data quality
     confidence = 0.8

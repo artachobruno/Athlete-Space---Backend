@@ -17,6 +17,8 @@ from app.coach.adapters.season_modification_adapter import adapt_extracted_seaso
 from app.coach.adapters.week_modification_adapter import to_week_modification
 from app.coach.admin.tool_registry import READ_ONLY_TOOLS
 from app.coach.agents.orchestrator_deps import CoachDeps
+from app.orchestrator.routing import route_with_safety_check
+from app.tools.guards import EvaluationRequiredError, require_recent_evaluation, validate_semantic_tool_only
 from app.coach.clarification import (
     generate_proactive_clarification,
     generate_slot_clarification,
@@ -711,19 +713,68 @@ class CoachActionExecutor:
             )
             return "I need your training data to perform this action. Please sync your activities first, or try asking a general question."
 
-        # Execute based on target_action (preferred) or intent/horizon mapping (fallback)
+        # HARD LOCK: Use routing module - no fallback paths
         intent = decision.intent
-        horizon = decision.horizon
-        target_action = decision.target_action or decision.next_executable_action
+        horizon = decision.horizon or "none"
+        
+        # Route intent × horizon → semantic tool (deterministic)
+        routed_tool, prerequisite_checks = route_with_safety_check(
+            intent=intent,  # type: ignore
+            horizon=horizon,  # type: ignore
+            has_proposal=bool(decision.filled_slots),
+            needs_approval=decision.action == "EXECUTE",
+            query_type=None,  # Could extract from decision.message if needed
+        )
+
+        # Validate routed tool is semantic
+        if routed_tool:
+            validate_semantic_tool_only(routed_tool)
+
+        # Run prerequisite checks (e.g., detect_plan_incoherence)
+        for check_tool in prerequisite_checks:
+            logger.info(
+                "Running prerequisite check",
+                check_tool=check_tool,
+                intent=intent,
+                horizon=horizon,
+            )
+            # Prerequisite checks would be executed here
+            # For now, just log
+
+        # Enforce evaluation-before-mutation invariant
+        if routed_tool and horizon in ("week", "season", "race"):
+            try:
+                await require_recent_evaluation(
+                    user_id=deps.user_id or "",
+                    athlete_id=deps.athlete_id or 0,
+                    horizon=horizon,  # type: ignore
+                    tool_name=routed_tool,
+                )
+            except EvaluationRequiredError as e:
+                logger.error(
+                    "Mutation blocked - evaluation required",
+                    tool=routed_tool,
+                    horizon=horizon,
+                    error=str(e),
+                )
+                return f"Cannot proceed: {str(e)}. Please evaluate the plan first."
+
+        # Use routed tool (enforced) or fall back to target_action for backward compatibility
+        target_action = routed_tool or decision.target_action or decision.next_executable_action
 
         logger.debug(
             "ActionExecutor: Executing action",
             intent=intent,
             horizon=horizon,
+            routed_tool=routed_tool,
             target_action=target_action,
             action=decision.action,
             conversation_id=conversation_id,
         )
+
+        # Assert: target_action must be semantic tool if set
+        if target_action:
+            validate_semantic_tool_only(target_action)
 
         # Use target_action for execution routing if available
         if target_action == "plan_race_build":

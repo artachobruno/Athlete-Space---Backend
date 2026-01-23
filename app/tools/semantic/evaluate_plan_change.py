@@ -28,11 +28,21 @@ class PlanChangeDecision(BaseModel):
     confidence: float  # 0.0-1.0
 
 
+class PlanStateSummary(BaseModel):
+    """Structured summary of current plan state."""
+
+    total_planned_sessions: int
+    total_recent_activities: int
+    compliance_rate: float
+    summary_text: str
+
+
 class EvaluatePlanChangeResult(BaseModel):
     """Result from evaluate_plan_change tool."""
 
     decision: PlanChangeDecision
-    current_state_summary: str
+    current_state_summary: str  # Kept for backward compatibility
+    current_state: PlanStateSummary  # New structured summary
     horizon: str
 
 
@@ -146,6 +156,14 @@ async def evaluate_plan_change(  # noqa: RUF029
     if not recent_activities:
         confidence = 0.6
 
+    # Build structured summary
+    state = PlanStateSummary(
+        total_planned_sessions=len(planned_sessions),
+        total_recent_activities=len(recent_activities),
+        compliance_rate=compliance_rate,
+        summary_text=state_summary,
+    )
+
     result = EvaluatePlanChangeResult(
         decision=PlanChangeDecision(
             decision=decision,
@@ -154,6 +172,7 @@ async def evaluate_plan_change(  # noqa: RUF029
             confidence=confidence,
         ),
         current_state_summary=state_summary,
+        current_state=state,
         horizon=horizon,
     )
 

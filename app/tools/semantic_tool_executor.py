@@ -94,6 +94,11 @@ async def execute_semantic_tool(
             deps.execution_guard.mark_executed("explain_training_state")
         return await CoachActionExecutor._execute_explain_training_state(decision, deps, conversation_id)
 
+    if tool_name == "get_planned_sessions":
+        if deps.execution_guard:
+            deps.execution_guard.mark_executed("get_planned_sessions")
+        return await CoachActionExecutor._execute_get_planned_sessions(decision, deps, conversation_id)
+
     if tool_name == "adjust_training_load":
         if deps.execution_guard:
             deps.execution_guard.mark_executed("adjust_training_load")

@@ -2120,6 +2120,97 @@ class CoachActionExecutor:
             return training_state_msg
 
     @staticmethod
+    async def _execute_get_planned_sessions(
+        decision: OrchestratorAgentResponse,
+        deps: CoachDeps,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Execute get_planned_sessions tool to retrieve and format planned sessions.
+
+        Args:
+            decision: Orchestrator decision
+            deps: Dependencies
+            conversation_id: Optional conversation ID
+
+        Returns:
+            Formatted message with planned sessions
+        """
+        tool_name = "get_planned_sessions"
+        step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
+
+        if conversation_id and step_info:
+            step_id, label = step_info
+            await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
+
+        try:
+            # Determine date range based on horizon
+            now = datetime.now(timezone.utc)
+            horizon = decision.horizon or "week"
+
+            if horizon == "today":
+                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            elif horizon == "week":
+                days_since_monday = now.weekday()
+                start_date = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = start_date + timedelta(days=6, hours=23, minutes=59, seconds=59)
+            else:
+                # Default to current week for other horizons
+                days_since_monday = now.weekday()
+                start_date = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = start_date + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+            sessions_result = await call_tool(
+                "get_planned_sessions",
+                {
+                    "user_id": deps.user_id,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                },
+            )
+
+            sessions_data = sessions_result.get("sessions", [])
+
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
+
+            if not sessions_data:
+                if horizon == "today":
+                    return "You don't have any workouts scheduled for today."
+                return "You don't have any workouts scheduled for this week yet."
+
+            # Format sessions conversationally
+            sessions_list_parts = []
+            for s in sessions_data[:20]:  # Limit to 20 to avoid too long responses
+                session_name = s.get("name", "Workout")
+                starts_at = s.get("starts_at", "")
+                if starts_at:
+                    try:
+                        dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+                        day_name = dt.strftime("%A")
+                        date_str = dt.strftime("%B %d")
+                        time_str = dt.strftime("%I:%M %p").lstrip("0")
+                        sessions_list_parts.append(f"{session_name} on {day_name}, {date_str} at {time_str}")
+                    except Exception:
+                        sessions_list_parts.append(f"{session_name} on {starts_at[:10]}")
+                else:
+                    sessions_list_parts.append(session_name)
+
+            sessions_text = "\n".join(f"• {s}" for s in sessions_list_parts)
+
+            if horizon == "today":
+                return f"Here's what you have scheduled for today:\n{sessions_text}"
+            return f"Here's what you have scheduled this week:\n{sessions_text}"
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch planned sessions: {e}", exc_info=True)
+            if conversation_id and step_info:
+                step_id, label = step_info
+                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "error")
+            return "I couldn't retrieve your planned sessions at the moment. Please try again later."
+
+    @staticmethod
     async def _execute_explain_training_state(
         decision: OrchestratorAgentResponse,
         deps: CoachDeps,

@@ -140,7 +140,7 @@ async def _generate_coach_feedback_for_session(
 
             if workout_steps:
                 # Convert WorkoutStep to schema format (matching _convert_workout_step_to_schema)
-                steps = _convert_workout_steps_to_schema(workout_steps, workout_obj)
+                steps = _convert_workout_steps_to_schema(list(workout_steps), workout_obj)
                 logger.debug(f"Loaded {len(steps)} canonical steps for workout {workout_id}")
 
     # Early return for dry run - log what would be done

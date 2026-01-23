@@ -25,12 +25,14 @@ from sqlalchemy.orm import Session
 
 from app.coach.config.models import USER_FACING_MODEL
 from app.config.settings import settings
+from app.core.conversation_ownership import get_conversation_owner
 from app.core.memory_compactor import compact_conversation_memory
 from app.core.memory_metrics import increment_memory_counter
 from app.core.message import Message
 from app.core.redis_conversation_store import get_recent_messages
 from app.core.token_counting import count_tokens
 from app.db.models import (
+    Conversation,
     ConversationMessage,
     ConversationProgress,
 )
@@ -494,6 +496,39 @@ def persist_conversation_summary(
         for attempt in range(max_retries):
             try:
                 with get_session() as db:
+                    # Ensure the Conversation exists before creating ConversationSummary
+                    # This is required to satisfy the foreign key constraint
+                    conversation = db.get(Conversation, db_conversation_id)
+                    if conversation is None:
+                        # Get user_id from conversation ownership
+                        resolved_user_id = get_conversation_owner(conversation_id)
+                        if resolved_user_id is None:
+                            # If ownership doesn't exist, we can't create the conversation
+                            # This should not happen in production - ownership should exist
+                            logger.warning(
+                                "Cannot create Conversation for summary: ownership not found",
+                                conversation_id=conversation_id,
+                            )
+                            raise ValueError(
+                                f"Cannot create Conversation for {conversation_id}: "
+                                "conversation ownership not found. "
+                                "Ensure ConversationOwnership exists before saving summary."
+                            )
+
+                        # Create the conversation
+                        conversation = Conversation(
+                            id=db_conversation_id,
+                            user_id=resolved_user_id,
+                            status="active",
+                        )
+                        db.add(conversation)
+                        db.flush()  # Ensure FK is visible for subsequent inserts
+                        logger.debug(
+                            "Created conversation for summary",
+                            conversation_id=conversation_id,
+                            user_id=resolved_user_id,
+                        )
+
                     version = get_next_summary_version(db, conversation_id)
                     created_at = datetime.now(timezone.utc)
 

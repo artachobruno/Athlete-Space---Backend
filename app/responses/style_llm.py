@@ -89,6 +89,10 @@ async def generate_coach_message(structured_input: StyleLLMInput) -> str:
                 error_type=type(e).__name__,
                 prompt_preview=prompt[:200],
                 model_output=message,
+                message_length=len(message),
+                sentence_count=len([s for s in message.split(".") if s.strip()]),
+                numeric_count=len([c for c in message if c.isdigit()]),
+                dash_count=message.count("-"),
             )
             raise
 

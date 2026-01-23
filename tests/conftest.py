@@ -13,7 +13,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 # Make MCP fixtures available to all tests (including CLI tests)
-pytest_plugins = ["tests.mcp.conftest"]
+# NOTE: Commented out because tests.mcp is not a proper Python package (missing __init__.py)
+# Uncomment and ensure tests/__init__.py and tests/mcp/__init__.py exist if MCP fixtures are needed
+# pytest_plugins = ["tests.mcp.conftest"]
 
 
 # Enable foreign key constraints for SQLite
@@ -125,6 +127,16 @@ def db_session(monkeypatch):
         echo=False,
         connect_args={"check_same_thread": False},
     )
+
+    # Patch JSONB to JSON for SQLite compatibility
+    from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    # Add visit_JSONB method to SQLiteTypeCompiler if it doesn't exist
+    if not hasattr(SQLiteTypeCompiler, "visit_JSONB"):
+        def visit_jsonb(self, type_, **kw):
+            return "JSON"
+        SQLiteTypeCompiler.visit_JSONB = visit_jsonb
 
     # Patch the engine getter to return our test engine
     def mock_get_engine():

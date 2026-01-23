@@ -12,6 +12,7 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from app.api.dependencies.auth import get_current_user_id
+from app.api.schemas.season import SeasonSummary
 from app.coach.schemas.contracts import (
     DailyDecisionListItem,
     DailyDecisionResponse,
@@ -33,6 +34,7 @@ from app.services.intelligence.context_builder import build_daily_decision_conte
 from app.services.intelligence.failures import IntelligenceFailureHandler
 from app.services.intelligence.store import IntentStore
 from app.services.intelligence.triggers import RegenerationTriggers
+from app.services.season_summary import build_season_summary
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
 
@@ -224,6 +226,43 @@ def get_season_plan(user_id: str = Depends(get_current_user_id)):
         created_at=plan_model.created_at,
         updated_at=plan_model.updated_at,
     )
+
+
+@router.get("/season/summary", response_model=SeasonSummary)
+def get_season_summary(user_id: str = Depends(get_current_user_id)):
+    """Get season narrative summary - a read-only, story-driven view.
+
+    This endpoint returns a narrative view of how the season is unfolding
+    relative to the plan, week by week. It shows phases, weeks, and coach
+    summaries - no metrics, no calendar mechanics.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        SeasonSummary with phases and weeks
+
+    Raises:
+        HTTPException: If season plan not found or Strava account not connected
+    """
+    athlete_id = _get_athlete_id_from_user(user_id)
+    logger.info(f"Getting season summary for user_id={user_id}, athlete_id={athlete_id}")
+
+    try:
+        summary = build_season_summary(user_id, athlete_id)
+        return summary
+    except ValueError as e:
+        logger.warning(f"Season summary not available: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        logger.exception(f"Error building season summary: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to build season summary",
+        ) from e
 
 
 @router.get("/week", response_model=WeeklyIntentResponse)

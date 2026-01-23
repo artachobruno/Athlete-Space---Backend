@@ -229,7 +229,7 @@ def get_season_plan(user_id: str = Depends(get_current_user_id)):
 
 
 @router.get("/season/summary", response_model=SeasonSummary)
-def get_season_summary(user_id: str = Depends(get_current_user_id)):
+async def get_season_summary(user_id: str = Depends(get_current_user_id)):
     """Get season narrative summary - a read-only, story-driven view.
 
     This endpoint returns a narrative view of how the season is unfolding
@@ -249,8 +249,7 @@ def get_season_summary(user_id: str = Depends(get_current_user_id)):
     logger.info(f"Getting season summary for user_id={user_id}, athlete_id={athlete_id}")
 
     try:
-        summary = build_season_summary(user_id, athlete_id)
-        return summary
+        return await build_season_summary(user_id, athlete_id)
     except ValueError as e:
         logger.warning(f"Season summary not available: {e}")
         raise HTTPException(

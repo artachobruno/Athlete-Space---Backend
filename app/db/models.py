@@ -728,7 +728,6 @@ class PlannedSession(Base):
     # The completed_at column doesn't exist in the production database yet.
     # TODO: Uncomment after running migrate_add_planned_session_completion_fields.py
     # Code that accesses completed_at should use getattr(planned, "completed_at", None) for safety
-    # completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     @property
     def is_locked(self) -> bool:

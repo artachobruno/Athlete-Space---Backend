@@ -20,7 +20,13 @@ from pydantic_ai import Agent
 
 from app.coach.config.models import USER_FACING_MODEL
 from app.coach.prompts.loader import load_prompt
-from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIntent, WeeklyReport
+from app.coach.schemas.intent_schemas import (
+    DailyDecision,
+    SeasonPlan,
+    WeeklyCoachSummary,
+    WeeklyIntent,
+    WeeklyReport,
+)
 from app.coach.schemas.training_plan_schemas import TrainingPlan
 from app.core.constraints import (
     validate_daily_decision,
@@ -360,6 +366,98 @@ class CoachLLMClient:
                 raise RuntimeError(f"Failed to generate weekly report: {type(e).__name__}: {e}") from e
 
         raise RuntimeError("Failed to generate weekly report after all retries")
+
+    async def generate_weekly_coach_summary(self, context: dict[str, Any]) -> str:
+        """Generate a brief weekly coach summary from LLM.
+
+        Args:
+            context: Context dictionary containing:
+                - week_index: Week number in season (1-based)
+                - week_start: Week start date (ISO format)
+                - phase: Phase name (Base, Build, Peak, Taper)
+                - plan_intent: Season plan intent/focus
+                - completed_sessions_count: Number of completed sessions
+                - planned_sessions_count: Number of planned sessions
+                - key_sessions: List of key session names/types
+
+        Returns:
+            Coach summary string (1-2 sentences)
+
+        Raises:
+            ValueError: If validation fails after all retries
+            RuntimeError: If LLM call fails
+        """
+        prompt_text = await load_prompt("weekly_coach_summary.txt")
+        agent = Agent(
+            model=self.model,
+            system_prompt=prompt_text,
+            output_type=WeeklyCoachSummary,
+        )
+
+        context_str = json.dumps(context, indent=2, default=str)
+
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                logger.info(
+                    f"Generating weekly coach summary (attempt {attempt + 1}/{MAX_RETRIES + 1})"
+                )
+                user_prompt = f"Context:\n{context_str}"
+                logger.debug(
+                    "LLM Prompt: Weekly Coach Summary Generation (attempt {attempt})\n"
+                    "System Prompt:\n{system_prompt}\n\n"
+                    "User Prompt:\n{user_prompt}",
+                    system_prompt=prompt_text,
+                    user_prompt=user_prompt,
+                    attempt=attempt + 1,
+                )
+                result = await agent.run(user_prompt)
+
+                # Validate summary length
+                summary = result.output.summary
+                if not summary or len(summary) < 50:
+                    error_msg = "Summary too short"
+                    if attempt < MAX_RETRIES:
+                        logger.warning(
+                            f"Weekly coach summary validation failed: {error_msg}. Retrying..."
+                        )
+                        context["validation_errors"] = error_msg
+                        context_str = json.dumps(context, indent=2, default=str)
+                        continue
+                    _raise_validation_error("Weekly coach summary", error_msg)
+                if len(summary) > 300:
+                    error_msg = "Summary too long"
+                    if attempt < MAX_RETRIES:
+                        logger.warning(
+                            f"Weekly coach summary validation failed: {error_msg}. Retrying..."
+                        )
+                        context["validation_errors"] = error_msg
+                        context_str = json.dumps(context, indent=2, default=str)
+                        continue
+                    _raise_validation_error("Weekly coach summary", error_msg)
+                else:
+                    logger.info("Weekly coach summary generated successfully")
+                    return summary
+
+            except ValidationError as e:
+                if attempt < MAX_RETRIES:
+                    logger.warning(
+                        f"Weekly coach summary parsing failed: {e}. Retrying..."
+                    )
+                    context["parsing_errors"] = str(e)
+                    context_str = json.dumps(context, indent=2, default=str)
+                    continue
+                raise ValueError(
+                    f"Weekly coach summary parsing failed after {MAX_RETRIES + 1} attempts: {e}"
+                ) from e
+            except Exception as e:
+                logger.exception("Error generating weekly coach summary")
+                if attempt < MAX_RETRIES:
+                    continue
+                raise RuntimeError(
+                    f"Failed to generate weekly coach summary: {type(e).__name__}: {e}"
+                ) from e
+
+        raise RuntimeError("Failed to generate weekly coach summary after all retries")
 
     @staticmethod
     def _raise_validation_error(error_msg: str) -> None:
@@ -759,6 +857,30 @@ class CoachLLMClient:
                         attempt=attempt + 1,
                         plan_type=plan.plan_type,
                     )
+
+                    # Debug: Log full plan structure for debugging
+                    try:
+                        if hasattr(plan, "model_dump"):
+                            plan_dict = plan.model_dump()
+                        elif hasattr(plan, "dict"):
+                            plan_dict = plan.dict()
+                        else:
+                            plan_dict = str(plan)
+                        plan_json = json.dumps(plan_dict, indent=2, default=str)
+                        logger.debug(
+                            f"llm_client: Generated plan structure (full)\n{plan_json}",
+                            plan_type=plan.plan_type,
+                            session_count=len(plan.sessions),
+                            has_rationale=bool(plan.rationale),
+                            assumptions_count=len(plan.assumptions) if plan.assumptions else 0,
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            "llm_client: Failed to serialize plan for debug logging",
+                            error=str(e),
+                            plan_type=plan.plan_type if plan else None,
+                        )
+
                     t_total = time.monotonic()
                     total_time = t_total - t0
                     logger.info(f"[PLAN] total={total_time:.1f}s")

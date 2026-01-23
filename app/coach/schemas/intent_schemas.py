@@ -212,3 +212,16 @@ class DailyDecision(BaseModel):
         default=None,
         description="Reference to the weekly intent this day belongs to",
     )
+
+
+class WeeklyCoachSummary(BaseModel):
+    """LLM-generated weekly coach summary for season narrative.
+
+    This is a brief 1-2 sentence summary explaining how a week
+    unfolded relative to the plan intent, used in the season narrative view.
+    """
+
+    summary: str = Field(
+        ...,
+        description="Brief coach summary (1-2 sentences, 50-300 chars) explaining how the week unfolded relative to plan intent",
+    )

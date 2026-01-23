@@ -4,7 +4,7 @@ These schemas define the structure for the Season tab - a read-only,
 story-driven view that explains how the season is unfolding relative to the plan.
 """
 
-from datetime import date
+import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -14,7 +14,7 @@ class GoalRace(BaseModel):
     """Goal race information for the season."""
 
     name: str = Field(..., description="Race name")
-    date: date = Field(..., description="Race date")
+    race_date: datetime.date = Field(..., description="Race date")
     weeks_to_race: int = Field(..., description="Weeks remaining until race")
 
 
@@ -22,7 +22,7 @@ class SeasonWeek(BaseModel):
     """A week in the season narrative."""
 
     week_index: int = Field(..., description="Week number in the season (1-based)")
-    date_range: str = Field(..., description="Date range for the week (e.g., 'Dec 29 – Jan 4')")
+    date_range: str = Field(..., description="Date range for the week (e.g., 'Dec 29 - Jan 4')")
     status: Literal["completed", "current", "upcoming"] = Field(
         ..., description="Week status"
     )

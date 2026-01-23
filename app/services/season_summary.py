@@ -10,8 +10,8 @@ from typing import Literal
 from loguru import logger
 from sqlalchemy import select
 
-from app.api.schemas.season import GoalRace, SeasonPhase, SeasonSummary, SeasonWeek
 from app.api.schemas.schemas import CalendarSession
+from app.api.schemas.season import GoalRace, SeasonPhase, SeasonSummary, SeasonWeek
 from app.calendar.view_helper import calendar_session_from_view_row, get_calendar_items_from_view
 from app.coach.schemas.intent_schemas import SeasonPlan
 from app.coach.utils.llm_client import CoachLLMClient
@@ -36,7 +36,7 @@ def _get_week_start(date_obj: date) -> date:
 
 
 def _format_date_range(week_start: date) -> str:
-    """Format week date range as 'MMM d – MMM d'.
+    """Format week date range as 'MMM d - MMM d'.
 
     Args:
         week_start: Monday date of the week
@@ -48,7 +48,7 @@ def _format_date_range(week_start: date) -> str:
     # Use day without leading zero (works on all platforms)
     start_day = week_start.day
     end_day = week_end.day
-    return f"{week_start.strftime('%b')} {start_day} – {week_end.strftime('%b')} {end_day}"
+    return f"{week_start.strftime('%b')} {start_day} - {week_end.strftime('%b')} {end_day}"
 
 
 def _determine_week_status(week_start: date, today: date) -> Literal["completed", "current", "upcoming"]:
@@ -176,7 +176,7 @@ def _detect_week_flags(
     hard_sessions = sum(
         1
         for s in week_sessions
-        if s.status == "completed" and s.intensity in ("hard", "moderate")
+        if s.status == "completed" and s.intensity in {"hard", "moderate"}
     )
     if hard_sessions >= 4:
         flags.append("fatigue")
@@ -216,44 +216,22 @@ async def _generate_week_coach_summary(
         "plan_intent": plan_intent,
         "completed_sessions_count": len(completed_sessions),
         "planned_sessions_count": len(planned_sessions),
-        "key_sessions": [s.title or s.type for s in completed_sessions[:5]],
+        "key_sessions": [s.title or s.type or "Training" for s in completed_sessions[:5] if s.title or s.type],
     }
 
-    prompt = f"""Generate a brief coach summary (1-2 sentences) for week {week_index} of the season.
-
-Context:
-- Phase: {phase_name}
-- Plan Intent: {plan_intent}
-- Completed Sessions: {len(completed_sessions)}
-- Planned Sessions: {len(planned_sessions)}
-- Key Sessions: {', '.join(context['key_sessions'])}
-
-Requirements:
-- Reference plan intent
-- Evaluate execution vs intent
-- Speak in retrospective/forward-looking tone
-- NO numeric metrics (no distances, times, paces, TSS, CTL)
-- NO prescriptive instructions
-- NO daily details
-- 1-2 sentences only
-
-Example: "This week maintained aerobic consistency as planned, but accumulated fatigue suggests dialing back intensity next week."
-"""
-
     try:
-        # Use a simple text generation approach
-        # For now, return a placeholder - we'll implement proper LLM call later
+        return await client.generate_weekly_coach_summary(context)
+    except Exception as e:
+        logger.error(f"Error generating week coach summary: {e}")
+        # Fallback to simple summary
         if len(completed_sessions) >= len(planned_sessions) * 0.8:
             return f"Week {week_index} aligned well with the {phase_name.lower()} phase intent. Training consistency was maintained."
         if len(completed_sessions) < len(planned_sessions) * 0.5:
             return f"Week {week_index} saw reduced volume relative to plan. Recovery and consistency should be prioritized."
-        return f"Week {week_index} progressed as intended for the {phase_name.lower()} phase."
-    except Exception as e:
-        logger.error(f"Error generating week coach summary: {e}")
         return f"Week {week_index} training progressed within the {phase_name.lower()} phase framework."
 
 
-def build_season_summary(
+async def build_season_summary(
     user_id: str,
     athlete_id: int,
 ) -> SeasonSummary:
@@ -308,7 +286,7 @@ def build_season_summary(
             race_date = season_end  # Default to season end
             goal_race = GoalRace(
                 name=race_name,
-                date=race_date,
+                race_date=race_date,
                 weeks_to_race=max(0, (race_date - now_local.date()).days // 7),
             )
 
@@ -389,8 +367,15 @@ def build_season_summary(
             key_sessions = _get_key_sessions_for_week(all_sessions, week_start_date)
             flags = _detect_week_flags(all_sessions, week_start_date)
 
-            # Generate coach summary (synchronous for now, can be async later)
-            coach_summary = f"Week {week_num} training progressed within the {phase_name.lower()} phase framework."
+            # Generate coach summary using LLM
+            plan_intent = plan.focus if plan.focus else "Training progression"
+            coach_summary = await _generate_week_coach_summary(
+                week_index=week_num,
+                week_start=week_start_date,
+                week_sessions=week_sessions,
+                plan_intent=plan_intent,
+                phase_name=phase_name,
+            )
 
             week = SeasonWeek(
                 week_index=week_num,
@@ -405,13 +390,13 @@ def build_season_summary(
         # Group weeks into phases
         phases: list[SeasonPhase] = []
         current_phase_weeks: list[SeasonWeek] = []
-        current_phase = None
+        current_phase: str | None = None
 
         for week in weeks:
             phase_name = _infer_phase_name(week.week_index, total_weeks)
 
             if current_phase is None or phase_name != current_phase:
-                if current_phase_weeks:
+                if current_phase_weeks and current_phase is not None:
                     phases.append(
                         SeasonPhase(
                             name=current_phase,
@@ -425,7 +410,7 @@ def build_season_summary(
                 current_phase_weeks.append(week)
 
         # Add final phase
-        if current_phase_weeks:
+        if current_phase_weeks and current_phase is not None:
             phases.append(
                 SeasonPhase(
                     name=current_phase,

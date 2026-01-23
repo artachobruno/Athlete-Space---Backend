@@ -717,13 +717,23 @@ class CoachActionExecutor:
         intent = decision.intent
         horizon = decision.horizon or "none"
         
+        # Extract query type hint from message for better routing
+        query_type: str | None = None
+        message_lower = (decision.message or "").lower()
+        if any(word in message_lower for word in ["schedule", "planned", "calendar", "what do i have", "races", "race"]):
+            query_type = "schedule"
+        elif any(word in message_lower for word in ["structure", "why structured", "rationale"]):
+            query_type = "structure"
+        elif any(word in message_lower for word in ["why", "reason"]):
+            query_type = "why"
+        
         # Route intent × horizon → semantic tool (deterministic)
         routed_tool, prerequisite_checks = route_with_safety_check(
             intent=intent,  # type: ignore
             horizon=horizon,  # type: ignore
             has_proposal=bool(decision.filled_slots),
             needs_approval=decision.action == "EXECUTE",
-            query_type=None,  # Could extract from decision.message if needed
+            query_type=query_type,
         )
 
         # Validate routed tool is semantic

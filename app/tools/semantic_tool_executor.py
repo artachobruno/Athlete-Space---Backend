@@ -79,6 +79,15 @@ async def execute_semantic_tool(
         return await CoachActionExecutor._execute_recommend_next_session(decision, deps, conversation_id)
 
     if tool_name == "explain_training_state":
+        # Handle None horizon by defaulting to week
+        if decision.horizon is None or decision.horizon == "none":
+            # Create a modified decision with week horizon for tools that require it
+            from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
+            modified_decision = OrchestratorAgentResponse(
+                **decision.model_dump(),
+                horizon="week",  # Default to week for general explain queries
+            )
+            decision = modified_decision
         if deps.execution_guard:
             deps.execution_guard.mark_executed("explain_training_state")
         return await CoachActionExecutor._execute_explain_training_state(decision, deps, conversation_id)

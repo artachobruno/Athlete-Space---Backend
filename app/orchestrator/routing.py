@@ -6,6 +6,8 @@ No ambiguity - exactly one tool per intent/horizon combination.
 
 from typing import Literal
 
+from loguru import logger
+
 from app.tools.catalog import Horizon, Tier, get_tool_spec, validate_tool_horizon
 
 Intent = Literal[
@@ -58,18 +60,29 @@ def route(
 
     if intent == "explain":
         # Route based on what's being explained
-        if query_type == "schedule" or horizon in ("today", "week", "season"):
+        if query_type == "schedule":
             # "What do I have planned?" → get_planned_sessions
-            if query_type == "schedule":
-                return "get_planned_sessions"
-            # "Explain my training state" → explain_training_state
-            return "explain_training_state"
-        if query_type == "structure" or horizon in ("week", "season", "race"):
+            return "get_planned_sessions"
+        if query_type == "structure" and horizon in ("week", "season", "race"):
             # "Why is the plan structured this way?" → explain_plan_structure
             return "explain_plan_structure"
         if query_type == "why" or query_type == "rationale":
             # "Why did the plan change?" → generate_plan_rationale
             return "generate_plan_rationale"
+        # For explain with horizon=None, check if it's a calendar/schedule query
+        if horizon is None or horizon == "none":
+            # If query mentions calendar/races/planned, use get_planned_sessions
+            # Otherwise default to explain_training_state (will use week horizon)
+            if query_type == "schedule":
+                return "get_planned_sessions"
+            # Default: explain training state (will default to week horizon in executor)
+            return "explain_training_state"
+        # Route based on horizon
+        if horizon in ("today", "week", "season"):
+            return "explain_training_state"
+        if horizon in ("week", "season", "race"):
+            # Could be structure explanation
+            return "explain_plan_structure"
         # Default: explain training state
         return "explain_training_state"
 
@@ -164,12 +177,28 @@ def route_with_safety_check(
         if horizon in ("today", "week", "season"):
             prerequisite_checks.append("detect_plan_incoherence")
 
-    # Validate tool supports horizon
-    if tool_name and not validate_tool_horizon(tool_name, horizon):
-        raise ValueError(
-            f"Tool {tool_name} does not support horizon {horizon}. "
-            f"Supported horizons: {get_tool_spec(tool_name).horizons if get_tool_spec(tool_name) else 'unknown'}"
-        )
+    # Validate tool supports horizon (with fallback for None)
+    if tool_name:
+        spec = get_tool_spec(tool_name)
+        if spec:
+            # Check if tool supports "none" horizon
+            if horizon is None or horizon == "none":
+                if "none" not in spec.horizons:
+                    # Tool doesn't support None - this is OK, executor will handle it
+                    # Don't raise error, let the executor default the horizon
+                    logger.debug(
+                        "Routing: Tool doesn't support None horizon, executor will default",
+                        tool=tool_name,
+                        horizon=horizon,
+                        supported_horizons=spec.horizons,
+                    )
+            else:
+                # Validate specific horizon
+                if not validate_tool_horizon(tool_name, horizon):  # type: ignore
+                    raise ValueError(
+                        f"Tool {tool_name} does not support horizon {horizon}. "
+                        f"Supported horizons: {spec.horizons}"
+                    )
 
     return tool_name, prerequisite_checks
 

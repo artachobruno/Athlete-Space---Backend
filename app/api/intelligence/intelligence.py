@@ -615,7 +615,6 @@ def list_season_plans(
                 )
             )
         return result
-        ]
 
 
 @router.get("/week/list", response_model=list[WeeklyIntentListItem])

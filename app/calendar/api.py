@@ -1054,39 +1054,37 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                 enriched_row = {**row, "payload": payload}
                 enriched_rows.append(enriched_row)
 
-            # Generate LLM content for planned sessions (both planned and completed) if not already persisted
+            # Generate LLM content for planned sessions (both planned and completed)
             # Coach feedback provides:
             # - Pre-workout guidance for planned sessions
             # - Post-workout analysis and compliance comparison for completed sessions
+            # Note: Persistence function handles duplicates (updates existing, creates new)
             sessions = []
             for row in enriched_rows:
                 # Generate feedback for planned sessions (regardless of status: planned, completed, etc.)
                 # Skip standalone activities (they don't have planned sessions to compare)
                 kind = str(row.get("kind", ""))
                 status = str(row.get("status", "planned"))
-                is_planned_session = kind == "planned"  # Generate for all planned sessions, not just "planned" status
-                payload = row.get("payload") or {}
-                has_persisted_feedback = bool(payload.get("coach_insight") or payload.get("instructions"))
+                is_planned_session = kind == "planned"  # Generate for all planned sessions
+                item_id = row.get("item_id")
 
                 logger.info(
-                    "[COACH_FEEDBACK] Checking session for feedback generation",
-                    item_id=row.get("item_id"),
+                    "[COACH_FEEDBACK] Processing session",
+                    item_id=item_id,
                     kind=kind,
                     status=status,
                     is_planned_session=is_planned_session,
-                    has_persisted_feedback=has_persisted_feedback,
-                    payload_keys=list(payload.keys()),
                 )
 
                 instructions: list[str] | None = None
                 steps: list[dict[str, Any]] | None = None
                 coach_insight: str | None = None
 
-                # Generate feedback for planned sessions (both planned and completed) if not already persisted
-                if is_planned_session and not has_persisted_feedback:
+                # Always generate feedback for planned sessions (persistence handles duplicates)
+                if is_planned_session:
                     logger.info(
                         "[COACH_FEEDBACK] Triggering LLM generation",
-                        item_id=row.get("item_id"),
+                        item_id=item_id,
                         status=status,
                     )
                     instructions, steps, coach_insight = await _process_planned_session_for_today(
@@ -1094,9 +1092,9 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                     )
                 else:
                     logger.debug(
-                        "[COACH_FEEDBACK] Skipping generation",
-                        item_id=row.get("item_id"),
-                        reason="not_planned_session" if not is_planned_session else "already_persisted",
+                        "[COACH_FEEDBACK] Skipping generation - not a planned session",
+                        item_id=item_id,
+                        kind=kind,
                     )
 
                 sessions.append(

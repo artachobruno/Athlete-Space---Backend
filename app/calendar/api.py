@@ -1097,15 +1097,28 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                         kind=kind,
                     )
 
-                sessions.append(
-                    calendar_session_from_view_row(
-                        row,
-                        instructions=instructions,
-                        steps=steps,
-                        coach_insight=coach_insight,
-                        prefer_view_data=True,  # Prefer persisted data from view
-                    )
+                # Always pass generated feedback even if prefer_view_data is True
+                # This ensures feedback is included even if view migration hasn't run yet
+                session_obj = calendar_session_from_view_row(
+                    row,
+                    instructions=instructions,
+                    steps=steps,
+                    coach_insight=coach_insight,
+                    prefer_view_data=False,  # Use generated data directly (view may not have feedback yet)
                 )
+                
+                logger.info(
+                    "[COACH_FEEDBACK] Session object created",
+                    item_id=item_id,
+                    has_instructions=bool(session_obj.instructions),
+                    instructions_count=len(session_obj.instructions) if session_obj.instructions else 0,
+                    has_steps=bool(session_obj.steps),
+                    steps_count=len(session_obj.steps) if session_obj.steps else 0,
+                    has_coach_insight=bool(session_obj.coach_insight),
+                    coach_insight_length=len(session_obj.coach_insight) if session_obj.coach_insight else 0,
+                )
+                
+                sessions.append(session_obj)
 
             # Sort by time
             sessions.sort(key=lambda s: s.time or "23:59")

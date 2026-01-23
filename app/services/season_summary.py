@@ -233,7 +233,7 @@ async def _generate_week_coach_summary(
 
 async def build_season_summary(
     user_id: str,
-    athlete_id: int,
+    athlete_id: int,  # noqa: ARG001
 ) -> SeasonSummary:
     """Build season narrative summary.
 

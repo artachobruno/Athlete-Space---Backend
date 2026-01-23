@@ -36,6 +36,8 @@ async def get_plan_inspect(
     Args:
         user_id: Current authenticated user ID
         athlete_id: Optional athlete ID (defaults to user's athlete)
+        horizon: Horizon for evaluation: week, season, or race (defaults to season)
+        preview: Include preview of proposed changes
 
     Returns:
         PlanInspectResponse with inspection data
@@ -61,7 +63,7 @@ async def get_plan_inspect(
             athlete_id = int(account[0].athlete_id)
 
     try:
-        return inspect_plan(athlete_id=athlete_id, user_id=user_id, horizon=horizon, preview=preview)
+        return await inspect_plan(athlete_id=athlete_id, user_id=user_id, horizon=horizon, preview=preview)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

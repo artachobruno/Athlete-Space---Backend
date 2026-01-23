@@ -36,7 +36,7 @@ class EvaluatePlanChangeResult(BaseModel):
     horizon: str
 
 
-async def evaluate_plan_change(
+async def evaluate_plan_change(  # noqa: RUF029
     user_id: str,
     athlete_id: int,
     horizon: Literal["week", "season", "race"],
@@ -54,9 +54,7 @@ async def evaluate_plan_change(
         EvaluatePlanChangeResult with decision and reasoning
     """
     if today is None:
-        from datetime import date as date_today
-
-        today = date_today()
+        today = datetime.now(timezone.utc).date()
 
     logger.info(
         "Evaluating plan change",

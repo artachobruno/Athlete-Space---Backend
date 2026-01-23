@@ -15,6 +15,7 @@ from app.coach.schemas.intent_schemas import DailyDecision, SeasonPlan, WeeklyIn
 from app.coach.utils.date_extraction import extract_date_from_text, extract_session_count_from_text
 from app.db.models import DailyDecision as DailyDecisionModel
 from app.db.models import SeasonPlan as SeasonPlanModel
+from app.db.models import StravaAccount
 from app.db.models import WeeklyIntent as WeeklyIntentModel
 from app.db.models import WeeklyReport as WeeklyReportModel
 from app.db.session import get_session
@@ -71,7 +72,7 @@ class IntentStore:
     @staticmethod
     def save_season_plan(
         user_id: str,
-        athlete_id: int,
+        athlete_id: int,  # noqa: ARG004
         plan: SeasonPlan,
         context_hash: str,
     ) -> str:
@@ -156,7 +157,6 @@ class IntentStore:
         with get_session() as session:
             # Prefer user_id if provided, otherwise look it up from athlete_id
             if user_id is None and athlete_id is not None:
-                from app.db.models import StravaAccount
                 account = session.execute(
                     select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id))
                 ).first()

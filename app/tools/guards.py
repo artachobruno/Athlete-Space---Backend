@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.db.models import PlanEvaluation
 from app.db.session import get_session
 from app.tools.catalog import get_tool_spec, is_mutation_tool
+from app.tools.registry import SEMANTIC_TOOL_REGISTRY
 from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
 
 
@@ -43,7 +44,7 @@ async def require_recent_evaluation(
         EvaluationRequiredError: If evaluation is missing or stale
     """
     if today is None:
-        today = date.today()
+        today = datetime.now(timezone.utc).date()
 
     # Check if tool is a mutation tool
     spec = get_tool_spec(tool_name)
@@ -121,8 +122,6 @@ def validate_semantic_tool_only(tool_name: str) -> None:
     Raises:
         ValueError: If tool is not a semantic tool
     """
-    from app.tools.registry import SEMANTIC_TOOL_REGISTRY
-
     if not SEMANTIC_TOOL_REGISTRY.validate_tool_name(tool_name):
         raise ValueError(
             f"Tool '{tool_name}' is not a semantic tool. "

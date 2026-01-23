@@ -4,13 +4,11 @@ Tier 2 - Decision tool (non-mutating).
 Shows what would change if a proposal is applied.
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 from loguru import logger
 from pydantic import BaseModel
-
-from datetime import timedelta
 
 from app.tools.read.plans import get_planned_activities
 
@@ -36,11 +34,11 @@ class PlanChangePreview(BaseModel):
     expected_impact: str | None = None
 
 
-async def preview_plan_change(
+async def preview_plan_change(  # noqa: RUF029
     user_id: str,
     athlete_id: int,
     proposal: dict[str, Any],
-    horizon: Literal["day", "week", "season", "race"],
+    horizon: Literal["today", "week", "season", "race"],
     today: date | None = None,
 ) -> PlanChangePreview:
     """Preview plan changes from a proposal.
@@ -56,9 +54,7 @@ async def preview_plan_change(
         PlanChangePreview with diff summary
     """
     if today is None:
-        from datetime import date as date_today
-
-        today = date_today()
+        today = datetime.now(timezone.utc).date()
 
     logger.info(
         "Previewing plan change",
@@ -69,7 +65,7 @@ async def preview_plan_change(
     )
 
     # Calculate date range based on horizon
-    if horizon == "day":
+    if horizon == "today":
         start_date = today
         end_date = today
     elif horizon == "week":
@@ -135,7 +131,7 @@ async def preview_plan_change(
 
     # Risk notes (v1 - placeholder)
     risk_notes: list[str] | None = None
-    if change_type in ("volume_reduction", "intensity_cap"):
+    if change_type in {"volume_reduction", "intensity_cap"}:
         risk_notes = ["Reduced load may impact fitness progression"]
 
     # Expected impact (v1 - placeholder)

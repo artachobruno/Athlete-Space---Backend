@@ -4,13 +4,11 @@ Tier 2 - Decision tool (non-mutating).
 Detects incoherence between verdict/today plan/week plan/phase intent.
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from loguru import logger
 from pydantic import BaseModel
-
-from datetime import timedelta
 
 from app.tools.read.plans import get_planned_activities
 
@@ -32,7 +30,7 @@ class PlanIncoherenceResult(BaseModel):
     suggested_resolution: str | None = None
 
 
-async def detect_plan_incoherence(
+async def detect_plan_incoherence(  # noqa: RUF029
     user_id: str,
     athlete_id: int,
     horizon: Literal["today", "week", "season"],
@@ -50,9 +48,7 @@ async def detect_plan_incoherence(
         PlanIncoherenceResult with detected conflicts
     """
     if today is None:
-        from datetime import date as date_today
-
-        today = date_today()
+        today = datetime.now(timezone.utc).date()
 
     logger.info(
         "Detecting plan incoherence",
@@ -104,7 +100,7 @@ async def detect_plan_incoherence(
                 )
 
     # Check for missing rest days (v1 - basic check)
-    if horizon in ("week", "season"):
+    if horizon in {"week", "season"}:
         # Count consecutive training days
         sorted_dates = sorted(sessions_by_date.keys())
         consecutive_days = 0

@@ -17,8 +17,6 @@ from app.coach.adapters.season_modification_adapter import adapt_extracted_seaso
 from app.coach.adapters.week_modification_adapter import to_week_modification
 from app.coach.admin.tool_registry import READ_ONLY_TOOLS
 from app.coach.agents.orchestrator_deps import CoachDeps
-from app.orchestrator.routing import route_with_safety_check
-from app.tools.guards import EvaluationRequiredError, require_recent_evaluation, validate_semantic_tool_only
 from app.coach.clarification import (
     generate_proactive_clarification,
     generate_slot_clarification,
@@ -40,12 +38,15 @@ from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
 from app.db.models import Activity, AthleteProfile, PlannedSession, PlanRevision, SeasonPlan
 from app.db.session import get_session
+from app.orchestrator.routing import route_with_safety_check
 from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
 from app.plans.modify.plan_revision_repo import list_plan_revisions
 from app.plans.modify.types import DayModification
 from app.plans.revision.explanation_payload import build_explanation_payload
 from app.plans.revision.registry import PlanRevisionRegistry
+from app.tools.guards import EvaluationRequiredError, require_recent_evaluation, validate_semantic_tool_only
+from app.tools.semantic_tool_executor import execute_semantic_tool
 
 
 def serialize_for_mcp(obj: Any) -> Any:
@@ -716,7 +717,7 @@ class CoachActionExecutor:
         # HARD LOCK: Use routing module - no fallback paths
         intent = decision.intent
         horizon = decision.horizon or "none"
-        
+
         # Extract query type hint from message for better routing
         query_type: str | None = None
         message_lower = (decision.message or "").lower()
@@ -726,8 +727,8 @@ class CoachActionExecutor:
             query_type = "structure"
         elif any(word in message_lower for word in ["why", "reason"]):
             query_type = "why"
-        
-        # Route intent × horizon → semantic tool (deterministic)
+
+        # Route intent x horizon → semantic tool (deterministic)
         routed_tool, prerequisite_checks = route_with_safety_check(
             intent=intent,  # type: ignore
             horizon=horizon,  # type: ignore
@@ -752,7 +753,7 @@ class CoachActionExecutor:
             # For now, just log
 
         # Enforce evaluation-before-mutation invariant
-        if routed_tool and horizon in ("week", "season", "race"):
+        if routed_tool and horizon in {"week", "season", "race"}:
             try:
                 await require_recent_evaluation(
                     user_id=deps.user_id or "",
@@ -767,7 +768,7 @@ class CoachActionExecutor:
                     horizon=horizon,
                     error=str(e),
                 )
-                return f"Cannot proceed: {str(e)}. Please evaluate the plan first."
+                return f"Cannot proceed: {e!s}. Please evaluate the plan first."
 
         # Use routed tool (enforced) or fall back to target_action for backward compatibility
         target_action = routed_tool or decision.target_action or decision.next_executable_action
@@ -789,8 +790,6 @@ class CoachActionExecutor:
         # HARD RULE: All execution must go through semantic tool executor
         # No direct tool calls - routing determines tool, executor maps to implementation
         if routed_tool:
-            from app.tools.semantic_tool_executor import execute_semantic_tool
-
             return await execute_semantic_tool(routed_tool, decision, deps, conversation_id)
 
         # If no routed tool, return informational response (no mutation)

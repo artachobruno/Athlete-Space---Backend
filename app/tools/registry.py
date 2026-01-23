@@ -18,11 +18,13 @@ class SemanticToolRegistry:
         """Initialize registry with canonical tools."""
         self._tools = CANONICAL_TOOLS.copy()
 
-    def get_tool_spec(self, tool_name: str) -> ToolSpec | None:
+    @staticmethod
+    def get_tool_spec(tool_name: str) -> ToolSpec | None:
         """Get tool specification by name."""
         return get_tool_spec(tool_name)
 
-    def is_enabled(self, tool_name: str) -> bool:
+    @staticmethod
+    def is_enabled(tool_name: str) -> bool:
         """Check if a tool is enabled (exists in catalog)."""
         return is_semantic_tool(tool_name)
 
@@ -34,7 +36,8 @@ class SemanticToolRegistry:
         """List tools in a specific tier."""
         return [name for name, spec in self._tools.items() if spec.tier == tier]
 
-    def validate_tool_name(self, tool_name: str) -> bool:
+    @staticmethod
+    def validate_tool_name(tool_name: str) -> bool:
         """Validate that a tool name is a semantic tool."""
         return is_semantic_tool(tool_name)
 

@@ -4,13 +4,11 @@ Tier 1 - Informational tool (non-mutating).
 Explains why plan has its current structure, not metrics.
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from loguru import logger
 from pydantic import BaseModel
-
-from datetime import timedelta
 
 from app.tools.read.plans import get_planned_activities
 
@@ -24,7 +22,7 @@ class PlanStructureExplanation(BaseModel):
     overall_structure: str
 
 
-async def explain_plan_structure(
+async def explain_plan_structure(  # noqa: RUF029
     user_id: str,
     athlete_id: int,
     horizon: Literal["week", "season", "race"],
@@ -42,9 +40,7 @@ async def explain_plan_structure(
         PlanStructureExplanation with rationale
     """
     if today is None:
-        from datetime import date as date_today
-
-        today = date_today()
+        today = datetime.now(timezone.utc).date()
 
     logger.info(
         "Explaining plan structure",
@@ -83,9 +79,11 @@ async def explain_plan_structure(
     # Extract key workouts
     key_workouts: list[str] = []
     for week_sessions in list(sessions_by_week.values())[:4]:  # First 4 weeks
-        for session in week_sessions:
-            if session.intensity in ("high", "moderate"):
-                key_workouts.append(f"{session.sport} {session.intensity} on {session.date}")
+        key_workouts.extend(
+            f"{session.sport} {session.intensity} on {session.date}"
+            for session in week_sessions
+            if session.intensity in {"high", "moderate"}
+        )
 
     # Build explanation (v1 - template-based)
     phase_intent = f"Plan structure for {horizon} focuses on progressive overload and periodization"

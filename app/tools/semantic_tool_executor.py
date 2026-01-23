@@ -4,9 +4,9 @@ This module maps semantic tool names to their executor implementations.
 All tool execution must go through routing → semantic tool → this mapping → executor.
 """
 
+from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.executor.action_executor import CoachActionExecutor
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
-from app.coach.agents.orchestrator_deps import CoachDeps
 
 
 async def execute_semantic_tool(
@@ -29,7 +29,6 @@ async def execute_semantic_tool(
     Raises:
         ValueError: If tool_name is not a recognized semantic tool
     """
-    intent = decision.intent
     horizon = decision.horizon
 
     # Map semantic tools to executor methods based on intent/horizon
@@ -48,14 +47,14 @@ async def execute_semantic_tool(
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("plan_week")
             return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
-        if horizon == "day":
+        if horizon == "today":
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("plan_single_day")
             return await CoachActionExecutor._execute_plan_day(decision, deps, conversation_id)
         raise ValueError(f"Plan tool requires valid horizon, got: {horizon}")
 
     if tool_name == "modify":
-        if horizon == "day":
+        if horizon == "today":
             if deps.execution_guard:
                 deps.execution_guard.mark_executed("modify_day")
             return await CoachActionExecutor._execute_modify_day(decision, deps, conversation_id)
@@ -82,7 +81,6 @@ async def execute_semantic_tool(
         # Handle None horizon by defaulting to week
         if decision.horizon is None or decision.horizon == "none":
             # Create a modified decision with week horizon for tools that require it
-            from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
             modified_decision = OrchestratorAgentResponse(
                 **decision.model_dump(),
                 horizon="week",  # Default to week for general explain queries
@@ -113,7 +111,7 @@ async def execute_semantic_tool(
         return await CoachActionExecutor._execute_confirm_revision(decision, deps, conversation_id)
 
     # New semantic tools that don't have executor methods yet
-    if tool_name in ("evaluate_plan_change", "preview_plan_change", "detect_plan_incoherence", "explain_plan_structure"):
+    if tool_name in {"evaluate_plan_change", "preview_plan_change", "detect_plan_incoherence", "explain_plan_structure"}:
         # These are called directly, not through executor
         # They're decision/info tools, not mutations
         raise ValueError(

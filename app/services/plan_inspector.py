@@ -26,9 +26,9 @@ from app.schemas.plan_inspect import (
     PlanSnapshot,
     WeekInspect,
 )
+from app.services.intelligence.store import IntentStore
 from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
 from app.tools.semantic.preview_plan_change import preview_plan_change
-from app.services.intelligence.store import IntentStore
 
 
 def _get_week_start_end(week_start: date) -> tuple[date, date]:
@@ -57,18 +57,18 @@ def _extract_weekly_structure_from_plan(_plan: SeasonPlan) -> dict[str, str]:
 
 def _build_plan_snapshot(
     plan: SeasonPlan,
-    plan_model: SeasonPlanModel,
+    plan_model: SeasonPlanModel,  # noqa: ARG001
     _today: date,
 ) -> PlanSnapshot:
     """Build plan snapshot from season plan."""
     # Get metadata from plan object (from plan_data JSON)
     primary_race_name = plan.target_races[0] if plan.target_races else None
-    
+
     # Determine anchor type and title
     anchor_type = "race" if primary_race_name else "objective"
     anchor_title = primary_race_name or plan.focus
     anchor_date = None  # Would need to extract from target_races if date is embedded
-    
+
     # Calculate total weeks from plan dates
     total_weeks = max(1, (plan.season_end - plan.season_start).days // 7)
 
@@ -148,7 +148,7 @@ def _build_week_inspect(
 
 def _build_phases(
     plan: SeasonPlan,
-    plan_model: SeasonPlanModel,
+    plan_model: SeasonPlanModel,  # noqa: ARG001
     weekly_intents: list[WeeklyIntentModel],
     planned_sessions: list[PlannedSession],
     revisions: list[PlanRevision],
@@ -271,6 +271,8 @@ async def inspect_plan(
     Args:
         athlete_id: Athlete ID
         user_id: User ID (for authorization)
+        horizon: Horizon for evaluation: week, season, or race (defaults to season)
+        preview: Include preview of proposed changes
 
     Returns:
         PlanInspectResponse with all inspection data
@@ -308,19 +310,17 @@ async def inspect_plan(
         start_datetime = datetime.combine(plan.season_start, datetime.min.time()).replace(tzinfo=timezone.utc)
         end_datetime = datetime.combine(plan.season_end, datetime.max.time()).replace(tzinfo=timezone.utc)
 
-            planned_sessions = list(
-                session.execute(
-                    select(PlannedSession)
-                    .where(
-                        PlannedSession.user_id == user_id,
-                        PlannedSession.starts_at >= start_datetime,
-                        PlannedSession.starts_at <= end_datetime,
-                    )
-                    .order_by(PlannedSession.starts_at)
-                ).scalars().all()
-            )
-        else:
-            planned_sessions = []
+        planned_sessions = list(
+            session.execute(
+                select(PlannedSession)
+                .where(
+                    PlannedSession.user_id == user_id,
+                    PlannedSession.starts_at >= start_datetime,
+                    PlannedSession.starts_at <= end_datetime,
+                )
+                .order_by(PlannedSession.starts_at)
+            ).scalars().all()
+        )
 
         # Get plan revisions
         revisions = list(
@@ -351,7 +351,7 @@ async def inspect_plan(
         plan_change_evaluation: PlanChangeEvaluation | None = None
         preview_data: PlanChangePreviewData | None = None
 
-        if horizon and horizon in ("week", "season", "race"):
+        if horizon and horizon in {"week", "season", "race"}:
             try:
                 eval_result = await evaluate_plan_change(
                     user_id=user_id,

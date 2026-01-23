@@ -1,4 +1,4 @@
-"""Deterministic routing rules for intent × horizon → semantic tool.
+"""Deterministic routing rules for intent x horizon → semantic tool.
 
 This module provides the single source of truth for routing decisions.
 No ambiguity - exactly one tool per intent/horizon combination.
@@ -29,16 +29,16 @@ def route(
     intent: Intent,
     horizon: Horizon,
     has_proposal: bool = False,
-    needs_approval: bool = False,
+    needs_approval: bool = False,  # noqa: ARG001
     query_type: str | None = None,
 ) -> str | None:
-    """Route intent × horizon to semantic tool.
+    """Route intent x horizon to semantic tool.
 
     Args:
         intent: User intent
         horizon: Time horizon
         has_proposal: Whether a proposal object exists
-        needs_approval: Whether approval is required
+        needs_approval: Whether approval is required (unused, kept for API compatibility)
         query_type: Optional query type hint (e.g., "schedule", "structure", "why")
 
     Returns:
@@ -63,10 +63,10 @@ def route(
         if query_type == "schedule":
             # "What do I have planned?" → get_planned_sessions
             return "get_planned_sessions"
-        if query_type == "structure" and horizon in ("week", "season", "race"):
+        if query_type == "structure" and horizon in {"week", "season", "race"}:
             # "Why is the plan structured this way?" → explain_plan_structure
             return "explain_plan_structure"
-        if query_type == "why" or query_type == "rationale":
+        if query_type in {"why", "rationale"}:
             # "Why did the plan change?" → generate_plan_rationale
             return "generate_plan_rationale"
         # For explain with horizon=None, check if it's a calendar/schedule query
@@ -78,9 +78,9 @@ def route(
             # Default: explain training state (will default to week horizon in executor)
             return "explain_training_state"
         # Route based on horizon
-        if horizon in ("today", "week", "season"):
+        if horizon in {"today", "week", "season"}:
             return "explain_training_state"
-        if horizon in ("week", "season", "race"):
+        if horizon in {"week", "season", "race"}:
             # Could be structure explanation
             return "explain_plan_structure"
         # Default: explain training state
@@ -88,9 +88,9 @@ def route(
 
     # Tier 2 - Decision
     if intent == "recommend":
-        if horizon in ("next_session", "today"):
+        if horizon in {"next_session", "today"}:
             return "recommend_next_session"
-        if horizon in ("week", "season", "race"):
+        if horizon in {"week", "season", "race"}:
             # Recommend adjustments vs no change
             return "evaluate_plan_change"
         return None
@@ -100,7 +100,7 @@ def route(
             # No proposal object yet → clarify
             return None  # Will trigger clarify flow
         # Has proposal → preview it
-        if horizon in ("day", "week", "season", "race"):
+        if horizon in {"today", "week", "season", "race"}:
             return "preview_plan_change"
         return None
 
@@ -110,21 +110,21 @@ def route(
 
     # Tier 3 - Mutation
     if intent == "plan":
-        if horizon in ("race", "season"):
+        if horizon in {"race", "season"}:
             return "plan"
-        if horizon in ("week", "day"):
-            # Week/day planning becomes modify with create-if-missing
+        if horizon in {"week", "today"}:
+            # Week/today planning becomes modify with create-if-missing
             return "modify"
         return None
 
     if intent == "modify":
-        if horizon in ("day", "week", "season", "race"):
+        if horizon in {"today", "week", "season", "race"}:
             # Always creates proposal, does not apply
             return "modify"
         return None
 
     if intent == "adjust":
-        if horizon in ("week", "season"):
+        if horizon in {"week", "season"}:
             return "adjust_training_load"
         return None
 
@@ -173,9 +173,13 @@ def route_with_safety_check(
     prerequisite_checks: list[str] = []
 
     # Global safety check: detect incoherence before mutations
-    if run_incoherence_check and tool_name and tool_name in ("modify", "plan", "adjust_training_load"):
-        if horizon in ("today", "week", "season"):
-            prerequisite_checks.append("detect_plan_incoherence")
+    if (
+        run_incoherence_check
+        and tool_name
+        and tool_name in {"modify", "plan", "adjust_training_load"}
+        and horizon in {"today", "week", "season"}
+    ):
+        prerequisite_checks.append("detect_plan_incoherence")
 
     # Validate tool supports horizon (with fallback for None)
     if tool_name:
@@ -192,13 +196,12 @@ def route_with_safety_check(
                         horizon=horizon,
                         supported_horizons=spec.horizons,
                     )
-            else:
-                # Validate specific horizon
-                if not validate_tool_horizon(tool_name, horizon):  # type: ignore
-                    raise ValueError(
-                        f"Tool {tool_name} does not support horizon {horizon}. "
-                        f"Supported horizons: {spec.horizons}"
-                    )
+            # Validate specific horizon
+            elif not validate_tool_horizon(tool_name, horizon):  # type: ignore
+                raise ValueError(
+                    f"Tool {tool_name} does not support horizon {horizon}. "
+                    f"Supported horizons: {spec.horizons}"
+                )
 
     return tool_name, prerequisite_checks
 

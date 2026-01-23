@@ -578,7 +578,7 @@ def list_season_plans(
             # Extract metadata from plan_data JSON
             plan_data = plan_model.plan_data
             plan_name = plan_data.get("focus", "")[:100] if plan_data.get("focus") else None
-            
+
             # Parse dates from plan_data (stored as ISO date strings)
             start_date = None
             end_date = None
@@ -588,14 +588,14 @@ def list_season_plans(
                     start_date = datetime.combine(date.fromisoformat(start_date_str), datetime.min.time()).replace(tzinfo=timezone.utc)
                 elif isinstance(start_date_str, date):
                     start_date = datetime.combine(start_date_str, datetime.min.time()).replace(tzinfo=timezone.utc)
-            
+
             if plan_data.get("season_end"):
                 end_date_str = plan_data["season_end"]
                 if isinstance(end_date_str, str):
                     end_date = datetime.combine(date.fromisoformat(end_date_str), datetime.max.time()).replace(tzinfo=timezone.utc)
                 elif isinstance(end_date_str, date):
                     end_date = datetime.combine(end_date_str, datetime.max.time()).replace(tzinfo=timezone.utc)
-            
+
             primary_race_name = plan_data.get("target_races", [None])[0] if plan_data.get("target_races") else None
             primary_race_date = None  # Would need to extract from target_races if date is embedded
             total_weeks = (end_date.date() - start_date.date()).days // 7 if start_date and end_date else None

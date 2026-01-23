@@ -1291,7 +1291,8 @@ async def run_conversation(
             usage_info=usage_info,
         )
         logger.info(
-            f"Intent detected by orchestrator: intent={result.output.intent}, horizon={result.output.horizon}, target_action={result.output.target_action}",
+            f"Intent detected: intent={result.output.intent}, "
+            f"horizon={result.output.horizon}, target_action={result.output.target_action}",
             intent=result.output.intent,
             horizon=result.output.horizon,
             target_action=result.output.target_action,

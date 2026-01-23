@@ -10,13 +10,12 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.session import get_session
-
 # Import models here - these are implementation details
 from app.db.models import PlannedSession
+from app.db.session import get_session
 
 
-async def get_planned_sessions_db(
+async def get_planned_sessions_db(  # noqa: RUF029
     user_id: str,
     athlete_id: int,
     start_date: Any,

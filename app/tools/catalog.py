@@ -87,7 +87,7 @@ CANONICAL_TOOLS: dict[str, ToolSpec] = {
     "preview_plan_change": ToolSpec(
         name="preview_plan_change",
         tier="decision",
-        horizons=["day", "week", "season", "race"],
+        horizons=["today", "week", "season", "race"],
         approval="never",
         description="Shows diff preview before confirmation",
     ),
@@ -116,7 +116,7 @@ CANONICAL_TOOLS: dict[str, ToolSpec] = {
     "modify": ToolSpec(
         name="modify",
         tier="mutation",
-        horizons=["day", "week", "season", "race"],
+        horizons=["today", "week", "season", "race"],
         approval="required",
         description="Structured plan modifications",
     ),
@@ -130,7 +130,7 @@ CANONICAL_TOOLS: dict[str, ToolSpec] = {
     "add_workout": ToolSpec(
         name="add_workout",
         tier="mutation",
-        horizons=["day", "week"],
+        horizons=["today", "week"],
         approval="required",
         description="Calendar workout addition",
     ),

@@ -299,7 +299,7 @@ def save_weekly_intent(
 def save_season_plan(
     session: Session,
     user_id: str,
-    athlete_id: int,
+    athlete_id: int,  # noqa: ARG001
     plan: SeasonPlan,
 ) -> None:
     """Save season plan to database and create planned sessions.

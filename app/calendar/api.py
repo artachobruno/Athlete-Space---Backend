@@ -718,7 +718,7 @@ def _persist_coach_feedback(
     except Exception as e:
         error_type = type(e).__name__
         error_str = str(e)
-        
+
         # Handle case where table doesn't exist yet (migration not run)
         if "does not exist" in error_str.lower() or "undefinedtable" in error_str.lower():
             logger.warning(

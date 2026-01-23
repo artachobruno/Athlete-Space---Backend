@@ -5,6 +5,7 @@ All tool execution must go through routing → semantic tool → this mapping �
 """
 
 from app.coach.agents.orchestrator_deps import CoachDeps
+from app.coach.executor.action_executor import CoachActionExecutor
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 
 
@@ -28,10 +29,6 @@ async def execute_semantic_tool(
     Raises:
         ValueError: If tool_name is not a recognized semantic tool
     """
-    # Lazy import to avoid circular dependency
-    # action_executor imports this module, so we import it at runtime
-    from app.coach.executor.action_executor import CoachActionExecutor
-
     horizon = decision.horizon
 
     # Map semantic tools to executor methods based on intent/horizon

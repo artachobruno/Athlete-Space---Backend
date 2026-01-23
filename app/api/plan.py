@@ -20,9 +20,13 @@ router = APIRouter(prefix="/plan", tags=["plan"])
 
 
 @router.get("/inspect", response_model=PlanInspectResponse)
-def get_plan_inspect(
+async def get_plan_inspect(
     user_id: str = Depends(get_current_user_id),
     athlete_id: int | None = Query(None, description="Athlete ID (optional, defaults to user's athlete)"),
+    horizon: str | None = Query(
+        None, description="Horizon for evaluation: week, season, or race (defaults to season)"
+    ),
+    preview: bool = Query(False, description="Include preview of proposed changes"),
 ) -> PlanInspectResponse:
     """Get plan inspection data (dev/admin only).
 
@@ -57,7 +61,7 @@ def get_plan_inspect(
             athlete_id = int(account[0].athlete_id)
 
     try:
-        return inspect_plan(athlete_id=athlete_id, user_id=user_id)
+        return inspect_plan(athlete_id=athlete_id, user_id=user_id, horizon=horizon, preview=preview)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

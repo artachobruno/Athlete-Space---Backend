@@ -422,7 +422,6 @@ class SeasonPlan(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
     # Metadata fields (for fast queries without JSON parsing)
     plan_name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)

@@ -312,7 +312,6 @@ def save_season_plan(
     """
     plan_model = SeasonPlanModel(
         user_id=user_id,
-        athlete_id=athlete_id,
         plan_data=plan.model_dump(),
         is_active=True,
         version=1,

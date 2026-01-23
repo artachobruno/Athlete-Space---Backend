@@ -219,7 +219,7 @@ def get_season_plan(user_id: str = Depends(get_current_user_id)):
     return SeasonPlanResponse(
         id=plan_model.id,
         user_id=plan_model.user_id,
-        athlete_id=plan_model.athlete_id,
+        athlete_id=athlete_id,  # Use computed athlete_id from user_id
         plan=plan,
         version=plan_model.version,
         is_active=plan_model.is_active,
@@ -566,7 +566,7 @@ def list_season_plans(
     logger.info(f"Listing season plans for user_id={user_id}, athlete_id={athlete_id}, limit={limit}")
 
     with get_session() as session:
-        query = select(SeasonPlanModel).where(SeasonPlanModel.athlete_id == athlete_id)
+        query = select(SeasonPlanModel).where(SeasonPlanModel.user_id == user_id)
 
         if active_only:
             query = query.where(SeasonPlanModel.is_active.is_(True))

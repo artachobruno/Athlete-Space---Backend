@@ -87,11 +87,11 @@ class IntentStore:
             Plan ID (UUID string)
         """
         with get_session() as session:
-            # Deactivate previous active plans for this athlete
+            # Deactivate previous active plans for this user
             existing = (
                 session.execute(
                     select(SeasonPlanModel).where(
-                        SeasonPlanModel.athlete_id == athlete_id,
+                        SeasonPlanModel.user_id == user_id,
                         SeasonPlanModel.is_active.is_(True),
                     )
                 )
@@ -107,7 +107,7 @@ class IntentStore:
             max_version = session.execute(
                 select(SeasonPlanModel.version)
                 .where(
-                    SeasonPlanModel.athlete_id == athlete_id,
+                    SeasonPlanModel.user_id == user_id,
                 )
                 .order_by(SeasonPlanModel.version.desc())
             ).scalar()
@@ -145,7 +145,6 @@ class IntentStore:
             plan_dict["_context_hash"] = context_hash
             new_plan = SeasonPlanModel(
                 user_id=user_id,
-                athlete_id=athlete_id,
                 plan_name=plan_name,
                 start_date=start_date_dt,
                 end_date=end_date_dt,
@@ -164,7 +163,6 @@ class IntentStore:
                 "Season plan saved",
                 plan_id=new_plan.id,
                 user_id=user_id,
-                athlete_id=athlete_id,
                 version=next_version,
             )
 

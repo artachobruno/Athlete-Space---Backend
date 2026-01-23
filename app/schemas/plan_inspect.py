@@ -70,6 +70,26 @@ class PlanChangeLogItem(BaseModel):
     description: str = Field(..., description="Human-readable description")
 
 
+class PlanChangeEvaluation(BaseModel):
+    """Evaluation of whether plan changes are needed."""
+
+    decision: Literal["no_change", "minor_adjustment", "modification_required"]
+    reasons: list[str]
+    recommended_actions: list[str] | None = None
+    confidence: float
+    current_state_summary: str
+
+
+class PlanChangePreviewData(BaseModel):
+    """Preview of plan changes."""
+
+    change_summary: str
+    sessions_changed_count: int
+    key_sessions_changed: list[str]
+    risk_notes: list[str] | None = None
+    expected_impact: str | None = None
+
+
 class PlanInspectResponse(BaseModel):
     """Complete plan inspection response."""
 
@@ -78,3 +98,7 @@ class PlanInspectResponse(BaseModel):
     current_week: WeekInspect | None = Field(None, description="Current week details")
     coach_assessment: CoachAssessment | None = Field(None, description="Coach's assessment")
     change_log: list[PlanChangeLogItem] = Field(default_factory=list, description="Plan change audit trail")
+    plan_change_evaluation: PlanChangeEvaluation | None = Field(
+        None, description="Evaluation of whether plan changes are needed"
+    )
+    preview: PlanChangePreviewData | None = Field(None, description="Preview of proposed changes")

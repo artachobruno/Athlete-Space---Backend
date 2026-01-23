@@ -17,13 +17,17 @@ from app.db.models import WeeklyIntent as WeeklyIntentModel
 from app.db.session import get_session
 from app.schemas.plan_inspect import (
     CoachAssessment,
+    PlanChangeEvaluation,
     PlanChangeLogItem,
+    PlanChangePreviewData,
     PlanInspectResponse,
     PlanModification,
     PlanPhaseInspect,
     PlanSnapshot,
     WeekInspect,
 )
+from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
+from app.tools.semantic.preview_plan_change import preview_plan_change
 from app.services.intelligence.store import IntentStore
 
 
@@ -258,7 +262,12 @@ def _build_change_log(revisions: list[PlanRevision]) -> list[PlanChangeLogItem]:
     return log_items
 
 
-def inspect_plan(athlete_id: int, user_id: str) -> PlanInspectResponse:
+async def inspect_plan(
+    athlete_id: int,
+    user_id: str,
+    horizon: str | None = None,
+    preview: bool = False,
+) -> PlanInspectResponse:
     """Inspect a plan for diagnostic purposes.
 
     Args:
@@ -340,10 +349,61 @@ def inspect_plan(athlete_id: int, user_id: str) -> PlanInspectResponse:
             if current_week:
                 break
 
+        # Evaluate plan change if horizon provided
+        plan_change_evaluation: PlanChangeEvaluation | None = None
+        preview_data: PlanChangePreviewData | None = None
+
+        if horizon and horizon in ("week", "season", "race"):
+            try:
+                eval_result = await evaluate_plan_change(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    horizon=horizon,  # type: ignore
+                    today=today,
+                )
+                plan_change_evaluation = PlanChangeEvaluation(
+                    decision=eval_result.decision.decision,
+                    reasons=eval_result.decision.reasons,
+                    recommended_actions=eval_result.decision.recommended_actions,
+                    confidence=eval_result.decision.confidence,
+                    current_state_summary=eval_result.current_state_summary,
+                )
+
+                # Generate preview if requested and evaluation suggests changes
+                if preview and eval_result.decision.decision != "no_change":
+                    # Get last proposal (simplified - would need proposal storage)
+                    # For now, create a minimal proposal based on evaluation
+                    proposal = {
+                        "type": "adjustment" if eval_result.decision.decision == "minor_adjustment" else "modification",
+                        "affected_sessions": [],
+                        "new_session": {},
+                    }
+
+                    preview_result = await preview_plan_change(
+                        user_id=user_id,
+                        athlete_id=athlete_id,
+                        proposal=proposal,
+                        horizon=horizon,  # type: ignore
+                        today=today,
+                    )
+
+                    preview_data = PlanChangePreviewData(
+                        change_summary=preview_result.change_summary,
+                        sessions_changed_count=len(preview_result.sessions_changed),
+                        key_sessions_changed=preview_result.key_sessions_changed,
+                        risk_notes=preview_result.risk_notes,
+                        expected_impact=preview_result.expected_impact,
+                    )
+            except Exception as e:
+                logger.exception(f"Failed to evaluate/preview plan change: {e}")
+                # Continue without evaluation/preview on error
+
         return PlanInspectResponse(
             plan_snapshot=plan_snapshot,
             phases=phases,
             current_week=current_week,
             coach_assessment=coach_assessment,
             change_log=change_log,
+            plan_change_evaluation=plan_change_evaluation,
+            preview=preview_data,
         )

@@ -656,6 +656,19 @@ def _persist_coach_feedback(
         coach_insight: Coach insight text
     """
     try:
+        # Verify planned_session_id exists in planned_sessions table
+        planned_session_exists = session.execute(
+            select(PlannedSession.id).where(PlannedSession.id == planned_session_id)
+        ).scalar_one_or_none()
+
+        if not planned_session_exists:
+            logger.warning(
+                "[COACH_FEEDBACK] Planned session not found, cannot persist feedback",
+                planned_session_id=planned_session_id,
+                user_id=user_id,
+            )
+            return
+
         # Check if feedback already exists
         existing = session.execute(
             select(CoachFeedback).where(CoachFeedback.planned_session_id == planned_session_id)
@@ -667,9 +680,12 @@ def _persist_coach_feedback(
             existing.steps = steps
             existing.coach_insight = coach_insight
             existing.updated_at = datetime.now(timezone.utc)
-            logger.debug(
-                "Updated existing coach feedback",
+            logger.info(
+                "[COACH_FEEDBACK] Updating existing feedback",
                 planned_session_id=planned_session_id,
+                instructions_count=len(instructions),
+                steps_count=len(steps),
+                has_insight=bool(coach_insight),
             )
         else:
             # Create new feedback
@@ -681,16 +697,30 @@ def _persist_coach_feedback(
                 coach_insight=coach_insight,
             )
             session.add(feedback)
-            logger.debug(
-                "Created new coach feedback",
+            logger.info(
+                "[COACH_FEEDBACK] Adding new feedback",
                 planned_session_id=planned_session_id,
+                user_id=user_id,
+                instructions_count=len(instructions),
+                steps_count=len(steps),
+                has_insight=bool(coach_insight),
             )
 
+        # Flush to immediately expose any constraint violations
+        session.flush()
+        logger.info("[COACH_FEEDBACK] Flush succeeded")
+
         session.commit()
-    except Exception as e:
-        logger.warning(
-            "Failed to persist coach feedback",
+        logger.info(
+            "[COACH_FEEDBACK] Successfully persisted feedback",
             planned_session_id=planned_session_id,
+        )
+    except Exception as e:
+        logger.exception(
+            "[COACH_FEEDBACK] Failed to persist coach feedback",
+            planned_session_id=planned_session_id,
+            user_id=user_id,
+            error_type=type(e).__name__,
             error=str(e),
         )
         session.rollback()

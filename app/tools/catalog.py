@@ -177,3 +177,9 @@ def validate_tool_horizon(tool_name: str, horizon: Horizon) -> bool:
     if not spec:
         return False
     return horizon in spec.horizons
+
+
+def is_mutation_tool(tool_name: str) -> bool:
+    """Check if a tool is a mutation tool (tier 3)."""
+    spec = get_tool_spec(tool_name)
+    return spec is not None and spec.tier == "mutation"

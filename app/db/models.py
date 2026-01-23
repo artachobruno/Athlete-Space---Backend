@@ -1532,6 +1532,53 @@ class WorkoutReconciliation(Base):
     )
 
 
+class PlanEvaluation(Base):
+    """Plan evaluation storage for change decisions.
+
+    Stores evaluations of whether plan changes are needed.
+    Enables auditability and prevents re-evaluation drift.
+
+    Schema:
+    - id: UUID primary key
+    - user_id: User ID
+    - athlete_id: Athlete ID
+    - plan_version: Plan version identifier (nullable, for future versioning)
+    - horizon: Time horizon evaluated (week, season, race)
+    - decision: Evaluation decision (no_change, minor_adjustment, modification_required)
+    - reasons: JSON array of reason strings
+    - recommended_actions: JSON array of recommended actions (nullable)
+    - confidence: Confidence score (0.0-1.0)
+    - current_state_summary: Text summary of current state
+    - created_at: Timestamp when evaluation was created
+    """
+
+    __tablename__ = "plan_evaluations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    # Plan versioning (nullable for now, can link to season_plan_id later)
+    plan_version: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+
+    # Evaluation metadata
+    horizon: Mapped[str] = mapped_column(String, nullable=False, index=True)  # week, season, race
+    decision: Mapped[str] = mapped_column(String, nullable=False)  # no_change, minor_adjustment, modification_required
+
+    # Evaluation results (stored as JSON)
+    reasons: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    recommended_actions: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    current_state_summary: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    __table_args__ = (
+        Index("idx_plan_evaluation_athlete_horizon_created", "athlete_id", "horizon", "created_at"),
+    )
+
+
 class PlanRevision(Base):
     """Append-only audit table for plan modifications.
 

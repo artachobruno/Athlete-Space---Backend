@@ -4,14 +4,15 @@ Tier 2 - Decision tool (non-mutating).
 Evaluates current plan state and determines if changes are recommended.
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from loguru import logger
 from pydantic import BaseModel
+from sqlalchemy import select
 
-from datetime import datetime, timedelta, timezone
-
+from app.db.models import PlanEvaluation
+from app.db.session import get_session
 from app.tools.read.activities import get_completed_activities
 from app.tools.read.compliance import get_plan_compliance
 from app.tools.read.plans import get_planned_activities
@@ -147,7 +148,7 @@ async def evaluate_plan_change(
     if not recent_activities:
         confidence = 0.6
 
-    return EvaluatePlanChangeResult(
+    result = EvaluatePlanChangeResult(
         decision=PlanChangeDecision(
             decision=decision,
             reasons=reasons if reasons else ["No changes needed at this time"],
@@ -157,3 +158,27 @@ async def evaluate_plan_change(
         current_state_summary=state_summary,
         horizon=horizon,
     )
+
+    # Store evaluation for auditability and reuse
+    with get_session() as session:
+        evaluation = PlanEvaluation(
+            user_id=user_id,
+            athlete_id=athlete_id,
+            plan_version=None,  # TODO: Link to season_plan_id when available
+            horizon=horizon,
+            decision=decision,
+            reasons=reasons if reasons else ["No changes needed at this time"],
+            recommended_actions=recommended_actions if recommended_actions else None,
+            confidence=confidence,
+            current_state_summary=state_summary,
+        )
+        session.add(evaluation)
+        session.commit()
+        logger.info(
+            "Plan evaluation stored",
+            evaluation_id=evaluation.id,
+            horizon=horizon,
+            decision=decision,
+        )
+
+    return result

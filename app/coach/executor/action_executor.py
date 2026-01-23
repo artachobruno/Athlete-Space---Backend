@@ -776,156 +776,22 @@ class CoachActionExecutor:
         if target_action:
             validate_semantic_tool_only(target_action)
 
-        # Use target_action for execution routing if available
-        if target_action == "plan_race_build":
-            # CRITICAL — execution invariant (Phase 0.5)
-            # No plan can execute without required slots
-            if not decision.filled_slots:
-                raise RuntimeError(
-                    "EXECUTION_WITH_EMPTY_SLOTS: plan_race_build requires filled slots"
-                )
-            logger.debug(
-                "ActionExecutor: Routing to plan_race_build execution",
-                conversation_id=conversation_id,
-            )
-            # Mark execution in turn-scoped guard BEFORE calling planner to prevent re-entry
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("plan_race_build")
-            return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
+        # HARD RULE: All execution must go through semantic tool executor
+        # No direct tool calls - routing determines tool, executor maps to implementation
+        if routed_tool:
+            from app.tools.semantic_tool_executor import execute_semantic_tool
 
-        if target_action == "plan_week":
-            # Validate intent and horizon
-            if intent != "plan":
-                logger.warning(
-                    "plan_week called with invalid intent",
-                    intent=intent,
-                    conversation_id=conversation_id,
-                )
-                return "Weekly planning requires intent='plan'."
-            if horizon != "week":
-                logger.warning(
-                    "plan_week called with invalid horizon",
-                    horizon=horizon,
-                    conversation_id=conversation_id,
-                )
-                return "Weekly planning requires horizon='week'."
-            logger.debug(
-                "ActionExecutor: Routing to plan_week execution",
-                conversation_id=conversation_id,
-            )
-            # Mark execution in turn-scoped guard BEFORE calling planner to prevent re-entry
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("plan_week")
-            return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
+            return await execute_semantic_tool(routed_tool, decision, deps, conversation_id)
 
-        # Fallback to intent/horizon mapping if no target_action
-        if intent == "recommend" and horizon in {"next_session", "today"}:
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("recommend_next_session")
-            return await CoachActionExecutor._execute_recommend_next_session(decision, deps, conversation_id)
-
-        if intent == "plan" and horizon == "day":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("plan_single_day")
-            return await CoachActionExecutor._execute_plan_day(decision, deps, conversation_id)
-
-        if intent == "plan" and horizon == "race":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("plan_race_build")
-            return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
-
-        if intent == "plan" and horizon == "week":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("plan_week")
-            return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
-
-        if intent == "plan" and horizon == "season":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("plan_season")
-            return await CoachActionExecutor._execute_plan_season(decision, deps, conversation_id)
-
-        if intent == "modify" and horizon == "day":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("modify_day")
-            return await CoachActionExecutor._execute_modify_day(decision, deps, conversation_id)
-
-        if intent == "modify" and horizon == "week":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("modify_week")
-            return await CoachActionExecutor._execute_modify_week(decision, deps, conversation_id)
-
-        if intent == "modify" and horizon == "race":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("modify_race")
-            return await CoachActionExecutor._execute_modify_race(decision, deps, conversation_id)
-
-        if intent == "modify" and horizon == "season":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("modify_season")
-            return await CoachActionExecutor._execute_modify_season(decision, deps, conversation_id)
-
-        if intent == "adjust":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("adjust_training_load")
-            return await CoachActionExecutor._execute_adjust_training_load(decision, deps, conversation_id)
-
-        if intent == "explain":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("explain_training_state")
-            return await CoachActionExecutor._execute_explain_training_state(decision, deps, conversation_id)
-
-        if intent == "log":
-            if deps.execution_guard:
-                deps.execution_guard.mark_executed("add_workout")
-            return await CoachActionExecutor._execute_add_workout(decision, deps, conversation_id)
-
-        # Tier 2 - Decision (no mutation)
-        if intent == "propose":
-            # Propose creates a revision but doesn't execute it
-            # This will be handled by the plan/modify tools with approval flow
-            logger.info(
-                "Propose intent - will create revision requiring approval",
-                horizon=horizon,
-                conversation_id=conversation_id,
-            )
-            # Route to appropriate planning tool based on horizon
-            if horizon == "week":
-                if deps.execution_guard:
-                    deps.execution_guard.mark_executed("propose_week")
-                return await CoachActionExecutor._execute_plan_week(decision, deps, conversation_id)
-            if horizon == "race":
-                if deps.execution_guard:
-                    deps.execution_guard.mark_executed("propose_race")
-                return await CoachActionExecutor._execute_plan_race(decision, deps, conversation_id)
-            if horizon == "season":
-                if deps.execution_guard:
-                    deps.execution_guard.mark_executed("propose_season")
-                return await CoachActionExecutor._execute_plan_season(decision, deps, conversation_id)
-            return "Propose requires a horizon (week, race, or season)."
-
-        if intent == "clarify":
-            # Clarify is informational - return the question from decision
-            logger.info(
-                "Clarify intent - returning clarification question",
-                conversation_id=conversation_id,
-            )
-            return decision.message or decision.next_question or "I need more information to proceed."
-
-        # Tier 3 - Mutation (approval)
-        if intent == "confirm":
-            # Confirm applies a pending revision
-            logger.info(
-                "Confirm intent - applying pending revision",
-                conversation_id=conversation_id,
-            )
-            return await CoachActionExecutor._execute_confirm_revision(decision, deps, conversation_id)
-
-        logger.warning(
-            "Unhandled intent/horizon combination",
+        # If no routed tool, return informational response (no mutation)
+        # This handles cases where routing returns None (e.g., question, general, clarify)
+        logger.debug(
+            "No routed tool - returning informational response",
             intent=intent,
             horizon=horizon,
+            target_action=target_action,
         )
-        return decision.message
+        return decision.message or "I understand. How can I help you with your training?"
 
     @staticmethod
     async def _execute_recommend_next_session(

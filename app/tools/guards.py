@@ -9,7 +9,7 @@ from typing import Literal
 from loguru import logger
 from sqlalchemy import select
 
-from app.db.models import PlanRevision
+from app.db.models import PlanEvaluation
 from app.db.session import get_session
 from app.tools.catalog import get_tool_spec, is_mutation_tool
 from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
@@ -51,25 +51,22 @@ async def require_recent_evaluation(
         # Not a mutation tool, no evaluation required
         return
 
-    # Check for recent evaluation in plan revisions
-    # Evaluation should have been run and stored as a revision or decision
+    # Check for recent evaluation in plan_evaluations table
     with get_session() as session:
-        # Look for recent evaluation (within last 7 days for same horizon)
+        # Look for recent evaluation (within last 7 days for same horizon and athlete)
         cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-        recent_evaluations = list(
-            session.execute(
-                select(PlanRevision)
-                .where(
-                    PlanRevision.athlete_id == athlete_id,
-                    PlanRevision.created_at >= cutoff,
-                    PlanRevision.change_type == "evaluation",  # Assuming evaluation is stored as revision type
-                )
-                .order_by(PlanRevision.created_at.desc())
-                .limit(1)
-            ).scalars().all()
-        )
+        recent_evaluation = session.execute(
+            select(PlanEvaluation)
+            .where(
+                PlanEvaluation.athlete_id == athlete_id,
+                PlanEvaluation.horizon == horizon,
+                PlanEvaluation.created_at >= cutoff,
+            )
+            .order_by(PlanEvaluation.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
 
-        if not recent_evaluations:
+        if not recent_evaluation:
             # No recent evaluation - force one
             logger.warning(
                 "Mutation attempted without recent evaluation - forcing evaluation",
@@ -78,7 +75,7 @@ async def require_recent_evaluation(
                 user_id=user_id,
                 athlete_id=athlete_id,
             )
-            # Run evaluation now
+            # Run evaluation now (this will store it automatically)
             try:
                 await evaluate_plan_change(
                     user_id=user_id,
@@ -87,7 +84,7 @@ async def require_recent_evaluation(
                     today=today,
                 )
                 logger.info(
-                    "Evaluation completed - mutation can proceed",
+                    "Evaluation completed and stored - mutation can proceed",
                     tool=tool_name,
                     horizon=horizon,
                 )
@@ -102,14 +99,14 @@ async def require_recent_evaluation(
                     f"Mutation requires evaluation but evaluation failed: {e}"
                 ) from e
         else:
-            # Check if evaluation is for same horizon
-            latest_eval = recent_evaluations[0]
-            # Note: This is a simplified check - in reality, you'd store horizon in the revision
+            # Recent evaluation found - check if it's still valid
             logger.debug(
                 "Recent evaluation found - mutation can proceed",
                 tool=tool_name,
                 horizon=horizon,
-                evaluation_date=latest_eval.created_at,
+                evaluation_id=recent_evaluation.id,
+                evaluation_date=recent_evaluation.created_at,
+                decision=recent_evaluation.decision,
             )
 
 

@@ -289,6 +289,7 @@ def _planned_session_to_calendar(
         completed_activity_id=None,  # Schema v2: removed, use session_links
         completed=status == "completed",
         completed_at=completed_at_str,
+        coach_insight=None,  # Not stored in PlannedSession - generated dynamically for today's sessions only
     )
 
 

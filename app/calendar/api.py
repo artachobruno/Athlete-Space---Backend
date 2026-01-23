@@ -1106,7 +1106,7 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                     coach_insight=coach_insight,
                     prefer_view_data=False,  # Use generated data directly (view may not have feedback yet)
                 )
-                
+
                 logger.info(
                     f"[COACH_FEEDBACK] Session object created - item_id={item_id}, "
                     f"has_instructions={bool(session_obj.instructions)}, "
@@ -1117,7 +1117,7 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                     f"coach_insight_length={len(session_obj.coach_insight) if session_obj.coach_insight else 0}, "
                     f"coach_insight_preview={session_obj.coach_insight[:100] if session_obj.coach_insight else None}"
                 )
-                
+
                 sessions.append(session_obj)
 
             # Sort by time

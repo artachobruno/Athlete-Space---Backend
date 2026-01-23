@@ -20,6 +20,7 @@ from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
 from app.db.models import Activity, PairingDecision, PlannedSession, StravaAccount
 from app.db.session import get_session
+from app.workouts.execution_models import WorkoutComplianceSummary, WorkoutExecution
 from app.ingestion.fetch_streams import fetch_and_save_streams
 from app.ingestion.file_parser import parse_activity_file
 from app.integrations.strava.client import StravaClient
@@ -208,12 +209,42 @@ def get_activities(
             query.order_by(Activity.starts_at.desc()).limit(limit).offset(offset)
         )
 
+        # Get all activity IDs for batch lookup
+        activity_ids = [row[0].id for row in activities_result]
+        
+        # Batch fetch workout executions for all activities
+        workout_executions = {}
+        if activity_ids:
+            execution_results = session.execute(
+                select(WorkoutExecution).where(WorkoutExecution.activity_id.in_(activity_ids))
+            ).scalars().all()
+            for execution in execution_results:
+                workout_executions[execution.activity_id] = execution
+        
+        # Batch fetch workout compliance summaries for all workout IDs
+        workout_ids = [exec.workout_id for exec in workout_executions.values()]
+        compliance_summaries = {}
+        if workout_ids:
+            compliance_results = session.execute(
+                select(WorkoutComplianceSummary).where(WorkoutComplianceSummary.workout_id.in_(workout_ids))
+            ).scalars().all()
+            for summary in compliance_results:
+                compliance_summaries[summary.workout_id] = summary
+
         activities = []
         for row in activities_result:
             activity = row[0]
             # Get pairing info from session_links
             link = get_link_for_activity(session, activity.id)
             planned_session_id = link.planned_session_id if link else None
+
+            # Get coach feedback from workout interpretation
+            coach_feedback = None
+            execution = workout_executions.get(activity.id)
+            if execution:
+                summary = compliance_summaries.get(execution.workout_id)
+                if summary and summary.llm_summary:
+                    coach_feedback = summary.llm_summary
 
             activities.append({
                 "id": activity.id,
@@ -230,6 +261,7 @@ def get_activities(
                 "has_raw_json": activity.raw_json is not None,
                 "has_streams": getattr(activity, "streams_data", None) is not None,
                 "planned_session_id": planned_session_id,  # Include pairing info
+                "coach_feedback": coach_feedback,  # Include coach feedback from workout interpretation
             })
 
         logger.info(f"[ACTIVITIES] Returning {len(activities)} activities (total: {total})")
@@ -276,6 +308,18 @@ def get_activity(
 
         activity = activity_result[0]
 
+        # Get coach feedback from workout interpretation
+        coach_feedback = None
+        execution = session.execute(
+            select(WorkoutExecution).where(WorkoutExecution.activity_id == activity.id).limit(1)
+        ).scalar_one_or_none()
+        if execution:
+            summary = session.execute(
+                select(WorkoutComplianceSummary).where(WorkoutComplianceSummary.workout_id == execution.workout_id)
+            ).scalar_one_or_none()
+            if summary and summary.llm_summary:
+                coach_feedback = summary.llm_summary
+
         # Return full activity including raw_json and streams_data
         return {
             "id": activity.id,
@@ -291,6 +335,7 @@ def get_activity(
             "raw_json": activity.raw_json,
             "streams_data": activity.streams_data,
             "created_at": activity.created_at.isoformat(),
+            "coach_feedback": coach_feedback,  # Include coach feedback from workout interpretation
         }
 
 

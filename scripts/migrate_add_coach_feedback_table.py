@@ -91,13 +91,43 @@ def migrate_add_coach_feedback_table() -> None:
         logger.info("Creating coach_feedback table")
 
         if _is_postgresql():
-            db.execute(
+            # Check actual column types in database
+            planned_sessions_id_type = db.execute(
                 text(
                     """
+                    SELECT data_type
+                    FROM information_schema.columns
+                    WHERE table_name = 'planned_sessions' AND column_name = 'id'
+                    """
+                ),
+            ).scalar()
+
+            users_id_type = db.execute(
+                text(
+                    """
+                    SELECT data_type
+                    FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'id'
+                    """
+                ),
+            ).scalar()
+
+            # Use UUID if the referenced columns are UUID, otherwise use VARCHAR
+            planned_session_id_type = "UUID" if planned_sessions_id_type == "uuid" else "VARCHAR"
+            user_id_type = "UUID" if users_id_type == "uuid" else "VARCHAR"
+            id_type = "UUID"  # Primary key can be UUID
+
+            logger.info(
+                f"Detected column types: planned_sessions.id={planned_sessions_id_type}, users.id={users_id_type}"
+            )
+
+            db.execute(
+                text(
+                    f"""
                     CREATE TABLE coach_feedback (
-                        id VARCHAR NOT NULL PRIMARY KEY,
-                        planned_session_id VARCHAR NOT NULL UNIQUE,
-                        user_id VARCHAR NOT NULL,
+                        id {id_type} NOT NULL PRIMARY KEY,
+                        planned_session_id {planned_session_id_type} NOT NULL UNIQUE,
+                        user_id {user_id_type} NOT NULL,
                         instructions JSONB NOT NULL DEFAULT '[]'::jsonb,
                         steps JSONB NOT NULL DEFAULT '[]'::jsonb,
                         coach_insight TEXT NOT NULL,

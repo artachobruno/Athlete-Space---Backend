@@ -77,6 +77,35 @@ def _view_exists(conn, view_name: str) -> bool:
     return result is not None
 
 
+def _table_exists(conn, table_name: str) -> bool:
+    """Check if a table exists.
+
+    Args:
+        conn: Database connection
+        table_name: Name of the table
+
+    Returns:
+        True if table exists, False otherwise
+    """
+    if _is_postgresql():
+        result = conn.execute(
+            text(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = :table_name
+                """,
+            ),
+            {"table_name": table_name},
+        ).fetchone()
+        return result is not None
+    result = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name=:table_name"),
+        {"table_name": table_name},
+    ).fetchone()
+    return result is not None
+
+
 def migrate_add_coach_feedback_to_calendar_view() -> None:
     """Add coach_feedback to calendar_items view payload."""
     logger.info("Starting migration: Add coach_feedback to calendar_items view")
@@ -85,6 +114,14 @@ def migrate_add_coach_feedback_to_calendar_view() -> None:
     db_type = "PostgreSQL" if _is_postgresql() else "SQLite"
 
     with engine.begin() as conn:
+        # Check if coach_feedback table exists first
+        if not _table_exists(conn, "coach_feedback"):
+            logger.warning(
+                "coach_feedback table does not exist. "
+                "Please run migrate_add_coach_feedback_table.py first. Skipping view migration."
+            )
+            return
+
         view_exists = _view_exists(conn, "calendar_items")
         if not view_exists:
             logger.warning("calendar_items view does not exist. Skipping migration.")

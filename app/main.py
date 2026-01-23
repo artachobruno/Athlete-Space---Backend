@@ -80,6 +80,8 @@ from scripts.migrate_activities_user_id import migrate_activities_user_id
 from scripts.migrate_add_activity_tss import migrate_add_activity_tss
 from scripts.migrate_add_athlete_id_to_planned_sessions import migrate_add_athlete_id_to_planned_sessions
 from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to_profiles
+from scripts.migrate_add_coach_feedback_table import migrate_add_coach_feedback_table
+from scripts.migrate_add_coach_feedback_to_calendar_view import migrate_add_coach_feedback_to_calendar_view
 from scripts.migrate_add_conversation_summaries_table import migrate_add_conversation_summaries_table
 from scripts.migrate_add_conversation_summary import migrate_add_conversation_summary
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
@@ -544,6 +546,22 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_create_workout_execution_tables: {e}")
         logger.exception(f"Migration failed: migrate_create_workout_execution_tables - {e}")
+
+    try:
+        logger.info("Running migration: coach_feedback table")
+        migrate_add_coach_feedback_table()
+        logger.info("✓ Migration completed: coach_feedback table")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_coach_feedback_table: {e}")
+        logger.exception(f"Migration failed: migrate_add_coach_feedback_table - {e}")
+
+    try:
+        logger.info("Running migration: add coach_feedback to calendar_items view")
+        migrate_add_coach_feedback_to_calendar_view()
+        logger.info("✓ Migration completed: add coach_feedback to calendar_items view")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_coach_feedback_to_calendar_view: {e}")
+        logger.exception(f"Migration failed: migrate_add_coach_feedback_to_calendar_view - {e}")
 
     if migration_errors:
         logger.error(

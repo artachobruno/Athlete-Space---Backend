@@ -716,13 +716,25 @@ def _persist_coach_feedback(
             planned_session_id=planned_session_id,
         )
     except Exception as e:
-        logger.exception(
-            "[COACH_FEEDBACK] Failed to persist coach feedback",
-            planned_session_id=planned_session_id,
-            user_id=user_id,
-            error_type=type(e).__name__,
-            error=str(e),
-        )
+        error_type = type(e).__name__
+        error_str = str(e)
+        
+        # Handle case where table doesn't exist yet (migration not run)
+        if "does not exist" in error_str.lower() or "undefinedtable" in error_str.lower():
+            logger.warning(
+                "[COACH_FEEDBACK] Table does not exist - migration not run yet",
+                planned_session_id=planned_session_id,
+                user_id=user_id,
+                hint="Run: python scripts/run_migrations.py",
+            )
+        else:
+            logger.exception(
+                "[COACH_FEEDBACK] Failed to persist coach feedback",
+                planned_session_id=planned_session_id,
+                user_id=user_id,
+                error_type=error_type,
+                error=error_str,
+            )
         session.rollback()
         # Don't raise - allow request to continue without persisted feedback
 

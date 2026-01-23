@@ -1108,14 +1108,14 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                 )
                 
                 logger.info(
-                    "[COACH_FEEDBACK] Session object created",
-                    item_id=item_id,
-                    has_instructions=bool(session_obj.instructions),
-                    instructions_count=len(session_obj.instructions) if session_obj.instructions else 0,
-                    has_steps=bool(session_obj.steps),
-                    steps_count=len(session_obj.steps) if session_obj.steps else 0,
-                    has_coach_insight=bool(session_obj.coach_insight),
-                    coach_insight_length=len(session_obj.coach_insight) if session_obj.coach_insight else 0,
+                    f"[COACH_FEEDBACK] Session object created - item_id={item_id}, "
+                    f"has_instructions={bool(session_obj.instructions)}, "
+                    f"instructions_count={len(session_obj.instructions) if session_obj.instructions else 0}, "
+                    f"has_steps={bool(session_obj.steps)}, "
+                    f"steps_count={len(session_obj.steps) if session_obj.steps else 0}, "
+                    f"has_coach_insight={bool(session_obj.coach_insight)}, "
+                    f"coach_insight_length={len(session_obj.coach_insight) if session_obj.coach_insight else 0}, "
+                    f"coach_insight_preview={session_obj.coach_insight[:100] if session_obj.coach_insight else None}"
                 )
                 
                 sessions.append(session_obj)

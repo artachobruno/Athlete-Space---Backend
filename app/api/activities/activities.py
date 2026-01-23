@@ -205,12 +205,13 @@ def get_activities(
         total = session.execute(count_query).scalar() or 0
 
         # Get paginated activities with filters applied
+        # Convert to list immediately to avoid cursor exhaustion when iterating twice
         activities_result = session.execute(
             query.order_by(Activity.starts_at.desc()).limit(limit).offset(offset)
-        )
+        ).scalars().all()
 
         # Get all activity IDs for batch lookup
-        activity_ids = [row[0].id for row in activities_result]
+        activity_ids = [activity.id for activity in activities_result]
         
         # Batch fetch workout executions for all activities
         workout_executions = {}
@@ -233,8 +234,7 @@ def get_activities(
                 compliance_summaries[summary.workout_id] = summary
 
         activities = []
-        for row in activities_result:
-            activity = row[0]
+        for activity in activities_result:
             # Get pairing info from session_links
             link = get_link_for_activity(session, activity.id)
             planned_session_id = link.planned_session_id if link else None

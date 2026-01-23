@@ -274,7 +274,7 @@ def _planned_session_to_calendar(
             execution_notes = None
 
     return CalendarSession(
-        id=planned.id,
+        id=str(planned.id),  # Convert UUID to string
         date=planned.starts_at.strftime("%Y-%m-%d") if planned.starts_at else "",
         time=time_str,
         type=session_type,
@@ -285,7 +285,7 @@ def _planned_session_to_calendar(
         status=status,
         notes=planned.notes,
         execution_notes=execution_notes,
-        workout_id=planned.workout_id,
+        workout_id=str(planned.workout_id) if planned.workout_id else None,  # Convert UUID to string if present
         completed_activity_id=None,  # Schema v2: removed, use session_links
         completed=status == "completed",
         completed_at=completed_at_str,

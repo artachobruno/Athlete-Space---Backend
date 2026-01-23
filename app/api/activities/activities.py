@@ -222,7 +222,8 @@ def get_activities(
                 workout_executions[execution.activity_id] = execution
         
         # Batch fetch workout compliance summaries for all workout IDs
-        workout_ids = [exec.workout_id for exec in workout_executions.values()]
+        # Convert workout_id to string to match database column type (VARCHAR)
+        workout_ids = [str(exec.workout_id) for exec in workout_executions.values()]
         compliance_summaries = {}
         if workout_ids:
             compliance_results = session.execute(
@@ -242,7 +243,9 @@ def get_activities(
             coach_feedback = None
             execution = workout_executions.get(activity.id)
             if execution:
-                summary = compliance_summaries.get(execution.workout_id)
+                # Convert workout_id to string for dictionary lookup
+                workout_id_str = str(execution.workout_id)
+                summary = compliance_summaries.get(workout_id_str)
                 if summary and summary.llm_summary:
                     coach_feedback = summary.llm_summary
 
@@ -314,8 +317,10 @@ def get_activity(
             select(WorkoutExecution).where(WorkoutExecution.activity_id == activity.id).limit(1)
         ).scalar_one_or_none()
         if execution:
+            # Convert workout_id to string to match database column type (VARCHAR)
+            workout_id_str = str(execution.workout_id)
             summary = session.execute(
-                select(WorkoutComplianceSummary).where(WorkoutComplianceSummary.workout_id == execution.workout_id)
+                select(WorkoutComplianceSummary).where(WorkoutComplianceSummary.workout_id == workout_id_str)
             ).scalar_one_or_none()
             if summary and summary.llm_summary:
                 coach_feedback = summary.llm_summary

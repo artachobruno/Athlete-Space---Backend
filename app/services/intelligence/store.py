@@ -172,21 +172,38 @@ class IntentStore:
 
     @staticmethod
     def get_latest_season_plan(
-        athlete_id: int,
+        athlete_id: int | None = None,
+        user_id: str | None = None,
         active_only: bool = True,
     ) -> SeasonPlanModel | None:
         """Get the latest season plan for an athlete.
 
         Args:
-            athlete_id: Athlete ID
+            athlete_id: Athlete ID (optional, used to look up user_id if user_id not provided)
+            user_id: User ID (preferred, queries by this if provided)
             active_only: If True, only return active plans
 
         Returns:
             Latest SeasonPlanModel or None
         """
         with get_session() as session:
+            # Prefer user_id if provided, otherwise look it up from athlete_id
+            if user_id is None and athlete_id is not None:
+                from app.db.models import StravaAccount
+                account = session.execute(
+                    select(StravaAccount).where(StravaAccount.athlete_id == str(athlete_id))
+                ).first()
+                if account:
+                    user_id = str(account[0].user_id)
+                else:
+                    logger.warning(f"Could not find user_id for athlete_id={athlete_id}")
+
+            if user_id is None:
+                logger.warning("get_latest_season_plan called without user_id or valid athlete_id")
+                return None
+
             query = select(SeasonPlanModel).where(
-                SeasonPlanModel.athlete_id == athlete_id,
+                SeasonPlanModel.user_id == user_id,
             )
 
             if active_only:

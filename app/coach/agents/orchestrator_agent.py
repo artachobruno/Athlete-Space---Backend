@@ -1290,6 +1290,15 @@ async def run_conversation(
             filled_slots=result.output.filled_slots,
             usage_info=usage_info,
         )
+        logger.info(
+            f"Intent detected by orchestrator: intent={result.output.intent}, horizon={result.output.horizon}, target_action={result.output.target_action}",
+            intent=result.output.intent,
+            horizon=result.output.horizon,
+            target_action=result.output.target_action,
+            should_execute=result.output.should_execute,
+            athlete_id=deps.athlete_id,
+            conversation_id=conversation_id,
+        )
 
     except ValidationError as e:
         validation_errors = str(e.errors()) if hasattr(e, "errors") else None

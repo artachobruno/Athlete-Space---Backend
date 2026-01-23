@@ -260,9 +260,9 @@ async def build_season_summary(
         now_local = now_user(user)
 
         # Get season plan
-        plan_model = IntentStore.get_latest_season_plan(athlete_id, active_only=True)
+        plan_model = IntentStore.get_latest_season_plan(user_id=user_id, active_only=True)
         if not plan_model:
-            plan_model = IntentStore.get_latest_season_plan(athlete_id, active_only=False)
+            plan_model = IntentStore.get_latest_season_plan(user_id=user_id, active_only=False)
         if not plan_model:
             raise ValueError("Season plan not available")
 

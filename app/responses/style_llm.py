@@ -97,6 +97,7 @@ async def generate_coach_message(structured_input: StyleLLMInput) -> str:
             message_length=len(message),
             has_headline=bool(structured_input.get("headline")),
         )
+        return message
     except ValueError:
         # Re-raise validation errors (already logged above)
         raise
@@ -111,5 +112,3 @@ async def generate_coach_message(structured_input: StyleLLMInput) -> str:
             prompt_preview=prompt[:200],
         )
         raise RuntimeError(f"Style LLM generation failed: {e}") from e
-    else:
-        return message

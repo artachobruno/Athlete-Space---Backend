@@ -194,11 +194,11 @@ def get_season_plan(user_id: str = Depends(get_current_user_id)):
     athlete_id = _get_athlete_id_from_user(user_id)
     logger.info(f"Getting season plan for user_id={user_id}, athlete_id={athlete_id}")
 
-    plan_model = store.get_latest_season_plan(athlete_id, active_only=True)
+    plan_model = store.get_latest_season_plan(user_id=user_id, active_only=True)
 
     if plan_model is None:
         # Try fallback to inactive plan
-        plan_model = store.get_latest_season_plan(athlete_id, active_only=False)
+        plan_model = store.get_latest_season_plan(user_id=user_id, active_only=False)
         if plan_model is None:
             raise HTTPException(
                 status_code=503,

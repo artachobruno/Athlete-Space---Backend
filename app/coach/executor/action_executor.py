@@ -600,6 +600,14 @@ class CoachActionExecutor:
                 should_execute=decision.should_execute,
                 conversation_id=conversation_id,
             )
+            logger.info(
+                f"Tool execution initiated: intent={decision.intent}, horizon={decision.horizon}, target_action={target_action}",
+                intent=decision.intent,
+                horizon=decision.horizon,
+                target_action=target_action,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
+            )
             logger.debug(
                 "ActionExecutor: STATE 2 - Preparing for immediate execution",
                 current_action=decision.action,
@@ -898,6 +906,14 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
+            )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Recommendation generated.")
@@ -990,6 +1006,14 @@ class CoachActionExecutor:
                 "Single-day session planned successfully",
                 template_id=planned_session.template.template_id,
                 conversation_id=conversation_id,
+            )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
             )
 
             # Trigger summarization after successful tool execution (B34)
@@ -1227,6 +1251,14 @@ class CoachActionExecutor:
                 reason=modification.reason,
                 conversation_id=conversation_id,
             )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
+            )
 
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
@@ -1329,6 +1361,14 @@ class CoachActionExecutor:
                 session_count=len(result.get("modified_sessions", [])),
                 conversation_id=conversation_id,
             )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
+            )
 
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
@@ -1416,6 +1456,14 @@ class CoachActionExecutor:
                 change_type=race_modification.change_type,
                 warnings_count=len(result.get("warnings", [])),
                 conversation_id=conversation_id,
+            )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
             )
 
             # Trigger summarization after successful tool execution (B34)
@@ -1513,6 +1561,14 @@ class CoachActionExecutor:
                 session_count=len(result.get("modified_sessions", [])),
                 conversation_id=conversation_id,
             )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
+            )
 
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
@@ -1580,6 +1636,14 @@ class CoachActionExecutor:
                 "Tool executed successfully",
                 tool=tool_name,
                 conversation_id=conversation_id,
+            )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
             )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
@@ -1857,6 +1921,14 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
+            )
             logger.debug(
                 "ActionExecutor: Triggering summarization if needed",
                 conversation_id=conversation_id,
@@ -1925,6 +1997,14 @@ class CoachActionExecutor:
                 tool=tool_name,
                 conversation_id=conversation_id,
             )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
+            )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return result.get("message", "Season plan created.")
@@ -1988,6 +2068,14 @@ class CoachActionExecutor:
                 "Tool executed successfully",
                 tool=tool_name,
                 conversation_id=conversation_id,
+            )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
             )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
@@ -2146,6 +2234,14 @@ class CoachActionExecutor:
                 "Tool executed successfully",
                 tool=tool_name,
                 conversation_id=conversation_id,
+            )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
             )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
@@ -2340,6 +2436,14 @@ class CoachActionExecutor:
                 "Tool executed successfully",
                 tool=tool_name,
                 conversation_id=conversation_id,
+            )
+            logger.info(
+                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                tool=tool_name,
+                intent=decision.intent,
+                horizon=decision.horizon,
+                conversation_id=conversation_id,
+                athlete_id=deps.athlete_id,
             )
             # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)

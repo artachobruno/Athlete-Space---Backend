@@ -260,7 +260,9 @@ def _planned_session_to_calendar(
     session_type: str = planned.type.capitalize()
 
     # Convert completed_at to ISO 8601 string (handles timezone-aware datetimes properly)
-    completed_at_str = planned.completed_at.isoformat() if planned.completed_at else None
+    # Use getattr to handle case where column doesn't exist in database (migration pending)
+    completed_at = getattr(planned, "completed_at", None)
+    completed_at_str = completed_at.isoformat() if completed_at else None
 
     # Schema v2: use starts_at, duration_seconds, distance_meters
     # CalendarSession schema may still expect old names in response (compatibility)

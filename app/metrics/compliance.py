@@ -137,7 +137,9 @@ def record_completion(
 
         if planned:
             planned[0].completed = True
-            planned[0].completed_at = datetime.now(timezone.utc)
+            # Use setattr to handle case where column doesn't exist in database (migration pending)
+            if hasattr(planned[0], "completed_at"):
+                planned[0].completed_at = datetime.now(timezone.utc)
             planned[0].status = "completed"
             if completed_duration_min is not None:
                 planned[0].duration_minutes = completed_duration_min

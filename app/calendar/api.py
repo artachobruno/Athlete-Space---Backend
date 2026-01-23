@@ -407,17 +407,20 @@ def get_season(user_id: str = Depends(get_current_user_id)):
                     activity_pairing_map[item_id] = link.planned_session_id
 
         # Enrich view rows with pairing info before converting to CalendarSession
+        # Filter out activities that are paired to a planned session (show only the planned session card)
         enriched_rows = []
         for row in view_rows:
             item_id = str(row.get("item_id", ""))
             kind = str(row.get("kind", ""))
             payload = row.get("payload") or {}
 
+            # Skip activities that are paired to a planned session (they'll be shown via the planned session card)
+            if kind == "activity" and item_id in activity_pairing_map:
+                continue
+
             # Add pairing info to payload
             if kind == "planned" and item_id in pairing_map:
                 payload = {**payload, "paired_activity_id": pairing_map[item_id]}
-            elif kind == "activity" and item_id in activity_pairing_map:
-                payload = {**payload, "paired_planned_session_id": activity_pairing_map[item_id]}
 
             enriched_row = {**row, "payload": payload}
             enriched_rows.append(enriched_row)
@@ -523,17 +526,20 @@ def get_week(user_id: str = Depends(get_current_user_id)):
                         activity_pairing_map[item_id] = link.planned_session_id
 
             # Enrich view rows with pairing info before converting to CalendarSession
+            # Filter out activities that are paired to a planned session (show only the planned session card)
             enriched_rows = []
             for row in view_rows:
                 item_id = str(row.get("item_id", ""))
                 kind = str(row.get("kind", ""))
                 payload = row.get("payload") or {}
 
+                # Skip activities that are paired to a planned session (they'll be shown via the planned session card)
+                if kind == "activity" and item_id in activity_pairing_map:
+                    continue
+
                 # Add pairing info to payload
                 if kind == "planned" and item_id in pairing_map:
                     payload = {**payload, "paired_activity_id": pairing_map[item_id]}
-                elif kind == "activity" and item_id in activity_pairing_map:
-                    payload = {**payload, "paired_planned_session_id": activity_pairing_map[item_id]}
 
                 enriched_row = {**row, "payload": payload}
                 enriched_rows.append(enriched_row)
@@ -855,17 +861,20 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                         activity_pairing_map[item_id] = link.planned_session_id
 
             # Enrich view rows with pairing info before processing
+            # Filter out activities that are paired to a planned session (show only the planned session card)
             enriched_rows = []
             for row in view_rows:
                 item_id = str(row.get("item_id", ""))
                 kind = str(row.get("kind", ""))
                 payload = row.get("payload") or {}
 
+                # Skip activities that are paired to a planned session (they'll be shown via the planned session card)
+                if kind == "activity" and item_id in activity_pairing_map:
+                    continue
+
                 # Add pairing info to payload
                 if kind == "planned" and item_id in pairing_map:
                     payload = {**payload, "paired_activity_id": pairing_map[item_id]}
-                elif kind == "activity" and item_id in activity_pairing_map:
-                    payload = {**payload, "paired_planned_session_id": activity_pairing_map[item_id]}
 
                 enriched_row = {**row, "payload": payload}
                 enriched_rows.append(enriched_row)

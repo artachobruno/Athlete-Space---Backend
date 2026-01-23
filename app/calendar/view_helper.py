@@ -176,15 +176,6 @@ def calendar_session_from_view_row(
     if must_dos and len(must_dos) == 0:
         must_dos = None
 
-    # Determine completed flag and completed_at
-    completed = kind == "activity" or status == "completed"
-    completed_at_str: str | None = None
-    if completed and starts_at:
-        if isinstance(starts_at, datetime):
-            completed_at_str = starts_at.isoformat()
-        else:
-            completed_at_str = str(starts_at)
-
     # Extract activity_id from payload for activities; normalize to str (view/links may use UUID)
     raw_activity_id: str | uuid.UUID | None = None
     if kind == "activity":
@@ -192,6 +183,16 @@ def calendar_session_from_view_row(
     elif kind == "planned":
         raw_activity_id = payload.get("paired_activity_id")
     completed_activity_id = _ensure_str_id(raw_activity_id)
+
+    # Determine completed flag and completed_at
+    # A planned session is completed if: status is "completed" OR it has a paired activity
+    completed = kind == "activity" or status == "completed" or completed_activity_id is not None
+    completed_at_str: str | None = None
+    if completed and starts_at:
+        if isinstance(starts_at, datetime):
+            completed_at_str = starts_at.isoformat()
+        else:
+            completed_at_str = str(starts_at)
 
     # Determine intensity (simple heuristic based on duration)
     intensity: str | None = None

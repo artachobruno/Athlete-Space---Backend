@@ -264,7 +264,7 @@ async def build_season_summary(
         if not plan_model:
             plan_model = IntentStore.get_latest_season_plan(user_id=user_id, active_only=False)
         if not plan_model:
-            raise ValueError("Season plan not available")
+            raise ValueError("Season plan not available. The coach is still learning about your training patterns.")
 
         # Handle case where plan_data might be None (missing column)
         if not plan_model.plan_data:

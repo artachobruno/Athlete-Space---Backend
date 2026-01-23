@@ -656,6 +656,18 @@ def _persist_coach_feedback(
         coach_insight: Coach insight text
     """
     try:
+        # Check if coach_feedback table exists
+        inspector = inspect(session.bind)
+        table_exists = "coach_feedback" in inspector.get_table_names()
+
+        if not table_exists:
+            logger.warning(
+                "[COACH_FEEDBACK] Table does not exist - migration not run yet",
+                planned_session_id=planned_session_id,
+                hint="Run: python scripts/migrate_add_coach_feedback_table.py",
+            )
+            return
+
         # Verify planned_session_id exists in planned_sessions table
         planned_session_exists = session.execute(
             select(PlannedSession.id).where(PlannedSession.id == planned_session_id)
@@ -755,6 +767,8 @@ async def _process_planned_session_for_today(
     try:
         # Extract session details
         payload: dict[str, Any] = row.get("payload") or {}
+        status = str(row.get("status", "planned"))
+        is_completed = status == "completed"
         session_title = row.get("title") or payload.get("title") or "Training Session"
         session_type = payload.get("session_type")
         duration_seconds = payload.get("duration_seconds")
@@ -766,6 +780,30 @@ async def _process_planned_session_for_today(
         intent = payload.get("intent", "").lower()
         is_rest_day = intent == "rest" or "rest" in (session_title or "").lower()
         workout_id = payload.get("workout_id")
+
+        # For completed sessions, try to get actual activity data for comparison
+        paired_activity_id = payload.get("paired_activity_id")
+        actual_activity: Activity | None = None
+        actual_duration_minutes: int | None = None
+        actual_distance_km: float | None = None
+
+        if is_completed and paired_activity_id:
+            actual_activity = session.execute(
+                select(Activity).where(Activity.id == paired_activity_id)
+            ).scalar_one_or_none()
+
+            if actual_activity:
+                if actual_activity.duration_seconds:
+                    actual_duration_minutes = int(actual_activity.duration_seconds // 60)
+                if actual_activity.distance_meters:
+                    actual_distance_km = round(float(actual_activity.distance_meters) / 1000.0, 2)
+                logger.info(
+                    "[COACH_FEEDBACK] Found actual activity for comparison",
+                    session_id=row.get("item_id"),
+                    activity_id=paired_activity_id,
+                    actual_duration_minutes=actual_duration_minutes,
+                    actual_distance_km=actual_distance_km,
+                )
 
         # ❗ SINGLE SOURCE OF TRUTH: Use canonical workout steps from database
         # Only generate LLM steps if no workout_id or no steps exist
@@ -800,6 +838,9 @@ async def _process_planned_session_for_today(
                 intensity=intensity,
                 notes=notes,
                 is_rest_day=is_rest_day,
+                is_completed=is_completed,
+                actual_duration_minutes=actual_duration_minutes,
+                actual_distance_km=actual_distance_km,
             )
 
             instructions = content.instructions
@@ -832,6 +873,7 @@ async def _process_planned_session_for_today(
             logger.info(
                 "Generated LLM content for today session",
                 session_id=row.get("item_id"),
+                is_completed=is_completed,
                 instructions_count=len(instructions) if instructions else 0,
                 steps_count=len(steps) if steps else 0,
                 used_canonical_steps=bool(workout_id and steps),
@@ -847,6 +889,9 @@ async def _process_planned_session_for_today(
                 intensity=intensity,
                 notes=notes,
                 is_rest_day=is_rest_day,
+                is_completed=is_completed,
+                actual_duration_minutes=actual_duration_minutes,
+                actual_distance_km=actual_distance_km,
             )
             instructions = content.instructions
             coach_insight = content.coach_insight
@@ -1009,25 +1054,49 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                 enriched_row = {**row, "payload": payload}
                 enriched_rows.append(enriched_row)
 
-            # Generate LLM content for planned sessions (not completed ones) if not already persisted
+            # Generate LLM content for planned sessions (both planned and completed) if not already persisted
+            # Coach feedback provides:
+            # - Pre-workout guidance for planned sessions
+            # - Post-workout analysis and compliance comparison for completed sessions
             sessions = []
             for row in enriched_rows:
-                # Only generate LLM content for planned sessions (not activities or completed)
-                # and only if feedback is not already in the view
+                # Generate feedback for planned sessions (regardless of status: planned, completed, etc.)
+                # Skip standalone activities (they don't have planned sessions to compare)
                 kind = str(row.get("kind", ""))
                 status = str(row.get("status", "planned"))
-                is_planned = kind == "planned" and status == "planned"
+                is_planned_session = kind == "planned"  # Generate for all planned sessions, not just "planned" status
                 payload = row.get("payload") or {}
                 has_persisted_feedback = bool(payload.get("coach_insight") or payload.get("instructions"))
+
+                logger.info(
+                    "[COACH_FEEDBACK] Checking session for feedback generation",
+                    item_id=row.get("item_id"),
+                    kind=kind,
+                    status=status,
+                    is_planned_session=is_planned_session,
+                    has_persisted_feedback=has_persisted_feedback,
+                    payload_keys=list(payload.keys()),
+                )
 
                 instructions: list[str] | None = None
                 steps: list[dict[str, Any]] | None = None
                 coach_insight: str | None = None
 
-                # Only generate if it's a planned session and feedback is not already persisted
-                if is_planned and not has_persisted_feedback:
+                # Generate feedback for planned sessions (both planned and completed) if not already persisted
+                if is_planned_session and not has_persisted_feedback:
+                    logger.info(
+                        "[COACH_FEEDBACK] Triggering LLM generation",
+                        item_id=row.get("item_id"),
+                        status=status,
+                    )
                     instructions, steps, coach_insight = await _process_planned_session_for_today(
                         session, row, user_id
+                    )
+                else:
+                    logger.debug(
+                        "[COACH_FEEDBACK] Skipping generation",
+                        item_id=row.get("item_id"),
+                        reason="not_planned_session" if not is_planned_session else "already_persisted",
                     )
 
                 sessions.append(

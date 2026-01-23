@@ -62,6 +62,9 @@ def build_today_session_prompt(
     intensity: str | None,
     notes: str | None,
     is_rest_day: bool = False,
+    is_completed: bool = False,
+    actual_duration_minutes: int | None = None,
+    actual_distance_km: float | None = None,
 ) -> str:
     """Build prompt for generating today session content.
 
@@ -73,42 +76,87 @@ def build_today_session_prompt(
         intensity: Intensity level
         notes: Session notes
         is_rest_day: Whether this is a rest day
+        is_completed: Whether this session has been completed
+        actual_duration_minutes: Actual duration if completed
+        actual_distance_km: Actual distance if completed
 
     Returns:
         Complete prompt string
     """
-    parts = [
-        "SYSTEM:",
-        "You are an AI endurance coach generating daily execution guidance.",
-        "",
-        "TASK:",
-        "Generate execution instructions, structured steps, and coach insight for today's session.",
-        "",
-        "RULES:",
-        "- Instructions: 3-5 bullets, execution cues (not metrics), actionable",
-        "- Steps: Default warm-up / main / cooldown structure",
-        "- Rest days: Include optional mobility / walk steps",
-        "- Coach insight: Explain why today matters, reference recent load + recovery implicitly",
-        "- Include conditional advice (e.g., 'if it feels forced...')",
-        "- Use synthesis and judgment language, not deterministic rules",
-        "- Do NOT say 'rule-based', 'algorithm', or list raw metrics",
-        "",
-        "SESSION DETAILS:",
-        f"Title: {session_title}",
-    ]
+    if is_completed:
+        parts = [
+            "SYSTEM:",
+            "You are an AI endurance coach providing post-workout analysis and feedback.",
+            "",
+            "TASK:",
+            "Analyze the completed session, compare actual execution to what was planned, and provide coach insight.",
+            "",
+            "RULES:",
+            "- Instructions: 3-5 bullets analyzing what happened, compliance with plan, execution quality",
+            "- Steps: Show what was planned vs what was executed (if available)",
+            "- Coach insight: Analyze execution, compliance, what went well, what to adjust",
+            "- Reference how this session fits into overall training progression",
+            "- Use synthesis and judgment language, not deterministic rules",
+            "- Do NOT say 'rule-based', 'algorithm', or list raw metrics",
+            "",
+            "PLANNED SESSION:",
+            f"Title: {session_title}",
+        ]
+        if session_type:
+            parts.append(f"Type: {session_type}")
+        if duration_minutes:
+            parts.append(f"Planned Duration: {duration_minutes} minutes")
+        if distance_km:
+            parts.append(f"Planned Distance: {distance_km} km")
+        if intensity:
+            parts.append(f"Planned Intensity: {intensity}")
+        if notes:
+            parts.append(f"Notes: {notes}")
 
-    if session_type:
-        parts.append(f"Type: {session_type}")
-    if duration_minutes:
-        parts.append(f"Duration: {duration_minutes} minutes")
-    if distance_km:
-        parts.append(f"Distance: {distance_km} km")
-    if intensity:
-        parts.append(f"Intensity: {intensity}")
-    if notes:
-        parts.append(f"Notes: {notes}")
-    if is_rest_day:
-        parts.append("Rest Day: Yes")
+        parts.append("")
+        parts.append("ACTUAL EXECUTION:")
+        if actual_duration_minutes:
+            parts.append(f"Actual Duration: {actual_duration_minutes} minutes")
+            if duration_minutes:
+                delta = actual_duration_minutes - duration_minutes
+                parts.append(f"Duration Delta: {delta:+d} minutes")
+        if actual_distance_km:
+            parts.append(f"Actual Distance: {actual_distance_km} km")
+            if distance_km:
+                delta = actual_distance_km - distance_km
+                parts.append(f"Distance Delta: {delta:+.2f} km")
+    else:
+        parts = [
+            "SYSTEM:",
+            "You are an AI endurance coach generating daily execution guidance.",
+            "",
+            "TASK:",
+            "Generate execution instructions, structured steps, and coach insight for today's session.",
+            "",
+            "RULES:",
+            "- Instructions: 3-5 bullets, execution cues (not metrics), actionable",
+            "- Steps: Default warm-up / main / cooldown structure",
+            "- Rest days: Include optional mobility / walk steps",
+            "- Coach insight: Explain why today matters, reference recent load + recovery implicitly",
+            "- Include conditional advice (e.g., 'if it feels forced...')",
+            "- Use synthesis and judgment language, not deterministic rules",
+            "- Do NOT say 'rule-based', 'algorithm', or list raw metrics",
+            "",
+            "SESSION DETAILS:",
+            f"Title: {session_title}",
+        ]
+        if session_type:
+            parts.append(f"Type: {session_type}")
+        if duration_minutes:
+            parts.append(f"Duration: {duration_minutes} minutes")
+        if distance_km:
+            parts.append(f"Distance: {distance_km} km")
+        if intensity:
+            parts.append(f"Intensity: {intensity}")
+        if notes:
+            parts.append(f"Notes: {notes}")
+        if is_rest_day:
+            parts.append("Rest Day: Yes")
 
     parts.append("")
     parts.append("OUTPUT FORMAT:")
@@ -138,6 +186,9 @@ async def generate_today_session_content(
     intensity: str | None = None,
     notes: str | None = None,
     is_rest_day: bool = False,
+    is_completed: bool = False,
+    actual_duration_minutes: int | None = None,
+    actual_distance_km: float | None = None,
 ) -> TodaySessionContent:
     """Generate today session execution content via LLM.
 
@@ -149,6 +200,9 @@ async def generate_today_session_content(
         intensity: Intensity level
         notes: Session notes
         is_rest_day: Whether this is a rest day
+        is_completed: Whether the session has been completed
+        actual_duration_minutes: Actual duration in minutes (if completed)
+        actual_distance_km: Actual distance in kilometers (if completed)
 
     Returns:
         TodaySessionContent with instructions, steps, and coach_insight
@@ -166,13 +220,23 @@ async def generate_today_session_content(
         intensity=intensity,
         notes=notes,
         is_rest_day=is_rest_day,
+        is_completed=is_completed,
+        actual_duration_minutes=actual_duration_minutes,
+        actual_distance_km=actual_distance_km,
     )
 
-    system_prompt = (
-        "You are an AI endurance coach providing daily execution guidance. "
-        "Generate actionable instructions, structured steps, and insightful reasoning. "
-        "Use synthesis and judgment language. Do NOT reference algorithms or rules."
-    )
+    if is_completed:
+        system_prompt = (
+            "You are an AI endurance coach providing post-workout analysis. "
+            "Analyze execution, compare to plan, and provide insightful feedback. "
+            "Use synthesis and judgment language. Do NOT reference algorithms or rules."
+        )
+    else:
+        system_prompt = (
+            "You are an AI endurance coach providing daily execution guidance. "
+            "Generate actionable instructions, structured steps, and insightful reasoning. "
+            "Use synthesis and judgment language. Do NOT reference algorithms or rules."
+        )
 
     agent = Agent(
         model=model,

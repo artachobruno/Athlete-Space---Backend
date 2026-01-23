@@ -114,43 +114,12 @@ class IntentStore:
 
             next_version = (max_version or 0) + 1
 
-            # Extract metadata fields for fast queries
-            start_date_dt = datetime.combine(plan.season_start, datetime.min.time()).replace(tzinfo=timezone.utc)
-            end_date_dt = datetime.combine(plan.season_end, datetime.min.time()).replace(tzinfo=timezone.utc)
-            total_weeks = (plan.season_end - plan.season_start).days // 7
-
-            # Extract primary race info if available
-            primary_race_date = None
-            primary_race_name = None
-            if plan.target_races:
-                # Try to extract date from race strings and find the nearest/first race
-                for race_str in plan.target_races:
-                    # Try to parse date from race string (e.g., "Marathon - April 15, 2024")
-                    race_date = _extract_date_from_race_string(race_str, plan.season_start, plan.season_end)
-                    if race_date:
-                        primary_race_date = datetime.combine(race_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-                        primary_race_name = race_str
-                        break  # Use first race with valid date
-
-                # If no date found, use first race as primary
-                if primary_race_name is None:
-                    primary_race_name = plan.target_races[0]
-
-            # Create plan name from focus
-            plan_name = plan.focus[:100] if len(plan.focus) > 100 else plan.focus
-
             # Create new plan
             # Use mode='json' to serialize dates/datetimes to strings for JSON storage
             plan_dict = plan.model_dump(mode="json")
             plan_dict["_context_hash"] = context_hash
             new_plan = SeasonPlanModel(
                 user_id=user_id,
-                plan_name=plan_name,
-                start_date=start_date_dt,
-                end_date=end_date_dt,
-                primary_race_date=primary_race_date,
-                primary_race_name=primary_race_name,
-                total_weeks=total_weeks,
                 plan_data=plan_dict,
                 version=next_version,
                 is_active=True,

@@ -573,20 +573,48 @@ def list_season_plans(
 
         plans = session.execute(query.order_by(SeasonPlanModel.version.desc()).limit(limit)).scalars().all()
 
-        return [
-            SeasonPlanListItem(
-                id=plan.id,
-                plan_name=plan.plan_name,
-                start_date=plan.start_date,
-                end_date=plan.end_date,
-                primary_race_date=plan.primary_race_date,
-                primary_race_name=plan.primary_race_name,
-                total_weeks=plan.total_weeks,
-                version=plan.version,
-                is_active=plan.is_active,
-                created_at=plan.created_at,
+        result = []
+        for plan_model in plans:
+            # Extract metadata from plan_data JSON
+            plan_data = plan_model.plan_data
+            plan_name = plan_data.get("focus", "")[:100] if plan_data.get("focus") else None
+            
+            # Parse dates from plan_data (stored as ISO date strings)
+            start_date = None
+            end_date = None
+            if plan_data.get("season_start"):
+                start_date_str = plan_data["season_start"]
+                if isinstance(start_date_str, str):
+                    start_date = datetime.combine(date.fromisoformat(start_date_str), datetime.min.time()).replace(tzinfo=timezone.utc)
+                elif isinstance(start_date_str, date):
+                    start_date = datetime.combine(start_date_str, datetime.min.time()).replace(tzinfo=timezone.utc)
+            
+            if plan_data.get("season_end"):
+                end_date_str = plan_data["season_end"]
+                if isinstance(end_date_str, str):
+                    end_date = datetime.combine(date.fromisoformat(end_date_str), datetime.max.time()).replace(tzinfo=timezone.utc)
+                elif isinstance(end_date_str, date):
+                    end_date = datetime.combine(end_date_str, datetime.max.time()).replace(tzinfo=timezone.utc)
+            
+            primary_race_name = plan_data.get("target_races", [None])[0] if plan_data.get("target_races") else None
+            primary_race_date = None  # Would need to extract from target_races if date is embedded
+            total_weeks = (end_date.date() - start_date.date()).days // 7 if start_date and end_date else None
+
+            result.append(
+                SeasonPlanListItem(
+                    id=plan_model.id,
+                    plan_name=plan_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    primary_race_date=primary_race_date,
+                    primary_race_name=primary_race_name,
+                    total_weeks=total_weeks,
+                    version=plan_model.version,
+                    is_active=plan_model.is_active,
+                    created_at=plan_model.created_at,
+                )
             )
-            for plan in plans
+        return result
         ]
 
 

@@ -61,16 +61,16 @@ def _build_plan_snapshot(
     _today: date,
 ) -> PlanSnapshot:
     """Build plan snapshot from season plan."""
+    # Get metadata from plan object (from plan_data JSON)
+    primary_race_name = plan.target_races[0] if plan.target_races else None
+    
     # Determine anchor type and title
-    anchor_type = "race" if plan_model.primary_race_name else "objective"
-    anchor_title = plan_model.primary_race_name or plan.focus
-    anchor_date = plan_model.primary_race_date.date() if plan_model.primary_race_date else None
-
-    # Calculate total weeks
-    total_weeks = plan_model.total_weeks
-    if not total_weeks and plan_model.start_date and plan_model.end_date:
-        delta = plan_model.end_date.date() - plan_model.start_date.date()
-        total_weeks = max(1, delta.days // 7)
+    anchor_type = "race" if primary_race_name else "objective"
+    anchor_title = primary_race_name or plan.focus
+    anchor_date = None  # Would need to extract from target_races if date is embedded
+    
+    # Calculate total weeks from plan dates
+    total_weeks = max(1, (plan.season_end - plan.season_start).days // 7)
 
     # Determine current phase (simplified - would need phase logic)
     current_phase = None
@@ -161,11 +161,9 @@ def _build_phases(
     """
     phases: list[PlanPhaseInspect] = []
 
-    if not plan_model.start_date:
-        return phases
-
-    start_date = plan_model.start_date.date()
-    total_weeks = plan_model.total_weeks or 16
+    # Get dates from plan object (from plan_data JSON)
+    start_date = plan.season_start
+    total_weeks = max(1, (plan.season_end - plan.season_start).days // 7)
 
     # Group weeks into phases (simplified: Base, Build, Peak, Taper)
     phase_ranges = [
@@ -306,9 +304,9 @@ async def inspect_plan(
         )
 
         # Get planned sessions
-        if plan_model.start_date and plan_model.end_date:
-            start_datetime = datetime.combine(plan_model.start_date.date(), datetime.min.time()).replace(tzinfo=timezone.utc)
-            end_datetime = datetime.combine(plan_model.end_date.date(), datetime.max.time()).replace(tzinfo=timezone.utc)
+        # Use dates from plan object (from plan_data JSON)
+        start_datetime = datetime.combine(plan.season_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end_datetime = datetime.combine(plan.season_end, datetime.max.time()).replace(tzinfo=timezone.utc)
 
             planned_sessions = list(
                 session.execute(

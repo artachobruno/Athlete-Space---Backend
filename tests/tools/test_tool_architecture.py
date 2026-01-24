@@ -75,7 +75,8 @@ def test_tool_horizon_validation():
     """Test: Tools validate horizon support."""
     assert validate_tool_horizon("plan", "season")
     assert validate_tool_horizon("plan", "race")
-    assert not validate_tool_horizon("plan", "today")  # plan doesn't support today
+    assert validate_tool_horizon("plan", "today")  # plan supports week/today when no plan exists
+    assert validate_tool_horizon("plan", "week")
     assert validate_tool_horizon("log", "today")
     assert not validate_tool_horizon("log", "season")  # log only supports today
 

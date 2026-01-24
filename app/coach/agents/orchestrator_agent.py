@@ -1210,7 +1210,16 @@ async def run_conversation(
         # ============================================================================
         policy_decision = None
 
-        if result.output.intent == "plan" and result.output.horizon == "week":
+        # Only run evaluation/policy for PROPOSE/ADJUST actions, not EXECUTE
+        # EXECUTE actions should complete first, then evaluation runs in next turn
+        # This prevents evaluation from running before plan persistence completes
+        should_evaluate = (
+            result.output.intent == "plan"
+            and result.output.horizon == "week"
+            and result.output.action != "EXECUTE"
+        )
+
+        if should_evaluate:
             try:
                 evaluation = evaluate_plan_change(
                     user_id=deps.user_id,

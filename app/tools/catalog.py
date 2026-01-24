@@ -109,9 +109,9 @@ CANONICAL_TOOLS: dict[str, ToolSpec] = {
     "plan": ToolSpec(
         name="plan",
         tier="mutation",
-        horizons=["season", "race"],
+        horizons=["today", "week", "season", "race"],
         approval="optional",
-        description="Initial plan creation",
+        description="Initial plan creation (week/today when no plan exists)",
     ),
     "modify": ToolSpec(
         name="modify",

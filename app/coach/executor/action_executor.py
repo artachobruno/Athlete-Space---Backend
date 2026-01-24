@@ -45,7 +45,9 @@ from app.plans.modify.plan_revision_repo import list_plan_revisions
 from app.plans.modify.types import DayModification
 from app.plans.revision.explanation_payload import build_explanation_payload
 from app.plans.revision.registry import PlanRevisionRegistry
-from app.tools.guards import EvaluationRequiredError, require_recent_evaluation, validate_semantic_tool_only
+from app.coach.policy.weekly_policy_v0 import decide_weekly_action
+from app.tools.guards import require_recent_evaluation, validate_semantic_tool_only
+from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
 from app.tools.semantic_tool_executor import execute_semantic_tool
 
 
@@ -509,6 +511,13 @@ class CoachActionExecutor:
             If slots are complete (should_execute = true), execute immediately.
             No confirmation. No waiting. Execute now.
         """
+        logger.info(
+            "Executor entry",
+            action=decision.action,
+            intent=decision.intent,
+            horizon=decision.horizon,
+            conversation_id=conversation_id,
+        )
         # Invariant guard: Legacy planner must never be called
         if "plan_race_build" in (decision.action or ""):
             raise RuntimeError("Legacy planner must never be called")
@@ -729,12 +738,15 @@ class CoachActionExecutor:
             query_type = "why"
 
         # Route intent x horizon → semantic tool (deterministic)
+        today_utc = datetime.now(timezone.utc).date()
         routed_tool, prerequisite_checks = route_with_safety_check(
             intent=intent,  # type: ignore
             horizon=horizon,  # type: ignore
             has_proposal=bool(decision.filled_slots),
             needs_approval=decision.action == "EXECUTE",
             query_type=query_type,
+            user_id=deps.user_id,
+            today=today_utc,
         )
 
         # Validate routed tool is semantic
@@ -752,23 +764,15 @@ class CoachActionExecutor:
             # Prerequisite checks would be executed here
             # For now, just log
 
-        # Enforce evaluation-before-mutation invariant
+        # Enforce evaluation-before-mutation invariant (PROPOSE/ADJUST only; skip for EXECUTE)
         if routed_tool and horizon in {"week", "season", "race"}:
-            try:
-                require_recent_evaluation(
-                    user_id=deps.user_id or "",
-                    athlete_id=deps.athlete_id or 0,
-                    horizon=horizon,  # type: ignore
-                    tool_name=routed_tool,
-                )
-            except EvaluationRequiredError as e:
-                logger.error(
-                    "Mutation blocked - evaluation required",
-                    tool=routed_tool,
-                    horizon=horizon,
-                    error=str(e),
-                )
-                return f"Cannot proceed: {e!s}. Please evaluate the plan first."
+            require_recent_evaluation(
+                user_id=deps.user_id or "",
+                athlete_id=deps.athlete_id or 0,
+                horizon=horizon,  # type: ignore
+                tool_name=routed_tool,
+                action=decision.action,
+            )
 
         # Use routed tool (enforced) or fall back to target_action for backward compatibility
         target_action = routed_tool or decision.target_action or decision.next_executable_action
@@ -1245,6 +1249,18 @@ class CoachActionExecutor:
 
             extracted = await extract_week_modification_llm(user_message, today)
 
+            # Execution readiness: require change_type before mutating
+            if extracted.change_type is None:
+                logger.warning(
+                    "Execution requested without complete modification spec (change_type missing)",
+                    tool_name=tool_name,
+                    conversation_id=conversation_id,
+                )
+                return (
+                    "I need a bit more detail before modifying your week. "
+                    "What would you like to change? (e.g. reduce volume, shift days, replace a day)"
+                )
+
             # Convert extracted to structured WeekModification
             week_modification = to_week_modification(extracted, today)
 
@@ -1456,6 +1472,18 @@ class CoachActionExecutor:
             user_message = decision.message or ""
 
             extracted = await extract_modify_season(user_message)
+
+            # Execution readiness: require change_type before mutating
+            if extracted.change_type is None:
+                logger.warning(
+                    "Execution requested without complete modification spec (change_type missing)",
+                    tool_name=tool_name,
+                    conversation_id=conversation_id,
+                )
+                return (
+                    "I need a bit more detail before modifying your season. "
+                    "What would you like to change? (e.g. reduce volume, extend phase)"
+                )
 
             # Convert extracted to structured SeasonModification
             season_modification = adapt_extracted_season_modification(
@@ -2118,6 +2146,50 @@ class CoachActionExecutor:
             logger.warning(f"Failed to fetch scheduled workouts: {e}", exc_info=True)
             # Use training state even if scheduled workouts fetch fails
             return training_state_msg
+
+    @staticmethod
+    async def _execute_preview_plan_change(
+        decision: OrchestratorAgentResponse,
+        deps: CoachDeps,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Preview plan change: evaluate + policy only. No DB writes, no mutation.
+
+        Read-only. Calls evaluate_plan_change(store=False) and policy engine.
+        Returns decision, reasons, recommended_actions, confidence.
+        """
+        if not deps.user_id or not isinstance(deps.user_id, str):
+            return "I need your user ID to preview plan changes."
+        if deps.athlete_id is None:
+            return "I need your athlete ID to preview plan changes."
+
+        today = datetime.now(timezone.utc).date()
+        horizon = decision.horizon if decision.horizon in ("week", "season", "race") else "week"
+
+        eval_result = evaluate_plan_change(
+            user_id=deps.user_id,
+            athlete_id=deps.athlete_id,
+            horizon=horizon,
+            today=today,
+            store=False,
+        )
+        policy_result = decide_weekly_action(eval_result.current_state)
+
+        decision_str = eval_result.decision.decision
+        reasons = eval_result.decision.reasons or []
+        recommended = eval_result.decision.recommended_actions or []
+        confidence = eval_result.decision.confidence
+
+        parts = [
+            f"Preview (policy: {policy_result.decision}): {policy_result.reason}",
+            f"Evaluation: {decision_str} (confidence: {confidence:.0%}).",
+        ]
+        if reasons:
+            parts.append("Reasons: " + "; ".join(reasons))
+        if recommended:
+            parts.append("Recommended: " + "; ".join(recommended))
+
+        return " ".join(parts)
 
     @staticmethod
     async def _execute_get_planned_sessions(

@@ -119,10 +119,15 @@ async def execute_semantic_tool(
             deps.execution_guard.mark_executed("confirm")
         return await CoachActionExecutor._execute_confirm_revision(decision, deps, conversation_id)
 
-    # New semantic tools that don't have executor methods yet
-    if tool_name in {"evaluate_plan_change", "preview_plan_change", "detect_plan_incoherence", "explain_plan_structure"}:
-        # These are called directly, not through executor
-        # They're decision/info tools, not mutations
+    if tool_name == "preview_plan_change":
+        if deps.execution_guard:
+            deps.execution_guard.mark_executed("preview_plan_change")
+        return await CoachActionExecutor._execute_preview_plan_change(
+            decision, deps, conversation_id
+        )
+
+    # Semantic tools called directly, not through executor
+    if tool_name in {"evaluate_plan_change", "detect_plan_incoherence", "explain_plan_structure"}:
         raise ValueError(
             f"Semantic tool '{tool_name}' should be called directly, not through executor. "
             "This indicates a routing error."

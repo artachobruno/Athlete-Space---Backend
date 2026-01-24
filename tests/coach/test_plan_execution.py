@@ -4,11 +4,13 @@ Cursor-style determinism: ActionPlan before execution, ordered steps,
 planned -> in_progress -> completed, failure halts, no routing bypass.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+import app.coach.flows.plan_execution as plan_execution_mod
 from app.coach.agents.orchestrator_deps import CoachDeps
+from app.coach.flows.plan_execution import execute_plan_with_action_plan
 from app.coach.schemas.action_plan import ActionPlan, ActionStep
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 
@@ -37,15 +39,11 @@ def mock_decision():
 @pytest.mark.asyncio
 async def test_action_plan_generated_before_execution(mock_deps, mock_decision):
     """ActionPlan is generated before execution."""
-    from app.coach.flows.plan_execution import execute_plan_with_action_plan
-
     plan_generated = []
+    real_generate = plan_execution_mod._generate_action_plan
 
-    def capture_generate(intent, horizon):
-        import app.coach.flows.plan_execution as mod
-
-        generate_func = mod._generate_action_plan
-        result = generate_func(intent, horizon)
+    def capture_generate(intent: str, horizon: str):
+        result = real_generate(intent, horizon)
         plan_generated.append(result)
         return result
 
@@ -53,7 +51,7 @@ async def test_action_plan_generated_before_execution(mock_deps, mock_decision):
         patch("app.coach.flows.plan_execution.require_authorization"),
         patch("app.coach.flows.plan_execution.emit_progress_event_safe", new_callable=AsyncMock),
         patch("app.coach.flows.plan_execution.route_with_safety_check", return_value=("plan", [])),
-        patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=AsyncMock),
+        patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=Mock),
         patch("app.coach.flows.plan_execution.execute_semantic_tool", new_callable=AsyncMock, return_value="ok"),
         patch("app.coach.flows.plan_execution._generate_action_plan", side_effect=capture_generate),
     ):
@@ -76,8 +74,6 @@ async def test_action_plan_generated_before_execution(mock_deps, mock_decision):
 @pytest.mark.asyncio
 async def test_steps_execute_in_order(mock_deps, mock_decision):
     """Steps execute in order."""
-    from app.coach.flows.plan_execution import execute_plan_with_action_plan
-
     order = []
 
     def fake_execute_step(step, decision, deps, conversation_id, horizon):
@@ -103,8 +99,6 @@ async def test_steps_execute_in_order(mock_deps, mock_decision):
 @pytest.mark.asyncio
 async def test_each_step_emits_planned_in_progress_completed(mock_deps, mock_decision):
     """Each step emits planned, in_progress, completed."""
-    from app.coach.flows.plan_execution import execute_plan_with_action_plan
-
     emitted = []
 
     def capture_emit(conversation_id, step_id, label, status, message=None):
@@ -114,7 +108,7 @@ async def test_each_step_emits_planned_in_progress_completed(mock_deps, mock_dec
         patch("app.coach.flows.plan_execution.require_authorization"),
         patch("app.coach.flows.plan_execution.emit_progress_event_safe", side_effect=capture_emit),
         patch("app.coach.flows.plan_execution.route_with_safety_check", return_value=("plan", [])),
-        patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=AsyncMock),
+        patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=Mock),
         patch("app.coach.flows.plan_execution.execute_semantic_tool", new_callable=AsyncMock, return_value="ok"),
     ):
         await execute_plan_with_action_plan(
@@ -137,8 +131,6 @@ async def test_each_step_emits_planned_in_progress_completed(mock_deps, mock_dec
 @pytest.mark.asyncio
 async def test_failure_stops_execution(mock_deps, mock_decision):
     """Failure halts execution."""
-    from app.coach.flows.plan_execution import execute_plan_with_action_plan
-
     call_count = 0
 
     def fail_on_second(step, decision, deps, conversation_id, horizon):
@@ -166,11 +158,18 @@ async def test_failure_stops_execution(mock_deps, mock_decision):
 @pytest.mark.asyncio
 async def test_execution_uses_route_with_safety_check(mock_deps, mock_decision):
     """No execution bypasses route_with_safety_check."""
-    from app.coach.flows.plan_execution import execute_plan_with_action_plan
-
     route_calls = []
 
-    def capture_route(intent, horizon, has_proposal=False, needs_approval=False, query_type=None, run_incoherence_check=True):
+    def capture_route(
+        intent,
+        horizon,
+        has_proposal=False,
+        needs_approval=False,
+        query_type=None,
+        run_incoherence_check=True,
+        user_id=None,
+        today=None,
+    ):
         route_calls.append((intent, horizon))
         return ("plan", [])
 
@@ -178,7 +177,7 @@ async def test_execution_uses_route_with_safety_check(mock_deps, mock_decision):
         patch("app.coach.flows.plan_execution.require_authorization"),
         patch("app.coach.flows.plan_execution.emit_progress_event_safe", new_callable=AsyncMock),
         patch("app.coach.flows.plan_execution.route_with_safety_check", side_effect=capture_route),
-        patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=AsyncMock),
+        patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=Mock),
         patch("app.coach.flows.plan_execution.execute_semantic_tool", new_callable=AsyncMock, return_value="ok"),
     ):
         await execute_plan_with_action_plan(

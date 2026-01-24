@@ -4,10 +4,12 @@ This module provides the single source of truth for routing decisions.
 No ambiguity - exactly one tool per intent/horizon combination.
 """
 
+from datetime import date
 from typing import Literal
 
 from loguru import logger
 
+from app.coach.routing.route import route_plan_week_today
 from app.tools.catalog import Horizon, Tier, get_tool_spec, validate_tool_horizon
 
 Intent = Literal[
@@ -31,6 +33,8 @@ def route(
     has_proposal: bool = False,
     needs_approval: bool = False,  # noqa: ARG001
     query_type: str | None = None,
+    user_id: str | None = None,
+    today: date | None = None,
 ) -> str | None:
     """Route intent x horizon to semantic tool.
 
@@ -40,6 +44,8 @@ def route(
         has_proposal: Whether a proposal object exists
         needs_approval: Whether approval is required (unused, kept for API compatibility)
         query_type: Optional query type hint (e.g., "schedule", "structure", "why")
+        user_id: User ID for plan existence check (plan + week/today only)
+        today: Current date for plan existence check (plan + week/today only)
 
     Returns:
         Tool name or None if no tool should be called
@@ -113,8 +119,8 @@ def route(
         if horizon in {"race", "season"}:
             return "plan"
         if horizon in {"week", "today"}:
-            # Week/today planning becomes modify with create-if-missing
-            return "modify"
+            # Plan + week/today: plan (create) vs modify (change existing) by existence only
+            return route_plan_week_today(user_id, horizon, today)
         return None
 
     if intent == "modify":
@@ -149,6 +155,8 @@ def route_with_safety_check(
     needs_approval: bool = False,
     query_type: str | None = None,
     run_incoherence_check: bool = True,
+    user_id: str | None = None,
+    today: date | None = None,
 ) -> tuple[str | None, list[str]]:
     """Route with safety checks.
 
@@ -159,6 +167,8 @@ def route_with_safety_check(
         needs_approval: Whether approval is required
         query_type: Optional query type hint
         run_incoherence_check: Whether to run incoherence detection
+        user_id: User ID for plan existence check (plan + week/today only)
+        today: Current date for plan existence check (plan + week/today only)
 
     Returns:
         Tuple of (tool_name, prerequisite_checks)
@@ -168,7 +178,10 @@ def route_with_safety_check(
     Raises:
         ValueError: If intent/horizon combination is invalid
     """
-    tool_name = route(intent, horizon, has_proposal, needs_approval, query_type)
+    tool_name = route(
+        intent, horizon, has_proposal, needs_approval, query_type,
+        user_id=user_id, today=today,
+    )
 
     prerequisite_checks: list[str] = []
 

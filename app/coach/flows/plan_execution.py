@@ -4,6 +4,7 @@ This module executes plan creation/modification with stepwise progress tracking.
 All execution goes through semantic tool routing and evaluation guard.
 """
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from loguru import logger
@@ -15,7 +16,7 @@ from app.coach.schemas.action_plan import ActionPlan, ActionStep
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.orchestrator.routing import route_with_safety_check
-from app.tools.guards import EvaluationRequiredError, require_recent_evaluation
+from app.tools.guards import require_recent_evaluation
 from app.tools.semantic_tool_executor import execute_semantic_tool
 
 
@@ -252,11 +253,14 @@ async def _execute_step(
 
     # Route to semantic tool for execution steps
     intent = decision.intent
+    today_utc = datetime.now(timezone.utc).date()
     routed_tool, prerequisite_checks = route_with_safety_check(
         intent=intent,
         horizon=horizon,
         has_proposal=False,
         needs_approval=True,
+        user_id=deps.user_id,
+        today=today_utc,
     )
 
     if not routed_tool:
@@ -282,23 +286,17 @@ async def _execute_step(
             conversation_id=conversation_id,
         )
 
-    # Require evaluation before mutation (for apply_plan and save_plan steps)
+    # Require evaluation before mutation (PROPOSE/ADJUST only; skip for EXECUTE)
     if step.id in {"apply_plan", "save_plan", "modify_plan"}:
         if not deps.user_id:
             raise ValueError("user_id is required for plan mutation operations")
-        try:
-            require_recent_evaluation(
-                user_id=deps.user_id,
-                athlete_id=deps.athlete_id,
-                horizon=horizon,
-                tool_name=routed_tool,
-            )
-        except EvaluationRequiredError as e:
-            logger.warning(
-                "Evaluation required but failed",
-                error=str(e),
-            )
-            raise
+        require_recent_evaluation(
+            user_id=deps.user_id,
+            athlete_id=deps.athlete_id,
+            horizon=horizon,
+            tool_name=routed_tool,
+            action=decision.action,
+        )
 
     # Execute semantic tool (main execution happens here)
     if step.id in {"generate_plan_structure", "apply_plan", "save_plan", "modify_plan"}:

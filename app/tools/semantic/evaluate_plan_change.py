@@ -203,6 +203,7 @@ def evaluate_plan_change(
     athlete_id: int,
     horizon: Literal["week", "season", "race"],
     today: date | None = None,
+    store: bool = True,
 ) -> EvaluatePlanChangeResult:
     """Evaluate whether plan changes are needed.
 
@@ -211,6 +212,7 @@ def evaluate_plan_change(
         athlete_id: Athlete ID
         horizon: Time horizon to evaluate
         today: Current date (defaults to today)
+        store: If True, persist to plan_evaluations (when table exists). False for read-only preview.
 
     Returns:
         EvaluatePlanChangeResult with decision and reasoning
@@ -369,40 +371,37 @@ def evaluate_plan_change(
         horizon=horizon,
     )
 
-    # Store evaluation (gracefully handle missing table)
-    try:
-        with get_session() as session:
-            evaluation = PlanEvaluation(
-                user_id=user_id,
-                athlete_id=athlete_id,
-                plan_version=None,
-                horizon=horizon,
-                decision=decision,
-                reasons=reasons if reasons else ["No changes needed at this time"],
-                recommended_actions=recommended_actions if recommended_actions else None,
-                confidence=confidence,
-                current_state_summary=state_summary,
-            )
-            session.add(evaluation)
-            session.commit()
-            logger.info(
-                "Plan evaluation stored",
-                evaluation_id=evaluation.id,
-                horizon=horizon,
-                decision=decision,
-            )
-    except ProgrammingError as e:
-        # Table doesn't exist yet - log but don't fail
-        # This allows the evaluation to proceed even if migrations haven't been run
-        if "does not exist" in str(e).lower() or "undefinedtable" in str(e).lower():
-            logger.warning(
-                "plan_evaluations table does not exist - skipping storage",
-                horizon=horizon,
-                user_id=user_id,
-                athlete_id=athlete_id,
-            )
-        else:
-            # Re-raise if it's a different database error
-            raise
+    if store:
+        try:
+            with get_session() as session:
+                evaluation = PlanEvaluation(
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    plan_version=None,
+                    horizon=horizon,
+                    decision=decision,
+                    reasons=reasons if reasons else ["No changes needed at this time"],
+                    recommended_actions=recommended_actions if recommended_actions else None,
+                    confidence=confidence,
+                    current_state_summary=state_summary,
+                )
+                session.add(evaluation)
+                session.commit()
+                logger.info(
+                    "Plan evaluation stored",
+                    evaluation_id=evaluation.id,
+                    horizon=horizon,
+                    decision=decision,
+                )
+        except ProgrammingError as e:
+            if "does not exist" in str(e).lower() or "undefinedtable" in str(e).lower():
+                logger.warning(
+                    "plan_evaluations table does not exist - skipping storage",
+                    horizon=horizon,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                )
+            else:
+                raise
 
     return result

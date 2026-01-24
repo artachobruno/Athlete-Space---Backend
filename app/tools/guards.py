@@ -18,7 +18,11 @@ from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
 
 
 class EvaluationRequiredError(Exception):
-    """Raised when mutation is attempted without recent evaluation."""
+    """Raised when mutation is attempted without recent evaluation.
+
+    Retained for backward compatibility; guards no longer raise this
+    for evaluation failure (evaluation is non-blocking).
+    """
 
     pass
 
@@ -29,10 +33,14 @@ def require_recent_evaluation(
     horizon: Literal["week", "season", "race"],
     tool_name: str,
     today: date | None = None,
+    action: Literal["NO_ACTION", "EXECUTE"] | None = None,
 ) -> None:
-    """Require recent evaluation before mutation.
+    """Require recent evaluation before mutation (PROPOSE/ADJUST only).
 
-    Hard invariant: No plan mutation may occur unless evaluation has been run first.
+    Invariant: Evaluation is allowed ONLY when action in {NO_ACTION, PROPOSE, ADJUST}.
+    NEVER during EXECUTE. Guards are not evaluators; we skip entirely for EXECUTE.
+
+    Evaluation failure is non-blocking: log and continue. Never block execution.
 
     Args:
         user_id: User ID
@@ -40,24 +48,28 @@ def require_recent_evaluation(
         horizon: Time horizon
         tool_name: Tool name being executed
         today: Current date (defaults to today)
-
-    Raises:
-        EvaluationRequiredError: If evaluation is missing or stale
+        action: Orchestrator action (EXECUTE, NO_ACTION). When EXECUTE, skip guard.
     """
     if today is None:
         today = datetime.now(timezone.utc).date()
 
+    if action == "EXECUTE":
+        logger.debug(
+            "Skipping evaluation guard for EXECUTE action",
+            tool=tool_name,
+            horizon=horizon,
+        )
+        return
+
     # Check if tool is a mutation tool
     spec = get_tool_spec(tool_name)
     if not spec or not is_mutation_tool(tool_name):
-        # Not a mutation tool, no evaluation required
         return
 
     # Check for recent evaluation in plan_evaluations table
     recent_evaluation = None
     try:
         with get_session() as session:
-            # Look for recent evaluation (within last 7 days for same horizon and athlete)
             cutoff = datetime.now(timezone.utc) - timedelta(days=7)
             recent_evaluation = session.execute(
                 select(PlanEvaluation)
@@ -70,8 +82,6 @@ def require_recent_evaluation(
                 .limit(1)
             ).scalar_one_or_none()
     except ProgrammingError as e:
-        # Table doesn't exist yet - treat as no recent evaluation
-        # This can happen if migrations haven't been run
         if "does not exist" in str(e).lower() or "undefinedtable" in str(e).lower():
             logger.debug(
                 "plan_evaluations table does not exist - treating as no recent evaluation",
@@ -80,19 +90,16 @@ def require_recent_evaluation(
             )
             recent_evaluation = None
         else:
-            # Re-raise if it's a different database error
             raise
 
     if not recent_evaluation:
-        # No recent evaluation - force one
         logger.warning(
-            "Mutation attempted without recent evaluation - forcing evaluation",
+            "Mutation attempted without recent evaluation - running evaluation (non-blocking)",
             tool=tool_name,
             horizon=horizon,
             user_id=user_id,
             athlete_id=athlete_id,
         )
-        # Run evaluation now (this will store it automatically)
         try:
             evaluate_plan_change(
                 user_id=user_id,
@@ -101,30 +108,27 @@ def require_recent_evaluation(
                 today=today,
             )
             logger.info(
-                "Evaluation completed and stored - mutation can proceed",
+                "Evaluation completed - mutation can proceed",
                 tool=tool_name,
                 horizon=horizon,
             )
         except Exception as e:
-            logger.exception(
-                "Failed to run required evaluation",
+            logger.warning(
+                "Evaluation failed (non-blocking) - continuing with mutation",
                 tool=tool_name,
                 horizon=horizon,
                 error=str(e),
             )
-            raise EvaluationRequiredError(
-                f"Mutation requires evaluation but evaluation failed: {e}"
-            ) from e
-    else:
-        # Recent evaluation found - check if it's still valid
-        logger.debug(
-            "Recent evaluation found - mutation can proceed",
-            tool=tool_name,
-            horizon=horizon,
-            evaluation_id=recent_evaluation.id,
-            evaluation_date=recent_evaluation.created_at,
-            decision=recent_evaluation.decision,
-        )
+        return
+
+    logger.debug(
+        "Recent evaluation found - mutation can proceed",
+        tool=tool_name,
+        horizon=horizon,
+        evaluation_id=recent_evaluation.id,
+        evaluation_date=recent_evaluation.created_at,
+        decision=recent_evaluation.decision,
+    )
 
 
 def validate_semantic_tool_only(tool_name: str) -> None:

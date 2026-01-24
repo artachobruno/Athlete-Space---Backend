@@ -481,6 +481,49 @@ def persist_conversation_summary(
         """Raise error for persistence failure."""
         raise ValueError("Failed to persist conversation summary after retries")
 
+    def _raise_ownership_error(conv_id: str) -> NoReturn:
+        """Raise error for missing conversation ownership."""
+        raise ValueError(
+            f"Cannot create Conversation for {conv_id}: "
+            "conversation ownership not found. "
+            "Ensure ConversationOwnership exists before saving summary."
+        )
+
+    def _ensure_conversation_exists(db: Session, db_conv_id: str, conv_id: str) -> None:
+        """Ensure Conversation exists, creating it if needed."""
+        conversation = db.get(Conversation, db_conv_id)
+        if conversation is not None:
+            return
+
+        resolved_user_id = get_conversation_owner(conv_id)
+        if resolved_user_id is None:
+            logger.warning(
+                "Cannot create Conversation for summary: ownership not found",
+                conversation_id=conv_id,
+            )
+            _raise_ownership_error(conv_id)
+
+        conversation = Conversation(
+            id=db_conv_id,
+            user_id=resolved_user_id,
+            status="active",
+        )
+        db.add(conversation)
+        db.flush()
+        logger.debug(
+            "Created conversation for summary",
+            conversation_id=conv_id,
+            user_id=resolved_user_id,
+        )
+
+    def _is_unique_violation(error: Exception) -> bool:
+        """Check if exception is a unique constraint violation."""
+        error_str = str(error).lower()
+        return any(
+            keyword in error_str
+            for keyword in ("unique", "duplicate", "uniqueconstraint", "integrityerror")
+        )
+
     try:
         # Convert c_<UUID> format to UUID for database if needed
         # Database stores conversation_id as UUID type, so strip the 'c_' prefix
@@ -496,38 +539,7 @@ def persist_conversation_summary(
         for attempt in range(max_retries):
             try:
                 with get_session() as db:
-                    # Ensure the Conversation exists before creating ConversationSummary
-                    # This is required to satisfy the foreign key constraint
-                    conversation = db.get(Conversation, db_conversation_id)
-                    if conversation is None:
-                        # Get user_id from conversation ownership
-                        resolved_user_id = get_conversation_owner(conversation_id)
-                        if resolved_user_id is None:
-                            # If ownership doesn't exist, we can't create the conversation
-                            # This should not happen in production - ownership should exist
-                            logger.warning(
-                                "Cannot create Conversation for summary: ownership not found",
-                                conversation_id=conversation_id,
-                            )
-                            raise ValueError(
-                                f"Cannot create Conversation for {conversation_id}: "
-                                "conversation ownership not found. "
-                                "Ensure ConversationOwnership exists before saving summary."
-                            )
-
-                        # Create the conversation
-                        conversation = Conversation(
-                            id=db_conversation_id,
-                            user_id=resolved_user_id,
-                            status="active",
-                        )
-                        db.add(conversation)
-                        db.flush()  # Ensure FK is visible for subsequent inserts
-                        logger.debug(
-                            "Created conversation for summary",
-                            conversation_id=conversation_id,
-                            user_id=resolved_user_id,
-                        )
+                    _ensure_conversation_exists(db, db_conversation_id, conversation_id)
 
                     version = get_next_summary_version(db, conversation_id)
                     created_at = datetime.now(timezone.utc)
@@ -542,23 +554,12 @@ def persist_conversation_summary(
                     db.commit()
                     break  # Success, exit retry loop
             except Exception as e:
-                # Check if it's a unique constraint violation (race condition)
-                error_str = str(e).lower()
-                is_unique_violation = (
-                    "unique" in error_str
-                    or "duplicate" in error_str
-                    or "uniqueconstraint" in error_str
-                    or "integrityerror" in error_str
-                )
-
-                if is_unique_violation and attempt < max_retries - 1:
-                    # Race condition detected - retry with fresh version lookup
+                if _is_unique_violation(e) and attempt < max_retries - 1:
                     logger.warning(
                         f"Race condition detected in conversation summary persistence (attempt {attempt + 1}/{max_retries}), retrying...",
                         conversation_id=conversation_id,
                     )
                     continue
-                # Either not a race condition or max retries reached - re-raise
                 raise
 
         # Continue with rest of function after successful commit

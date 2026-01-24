@@ -355,13 +355,12 @@ def scenario_no_race(db_session, today: date) -> dict[str, Any]:
 # ============================================================================
 
 
-@pytest.mark.asyncio
-async def test_scenario_healthy_base(
+def test_scenario_healthy_base(
     scenario_healthy_base: dict[str, Any],
     today: date,
 ):
     """Observe coach behavior in healthy base scenario."""
-    result = await evaluate_plan_change(
+    result = evaluate_plan_change(
         user_id=scenario_healthy_base["user_id"],
         athlete_id=1,
         horizon="week",
@@ -375,15 +374,15 @@ async def test_scenario_healthy_base(
     print(f"Reasons: {result.decision.reasons}")
     print(f"Confidence: {result.decision.confidence:.2f}")
     print(f"State Summary: {result.current_state_summary}")
+    print(result.current_state)
 
 
-@pytest.mark.asyncio
-async def test_scenario_missed_long_run(
+def test_scenario_missed_long_run(
     scenario_missed_long_run: dict[str, Any],
     today: date,
 ):
     """Observe coach behavior when long run is missed."""
-    result = await evaluate_plan_change(
+    result = evaluate_plan_change(
         user_id=scenario_missed_long_run["user_id"],
         athlete_id=2,
         horizon="week",
@@ -397,15 +396,15 @@ async def test_scenario_missed_long_run(
     print(f"Reasons: {result.decision.reasons}")
     print(f"Confidence: {result.decision.confidence:.2f}")
     print(f"State Summary: {result.current_state_summary}")
+    print(result.current_state)
 
 
-@pytest.mark.asyncio
-async def test_scenario_fatigue(
+def test_scenario_fatigue(
     scenario_fatigue: dict[str, Any],
     today: date,
 ):
     """Observe coach behavior when fatigue is detected."""
-    result = await evaluate_plan_change(
+    result = evaluate_plan_change(
         user_id=scenario_fatigue["user_id"],
         athlete_id=3,
         horizon="week",
@@ -419,15 +418,15 @@ async def test_scenario_fatigue(
     print(f"Reasons: {result.decision.reasons}")
     print(f"Confidence: {result.decision.confidence:.2f}")
     print(f"State Summary: {result.current_state_summary}")
+    print(result.current_state)
 
 
-@pytest.mark.asyncio
-async def test_scenario_taper(
+def test_scenario_taper(
     scenario_taper: dict[str, Any],
     today: date,
 ):
     """Observe coach behavior during taper phase."""
-    result = await evaluate_plan_change(
+    result = evaluate_plan_change(
         user_id=scenario_taper["user_id"],
         athlete_id=4,
         horizon="week",
@@ -441,15 +440,15 @@ async def test_scenario_taper(
     print(f"Reasons: {result.decision.reasons}")
     print(f"Confidence: {result.decision.confidence:.2f}")
     print(f"State Summary: {result.current_state_summary}")
+    print(result.current_state)
 
 
-@pytest.mark.asyncio
-async def test_scenario_no_race(
+def test_scenario_no_race(
     scenario_no_race: dict[str, Any],
     today: date,
 ):
     """Observe coach behavior with no race goal."""
-    result = await evaluate_plan_change(
+    result = evaluate_plan_change(
         user_id=scenario_no_race["user_id"],
         athlete_id=5,
         horizon="week",
@@ -463,10 +462,10 @@ async def test_scenario_no_race(
     print(f"Reasons: {result.decision.reasons}")
     print(f"Confidence: {result.decision.confidence:.2f}")
     print(f"State Summary: {result.current_state_summary}")
+    print(result.current_state)
 
 
-@pytest.mark.asyncio
-async def test_all_scenarios_summary(
+def test_all_scenarios_summary(
     scenario_healthy_base: dict[str, Any],
     scenario_missed_long_run: dict[str, Any],
     scenario_fatigue: dict[str, Any],
@@ -490,7 +489,7 @@ async def test_all_scenarios_summary(
 
     results = []
     for scenario, athlete_id in scenarios:
-        result = await evaluate_plan_change(
+        result = evaluate_plan_change(
             user_id=scenario["user_id"],
             athlete_id=athlete_id,
             horizon="week",

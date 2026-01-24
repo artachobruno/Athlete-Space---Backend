@@ -42,23 +42,29 @@ def test_parse_pending():
 
 def test_require_authorization_fails_when_pending():
     """Mutation intent fails when authorization = pending."""
-    with patch("app.coach.flows.authorization.get_authorization_state", return_value="pending"):
-        with pytest.raises(RuntimeError, match="requires authorization"):
-            require_authorization("c_test-conv", "plan")
+    with (
+        patch("app.coach.flows.authorization.get_authorization_state", return_value="pending"),
+        pytest.raises(RuntimeError, match="requires authorization"),
+    ):
+        require_authorization("c_test-conv", "plan")
 
 
 def test_require_authorization_fails_when_rejected():
     """Mutation intent fails when authorization = rejected."""
-    with patch("app.coach.flows.authorization.get_authorization_state", return_value="rejected"):
-        with pytest.raises(RuntimeError, match="requires authorization"):
-            require_authorization("c_test-conv", "modify")
+    with (
+        patch("app.coach.flows.authorization.get_authorization_state", return_value="rejected"),
+        pytest.raises(RuntimeError, match="requires authorization"),
+    ):
+        require_authorization("c_test-conv", "modify")
 
 
 def test_require_authorization_fails_when_none():
     """Mutation intent fails when authorization = none."""
-    with patch("app.coach.flows.authorization.get_authorization_state", return_value="none"):
-        with pytest.raises(RuntimeError, match="requires authorization"):
-            require_authorization("c_test-conv", "plan")
+    with (
+        patch("app.coach.flows.authorization.get_authorization_state", return_value="none"),
+        pytest.raises(RuntimeError, match="requires authorization"),
+    ):
+        require_authorization("c_test-conv", "plan")
 
 
 def test_require_authorization_proceeds_when_approved():

@@ -19,6 +19,7 @@ def get_planned_activities(
     start: date,
     end: date,
     sport: str | None = None,
+    include_completed: bool = False,
 ) -> list[PlannedSessionInterface]:
     """Get planned activities within a date range.
 
@@ -30,11 +31,15 @@ def get_planned_activities(
         start: Start date (inclusive)
         end: End date (inclusive)
         sport: Optional sport filter (e.g., 'run', 'ride')
+        include_completed: If True, include sessions with status="completed" (executed plan sessions)
 
     Returns:
         List of planned sessions, empty list if none found
     """
-    logger.debug(f"Reading planned activities: user_id={user_id}, start={start}, end={end}, sport={sport}")
+    logger.debug(
+        f"Reading planned activities: user_id={user_id}, start={start}, end={end}, "
+        f"sport={sport}, include_completed={include_completed}"
+    )
 
     with get_session() as session:
         # Convert dates to datetimes for query
@@ -42,10 +47,17 @@ def get_planned_activities(
         end_datetime = datetime.combine(end, datetime.max.time()).replace(tzinfo=timezone.utc)
 
         # Build base query
+        # Include both "planned" and optionally "completed" status sessions
+        # This allows evaluation to see both future planned sessions and recently executed plan sessions
+        status_filter = ["planned"]
+        if include_completed:
+            status_filter.append("completed")
+
         query = select(PlannedSession).where(
             PlannedSession.user_id == user_id,
             PlannedSession.starts_at >= start_datetime,
             PlannedSession.starts_at <= end_datetime,
+            PlannedSession.status.in_(status_filter),
         )
 
         # Add sport filter if provided

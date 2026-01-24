@@ -4,7 +4,7 @@ This file makes shared fixtures available across all test modules.
 """
 
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 import pytest
 from loguru import logger
@@ -129,8 +129,8 @@ def db_session(monkeypatch):
     )
 
     # Patch JSONB to JSON for SQLite compatibility
-    from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
     from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 
     # Add visit_JSONB method to SQLiteTypeCompiler if it doesn't exist
     if not hasattr(SQLiteTypeCompiler, "visit_JSONB"):
@@ -138,12 +138,32 @@ def db_session(monkeypatch):
             return "JSON"
         SQLiteTypeCompiler.visit_JSONB = visit_jsonb
 
+    # CRITICAL: Reset global engine and session factory to force recreation
+    import app.db.session as session_module
+
+    # Reset globals to force recreation with our test engine
+    # This must happen BEFORE any code that might have cached the engine
+    session_module._engine = None
+    session_module._SessionLocal = None
+
+    # Force close any existing engine connections to prevent reuse
+    if hasattr(session_module, "_engine") and session_module._engine is not None:
+        with suppress(Exception):
+            session_module._engine.dispose()
+        session_module._engine = None
+
     # Patch the engine getter to return our test engine
     def mock_get_engine():
         return engine
 
-    monkeypatch.setattr("app.db.session._get_engine", mock_get_engine)
-    monkeypatch.setattr("app.db.session.get_engine", mock_get_engine)
+    monkeypatch.setattr(session_module, "_get_engine", mock_get_engine)
+    monkeypatch.setattr(session_module, "get_engine", mock_get_engine)
+
+    # Also patch _get_session_local to use our test engine
+    def mock_get_session_local():
+        return sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    monkeypatch.setattr(session_module, "_get_session_local", mock_get_session_local)
 
     # Import models after patching engine
     # CRITICAL: Import models so SQLAlchemy metadata is complete
@@ -175,24 +195,46 @@ def db_session(monkeypatch):
         yield session
 
     # Patch at the module level (where it's defined)
-    import app.db.session as session_module
     monkeypatch.setattr(session_module, "get_session", mock_get_session)
 
-    # CRITICAL: Patch where it's imported/used (not just where it's defined)
-    # regeneration_service imports: from app.db.session import get_session
-    # So we must patch it in the regeneration_service module namespace
-    try:
-        import app.plans.regenerate.regeneration_service as regen_svc
-        monkeypatch.setattr(regen_svc, "get_session", mock_get_session)
-    except ImportError:
-        pass
+    # CRITICAL: Patch get_session in all modules that import it directly
+    # This ensures that even if they imported it at module level, they get our mock
+    modules_to_patch = [
+        "app.coach.tools.plan_week",
+        "app.coach.tools.plan_season",
+        "app.coach.tools.session_planner",
+        "app.coach.tools.modify_week",
+        "app.coach.tools.modify_day",
+        "app.coach.tools.modify_season",
+        "app.coach.tools.modify_race",
+        "app.coach.tools.unified_plan",
+        "app.tools.read.plans",
+        "app.tools.semantic.evaluate_plan_change",
+        "app.tools.adapters.db_adapter",
+        "app.tools.guards",
+        "app.tools.read.audit",
+        "app.tools.read.feedback",
+        "app.tools.write.feedback",
+        "app.tools.read.profile",
+        "app.tools.read.calendar",
+        "app.tools.read.activities",
+        "app.tools.read.metrics",
+        "app.calendar.training_summary",
+        "app.plans.regenerate.regeneration_service",
+        "app.plans.modify.repository",
+    ]
 
-    # Also patch in repository module if it imports get_session directly
-    try:
-        import app.plans.modify.repository as repo_module
-        monkeypatch.setattr(repo_module, "get_session", mock_get_session)
-    except ImportError:
-        pass
+    for module_path in modules_to_patch:
+        try:
+            module = __import__(module_path, fromlist=[""])
+            # Patch both get_session and _get_session (aliased imports)
+            if hasattr(module, "get_session"):
+                monkeypatch.setattr(module, "get_session", mock_get_session)
+            if hasattr(module, "_get_session"):
+                monkeypatch.setattr(module, "_get_session", mock_get_session)
+        except (ImportError, AttributeError):
+            # Module doesn't exist or doesn't have get_session - that's OK
+            pass
 
     try:
         yield session

@@ -755,7 +755,7 @@ class CoachActionExecutor:
         # Enforce evaluation-before-mutation invariant
         if routed_tool and horizon in {"week", "season", "race"}:
             try:
-                await require_recent_evaluation(
+                require_recent_evaluation(
                     user_id=deps.user_id or "",
                     athlete_id=deps.athlete_id or 0,
                     horizon=horizon,  # type: ignore

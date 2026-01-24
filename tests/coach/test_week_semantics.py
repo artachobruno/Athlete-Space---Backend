@@ -1,9 +1,7 @@
-"""Contract test: Plan creation visibility to evaluation.
+"""Contract test: Planning Model B+ week semantics.
 
-This test verifies that when planned sessions exist for the current week,
-evaluate_plan_change sees them (B+ week window = Mon-Sun).
-
-This is a plumbing/contract test, NOT a behavior test.
+Verifies that week plans include past + future days in the same calendar week,
+and that planned_elapsed + planned_remaining == planned_total_week.
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
 from app.utils.calendar import week_end, week_start
 
 
-def create_test_user(db_session, user_id: str, athlete_id: int) -> str:
+def _create_test_user(db_session, user_id: str, athlete_id: int) -> str:
     """Helper to create a test user."""
     user = User(
         id=user_id,
@@ -29,8 +27,6 @@ def create_test_user(db_session, user_id: str, athlete_id: int) -> str:
         created_at=datetime.now(UTC),
     )
     db_session.add(user)
-
-    # Create StravaAccount for athlete_id mapping
     account = StravaAccount(
         user_id=user_id,
         athlete_id=str(athlete_id),
@@ -50,7 +46,9 @@ def today() -> date:
     return date(2026, 1, 23)  # Thursday
 
 
-def create_planned_sessions_for_week(db_session, user_id: str, today: date, count: int = 4) -> None:
+def _create_planned_sessions_for_week(
+    db_session, user_id: str, today: date, count: int = 5
+) -> None:
     """Create planned sessions in [week_start(today), week_end(today)]."""
     start = week_start(today)
     end = week_end(today)
@@ -69,13 +67,13 @@ def create_planned_sessions_for_week(db_session, user_id: str, today: date, coun
     db_session.commit()
 
 
-def test_week_plan_visible_to_evaluation(db_session, today: date):
-    """
-    Contract test:
-    When planned sessions exist for the B+ week (Mon-Sun), evaluate_plan_change MUST see them.
-    """
-    user_id = create_test_user(db_session, "test-user-visibility", 1)
-    create_planned_sessions_for_week(db_session, user_id, today)
+def test_week_plan_includes_past_and_future_days(
+    db_session,
+    today: date,
+):
+    """Week plan spans full calendar week; elapsed + remaining = total."""
+    user_id = _create_test_user(db_session, "test-user-week-semantics", 1)
+    _create_planned_sessions_for_week(db_session, user_id, today)
 
     result = evaluate_plan_change(
         user_id=user_id,
@@ -85,7 +83,16 @@ def test_week_plan_visible_to_evaluation(db_session, today: date):
     )
 
     assert result.current_state.planned_total_week > 0, (
-        f"Expected > 0 planned sessions, but found {result.current_state.planned_total_week}. "
+        f"Expected > 0 planned sessions in week, "
+        f"got {result.current_state.planned_total_week}. "
         f"Summary: {result.current_state_summary}"
     )
-    assert result.current_state.compliance_rate is not None
+    assert (
+        result.current_state.planned_elapsed + result.current_state.planned_remaining
+        == result.current_state.planned_total_week
+    ), (
+        f"planned_elapsed + planned_remaining must equal planned_total_week; "
+        f"got {result.current_state.planned_elapsed} + "
+        f"{result.current_state.planned_remaining} != "
+        f"{result.current_state.planned_total_week}"
+    )

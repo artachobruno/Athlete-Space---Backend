@@ -3,7 +3,7 @@
 This module generates read-only structured plan summaries after successful execution.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Literal
 
 from loguru import logger
@@ -85,7 +85,7 @@ def _build_summary_prompt(
     horizon: Literal["week", "season", "race"],
 ) -> str:
     """Build prompt for summary generation."""
-    prompt = f"""Generate a structured plan summary for a {horizon} training plan.
+    return f"""Generate a structured plan summary for a {horizon} training plan.
 
 Plan Data:
 {plan_data}
@@ -102,17 +102,15 @@ Requirements:
 Return valid JSON matching the PlanSummary schema.
 """
 
-    return prompt
-
 
 def _create_fallback_summary(
-    plan_data: dict,
-    horizon: Literal["week", "season", "race"],
+    plan_data: dict,  # noqa: ARG001
+    horizon: Literal["week", "season", "race"],  # noqa: ARG001
 ) -> PlanSummary:
     """Create minimal fallback summary if LLM fails."""
     return PlanSummary(
         duration_weeks=12,
-        end_date=datetime.now().date().isoformat(),
+        end_date=datetime.now(timezone.utc).date().isoformat(),
         weekly_volumes=[
             {"weeks": "W1-4", "volume_mi": 45, "volume_km": 72.4},
             {"weeks": "W5-9", "volume_mi": 55, "volume_km": 88.5},
@@ -173,7 +171,6 @@ def format_summary_message(summary: PlanSummary) -> str:
     if summary.constraints_applied:
         message_parts.append("")
         message_parts.append("• Constraints applied:")
-        for constraint in summary.constraints_applied:
-            message_parts.append(f"  - {constraint}")
+        message_parts.extend(f"  - {constraint}" for constraint in summary.constraints_applied)
 
     return "\n".join(message_parts)

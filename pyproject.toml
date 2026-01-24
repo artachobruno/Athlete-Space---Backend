@@ -245,6 +245,10 @@ virtus-decisions = "scripts.run_decisions:main"
 # -------------------------------------------------------------------
 
 [tool.pytest.ini_options]
+markers = [
+    "contract: plumbing-level invariants",
+    "behavioral: observational, non-blocking",
+]
 pythonpath = ["."]
 # Async test configuration (requires pytest-asyncio)
 # Install test dependencies with: pip install -e ".[test]" or uv sync --group test

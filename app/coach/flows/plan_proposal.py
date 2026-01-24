@@ -117,8 +117,7 @@ Current Training State:
 - TSB: {deps.athlete_state.tsb:.1f}
 - Load trend: {deps.athlete_state.load_trend or 'stable'}
 """
-
-    prompt = f"""Generate a plan proposal for a {horizon} training plan.
+    return f"""Generate a plan proposal for a {horizon} training plan.
 
 Context:
 - Horizon: {horizon}
@@ -143,8 +142,6 @@ Requirements:
 Return valid JSON matching the PlanProposal schema.
 """
 
-    return prompt
-
 
 def _create_fallback_proposal(
     context: dict[str, str | int | float | bool | None],
@@ -152,7 +149,6 @@ def _create_fallback_proposal(
 ) -> dict:
     """Create a minimal fallback proposal if LLM fails."""
     race_date = context.get("race_date")
-    distance = context.get("distance")
 
     return {
         "type": "plan_proposal",
@@ -193,12 +189,10 @@ def format_proposal_message(proposal: PlanProposal) -> str:
 
     if proposal.assumptions:
         message_parts.append("\n**Assumptions:**")
-        for assumption in proposal.assumptions:
-            message_parts.append(f"- {assumption}")
+        message_parts.extend(f"- {assumption}" for assumption in proposal.assumptions)
 
     message_parts.append("\n**What will change:**")
-    for change in proposal.changes:
-        message_parts.append(f"- {change}")
+    message_parts.extend(f"- {change}" for change in proposal.changes)
 
     message_parts.append(
         "\n**Would you like me to proceed with creating this plan?** "

@@ -80,7 +80,7 @@ async def execute_plan_with_action_plan(
 
 def _generate_action_plan(
     intent: str,
-    horizon: Literal["week", "season", "race"],
+    horizon: Literal["week", "season", "race"],  # noqa: ARG001
 ) -> ActionPlan:
     """Generate deterministic ActionPlan for plan execution.
 
@@ -205,7 +205,11 @@ async def _execute_steps(
             raise RuntimeError(f"Step '{step.label}' failed: {e}") from e
 
     # Return final result (from save_plan step or last step)
-    final_message = execution_results.get("save_plan") or execution_results.get(list(execution_results.keys())[-1] if execution_results else "completed", "Plan execution completed")
+    if execution_results:
+        last_key = list(execution_results.keys())[-1]
+        final_message = execution_results.get("save_plan") or execution_results.get(last_key, "Plan execution completed")
+    else:
+        final_message = "Plan execution completed"
 
     return {
         "message": final_message,
@@ -242,7 +246,7 @@ async def _execute_step(
 
     # For most steps, we route to the main semantic tool
     # Some steps (like load_training_state) may be no-ops or use read-only tools
-    if step.id in ["load_training_state", "preview_plan_change"]:
+    if step.id in {"load_training_state", "preview_plan_change"}:
         # These are informational steps - skip actual execution
         return f"Step '{step.label}' completed"
 
@@ -279,11 +283,11 @@ async def _execute_step(
         )
 
     # Require evaluation before mutation (for apply_plan and save_plan steps)
-    if step.id in ["apply_plan", "save_plan", "modify_plan"]:
+    if step.id in {"apply_plan", "save_plan", "modify_plan"}:
         if not deps.user_id:
             raise ValueError("user_id is required for plan mutation operations")
         try:
-            await require_recent_evaluation(
+            require_recent_evaluation(
                 user_id=deps.user_id,
                 athlete_id=deps.athlete_id,
                 horizon=horizon,
@@ -297,14 +301,13 @@ async def _execute_step(
             raise
 
     # Execute semantic tool (main execution happens here)
-    if step.id in ["generate_plan_structure", "apply_plan", "save_plan", "modify_plan"]:
-        result = await execute_semantic_tool(
+    if step.id in {"generate_plan_structure", "apply_plan", "save_plan", "modify_plan"}:
+        return await execute_semantic_tool(
             tool_name=routed_tool,
             decision=decision,
             deps=deps,
             conversation_id=conversation_id,
         )
-        return result
 
     # For evaluate_plan_change step, use evaluation tool
     if step.id == "evaluate_plan_change":

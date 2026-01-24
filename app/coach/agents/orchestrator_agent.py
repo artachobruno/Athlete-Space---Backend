@@ -24,6 +24,11 @@ from app.coach.agents.orchestrator_state import OrchestratorState
 from app.coach.config.models import ORCHESTRATOR_MODEL
 from app.coach.config.prompt_versions import ORCHESTRATOR_PROMPT_VERSION
 from app.coach.mcp_client import MCPError, call_tool
+from app.coach.policy.athlete_context import AthleteContext
+from app.coach.policy.intent_context import IntentContext
+from app.coach.policy.weekly_policy_v0 import WeeklyDecision
+from app.coach.policy.weekly_policy_v3 import decide_weekly_action_v3
+from app.coach.policy.weekly_policy_v4 import decide_weekly_action_v4, derive_trajectory
 from app.coach.prompts.loader import load_prompt
 from app.coach.rag.adapter import OrchestratorRagAdapter
 from app.coach.rag.logging import log_rag_usage
@@ -38,6 +43,7 @@ from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
 from app.core.token_guard import LLMMessage, enforce_token_limit
 from app.core.trace_metadata import get_trace_metadata_from_deps
 from app.services.llm.model import get_model
+from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
 
 # ============================================================================
 # SLOT COMPUTATION
@@ -1198,6 +1204,186 @@ async def run_conversation(
                         intent=result.output.intent,
                         athlete_id=deps.athlete_id,
                     )
+
+        # ============================================================================
+        # POLICY EVALUATION (Planning Model B+)
+        # ============================================================================
+        policy_decision = None
+
+        if result.output.intent == "plan" and result.output.horizon == "week":
+            try:
+                evaluation = evaluate_plan_change(
+                    user_id=deps.user_id,
+                    athlete_id=deps.athlete_id,
+                    horizon="week",
+                )
+
+                logger.debug(
+                    "Policy input state",
+                    current_state=evaluation.current_state.model_dump(),
+                )
+
+                # Build AthleteContext with simple heuristics
+                # Map training_consistency to experience_level
+                consistency = deps.training_preferences.training_consistency if deps.training_preferences else None
+                if consistency == "beginner":
+                    experience_level = "novice"
+                elif consistency == "structured":
+                    experience_level = "intermediate"
+                elif consistency == "competitive":
+                    experience_level = "advanced"
+                else:
+                    # Default based on years_structured
+                    years = deps.training_preferences.years_structured if deps.training_preferences else None
+                    if years and years >= 5:
+                        experience_level = "elite"
+                    elif years and years >= 2:
+                        experience_level = "advanced"
+                    elif years and years >= 1:
+                        experience_level = "intermediate"
+                    else:
+                        experience_level = "novice"
+
+                # Risk tolerance: default to medium, can be enhanced later
+                risk_tolerance = "medium"
+
+                # Consistency score: estimate from training_consistency
+                if consistency == "competitive":
+                    consistency_score = 0.9
+                elif consistency == "structured":
+                    consistency_score = 0.75
+                elif consistency == "beginner":
+                    consistency_score = 0.5
+                else:
+                    consistency_score = 0.7  # Default
+
+                # History of injury
+                history_of_injury = (
+                    deps.training_preferences.injury_flag is True
+                    if deps.training_preferences
+                    else False
+                )
+
+                # Adherence reliability: estimate from consistency
+                if consistency_score >= 0.85:
+                    adherence_reliability = "high"
+                elif consistency_score >= 0.65:
+                    adherence_reliability = "medium"
+                else:
+                    adherence_reliability = "low"
+
+                athlete_context = AthleteContext(
+                    experience_level=experience_level,
+                    risk_tolerance=risk_tolerance,
+                    consistency_score=consistency_score,
+                    history_of_injury=history_of_injury,
+                    adherence_reliability=adherence_reliability,
+                )
+
+                logger.debug(
+                    "Policy v3 input",
+                    athlete=athlete_context,
+                    state=evaluation.current_state.model_dump(),
+                )
+
+                # Build IntentContext with simple heuristics
+                # Determine request source
+                if result.output.should_execute:
+                    request_source = "athlete_explicit"
+                elif result.output.intent == "plan" and result.output.action:
+                    # If intent is plan and action is set, it's likely explicit
+                    request_source = "athlete_explicit"
+                else:
+                    # Default to reflective for questions/exploratory requests
+                    request_source = "athlete_reflective"
+
+                # Determine intent strength
+                if result.output.should_execute:
+                    intent_strength = "strong"
+                elif result.output.action and result.output.action != "NO_ACTION":
+                    intent_strength = "moderate"
+                else:
+                    intent_strength = "weak"
+
+                # Determine execution requested
+                execution_requested = result.output.should_execute or False
+
+                intent_ctx = IntentContext(
+                    request_source=request_source,
+                    intent_strength=intent_strength,
+                    execution_requested=execution_requested,
+                )
+
+                # Get v3 decision first
+                v3_decision = decide_weekly_action_v3(
+                    state=evaluation.current_state,
+                    intent_context=intent_ctx,
+                    athlete=athlete_context,
+                )
+
+                # Populate v4-specific fields in state (if available)
+                # Note: These are optional and v4 will gracefully handle None
+                state_with_v4_fields = evaluation.current_state.model_copy(
+                    update={
+                        "user_intent_strength": intent_ctx.intent_strength,
+                        "experience_level": athlete_context.experience_level,
+                        # plan_changes_last_21_days would need to be computed from history
+                        # For now, leave as None and v4 will skip that rule
+                    }
+                )
+
+                # Apply v4 trajectory-aware policy
+                policy_decision = decide_weekly_action_v4(
+                    state=state_with_v4_fields,
+                    prior_decision=v3_decision,
+                )
+
+                trajectory = derive_trajectory(state_with_v4_fields)
+
+                logger.debug(
+                    "Policy v4 applied",
+                    trajectory=trajectory.value,
+                    decision=policy_decision.decision,
+                )
+
+                logger.info(
+                    "Policy decision computed",
+                    decision=policy_decision.decision,
+                    reason=policy_decision.reason,
+                    request_source=intent_ctx.request_source,
+                    intent_strength=intent_ctx.intent_strength,
+                    experience_level=athlete_context.experience_level,
+                    trajectory=trajectory.value,
+                    athlete_id=deps.athlete_id,
+                )
+
+            except Exception:
+                logger.exception("Policy evaluation failed — continuing without policy")
+
+        if policy_decision:
+            if policy_decision.decision == WeeklyDecision.NO_CHANGE:
+                result.output.action = "NO_ACTION"
+                result.output.should_execute = False
+                result.output.message = policy_decision.reason
+                result.output.response_type = "explanation"
+
+            elif policy_decision.decision == WeeklyDecision.PROPOSE_PLAN:
+                result.output.action = "PROPOSE"
+                result.output.should_execute = False
+                result.output.message = policy_decision.reason
+                result.output.response_type = "plan_proposal"
+
+            elif policy_decision.decision == WeeklyDecision.PROPOSE_ADJUSTMENT:
+                result.output.action = "PROPOSE"
+                result.output.should_execute = False
+                result.output.message = policy_decision.reason
+                result.output.response_type = "plan_adjustment"
+        else:
+            logger.debug(
+                "No policy applied",
+                intent=result.output.intent,
+                horizon=result.output.horizon,
+            )
 
         # If should_execute and action is NO_ACTION, override to EXECUTE
         if result.output.should_execute:

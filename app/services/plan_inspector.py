@@ -353,7 +353,7 @@ async def inspect_plan(
 
         if horizon and horizon in {"week", "season", "race"}:
             try:
-                eval_result = await evaluate_plan_change(
+                eval_result = evaluate_plan_change(
                     user_id=user_id,
                     athlete_id=athlete_id,
                     horizon=horizon,  # type: ignore

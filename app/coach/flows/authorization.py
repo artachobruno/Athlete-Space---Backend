@@ -56,7 +56,7 @@ def get_authorization_state(conversation_id: str) -> AuthorizationState:
     slots = progress.slots or {}
     auth_state = slots.get("authorization_state")
 
-    if auth_state in ["pending", "approved", "rejected"]:
+    if auth_state in {"pending", "approved", "rejected"}:
         return auth_state
 
     return "none"
@@ -150,7 +150,7 @@ def clear_authorization_state(conversation_id: str) -> None:
         return
 
     current_slots = progress.slots or {}
-    updated_slots = {k: v for k, v in current_slots.items() if k not in ["authorization_state", "authorization_timestamp"]}
+    updated_slots = {k: v for k, v in current_slots.items() if k not in {"authorization_state", "authorization_timestamp"}}
 
     create_or_update_progress(
         conversation_id=conversation_id,

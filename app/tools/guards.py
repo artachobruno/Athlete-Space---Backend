@@ -8,6 +8,7 @@ from typing import Literal
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 
 from app.db.models import PlanEvaluation
 from app.db.session import get_session
@@ -22,7 +23,7 @@ class EvaluationRequiredError(Exception):
     pass
 
 
-async def require_recent_evaluation(
+def require_recent_evaluation(
     user_id: str,
     athlete_id: int,
     horizon: Literal["week", "season", "race"],
@@ -53,62 +54,77 @@ async def require_recent_evaluation(
         return
 
     # Check for recent evaluation in plan_evaluations table
-    with get_session() as session:
-        # Look for recent evaluation (within last 7 days for same horizon and athlete)
-        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-        recent_evaluation = session.execute(
-            select(PlanEvaluation)
-            .where(
-                PlanEvaluation.athlete_id == athlete_id,
-                PlanEvaluation.horizon == horizon,
-                PlanEvaluation.created_at >= cutoff,
-            )
-            .order_by(PlanEvaluation.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-
-        if not recent_evaluation:
-            # No recent evaluation - force one
-            logger.warning(
-                "Mutation attempted without recent evaluation - forcing evaluation",
+    recent_evaluation = None
+    try:
+        with get_session() as session:
+            # Look for recent evaluation (within last 7 days for same horizon and athlete)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            recent_evaluation = session.execute(
+                select(PlanEvaluation)
+                .where(
+                    PlanEvaluation.athlete_id == athlete_id,
+                    PlanEvaluation.horizon == horizon,
+                    PlanEvaluation.created_at >= cutoff,
+                )
+                .order_by(PlanEvaluation.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+    except ProgrammingError as e:
+        # Table doesn't exist yet - treat as no recent evaluation
+        # This can happen if migrations haven't been run
+        if "does not exist" in str(e).lower() or "undefinedtable" in str(e).lower():
+            logger.debug(
+                "plan_evaluations table does not exist - treating as no recent evaluation",
                 tool=tool_name,
                 horizon=horizon,
+            )
+            recent_evaluation = None
+        else:
+            # Re-raise if it's a different database error
+            raise
+
+    if not recent_evaluation:
+        # No recent evaluation - force one
+        logger.warning(
+            "Mutation attempted without recent evaluation - forcing evaluation",
+            tool=tool_name,
+            horizon=horizon,
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
+        # Run evaluation now (this will store it automatically)
+        try:
+            evaluate_plan_change(
                 user_id=user_id,
                 athlete_id=athlete_id,
+                horizon=horizon,
+                today=today,
             )
-            # Run evaluation now (this will store it automatically)
-            try:
-                await evaluate_plan_change(
-                    user_id=user_id,
-                    athlete_id=athlete_id,
-                    horizon=horizon,
-                    today=today,
-                )
-                logger.info(
-                    "Evaluation completed and stored - mutation can proceed",
-                    tool=tool_name,
-                    horizon=horizon,
-                )
-            except Exception as e:
-                logger.exception(
-                    "Failed to run required evaluation",
-                    tool=tool_name,
-                    horizon=horizon,
-                    error=str(e),
-                )
-                raise EvaluationRequiredError(
-                    f"Mutation requires evaluation but evaluation failed: {e}"
-                ) from e
-        else:
-            # Recent evaluation found - check if it's still valid
-            logger.debug(
-                "Recent evaluation found - mutation can proceed",
+            logger.info(
+                "Evaluation completed and stored - mutation can proceed",
                 tool=tool_name,
                 horizon=horizon,
-                evaluation_id=recent_evaluation.id,
-                evaluation_date=recent_evaluation.created_at,
-                decision=recent_evaluation.decision,
             )
+        except Exception as e:
+            logger.exception(
+                "Failed to run required evaluation",
+                tool=tool_name,
+                horizon=horizon,
+                error=str(e),
+            )
+            raise EvaluationRequiredError(
+                f"Mutation requires evaluation but evaluation failed: {e}"
+            ) from e
+    else:
+        # Recent evaluation found - check if it's still valid
+        logger.debug(
+            "Recent evaluation found - mutation can proceed",
+            tool=tool_name,
+            horizon=horizon,
+            evaluation_id=recent_evaluation.id,
+            evaluation_date=recent_evaluation.created_at,
+            decision=recent_evaluation.decision,
+        )
 
 
 def validate_semantic_tool_only(tool_name: str) -> None:

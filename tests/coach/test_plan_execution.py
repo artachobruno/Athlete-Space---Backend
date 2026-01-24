@@ -40,11 +40,14 @@ async def test_action_plan_generated_before_execution(mock_deps, mock_decision):
     from app.coach.flows.plan_execution import execute_plan_with_action_plan
 
     plan_generated = []
-    orig_generate = None
 
     def capture_generate(intent, horizon):
-        plan_generated.append(_generate(intent, horizon))
-        return plan_generated[-1]
+        import app.coach.flows.plan_execution as mod
+
+        generate_func = mod._generate_action_plan
+        result = generate_func(intent, horizon)
+        plan_generated.append(result)
+        return result
 
     with (
         patch("app.coach.flows.plan_execution.require_authorization"),
@@ -52,17 +55,14 @@ async def test_action_plan_generated_before_execution(mock_deps, mock_decision):
         patch("app.coach.flows.plan_execution.route_with_safety_check", return_value=("plan", [])),
         patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=AsyncMock),
         patch("app.coach.flows.plan_execution.execute_semantic_tool", new_callable=AsyncMock, return_value="ok"),
+        patch("app.coach.flows.plan_execution._generate_action_plan", side_effect=capture_generate),
     ):
-        import app.coach.flows.plan_execution as mod
-
-        _generate = mod._generate_action_plan
-        with patch.object(mod, "_generate_action_plan", side_effect=capture_generate):
-            await execute_plan_with_action_plan(
-                mock_decision,
-                mock_deps,
-                "c_test",
-                "week",
-            )
+        await execute_plan_with_action_plan(
+            mock_decision,
+            mock_deps,
+            "c_test",
+            "week",
+        )
 
     assert len(plan_generated) == 1
     ap = plan_generated[0]
@@ -80,7 +80,7 @@ async def test_steps_execute_in_order(mock_deps, mock_decision):
 
     order = []
 
-    async def fake_execute_step(step, decision, deps, conversation_id, horizon):
+    def fake_execute_step(step, decision, deps, conversation_id, horizon):
         order.append(step.id)
         return "ok"
 
@@ -107,7 +107,7 @@ async def test_each_step_emits_planned_in_progress_completed(mock_deps, mock_dec
 
     emitted = []
 
-    async def capture_emit(conversation_id, step_id, label, status, message=None):
+    def capture_emit(conversation_id, step_id, label, status, message=None):
         emitted.append((step_id, status))
 
     with (
@@ -128,7 +128,7 @@ async def test_each_step_emits_planned_in_progress_completed(mock_deps, mock_dec
     for step_id, status in emitted:
         by_step.setdefault(step_id, []).append(status)
 
-    for step_id, statuses in by_step.items():
+    for statuses in by_step.values():
         assert "planned" in statuses
         assert "in_progress" in statuses
         assert "completed" in statuses
@@ -141,7 +141,7 @@ async def test_failure_stops_execution(mock_deps, mock_decision):
 
     call_count = 0
 
-    async def fail_on_second(step, decision, deps, conversation_id, horizon):
+    def fail_on_second(step, decision, deps, conversation_id, horizon):
         nonlocal call_count
         call_count += 1
         if call_count >= 2:
@@ -151,15 +151,14 @@ async def test_failure_stops_execution(mock_deps, mock_decision):
     with (
         patch("app.coach.flows.plan_execution.require_authorization"),
         patch("app.coach.flows.plan_execution.emit_progress_event_safe", new_callable=AsyncMock),
-        patch("app.coach.flows.plan_execution._execute_step", side_effect=fail_on_second),
+        patch("app.coach.flows.plan_execution._execute_step", side_effect=fail_on_second), pytest.raises(RuntimeError, match="failed")
     ):
-        with pytest.raises(RuntimeError, match="failed"):
-            await execute_plan_with_action_plan(
-                mock_decision,
-                mock_deps,
-                "c_test",
-                "week",
-            )
+        await execute_plan_with_action_plan(
+            mock_decision,
+            mock_deps,
+            "c_test",
+            "week",
+        )
 
     assert call_count == 2
 

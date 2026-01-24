@@ -214,7 +214,7 @@ class FitWorkoutExporter(WorkoutExporter):
 
         # Validate the generated FIT file by attempting to decode it
         try:
-            decoder = Decoder(BytesIO(fit_bytes))
+            decoder = Decoder(BytesIO(fit_bytes))  # type: ignore[arg-type]
             decoder.read()
             logger.debug(f"Generated FIT file validated successfully ({len(fit_bytes)} bytes)")
         except Exception as e:

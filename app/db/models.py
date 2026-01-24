@@ -186,6 +186,11 @@ class Activity(Base):
     wind_avg_mps: Mapped[float | None] = mapped_column(Float, nullable=True)
     precip_total_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
     heat_stress_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    heat_acclimation_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # v1.1
+    effective_heat_stress_index: Mapped[float | None] = mapped_column(Float, nullable=True)  # v1.1
+    wind_chill_c: Mapped[float | None] = mapped_column(Float, nullable=True)  # v2.0
+    cold_stress_index: Mapped[float | None] = mapped_column(Float, nullable=True)  # v2.0
+    cold_tss_adjustment_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # v2.0 optional
     conditions_label: Mapped[str | None] = mapped_column(String, nullable=True)
     heat_tss_adjustment_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     adjusted_tss: Mapped[float | None] = mapped_column(Float, nullable=True)

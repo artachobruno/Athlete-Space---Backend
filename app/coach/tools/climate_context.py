@@ -45,11 +45,20 @@ def get_activity_climate_context(activity_id: str) -> dict[str, str | float | No
             logger.debug(f"[CLIMATE] Activity {activity_id} has no climate data")
             return {}
 
+        # Use effective HSI if available (v1.1), otherwise fallback to raw HSI
+        hsi_to_return = activity.effective_heat_stress_index
+        if hsi_to_return is None:
+            hsi_to_return = activity.heat_stress_index
+
         return {
             "conditions_label": activity.conditions_label,
             "avg_temperature_c": activity.avg_temperature_c,
             "avg_dew_point_c": activity.avg_dew_point_c,
-            "heat_stress_index": activity.heat_stress_index,
+            "heat_stress_index": activity.heat_stress_index,  # Always include raw HSI
+            "effective_heat_stress_index": hsi_to_return,  # Use effective if available
+            "heat_acclimation_score": activity.heat_acclimation_score,  # v1.1
+            "wind_chill_c": activity.wind_chill_c,  # v2.0
+            "cold_stress_index": activity.cold_stress_index,  # v2.0
         }
 
 
@@ -58,6 +67,7 @@ def convert_activity_performance_for_conditions(
     observed_pace_sec_per_km: float,
     heat_stress_index: float,
     duration_min: float,
+    effective_heat_stress_index: float | None = None,
 ) -> dict[str, float | str]:
     """Convert observed performance to equivalent performance accounting for conditions.
 
@@ -68,8 +78,9 @@ def convert_activity_performance_for_conditions(
     Args:
         sport: Sport type ('run', 'ride', etc.)
         observed_pace_sec_per_km: Observed pace in seconds per kilometer
-        heat_stress_index: Heat stress index (0.0-1.0)
+        heat_stress_index: Raw heat stress index (0.0-1.0)
         duration_min: Activity duration in minutes
+        effective_heat_stress_index: Effective HSI accounting for acclimation (v1.1, optional)
 
     Returns:
         Dictionary with:
@@ -87,9 +98,12 @@ def convert_activity_performance_for_conditions(
             "reason": "Performance equivalency only applies to aerobic sports (running, cycling)",
         }
 
+    # v1.1: Use effective HSI if available, otherwise fallback to raw HSI
+    hsi_for_calculation = effective_heat_stress_index if effective_heat_stress_index is not None else heat_stress_index
+
     # Heat stress adjustment model (exact formula v1.0)
     # Max adjustment: +15%
-    equivalency_factor = 1.0 + min(0.15, heat_stress_index * 0.10)
+    equivalency_factor = 1.0 + min(0.15, hsi_for_calculation * 0.10)
     adjustment_pct = equivalency_factor - 1.0
 
     # Calculate equivalent pace (faster = lower seconds per km)
@@ -100,20 +114,20 @@ def convert_activity_performance_for_conditions(
     # Higher heat stress + longer duration = higher confidence
     # Normalize duration: use a factor based on duration (longer = higher confidence)
     duration_factor = min(1.0, duration_min / 60.0)  # Normalize to 1.0 for 60+ min
-    confidence = min(1.0, heat_stress_index * 0.8 + (duration_factor * 0.2))
+    confidence = min(1.0, hsi_for_calculation * 0.8 + (duration_factor * 0.2))
 
     # Generate reason using exact coach language mapping (v1.0)
-    if heat_stress_index < 0.60:
+    if hsi_for_calculation < 0.60:
         reason = "Conditions added some environmental strain."
-    elif heat_stress_index < 0.75:
+    elif hsi_for_calculation < 0.75:
         reason = "Heat meaningfully increased aerobic stress today."
     else:
         reason = "Heat and humidity significantly increased cardiovascular load."
 
     logger.info(
         f"[CLIMATE] Performance conversion: sport={sport}, observed_pace={observed_pace_sec_per_km:.1f}s/km, "
-        f"heat_stress={heat_stress_index:.2f}, adjustment={adjustment_pct * 100:.1f}%, "
-        f"equivalent_pace={equivalent_pace:.1f}s/km"
+        f"heat_stress={heat_stress_index:.2f}, effective_hsi={hsi_for_calculation:.2f}, "
+        f"adjustment={adjustment_pct * 100:.1f}%, equivalent_pace={equivalent_pace:.1f}s/km"
     )
 
     return {

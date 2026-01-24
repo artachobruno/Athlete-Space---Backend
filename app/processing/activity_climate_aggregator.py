@@ -21,6 +21,11 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity
+from app.processing.cold_stress import compute_cold_stress_index, compute_wind_chill_c
+from app.processing.heat_acclimation import (
+    compute_effective_heat_stress_index,
+    compute_heat_acclimation_score,
+)
 
 
 def compute_heat_stress_index(avg_temp_c: float, avg_dew_point_c: float) -> float:
@@ -126,17 +131,82 @@ def aggregate_activity_climate(session: Session, activity: Activity) -> bool:
         # Compute heat stress index (exact formula v1.0)
         heat_stress = compute_heat_stress_index(avg_temp, avg_dew_point)
 
-        # Generate conditions label from heat stress index
+        # v1.1: Compute heat acclimation and effective HSI
+        heat_acclimation_score = None
+        effective_heat_stress = None
+        climate_model_version = "v1.0"
+
+        # Only compute acclimation if we have valid heat stress
+        if heat_stress >= 0.50:
+            try:
+                heat_acclimation_score = compute_heat_acclimation_score(
+                    session=session,
+                    user_id=activity.user_id,
+                    activity_date=activity.starts_at,
+                )
+                effective_heat_stress = compute_effective_heat_stress_index(
+                    heat_stress_index=heat_stress,
+                    heat_acclimation_score=heat_acclimation_score,
+                )
+                climate_model_version = "v1.1"
+            except Exception as e:
+                logger.warning(
+                    f"[CLIMATE_AGG] Failed to compute heat acclimation for activity {activity.id}: {e}"
+                )
+                # Fallback to v1.0 if acclimation computation fails
+                effective_heat_stress = heat_stress
+
+        # v2.0: Compute cold stress (wind chill and CSI)
+        wind_chill_c = None
+        cold_stress_index = None
+        if avg_temp is not None and avg_wind is not None and avg_wind > 0:
+            try:
+                wind_chill_c = compute_wind_chill_c(temp_c=avg_temp, wind_mps=avg_wind)
+                cold_stress_index = compute_cold_stress_index(wind_chill_c=wind_chill_c)
+            except Exception as e:
+                logger.warning(
+                    f"[CLIMATE_AGG] Failed to compute cold stress for activity {activity.id}: {e}"
+                )
+
+        # Version precedence rule (deterministic):
+        # If cold_stress_index > 0 → v2.0
+        # Else if heat_acclimation_score exists → v1.1
+        # Else → v1.0
+        if cold_stress_index is not None and cold_stress_index > 0:
+            climate_model_version = "v2.0"
+        elif heat_acclimation_score is not None:
+            climate_model_version = "v1.1"
+        else:
+            climate_model_version = "v1.0"
+
+        # Generate conditions label from heat stress index (use raw HSI for label)
         conditions_label = generate_conditions_label(heat_stress)
 
         # Compute TSS adjustment if applicable
+        # Use effective HSI if available, otherwise raw HSI
+        hsi_for_tss = effective_heat_stress if effective_heat_stress is not None else heat_stress
         heat_tss_adjustment_pct = None
+        cold_tss_adjustment_pct = None
         adjusted_tss = None
         if _should_apply_tss_adjustment(activity):
-            heat_load_multiplier = 1.0 + min(0.10, heat_stress * 0.08)
+            # Heat TSS adjustment
+            heat_load_multiplier = 1.0 + min(0.10, hsi_for_tss * 0.08)
             if activity.tss is not None:
                 adjusted_tss = activity.tss * heat_load_multiplier
                 heat_tss_adjustment_pct = (heat_load_multiplier - 1.0) * 100.0
+
+            # v2.0: Cold TSS adjustment (optional, conservative)
+            # Applies only to outdoor aerobic sessions >= 30 min
+            # Never applied to races
+            if cold_stress_index is not None and cold_stress_index > 0:
+                cold_load_multiplier = 1.0 + min(0.05, cold_stress_index * 0.05)  # Max +5%
+                if activity.tss is not None:
+                    # Apply cold adjustment on top of heat adjustment (if any)
+                    if adjusted_tss is not None:
+                        adjusted_tss *= cold_load_multiplier
+                    else:
+                        adjusted_tss = activity.tss * cold_load_multiplier
+                    cold_tss_adjustment_pct = (cold_load_multiplier - 1.0) * 100.0
 
         # Update activity record
         session.execute(
@@ -151,8 +221,13 @@ def aggregate_activity_climate(session: Session, activity: Activity) -> bool:
                     wind_avg_mps = :avg_wind,
                     precip_total_mm = :total_precip,
                     heat_stress_index = :heat_stress,
+                    heat_acclimation_score = :heat_acclimation_score,
+                    effective_heat_stress_index = :effective_heat_stress,
+                    wind_chill_c = :wind_chill_c,
+                    cold_stress_index = :cold_stress_index,
                     conditions_label = :conditions_label,
                     heat_tss_adjustment_pct = :heat_tss_adjustment_pct,
+                    cold_tss_adjustment_pct = :cold_tss_adjustment_pct,
                     adjusted_tss = :adjusted_tss,
                     climate_model_version = :climate_model_version
                 WHERE id = :activity_id
@@ -167,10 +242,15 @@ def aggregate_activity_climate(session: Session, activity: Activity) -> bool:
                 "avg_wind": avg_wind,
                 "total_precip": total_precip,
                 "heat_stress": heat_stress,
+                "heat_acclimation_score": heat_acclimation_score,
+                "effective_heat_stress": effective_heat_stress,
+                "wind_chill_c": wind_chill_c,
+                "cold_stress_index": cold_stress_index,
                 "conditions_label": conditions_label,
                 "heat_tss_adjustment_pct": heat_tss_adjustment_pct,
+                "cold_tss_adjustment_pct": cold_tss_adjustment_pct,
                 "adjusted_tss": adjusted_tss,
-                "climate_model_version": "v1.0",
+                "climate_model_version": climate_model_version,
             },
         )
 
@@ -184,9 +264,14 @@ def aggregate_activity_climate(session: Session, activity: Activity) -> bool:
         climate_log = {
             "activity_id": activity.id,
             "heat_stress_index": round(heat_stress, 2),
+            "heat_acclimation_score": round(heat_acclimation_score, 3) if heat_acclimation_score is not None else None,
+            "effective_heat_stress_index": round(effective_heat_stress, 2) if effective_heat_stress is not None else None,
+            "wind_chill_c": round(wind_chill_c, 1) if wind_chill_c is not None else None,
+            "cold_stress_index": round(cold_stress_index, 2) if cold_stress_index is not None else None,
             "conditions_label": conditions_label,
-            "tss_adjustment_pct": round(heat_tss_adjustment_pct, 1) if heat_tss_adjustment_pct else None,
-            "climate_model_version": "v1.0",
+            "heat_tss_adjustment_pct": round(heat_tss_adjustment_pct, 1) if heat_tss_adjustment_pct else None,
+            "cold_tss_adjustment_pct": round(cold_tss_adjustment_pct, 1) if cold_tss_adjustment_pct else None,
+            "climate_model_version": climate_model_version,
         }
         logger.info(f"[CLIMATE_OBSERVABILITY] {climate_log}")
 

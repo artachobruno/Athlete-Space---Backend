@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_user_id
+from app.coach.utils.climate_expectation import generate_climate_expectation
 from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
 from app.db.models import Activity, PairingDecision, PlannedSession, StravaAccount
@@ -249,6 +250,7 @@ def get_activities(
                 if summary and summary.llm_summary:
                     coach_feedback = summary.llm_summary
 
+            climate_exp = generate_climate_expectation(activity)
             activities.append({
                 "id": activity.id,
                 "user_id": activity.user_id,
@@ -266,6 +268,7 @@ def get_activities(
                 "planned_session_id": planned_session_id,  # Include pairing info
                 "coach_feedback": coach_feedback,  # Include coach feedback from workout interpretation
                 "conditions_label": activity.conditions_label,  # Climate conditions label (UI-facing)
+                "climate_expectation": climate_exp,  # One-line climate expectation (outdoor aerobic only)
             })
 
         logger.info(f"[ACTIVITIES] Returning {len(activities)} activities (total: {total})")
@@ -326,7 +329,7 @@ def get_activity(
             if summary and summary.llm_summary:
                 coach_feedback = summary.llm_summary
 
-        # Return full activity including raw_json and streams_data
+        climate_exp = generate_climate_expectation(activity)
         return {
             "id": activity.id,
             "user_id": activity.user_id,
@@ -343,6 +346,7 @@ def get_activity(
             "created_at": activity.created_at.isoformat(),
             "coach_feedback": coach_feedback,  # Include coach feedback from workout interpretation
             "conditions_label": activity.conditions_label,  # Climate conditions label (UI-facing)
+            "climate_expectation": climate_exp,  # One-line climate expectation (outdoor aerobic only)
         }
 
 

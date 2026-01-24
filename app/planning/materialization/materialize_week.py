@@ -19,6 +19,7 @@ def materialize_week(
     pace_min_per_mile: float,
     generate_coach_text: bool = False,
     philosophy_tags: list[str] | None = None,
+    vocabulary_level: str | None = None,
 ) -> list[ConcreteSession]:
     """Materialize all sessions in a week.
 
@@ -75,7 +76,7 @@ def materialize_week(
 
         # Generate optional coach text
         if generate_coach_text:
-            coach_text = generate_coach_text_sync(concrete, template, philosophy_tags)
+            coach_text = generate_coach_text_sync(concrete, template, philosophy_tags, vocabulary_level)
             if coach_text:
                 # Create new ConcreteSession with instructions
                 concrete = ConcreteSession(

@@ -429,6 +429,28 @@ def ingest_activities(
             f"duplicates={duplicate_count}, total_fetched={len(strava_activities)}"
         )
 
+        # Auto-upgrade vocabulary level if user meets criteria (non-blocking)
+        if imported_count > 0:
+            try:
+                from app.coach.vocabulary_upgrade import auto_upgrade_vocabulary_level
+                from app.db.models import UserSettings
+                
+                settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                upgraded = auto_upgrade_vocabulary_level(
+                    session=session,
+                    user_id=user_id,
+                    settings=settings,
+                )
+                if upgraded:
+                    logger.info(
+                        f"[INGESTION] Vocabulary level auto-upgraded for user_id={user_id}"
+                    )
+            except Exception as e:
+                # Non-blocking: log but don't fail ingestion
+                logger.warning(
+                    f"[INGESTION] Failed to auto-upgrade vocabulary level: {e}"
+                )
+
         return {
             "imported": imported_count,
             "skipped": skipped_count,

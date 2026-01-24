@@ -1792,6 +1792,11 @@ def _build_unified_profile_response(
     elif injury_history is False:
         injury_status = "none"
 
+    # Get vocabulary_level from settings (defaults to intermediate)
+    vocabulary_level = prefs.get("vocabulary_level")
+    if vocabulary_level not in ("foundational", "intermediate", "advanced"):
+        vocabulary_level = "intermediate"
+    
     return {
         "first_name": user_first_name,
         "last_name": user_last_name,
@@ -1804,6 +1809,7 @@ def _build_unified_profile_response(
         "injury_status": injury_status,
         "injury_notes": injury_notes,
         "strava_connected": strava_connected,
+        "vocabulary_level": vocabulary_level,
     }
 
 

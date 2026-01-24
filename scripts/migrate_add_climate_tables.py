@@ -212,11 +212,33 @@ def migrate_add_climate_tables() -> None:
         if not _table_exists(db, "athlete_climate_profile"):
             logger.info("Creating athlete_climate_profile table")
             if is_postgres:
-                db.execute(
+                # Detect actual type of users.id
+                user_id_type_result = db.execute(
                     text(
                         """
+                        SELECT data_type
+                        FROM information_schema.columns
+                        WHERE table_name = 'users'
+                        AND column_name = 'id'
+                        """
+                    )
+                ).fetchone()
+                
+                user_id_type = "VARCHAR"
+                if user_id_type_result:
+                    db_type = user_id_type_result[0]
+                    if db_type in ("uuid", "character varying"):
+                        if db_type == "uuid":
+                            user_id_type = "UUID"
+                        else:
+                            user_id_type = "VARCHAR"
+                    logger.info(f"Detected users.id type: {db_type}, using {user_id_type} for foreign key")
+                
+                db.execute(
+                    text(
+                        f"""
                         CREATE TABLE athlete_climate_profile (
-                          athlete_id VARCHAR PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                          athlete_id {user_id_type} PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                           home_lat DOUBLE PRECISION,
                           home_lon DOUBLE PRECISION,
                           climate_type TEXT,

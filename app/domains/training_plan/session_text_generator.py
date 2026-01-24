@@ -217,7 +217,9 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
             error=str(e),
         )
         # Fallback to deterministic generation
-        output = generate_fallback_session_text(input_data)
+        # Get vocabulary level from context if available
+        vocabulary_level = context.get("vocabulary_level")
+        output = generate_fallback_session_text(input_data, vocabulary_level)
         # Mark as fallback in metadata (stored in computed)
         # Create new computed dict with generated_by marker
         computed_with_metadata = dict(output.computed)

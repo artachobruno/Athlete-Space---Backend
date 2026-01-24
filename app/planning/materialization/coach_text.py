@@ -2,6 +2,7 @@
 
 Generates optional instructional text for sessions.
 LLM may ONLY write text - never numbers, distances, reps, or time changes.
+Uses canonical coach vocabulary to ensure consistent language.
 
 Allowed:
 - Explain purpose
@@ -13,6 +14,7 @@ Forbidden:
 - Distances
 - Reps
 - Time changes
+- Inventing new workout names
 """
 
 import asyncio
@@ -22,6 +24,7 @@ from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
+from app.coach.vocabulary import resolve_workout_display_name
 from app.planning.errors import PlanningInvariantError
 from app.planning.library.session_template import SessionTemplate
 from app.planning.materialization.models import ConcreteSession
@@ -56,6 +59,7 @@ async def generate_coach_text(
     session: ConcreteSession,
     template: SessionTemplate,
     philosophy_tags: list[str] | None = None,
+    vocabulary_level: str | None = None,
 ) -> str | None:
     """Generate optional coach text for a session.
 
@@ -71,8 +75,44 @@ async def generate_coach_text(
         PlanningInvariantError: If LLM outputs forbidden content (validated post-generation)
     """
     try:
-        # Build user prompt
+        # Resolve canonical workout name using vocabulary system
+        # Extract sport and intent from session_type and template
+        session_type_lower = session.session_type.lower()
+        
+        # Map session_type to sport (default: run)
+        sport = "run"
+        if "ride" in session_type_lower or "bike" in session_type_lower or "cycling" in session_type_lower:
+            sport = "ride"
+        elif "swim" in session_type_lower:
+            sport = "swim"
+        elif "strength" in session_type_lower or "weight" in session_type_lower:
+            sport = "strength"
+        
+        # Map session_type to intent
+        intent = "easy"
+        if "interval" in session_type_lower or "cruise" in session_type_lower:
+            intent = "intervals"
+        elif "tempo" in session_type_lower or "threshold" in session_type_lower:
+            intent = "tempo"
+        elif "long" in session_type_lower:
+            intent = "long"
+        elif "easy" in session_type_lower or "recovery" in session_type_lower:
+            intent = "easy"
+        elif "steady" in session_type_lower:
+            intent = "steady"
+        elif "rest" in session_type_lower:
+            intent = "rest"
+        
+        canonical_name = resolve_workout_display_name(
+            sport=sport,
+            intent=intent,
+            vocabulary_level=vocabulary_level or "intermediate",
+            title=None,
+        )
+        
+        # Build user prompt with canonical name
         prompt_parts = [
+            f"Today's session: {canonical_name}",
             f"Session Type: {session.session_type}",
             f"Template: {template.name}",
         ]
@@ -87,6 +127,9 @@ async def generate_coach_text(
         prompt_parts.append("Provide brief coaching instructions for this session.")
         prompt_parts.append("Focus on purpose, pacing feel, and execution guidance.")
         prompt_parts.append("Do NOT include any numbers, distances, durations, or structural details.")
+        prompt_parts.append("")
+        prompt_parts.append(f"IMPORTANT: Reference this session as '{canonical_name}'.")
+        prompt_parts.append("Do NOT invent new workout names. Use the provided canonical name exactly.")
 
         user_prompt = "\n".join(prompt_parts)
 
@@ -169,6 +212,7 @@ def generate_coach_text_sync(
     session: ConcreteSession,
     template: SessionTemplate,
     philosophy_tags: list[str] | None = None,
+    vocabulary_level: str | None = None,
 ) -> str | None:
     """Synchronous wrapper for generate_coach_text.
 
@@ -181,7 +225,7 @@ def generate_coach_text_sync(
         Coach text string, or None if generation fails
     """
     try:
-        return asyncio.run(generate_coach_text(session, template, philosophy_tags))
+        return asyncio.run(generate_coach_text(session, template, philosophy_tags, vocabulary_level))
     except RuntimeError:
         # Event loop already running - return None (coach text is optional)
         logger.debug("generate_coach_text_sync: Event loop already running, skipping coach text")

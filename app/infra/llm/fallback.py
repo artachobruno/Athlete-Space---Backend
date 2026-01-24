@@ -2,10 +2,12 @@
 
 This module provides deterministic fallback generation when LLM fails.
 Generates median workout descriptions based on template parameters.
+Uses canonical coach vocabulary for workout titles.
 """
 
 from loguru import logger
 
+from app.coach.vocabulary import resolve_workout_display_name
 from app.domains.training_plan.models import SessionTextInput, SessionTextOutput
 
 
@@ -105,7 +107,10 @@ def _estimate_warmup_cooldown(allocated_distance: float) -> tuple[float, float]:
     return (warmup, cooldown)
 
 
-def generate_fallback_session_text(input_data: SessionTextInput) -> SessionTextOutput:
+def generate_fallback_session_text(
+    input_data: SessionTextInput,
+    vocabulary_level: str | None = None,
+) -> SessionTextOutput:
     """Generate deterministic fallback session text.
 
     This function creates a plain, median workout description when LLM fails.
@@ -227,9 +232,36 @@ def generate_fallback_session_text(input_data: SessionTextInput) -> SessionTextO
         "intensity_minutes": intensity_minutes,
     }
 
-    # Generate title from template kind
-    title_parts = input_data.template_kind.split("_")
-    title = " ".join(word.capitalize() for word in title_parts)
+    # Generate title using canonical coach vocabulary
+    # Extract sport and intent from template_kind
+    template_kind_lower = input_data.template_kind.lower()
+    
+    # Map template_kind to sport (default: run)
+    sport = "run"  # Default sport
+    if "ride" in template_kind_lower or "bike" in template_kind_lower or "cycling" in template_kind_lower:
+        sport = "ride"
+    elif "swim" in template_kind_lower:
+        sport = "swim"
+    elif "strength" in template_kind_lower or "weight" in template_kind_lower:
+        sport = "strength"
+    
+    # Map template_kind to intent
+    intent = "easy"  # Default intent
+    if "interval" in template_kind_lower or "cruise" in template_kind_lower:
+        intent = "intervals"
+    elif "tempo" in template_kind_lower or "steady" in template_kind_lower:
+        intent = "tempo"
+    elif "long" in template_kind_lower:
+        intent = "long"
+    elif "easy" in template_kind_lower or "recovery" in template_kind_lower:
+        intent = "easy"
+    
+    # Resolve canonical workout name
+    title = resolve_workout_display_name(
+        sport=sport,
+        intent=intent,
+        vocabulary_level=vocabulary_level or "intermediate",
+    )
 
     output = SessionTextOutput(
         title=title,

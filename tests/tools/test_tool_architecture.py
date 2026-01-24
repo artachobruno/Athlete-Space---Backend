@@ -112,3 +112,16 @@ def test_semantic_registry_exports_only_canonical_tools():
     catalog_tools = set(CANONICAL_TOOLS.keys())
 
     assert registry_tools == catalog_tools, "Registry and catalog must match exactly"
+
+
+def test_preview_contract():
+    """Test: preview exists in catalog and is a valid semantic tool.
+
+    Locks the contract: preview is the routed preview tool for propose → preview.
+    _execute_preview_plan_change is an internal helper used by _execute_preview_plan.
+
+    To fully freeze: add assert preview_plan_change not in CANONICAL_TOOLS once
+    catalog aligns; add helpers-not-routed asserts once routing aligns.
+    """
+    assert "preview" in CANONICAL_TOOLS, "preview must exist in catalog"
+    validate_semantic_tool_only("preview")

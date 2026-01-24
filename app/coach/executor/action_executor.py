@@ -7,7 +7,7 @@ Owns all MCP tool calls, retries, rate limiting, and safety logic.
 import json
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, NoReturn, Optional
+from typing import Any, Literal, NoReturn, Optional
 
 from loguru import logger
 from sqlalchemy import select
@@ -2109,7 +2109,16 @@ class CoachActionExecutor:
             raise InvalidModificationSpecError()
 
         today = datetime.now(timezone.utc).date()
-        horizon = decision.horizon if decision.horizon in {"week", "season", "race"} else "week"
+        valid_eval_horizons: tuple[Literal["week", "season", "race"], ...] = (
+            "week",
+            "season",
+            "race",
+        )
+        horizon: Literal["week", "season", "race"]
+        if decision.horizon in valid_eval_horizons:
+            horizon = decision.horizon
+        else:
+            horizon = "week"
 
         eval_result = evaluate_plan_change(
             user_id=deps.user_id,

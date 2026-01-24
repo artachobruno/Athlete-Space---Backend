@@ -257,6 +257,9 @@ async def process_coach_chat(
         )
     except (NoActionError, InvalidModificationSpecError):
         return "I need a bit more detail before I can make that change. What would you like to modify?"
+    except MCPError as e:
+        logger.warning("MCP tool error during execution", error_code=e.code, message=e.message)
+        return "Something went wrong while handling your request. Please try again."
 
     # Style LLM: Rewrite structured decision into natural coach message
     # This is NON-AUTHORITATIVE - it rewrites, but never decides, computes, retrieves, or executes

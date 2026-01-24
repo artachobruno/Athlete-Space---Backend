@@ -1539,8 +1539,9 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.exception(
-                "Tool execution failed",
+            logger.error(
+                "Tool execution failed: {}",
+                e.message,
                 extra={
                     "tool": tool_name,
                     "conversation_id": conversation_id,

@@ -8,7 +8,9 @@ These are plumbing/contract tests, NOT behavior tests.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, timedelta
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -70,6 +72,24 @@ def minimal_athlete_state() -> AthleteState:
         fourteen_day_volume_hours=10.0,
         flags=[],
         confidence=0.8,
+    )
+
+
+@pytest.fixture
+def zero_volume_athlete_state() -> AthleteState:
+    """AthleteState with zero volume (new athlete, no history)."""
+    return AthleteState(
+        ctl=30.0,
+        atl=0.0,
+        tsb=30.0,
+        load_trend="stable",
+        volatility="low",
+        days_since_rest=0,
+        days_to_race=None,
+        seven_day_volume_hours=0.0,
+        fourteen_day_volume_hours=0.0,
+        flags=[],
+        confidence=0.5,
     )
 
 
@@ -192,3 +212,61 @@ async def test_plan_week_overwrite_does_not_duplicate(
         f"get_planned_activities shows duplication: first={first_count}, "
         f"get_planned_activities={len(planned)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_plan_week_zero_volume_uses_min_default_no_allocation_error(
+    zero_volume_athlete_state: AthleteState,
+):
+    """Zero volume (new athlete) uses min default; no VolumeAllocationError.
+
+    Root cause fix: plan_week ensures adjusted_volume_hours > 0 so
+    'Weekly distance must be positive' never fires.
+    """
+    from app.planner.calendar_persistence import PersistResult
+
+    mock_summary = MagicMock()
+    mock_summary.volume = {"total_duration_minutes": 0}
+    mock_summary.execution = {"compliance_rate": 0.0, "completed_sessions": 0}
+
+    captured_calculator: list = []
+
+    async def capture_and_mock_pipeline(*, base_volume_calculator, **kwargs):
+        await asyncio.sleep(0)
+        captured_calculator.append(base_volume_calculator)
+        return (
+            [],
+            PersistResult(plan_id="test", created=0, updated=0, skipped=0, warnings=[]),
+        )
+
+    with (
+        patch("app.coach.tools.plan_week._check_weekly_plan_exists", return_value=False),
+        patch("app.coach.tools.plan_week.build_training_summary", return_value=mock_summary),
+        patch(
+            "app.coach.tools.plan_week.execute_canonical_pipeline",
+            side_effect=capture_and_mock_pipeline,
+        ),
+        patch("app.coach.tools.plan_week.now_user") as mock_now,
+        patch("app.coach.tools.plan_week.to_utc", side_effect=lambda x: x),
+        patch("app.coach.tools.plan_week.get_session") as mock_session,
+    ):
+        mock_user = MagicMock()
+        mock_user.timezone = "UTC"
+        mock_session.return_value.__enter__.return_value.execute.return_value.first.return_value = (
+            mock_user,
+        )
+        mock_now.return_value = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        result = await plan_week(
+            state=zero_volume_athlete_state,
+            user_id="test-zero-vol",
+            athlete_id=99,
+            user_feedback=None,
+        )
+
+    assert result is not None
+    assert isinstance(result, str)
+    assert len(captured_calculator) == 1
+    vol = captured_calculator[0](0)
+    assert vol > 0, "volume_calculator must return positive miles (min default)"
+    assert vol == 22.5, "min 3.0 h * 7.5 mi/h => 22.5 miles"

@@ -314,7 +314,8 @@ async def plan_week(
     # Ensure positive volume: new athletes with no history have 0 volume → VolumeAllocationError.
     # Use a minimum default (~3 h → ~22.5 miles) so "Weekly distance must be positive" never fires.
     min_volume_hours = 3.0
-    if adjusted_volume_hours <= 0:
+    effective_hours = adjusted_volume_hours if adjusted_volume_hours is not None else 0.0
+    if effective_hours <= 0:
         adjusted_volume_hours = min_volume_hours
         logger.info(
             "B8: No volume from summary/state, using minimum default",

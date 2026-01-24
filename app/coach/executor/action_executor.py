@@ -2109,14 +2109,13 @@ class CoachActionExecutor:
             raise InvalidModificationSpecError()
 
         today = datetime.now(timezone.utc).date()
-        valid_eval_horizons: tuple[Literal["week", "season", "race"], ...] = (
-            "week",
-            "season",
-            "race",
-        )
         horizon: Literal["week", "season", "race"]
-        if decision.horizon in valid_eval_horizons:
-            horizon = decision.horizon
+        if decision.horizon == "week":
+            horizon = "week"
+        elif decision.horizon == "season":
+            horizon = "season"
+        elif decision.horizon == "race":
+            horizon = "race"
         else:
             horizon = "week"
 

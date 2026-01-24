@@ -67,6 +67,10 @@ class ExtractedSeasonModification(BaseModel):
         description="Reason for modification (e.g., 'fatigue', 'time constraint', 'injury recovery')",
     )
 
+    def is_complete(self) -> bool:
+        """True iff spec has required attributes for execution (change_type)."""
+        return self.change_type is not None
+
 
 async def extract_modify_season(text: str) -> ExtractedSeasonModification:
     """Extract structured season modification attributes from user message.

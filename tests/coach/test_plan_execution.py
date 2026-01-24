@@ -11,6 +11,7 @@ import pytest
 import app.coach.flows.plan_execution as plan_execution_mod
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.flows.plan_execution import execute_plan_with_action_plan
+from app.coach.routing.types import RoutedTool
 from app.coach.schemas.action_plan import ActionPlan, ActionStep
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 
@@ -50,7 +51,10 @@ async def test_action_plan_generated_before_execution(mock_deps, mock_decision):
     with (
         patch("app.coach.flows.plan_execution.require_authorization"),
         patch("app.coach.flows.plan_execution.emit_progress_event_safe", new_callable=AsyncMock),
-        patch("app.coach.flows.plan_execution.route_with_safety_check", return_value=("plan", [])),
+        patch(
+            "app.coach.flows.plan_execution.route_with_safety_check",
+            return_value=(RoutedTool(name="plan", mode="CREATE"), []),
+        ),
         patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=Mock),
         patch("app.coach.flows.plan_execution.execute_semantic_tool", new_callable=AsyncMock, return_value="ok"),
         patch("app.coach.flows.plan_execution._generate_action_plan", side_effect=capture_generate),
@@ -107,7 +111,10 @@ async def test_each_step_emits_planned_in_progress_completed(mock_deps, mock_dec
     with (
         patch("app.coach.flows.plan_execution.require_authorization"),
         patch("app.coach.flows.plan_execution.emit_progress_event_safe", side_effect=capture_emit),
-        patch("app.coach.flows.plan_execution.route_with_safety_check", return_value=("plan", [])),
+        patch(
+            "app.coach.flows.plan_execution.route_with_safety_check",
+            return_value=(RoutedTool(name="plan", mode="CREATE"), []),
+        ),
         patch("app.coach.flows.plan_execution.require_recent_evaluation", new_callable=Mock),
         patch("app.coach.flows.plan_execution.execute_semantic_tool", new_callable=AsyncMock, return_value="ok"),
     ):
@@ -167,11 +174,10 @@ async def test_execution_uses_route_with_safety_check(mock_deps, mock_decision):
         needs_approval=False,
         query_type=None,
         run_incoherence_check=True,
-        user_id=None,
-        today=None,
+        athlete_id=None,
     ):
         route_calls.append((intent, horizon))
-        return ("plan", [])
+        return (RoutedTool(name="plan", mode="CREATE"), [])
 
     with (
         patch("app.coach.flows.plan_execution.require_authorization"),

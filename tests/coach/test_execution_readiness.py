@@ -1,7 +1,7 @@
 """Execution readiness tests.
 
 Ensures EXECUTE with incomplete extraction (e.g. missing change_type)
-raises NoActionError instead of crashing. Clarification happens at orchestration layer.
+raises InvalidModificationSpecError instead of crashing. Clarification at orchestration layer.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.coach.executor.action_executor import CoachActionExecutor
-from app.coach.executor.errors import NoActionError
+from app.coach.executor.errors import InvalidModificationSpecError
 from app.coach.extraction.modify_week_extractor import ExtractedWeekModification
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
@@ -48,7 +48,7 @@ def deps():
 
 @pytest.mark.asyncio
 async def test_execute_modify_week_missing_change_type_does_not_crash(deps):
-    """EXECUTE with missing change_type raises NoActionError; no crash."""
+    """EXECUTE with missing change_type raises InvalidModificationSpecError; no crash."""
     decision = OrchestratorAgentResponse(
         intent="modify",
         horizon="week",
@@ -75,8 +75,7 @@ async def test_execute_modify_week_missing_change_type_does_not_crash(deps):
         "app.coach.executor.action_executor.extract_week_modification_llm",
         new_callable=AsyncMock,
         return_value=extracted_no_change_type,
-    ):
-        with pytest.raises(NoActionError) as exc_info:
-            await CoachActionExecutor.execute(decision, deps)
+    ), pytest.raises(InvalidModificationSpecError) as exc_info:
+        await CoachActionExecutor.execute(decision, deps)
 
-    assert exc_info.value.code == "insufficient_modification_spec"
+    assert "clarification" in exc_info.value.message.lower() or "incomplete" in exc_info.value.message.lower()

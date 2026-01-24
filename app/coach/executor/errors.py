@@ -16,3 +16,11 @@ class NoActionError(Exception):
         self.code = code
         self.message = message or f"Execution blocked: {code}"
         super().__init__(self.message)
+
+
+class InvalidModificationSpecError(Exception):
+    """Raised when modification spec is incomplete; clarification must occur before execution."""
+
+    def __init__(self, message: str = "Incomplete modification spec — clarification must occur before execution"):
+        self.message = message
+        super().__init__(self.message)

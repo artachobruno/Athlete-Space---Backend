@@ -41,8 +41,11 @@ def test_routing_returns_exactly_one_tool():
     ]
 
     for intent, horizon, expected_tool in test_cases:
-        result = route(intent, horizon)  # type: ignore
-        assert result == expected_tool, f"Routing failed: {intent}/{horizon} -> {result}, expected {expected_tool}"
+        result = route(intent, horizon, athlete_id=1)  # type: ignore
+        name = result.name if result else None
+        assert name == expected_tool, (
+            f"Routing failed: {intent}/{horizon} -> {name}, expected {expected_tool}"
+        )
 
 
 def test_mutation_requires_evaluation():
@@ -83,17 +86,23 @@ def test_tool_horizon_validation():
 
 def test_routing_with_safety_checks():
     """Test: Routing includes prerequisite checks for mutations."""
-    tool, checks = route_with_safety_check("modify", "week", run_incoherence_check=True)
-    assert tool == "modify"
+    tool, checks = route_with_safety_check(
+        "modify", "week", run_incoherence_check=True, athlete_id=1
+    )
+    assert tool is not None
+    assert tool.name == "modify"
     assert "detect_plan_incoherence" in checks
 
-    tool, checks = route_with_safety_check("plan", "season", run_incoherence_check=True)
-    assert tool == "plan"
+    tool, checks = route_with_safety_check(
+        "plan", "season", run_incoherence_check=True, athlete_id=1
+    )
+    assert tool is not None
+    assert tool.name == "plan"
     assert "detect_plan_incoherence" in checks
 
-    # Non-mutation tools should not have checks
     tool, checks = route_with_safety_check("explain", "week", run_incoherence_check=True)
-    assert tool == "explain_training_state"
+    assert tool is not None
+    assert tool.name == "explain_training_state"
     assert len(checks) == 0
 
 

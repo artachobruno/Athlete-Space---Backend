@@ -4,7 +4,6 @@ This module executes plan creation/modification with stepwise progress tracking.
 All execution goes through semantic tool routing and evaluation guard.
 """
 
-from datetime import datetime, timezone
 from typing import Literal
 
 from loguru import logger
@@ -251,32 +250,27 @@ async def _execute_step(
         # These are informational steps - skip actual execution
         return f"Step '{step.label}' completed"
 
-    # Route to semantic tool for execution steps
     intent = decision.intent
-    today_utc = datetime.now(timezone.utc).date()
     routed_tool, prerequisite_checks = route_with_safety_check(
         intent=intent,
         horizon=horizon,
         has_proposal=False,
         needs_approval=True,
-        user_id=deps.user_id,
-        today=today_utc,
+        athlete_id=deps.athlete_id,
     )
 
     if not routed_tool:
-        # No tool for this step - skip
         return f"Step '{step.label}' skipped (no tool required)"
 
-    # Run prerequisite checks (e.g., detect_plan_incoherence)
+    tool_name = routed_tool.name
     for check_tool in prerequisite_checks:
         logger.debug(
             "Running prerequisite check",
             check_tool=check_tool,
         )
-        # Prerequisite checks use a modified decision
         check_decision = OrchestratorAgentResponse(
             **decision.model_dump(),
-            intent="explain",  # Prerequisite checks are informational
+            intent="explain",
             target_action=check_tool,
         )
         await execute_semantic_tool(
@@ -286,7 +280,6 @@ async def _execute_step(
             conversation_id=conversation_id,
         )
 
-    # Require evaluation before mutation (PROPOSE/ADJUST only; skip for EXECUTE)
     if step.id in {"apply_plan", "save_plan", "modify_plan"}:
         if not deps.user_id:
             raise ValueError("user_id is required for plan mutation operations")
@@ -294,14 +287,13 @@ async def _execute_step(
             user_id=deps.user_id,
             athlete_id=deps.athlete_id,
             horizon=horizon,
-            tool_name=routed_tool,
+            tool_name=tool_name,
             action=decision.action,
         )
 
-    # Execute semantic tool (main execution happens here)
     if step.id in {"generate_plan_structure", "apply_plan", "save_plan", "modify_plan"}:
         return await execute_semantic_tool(
-            tool_name=routed_tool,
+            tool_name=tool_name,
             decision=decision,
             deps=deps,
             conversation_id=conversation_id,

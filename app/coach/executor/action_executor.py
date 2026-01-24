@@ -22,11 +22,12 @@ from app.coach.clarification import (
     generate_slot_clarification,
 )
 from app.coach.errors import ToolContractViolationError
-from app.coach.executor.errors import NoActionError
+from app.coach.executor.errors import InvalidModificationSpecError
 from app.coach.extraction.modify_race_extractor import extract_race_modification_llm
 from app.coach.extraction.modify_season_extractor import extract_modify_season
 from app.coach.extraction.modify_week_extractor import extract_week_modification_llm
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
+from app.coach.policy.weekly_policy_v0 import decide_weekly_action
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import get_conversation_progress
 from app.coach.tools.modify_day import modify_day
@@ -46,7 +47,6 @@ from app.plans.modify.plan_revision_repo import list_plan_revisions
 from app.plans.modify.types import DayModification
 from app.plans.revision.explanation_payload import build_explanation_payload
 from app.plans.revision.registry import PlanRevisionRegistry
-from app.coach.policy.weekly_policy_v0 import decide_weekly_action
 from app.tools.guards import require_recent_evaluation, validate_semantic_tool_only
 from app.tools.semantic.evaluate_plan_change import evaluate_plan_change
 from app.tools.semantic_tool_executor import execute_semantic_tool
@@ -739,22 +739,18 @@ class CoachActionExecutor:
             query_type = "why"
 
         # Route intent x horizon → semantic tool (deterministic)
-        today_utc = datetime.now(timezone.utc).date()
         routed_tool, prerequisite_checks = route_with_safety_check(
             intent=intent,  # type: ignore
             horizon=horizon,  # type: ignore
             has_proposal=bool(decision.filled_slots),
             needs_approval=decision.action == "EXECUTE",
             query_type=query_type,
-            user_id=deps.user_id,
-            today=today_utc,
+            athlete_id=deps.athlete_id,
         )
 
-        # Validate routed tool is semantic
-        if routed_tool:
-            validate_semantic_tool_only(routed_tool)
+        tool_name = routed_tool.name if routed_tool else None
+        target_action = tool_name or decision.target_action or decision.next_executable_action
 
-        # Run prerequisite checks (e.g., detect_plan_incoherence)
         for check_tool in prerequisite_checks:
             logger.info(
                 "Running prerequisite check",
@@ -762,40 +758,31 @@ class CoachActionExecutor:
                 intent=intent,
                 horizon=horizon,
             )
-            # Prerequisite checks would be executed here
-            # For now, just log
 
-        # Enforce evaluation-before-mutation invariant (PROPOSE/ADJUST only; skip for EXECUTE)
         if routed_tool and horizon in {"week", "season", "race"}:
             require_recent_evaluation(
                 user_id=deps.user_id or "",
                 athlete_id=deps.athlete_id or 0,
                 horizon=horizon,  # type: ignore
-                tool_name=routed_tool,
+                tool_name=routed_tool.name,
                 action=decision.action,
             )
-
-        # Use routed tool (enforced) or fall back to target_action for backward compatibility
-        target_action = routed_tool or decision.target_action or decision.next_executable_action
 
         logger.debug(
             "ActionExecutor: Executing action",
             intent=intent,
             horizon=horizon,
-            routed_tool=routed_tool,
+            routed_tool=tool_name,
             target_action=target_action,
             action=decision.action,
             conversation_id=conversation_id,
         )
 
-        # Assert: target_action must be semantic tool if set
         if target_action:
             validate_semantic_tool_only(target_action)
 
-        # HARD RULE: All execution must go through semantic tool executor
-        # No direct tool calls - routing determines tool, executor maps to implementation
         if routed_tool:
-            return await execute_semantic_tool(routed_tool, decision, deps, conversation_id)
+            return await execute_semantic_tool(routed_tool.name, decision, deps, conversation_id)
 
         # If no routed tool, return informational response (no mutation)
         # This handles cases where routing returns None (e.g., question, general, clarify)
@@ -972,8 +959,8 @@ class CoachActionExecutor:
     def _build_day_modification_from_context(
         structured_data: dict[str, Any],
         message: str | None,
-        existing_session: PlannedSession | None = None,
-    ) -> Optional[DayModification]:
+        _existing_session: PlannedSession | None = None,
+    ) -> DayModification | None:
         """Convert unstructured modification context to structured DayModification.
 
         No default guesses for change_type. Returns None when change_type
@@ -1058,10 +1045,8 @@ class CoachActionExecutor:
             step_id, label = step_info
             await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
 
-        if not deps.user_id or not isinstance(deps.user_id, str):
-            return "I need your user ID to modify a session. Please check your account settings."
-        if deps.athlete_id is None:
-            return "I need your athlete ID to modify a session. Please check your account settings."
+        if not deps.user_id or not isinstance(deps.user_id, str) or deps.athlete_id is None:
+            raise InvalidModificationSpecError()
 
         try:
             structured_data = decision.structured_data or {}
@@ -1093,7 +1078,7 @@ class CoachActionExecutor:
                 ).scalar_one_or_none()
 
                 if not existing_session:
-                    raise NoActionError("insufficient_modification_spec")
+                    raise InvalidModificationSpecError()
 
                 # Fetch athlete profile for race day protection (orchestrator owns DB access)
                 athlete_profile = db_session.execute(
@@ -1103,10 +1088,10 @@ class CoachActionExecutor:
                 modification = CoachActionExecutor._build_day_modification_from_context(
                     structured_data=structured_data,
                     message=decision.message,
-                    existing_session=existing_session,
+                    _existing_session=existing_session,
                 )
                 if modification is None:
-                    raise NoActionError("insufficient_modification_spec")
+                    raise InvalidModificationSpecError()
 
                 # Get user request from decision message
                 user_request = decision.message or f"Modify session on {target_date.isoformat()}"
@@ -1165,7 +1150,7 @@ class CoachActionExecutor:
             change_type_label = modification.change_type.replace("_", " ").title()
             return f"Modified your session for {target_date.isoformat()}. Change: {change_type_label}."
 
-        except NoActionError:
+        except InvalidModificationSpecError:
             raise
         except Exception as e:
             if conversation_id and step_info:
@@ -1207,20 +1192,16 @@ class CoachActionExecutor:
             step_id, label = step_info
             await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
 
-        if not deps.user_id or not isinstance(deps.user_id, str):
-            return "I need your user ID to modify a week. Please check your account settings."
-        if deps.athlete_id is None:
-            return "I need your athlete ID to modify a week. Please check your account settings."
+        if not deps.user_id or not isinstance(deps.user_id, str) or deps.athlete_id is None:
+            raise InvalidModificationSpecError()
 
         try:
-            # Extract structured week modification via LLM
             user_message = decision.message or ""
             today = datetime.now(tz=timezone.utc).date()
-
             extracted = await extract_week_modification_llm(user_message, today)
 
-            if extracted.change_type is None:
-                raise NoActionError("insufficient_modification_spec")
+            if not extracted.is_complete():
+                raise InvalidModificationSpecError()
 
             # Convert extracted to structured WeekModification
             week_modification = to_week_modification(extracted, today)
@@ -1281,7 +1262,7 @@ class CoachActionExecutor:
             message = result.get("message", "Week modified successfully")
             return f"{message}. Change: {change_type_label}."
 
-        except NoActionError:
+        except InvalidModificationSpecError:
             raise
         except Exception as e:
             if conversation_id and step_info:
@@ -1323,20 +1304,16 @@ class CoachActionExecutor:
             step_id, label = step_info
             await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
 
-        if not deps.user_id or not isinstance(deps.user_id, str):
-            return "I need your user ID to modify a race. Please check your account settings."
-        if deps.athlete_id is None:
-            return "I need your athlete ID to modify a race. Please check your account settings."
+        if not deps.user_id or not isinstance(deps.user_id, str) or deps.athlete_id is None:
+            raise InvalidModificationSpecError()
 
         try:
-            # Extract structured race modification via LLM
             user_message = decision.message or ""
             today = datetime.now(tz=timezone.utc).date()
-
             extracted = await extract_race_modification_llm(user_message, today)
 
-            if extracted.change_type is None:
-                raise NoActionError("insufficient_modification_spec")
+            if not extracted.is_complete():
+                raise InvalidModificationSpecError()
 
             race_modification = to_race_modification(extracted, today)
 
@@ -1387,7 +1364,7 @@ class CoachActionExecutor:
 
             return f"{message}. Change: {change_type_label}."
 
-        except NoActionError:
+        except InvalidModificationSpecError:
             raise
         except Exception as e:
             if conversation_id and step_info:
@@ -1429,19 +1406,15 @@ class CoachActionExecutor:
             step_id, label = step_info
             await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
 
-        if not deps.user_id or not isinstance(deps.user_id, str):
-            return "I need your user ID to modify a season. Please check your account settings."
-        if deps.athlete_id is None:
-            return "I need your athlete ID to modify a season. Please check your account settings."
+        if not deps.user_id or not isinstance(deps.user_id, str) or deps.athlete_id is None:
+            raise InvalidModificationSpecError()
 
         try:
-            # Extract structured season modification via LLM
             user_message = decision.message or ""
-
             extracted = await extract_modify_season(user_message)
 
-            if extracted.change_type is None:
-                raise NoActionError("insufficient_modification_spec")
+            if not extracted.is_complete():
+                raise InvalidModificationSpecError()
 
             # Convert extracted to structured SeasonModification
             season_modification = adapt_extracted_season_modification(
@@ -1490,7 +1463,7 @@ class CoachActionExecutor:
             message = result.get("message", "Season modified successfully")
             return f"{message}. Change: {change_type_label}."
 
-        except NoActionError:
+        except InvalidModificationSpecError:
             raise
         except Exception as e:
             if conversation_id and step_info:
@@ -2108,23 +2081,35 @@ class CoachActionExecutor:
             return training_state_msg
 
     @staticmethod
-    async def _execute_preview_plan_change(
+    async def _execute_preview_plan(
         decision: OrchestratorAgentResponse,
         deps: CoachDeps,
         conversation_id: str | None = None,
+    ) -> str:
+        """PREVIEW executor: evaluate + policy only. No DB writes, no mutation.
+
+        Read-only. No evaluation guards. Returns structured preview result.
+        """
+        return await CoachActionExecutor._execute_preview_plan_change(
+            decision, deps, conversation_id
+        )
+
+    @staticmethod
+    async def _execute_preview_plan_change(
+        decision: OrchestratorAgentResponse,
+        deps: CoachDeps,
+        _conversation_id: str | None = None,
     ) -> str:
         """Preview plan change: evaluate + policy only. No DB writes, no mutation.
 
         Read-only. Calls evaluate_plan_change(store=False) and policy engine.
         Returns decision, reasons, recommended_actions, confidence.
         """
-        if not deps.user_id or not isinstance(deps.user_id, str):
-            return "I need your user ID to preview plan changes."
-        if deps.athlete_id is None:
-            return "I need your athlete ID to preview plan changes."
+        if not deps.user_id or not isinstance(deps.user_id, str) or deps.athlete_id is None:
+            raise InvalidModificationSpecError()
 
         today = datetime.now(timezone.utc).date()
-        horizon = decision.horizon if decision.horizon in ("week", "season", "race") else "week"
+        horizon = decision.horizon if decision.horizon in {"week", "season", "race"} else "week"
 
         eval_result = evaluate_plan_change(
             user_id=deps.user_id,

@@ -16,7 +16,7 @@ from app.coach.agents.orchestrator_deps import (
 from app.coach.config.models import USER_FACING_MODEL
 from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
-from app.coach.executor.errors import NoActionError
+from app.coach.executor.errors import InvalidModificationSpecError, NoActionError
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.services.response_postprocessor import postprocess_response
 from app.coach.services.state_builder import build_athlete_state
@@ -680,7 +680,7 @@ async def coach_chat(
         executor_reply = await CoachActionExecutor.execute(
             decision, deps, conversation_id=conversation_id
         )
-    except NoActionError:
+    except (NoActionError, InvalidModificationSpecError):
         return CoachChatResponse(
             intent="clarify",
             reply="I need a bit more detail before I can make that change. What would you like to modify?",

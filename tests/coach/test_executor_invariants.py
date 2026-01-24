@@ -1,11 +1,11 @@
-"""Executor invariants: never ask questions, missing spec → NoActionError, clarify at orchestration."""
+"""Executor invariants: never ask questions, missing spec → InvalidModificationSpecError, clarify at orchestration."""
 
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.coach.executor.action_executor import CoachActionExecutor
-from app.coach.executor.errors import NoActionError
+from app.coach.executor.errors import InvalidModificationSpecError
 from app.coach.extraction.modify_week_extractor import ExtractedWeekModification
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
@@ -42,7 +42,7 @@ def deps():
 
 @pytest.mark.asyncio
 async def test_executors_never_emit_questions(deps):
-    """Executors never return user-facing questions; they raise NoActionError."""
+    """Executors never return user-facing questions; they raise InvalidModificationSpecError."""
     decision = OrchestratorAgentResponse(
         intent="modify",
         horizon="week",
@@ -62,17 +62,16 @@ async def test_executors_never_emit_questions(deps):
         "app.coach.executor.action_executor.extract_week_modification_llm",
         new_callable=AsyncMock,
         return_value=extracted,
-    ):
-        with pytest.raises(NoActionError):
-            await CoachActionExecutor.execute(decision, deps)
+    ), pytest.raises(InvalidModificationSpecError):
+        await CoachActionExecutor.execute(decision, deps)
 
     # Executor must not return a string that looks like a clarifying question
     # (it raises instead)
 
 
 @pytest.mark.asyncio
-async def test_missing_spec_raises_noactionerror(deps):
-    """Missing modification spec (e.g. change_type) raises NoActionError."""
+async def test_missing_spec_raises_invalid_modification_spec(deps):
+    """Missing modification spec (e.g. change_type) raises InvalidModificationSpecError."""
     decision = OrchestratorAgentResponse(
         intent="modify",
         horizon="week",
@@ -92,29 +91,14 @@ async def test_missing_spec_raises_noactionerror(deps):
         "app.coach.executor.action_executor.extract_week_modification_llm",
         new_callable=AsyncMock,
         return_value=extracted,
-    ):
-        with pytest.raises(NoActionError) as exc_info:
-            await CoachActionExecutor.execute(decision, deps)
+    ), pytest.raises(InvalidModificationSpecError) as exc_info:
+        await CoachActionExecutor.execute(decision, deps)
 
-    assert exc_info.value.code == "insufficient_modification_spec"
+    assert "clarification" in exc_info.value.message.lower() or "incomplete" in exc_info.value.message.lower()
 
 
-@pytest.mark.asyncio
-async def test_clarification_via_orchestration_not_executor(deps):
-    """Clarification is returned by orchestration layer when it catches NoActionError."""
-    from app.coach.executor.errors import NoActionError
-
-    # Orchestration layer (e.g. api_chat) catches NoActionError and returns clarify.
-    # We simulate: executor raises → caller catches and returns intent=clarify + message.
-    caught = None
+def test_clarification_via_orchestration_not_executor(deps):
+    """Clarification is returned by orchestration layer when it catches InvalidModificationSpecError."""
+    # Orchestration layer catches InvalidModificationSpecError and returns clarify.
     clarify_message = "I need a bit more detail before I can make that change. What would you like to modify?"
-
-    try:
-        raise NoActionError("insufficient_modification_spec")
-    except NoActionError as e:
-        caught = e
-
-    assert caught is not None
-    assert caught.code == "insufficient_modification_spec"
-    # Orchestration layer would return intent=clarify and clarify_message, not executor.
     assert "detail" in clarify_message.lower() or "modify" in clarify_message.lower()

@@ -88,7 +88,7 @@ async def test_preview_no_planned_sessions_created(deps, decision):
         return_value=eval_result,
     ):
         result = await CoachActionExecutor._execute_preview_plan_change(
-            decision, deps, conversation_id=None
+            decision, deps, None
         )
 
     assert "Preview" in result
@@ -124,7 +124,7 @@ async def test_preview_response_contains_payload(deps, decision):
         return_value=eval_result,
     ):
         result = await CoachActionExecutor._execute_preview_plan_change(
-            decision, deps, conversation_id=None
+            decision, deps, None
         )
 
     assert "Preview" in result
@@ -162,7 +162,7 @@ async def test_preview_policy_applied(deps, decision):
         return_value=eval_result,
     ):
         result = await CoachActionExecutor._execute_preview_plan_change(
-            decision, deps, conversation_id=None
+            decision, deps, None
         )
 
     assert "PROPOSE_PLAN" in result or "no plan" in result.lower() or "policy" in result.lower()

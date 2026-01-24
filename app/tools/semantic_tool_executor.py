@@ -119,6 +119,13 @@ async def execute_semantic_tool(
             deps.execution_guard.mark_executed("confirm")
         return await CoachActionExecutor._execute_confirm_revision(decision, deps, conversation_id)
 
+    if tool_name == "preview":
+        if deps.execution_guard:
+            deps.execution_guard.mark_executed("preview")
+        return await CoachActionExecutor._execute_preview_plan(
+            decision, deps, conversation_id
+        )
+
     if tool_name == "preview_plan_change":
         if deps.execution_guard:
             deps.execution_guard.mark_executed("preview_plan_change")

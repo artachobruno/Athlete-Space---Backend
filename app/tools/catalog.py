@@ -91,6 +91,13 @@ CANONICAL_TOOLS: dict[str, ToolSpec] = {
         approval="never",
         description="Shows diff preview before confirmation",
     ),
+    "preview": ToolSpec(
+        name="preview",
+        tier="decision",
+        horizons=["today", "week", "season", "race"],
+        approval="never",
+        description="Read-only preview: evaluate + policy, no DB writes",
+    ),
     "detect_plan_incoherence": ToolSpec(
         name="detect_plan_incoherence",
         tier="decision",

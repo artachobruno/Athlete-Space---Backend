@@ -57,6 +57,10 @@ class ExtractedRaceModification(BaseModel):
         description="Reason for modification (e.g., 'Race moved by organizer')",
     )
 
+    def is_complete(self) -> bool:
+        """True iff spec has required attributes for execution (change_type)."""
+        return self.change_type is not None
+
 
 async def extract_race_modification_llm(
     user_message: str,

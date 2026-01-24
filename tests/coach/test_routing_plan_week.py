@@ -1,84 +1,80 @@
-"""Routing tests: plan + week/today → plan vs modify by existence only."""
+"""Routing tests: plan + week/today → CREATE vs MODIFY by existence only."""
 
-from datetime import date
 from unittest.mock import patch
 
 import pytest
 
+from app.coach.routing.types import RoutedTool
 from app.orchestrator.routing import route_with_safety_check
 
 
-def _route_plan_week(user_id: str | None, today: date | None, has_plan: bool) -> str | None:
-    with patch("app.coach.routing.route.has_existing_plan", return_value=has_plan):
+def _route_plan_week(athlete_id: int | None, has_plan: bool) -> RoutedTool | None:
+    with patch("app.orchestrator.routing.has_existing_plan", return_value=has_plan):
         tool, _ = route_with_safety_check(
             intent="plan",
             horizon="week",
             has_proposal=False,
             needs_approval=False,
-            user_id=user_id,
-            today=today,
+            athlete_id=athlete_id,
         )
     return tool
 
 
-def _route_plan_today(user_id: str | None, today: date | None, has_plan: bool) -> str | None:
-    with patch("app.coach.routing.route.has_existing_plan", return_value=has_plan):
+def _route_plan_today(athlete_id: int | None, has_plan: bool) -> RoutedTool | None:
+    with patch("app.orchestrator.routing.has_existing_plan", return_value=has_plan):
         tool, _ = route_with_safety_check(
             intent="plan",
             horizon="today",
             has_proposal=False,
             needs_approval=False,
-            user_id=user_id,
-            today=today,
+            athlete_id=athlete_id,
         )
     return tool
 
 
 def test_plan_week_no_sessions_routes_to_plan():
-    """plan + week + no sessions → routed_tool == 'plan'."""
-    assert _route_plan_week("user-1", date(2026, 1, 20), has_plan=False) == "plan"
+    """plan + week + no sessions → plan + CREATE."""
+    rt = _route_plan_week(1, has_plan=False)
+    assert rt is not None
+    assert rt.name == "plan"
+    assert rt.mode == "CREATE"
 
 
 def test_plan_week_existing_sessions_routes_to_modify():
-    """plan + week + existing sessions → routed_tool == 'modify'."""
-    assert _route_plan_week("user-1", date(2026, 1, 20), has_plan=True) == "modify"
+    """plan + week + existing sessions → modify + MODIFY."""
+    rt = _route_plan_week(1, has_plan=True)
+    assert rt is not None
+    assert rt.name == "modify"
+    assert rt.mode == "MODIFY"
 
 
 def test_plan_today_no_sessions_routes_to_plan():
-    """plan + today + no sessions → routed_tool == 'plan' (mirrors week)."""
-    assert _route_plan_today("user-1", date(2026, 1, 20), has_plan=False) == "plan"
+    """plan + today + no sessions → plan + CREATE."""
+    rt = _route_plan_today(1, has_plan=False)
+    assert rt is not None
+    assert rt.name == "plan"
+    assert rt.mode == "CREATE"
 
 
 def test_plan_today_existing_sessions_routes_to_modify():
-    """plan + today + existing sessions → routed_tool == 'modify' (mirrors week)."""
-    assert _route_plan_today("user-1", date(2026, 1, 20), has_plan=True) == "modify"
+    """plan + today + existing sessions → modify + MODIFY."""
+    rt = _route_plan_today(1, has_plan=True)
+    assert rt is not None
+    assert rt.name == "modify"
+    assert rt.mode == "MODIFY"
 
 
-def test_plan_week_no_user_id_defaults_to_plan():
-    """plan + week + no user_id → 'plan' (cannot run existence check)."""
-    with patch("app.coach.routing.route.has_existing_plan") as mock:
+def test_plan_week_no_athlete_id_defaults_to_plan():
+    """plan + week + no athlete_id → plan + CREATE, has_existing_plan not called."""
+    with patch("app.orchestrator.routing.has_existing_plan") as mock:
         tool, _ = route_with_safety_check(
             intent="plan",
             horizon="week",
             has_proposal=False,
             needs_approval=False,
-            user_id=None,
-            today=date(2026, 1, 20),
+            athlete_id=None,
         )
         mock.assert_not_called()
-    assert tool == "plan"
-
-
-def test_plan_week_no_today_defaults_to_plan():
-    """plan + week + no today → 'plan' (cannot run existence check)."""
-    with patch("app.coach.routing.route.has_existing_plan") as mock:
-        tool, _ = route_with_safety_check(
-            intent="plan",
-            horizon="week",
-            has_proposal=False,
-            needs_approval=False,
-            user_id="user-1",
-            today=None,
-        )
-        mock.assert_not_called()
-    assert tool == "plan"
+    assert tool is not None
+    assert tool.name == "plan"
+    assert tool.mode == "CREATE"

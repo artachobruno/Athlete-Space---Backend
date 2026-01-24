@@ -3,7 +3,7 @@
 Read-only helpers. No side effects. Use existing read helpers only.
 """
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -44,7 +44,7 @@ def has_active_plan_version(athlete_id: int, horizon: str) -> bool:
     Read-only. Uses SeasonPlan (user_id from athlete_id). Horizon must be
     'season' or 'race'.
     """
-    if horizon not in ("season", "race"):
+    if horizon not in {"season", "race"}:
         return False
     user_id = get_user_id_from_athlete_id(athlete_id)
     if not user_id:
@@ -57,9 +57,10 @@ def has_active_plan_version(athlete_id: int, horizon: str) -> bool:
                     SeasonPlan.is_active.is_(True),
                 ).limit(1)
             ).first()
-        return row is not None
     except Exception:
         return False
+    else:
+        return row is not None
 
 
 def has_existing_plan(athlete_id: int, horizon: str) -> bool:
@@ -69,6 +70,6 @@ def has_existing_plan(athlete_id: int, horizon: str) -> bool:
     """
     if horizon == "week":
         return has_planned_sessions_for_week(athlete_id)
-    if horizon in ("season", "race"):
+    if horizon in {"season", "race"}:
         return has_active_plan_version(athlete_id, horizon)
     return False

@@ -1,7 +1,7 @@
 """Execution readiness tests.
 
 Ensures EXECUTE with incomplete extraction (e.g. missing change_type)
-returns a clarification message instead of crashing.
+raises NoActionError instead of crashing. Clarification happens at orchestration layer.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.coach.executor.action_executor import CoachActionExecutor
+from app.coach.executor.errors import NoActionError
 from app.coach.extraction.modify_week_extractor import ExtractedWeekModification
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
@@ -47,7 +48,7 @@ def deps():
 
 @pytest.mark.asyncio
 async def test_execute_modify_week_missing_change_type_does_not_crash(deps):
-    """EXECUTE with missing change_type returns clarification, does not crash."""
+    """EXECUTE with missing change_type raises NoActionError; no crash."""
     decision = OrchestratorAgentResponse(
         intent="modify",
         horizon="week",
@@ -75,7 +76,7 @@ async def test_execute_modify_week_missing_change_type_does_not_crash(deps):
         new_callable=AsyncMock,
         return_value=extracted_no_change_type,
     ):
-        result = await CoachActionExecutor.execute(decision, deps)
+        with pytest.raises(NoActionError) as exc_info:
+            await CoachActionExecutor.execute(decision, deps)
 
-    assert "need a bit more detail" in result.lower() or "what would you like to change" in result.lower()
-    assert "modify" in result.lower() or "change" in result.lower()
+    assert exc_info.value.code == "insufficient_modification_spec"

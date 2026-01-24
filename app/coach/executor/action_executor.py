@@ -976,19 +976,8 @@ class CoachActionExecutor:
     ) -> Optional[DayModification]:
         """Convert unstructured modification context to structured DayModification.
 
-        This is a temporary bridge until NLU provides structured DayModification directly.
-        TODO: Update NLU to extract structured DayModification in structured_data.
-
-        Args:
-            structured_data: Structured data from orchestrator
-            message: User message (fallback)
-            existing_session: Optional existing session for context
-
-        Returns:
-            DayModification object
-
-        Raises:
-            ValueError: If modification cannot be inferred
+        No default guesses for change_type. Returns None when change_type
+        cannot be determined from structured_data or adjustment.
         """
         if "modification" in structured_data:
             mod_dict = structured_data["modification"]
@@ -1501,6 +1490,8 @@ class CoachActionExecutor:
             message = result.get("message", "Season modified successfully")
             return f"{message}. Change: {change_type_label}."
 
+        except NoActionError:
+            raise
         except Exception as e:
             if conversation_id and step_info:
                 step_id, label = step_info

@@ -11,6 +11,7 @@ from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
 from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
+from app.coach.executor.errors import NoActionError
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
@@ -250,8 +251,12 @@ async def process_coach_chat(
                 status="planned",
             )
 
-    # Execute action if needed (executor will also guard against NO_ACTION)
-    executor_reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
+    try:
+        executor_reply = await CoachActionExecutor.execute(
+            decision, deps, conversation_id=conversation_id
+        )
+    except NoActionError:
+        return "I need a bit more detail before I can make that change. What would you like to modify?"
 
     # Style LLM: Rewrite structured decision into natural coach message
     # This is NON-AUTHORITATIVE - it rewrites, but never decides, computes, retrieves, or executes
@@ -519,7 +524,15 @@ def dispatch_coach_chat(
                     status="planned",
                 )
 
-        reply = await CoachActionExecutor.execute(decision, deps, conversation_id=conversation_id)
+        try:
+            reply = await CoachActionExecutor.execute(
+                decision, deps, conversation_id=conversation_id
+            )
+        except NoActionError:
+            return (
+                "clarify",
+                "I need a bit more detail before I can make that change. What would you like to modify?",
+            )
         return (decision.intent, reply)
 
     try:

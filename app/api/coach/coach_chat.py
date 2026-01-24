@@ -285,7 +285,7 @@ async def coach_chat(req: CoachChatRequest) -> CoachChatResponse:
     )
 
     # Execute action if needed
-    reply = await CoachActionExecutor.execute(decision, deps)
+    reply = await CoachActionExecutor.execute(decision, deps, user_message=req.message)
 
     # Extract persistence metadata from structured_data if available
     metadata: dict | None = None

@@ -1,9 +1,11 @@
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from typing import NoReturn
 
 from loguru import logger
 
+from app.coach.executor.errors import PersistenceError
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.utils.date_extraction import extract_dates_from_text
 from app.domains.training_plan.enums import PlanType, TrainingIntent
@@ -25,6 +27,11 @@ from app.planner.plan_race_simple import execute_canonical_pipeline
 
 # Cache to prevent duplicate calls within a short time window
 _recent_calls: dict[str, datetime] = {}
+
+
+def _raise_calendar_persistence_failed() -> NoReturn:
+    """Raise when calendar persistence fails; generation without persistence is failure."""
+    raise PersistenceError("plan_commit_failed")
 
 
 def parse_season_dates(message: str) -> tuple[datetime, datetime]:
@@ -80,15 +87,11 @@ def generate_season_plan_response(
     saved_count: int,
     weeks: int,
 ) -> str:
-    """Generate success response for season plan creation."""
-    if saved_count > 0:
-        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-        calendar_note = (
-            "Your planned sessions are now available in your calendar! You can view them in the calendar view and track your progress."
-        )
-    else:
-        save_status = "• ⚠️ Sessions generated but could not be saved to calendar (service may be temporarily unavailable)\n"
-        calendar_note = "The plan is ready, but you may need to retry saving to calendar later."
+    """Generate success response for season plan creation. Caller must ensure saved_count > 0."""
+    save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+    calendar_note = (
+        "Your planned sessions are now available in your calendar! You can view them in the calendar view and track your progress."
+    )
 
     return (
         f"✅ **Season Training Plan Created!**\n\n"
@@ -289,7 +292,19 @@ async def plan_season(message: str = "", user_id: str | None = None, athlete_id:
                 athlete_id=athlete_id,
             )
 
+            if not persist_result.success or not persist_result.session_ids:
+                logger.error(
+                    "Execution failed: calendar persistence error",
+                    season_start=season_start.isoformat(),
+                    season_end=season_end.isoformat(),
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                )
+                _raise_calendar_persistence_failed()
+
             return generate_season_plan_response(season_start, season_end, saved_count, total_weeks)
+        except PersistenceError:
+            raise
         except Exception as e:
             logger.exception(f"Error generating season plan: {e}")
             raise RuntimeError(

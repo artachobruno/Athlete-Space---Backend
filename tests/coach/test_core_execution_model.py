@@ -82,6 +82,36 @@ def test_modify_path_modify_mode():
     assert rt2.mode == "MODIFY"
 
 
+def test_adjust_week_routes_to_adjust_training_load():
+    """Reduce volume this week → adjust + week → adjust_training_load; executor accepts it."""
+    rt, _ = route_with_safety_check(
+        intent="adjust",
+        horizon="week",
+        has_proposal=False,
+        athlete_id=1,
+    )
+    assert rt is not None
+    assert rt.name == "adjust_training_load"
+
+    is_valid, _ = CoachActionExecutor._validate_intent_horizon_combination("adjust", "week")
+    assert is_valid is True
+
+
+def test_adjust_season_routes_to_adjust_training_load():
+    """Adjust season volume → adjust + season → adjust_training_load; executor accepts it."""
+    rt, _ = route_with_safety_check(
+        intent="adjust",
+        horizon="season",
+        has_proposal=False,
+        athlete_id=1,
+    )
+    assert rt is not None
+    assert rt.name == "adjust_training_load"
+
+    is_valid, _ = CoachActionExecutor._validate_intent_horizon_combination("adjust", "season")
+    assert is_valid is True
+
+
 @pytest.mark.asyncio
 async def test_incomplete_modify_clarify_executor_never_runs(deps):
     """Change my plan → clarify; executor raises InvalidModificationSpecError, never returns question."""

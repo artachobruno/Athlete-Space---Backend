@@ -1,10 +1,11 @@
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, NoReturn
 
 from loguru import logger
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from app.coach.executor.errors import PersistenceError
 from app.coach.mcp_client import call_tool, emit_progress_event_safe
 from app.coach.schemas.training_plan_schemas import TrainingPlan
 from app.coach.services.conversation_progress import (
@@ -35,6 +36,11 @@ def _raise_no_sessions_error() -> None:
 def _raise_invalid_date_type_error(first_date: date | datetime) -> None:
     """Raise error for invalid date type in training plan."""
     raise TypeError(f"Invalid date type in training plan: {type(first_date)}")
+
+
+def _raise_calendar_persistence_failed() -> NoReturn:
+    """Raise when calendar persistence fails; generation without persistence is failure."""
+    raise PersistenceError("plan_commit_failed")
 
 
 class RaceInformation(BaseModel):
@@ -1057,31 +1063,19 @@ async def create_and_save_plan_new(
             total_sessions=len(sessions),
         )
 
-        if persistence_status == "degraded":
-            logger.warning(
-                "MCP save failed — returning plan in degraded mode",
+        if persistence_status == "degraded" or saved_count <= 0:
+            logger.error(
+                "Plan persistence failed — raising",
                 user_id=user_id,
                 athlete_id=athlete_id,
-                session_count=len(sessions),
-                plan_type="race",
-                plan_id=plan_id,
+                saved_count=saved_count,
                 persistence_status=persistence_status,
             )
+            _raise_calendar_persistence_failed()
 
         target_time_str = f"\nTarget time: {target_time}" if target_time else ""
-        if saved_count == 0:
-            save_status = (
-                f"• **{len(sessions)} training sessions** generated "
-                f"(not saved - calendar unavailable)\n"
-            )
-            calendar_note = (
-                "⚠️ **Note:** Your training plan was generated successfully, "
-                "but we couldn't save it to your calendar right now. "
-                "Please try again later or contact support."
-            )
-        else:
-            save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-            calendar_note = "Your planned sessions are now available in your calendar!"
+        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+        calendar_note = "Your planned sessions are now available in your calendar!"
 
         success_message = (
             f"✅ **Race Training Plan Created!**\n\n"
@@ -1099,6 +1093,8 @@ async def create_and_save_plan_new(
             f"{calendar_note}{target_time_str}\n\n"
             f"**The plan is complete and ready to use. No further action needed.**"
         )
+    except PersistenceError:
+        raise
     except Exception as e:
         error_msg = (
             f"Failed to generate race plan "

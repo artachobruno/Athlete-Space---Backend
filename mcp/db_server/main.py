@@ -136,6 +136,10 @@ plan_week_tool = _coach_tools_module.plan_week_tool
 _progress_events_module = _load_module_from_path("mcp_db_progress_events", _tools_dir / "progress_events.py")
 emit_progress_event_tool = _progress_events_module.emit_progress_event_tool
 
+# Initialize template library at startup (required for plan_week, plan_season)
+_template_loader = _load_app_module("app.domains.training_plan.template_loader")
+_template_loader.initialize_template_library_from_cache()
+
 app = FastAPI(title="MCP DB Server", version="1.0.0")
 
 # Configure logger

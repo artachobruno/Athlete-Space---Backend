@@ -5,6 +5,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.calendar.training_summary import build_training_summary
+from app.coach.executor.errors import PersistenceError
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.constraints import TrainingConstraints
@@ -335,14 +336,23 @@ async def plan_week(
         # TODO: Use athlete's race goal pace from AthletePaceProfile when available
         return adjusted_volume_hours * 7.5  # ~7.5 miles per hour at 8 min/mile
 
-    planned_weeks, persist_result = await execute_canonical_pipeline(
-        ctx=ctx,
-        athlete_state=state,
-        user_id=user_id,
-        athlete_id=athlete_id,
-        plan_id=plan_id,
-        base_volume_calculator=volume_calculator,
-    )
+    try:
+        _planned_weeks, persist_result = await execute_canonical_pipeline(
+            ctx=ctx,
+            athlete_state=state,
+            user_id=user_id,
+            athlete_id=athlete_id,
+            plan_id=plan_id,
+            base_volume_calculator=volume_calculator,
+        )
+    except Exception as e:
+        logger.error(
+            "Execution failed: calendar persistence error",
+            error=str(e),
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
+        raise PersistenceError("plan_commit_failed") from e
 
     saved_count = persist_result.created
     logger.info(
@@ -354,27 +364,18 @@ async def plan_week(
         athlete_id=athlete_id,
     )
 
-    if saved_count > 0:
-        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-        calendar_message = "Your planned sessions are now available in your calendar!"
-    else:
-        save_status = (
-            f"• **{len(planned_weeks[0].sessions) if planned_weeks else 0} training sessions** generated "
-            f"(not saved - calendar unavailable)\n"
+    if not persist_result.success or not persist_result.session_ids:
+        logger.error(
+            "Execution failed: calendar persistence error",
+            week_start=monday.isoformat(),
+            week_end=sunday.isoformat(),
+            user_id=user_id,
+            athlete_id=athlete_id,
         )
-        calendar_message = (
-            "⚠️ **Note:** Your training plan was generated successfully, "
-            "but we couldn't save it to your calendar right now. "
-            "Please try again later or contact support."
-        )
+        raise PersistenceError("plan_commit_failed")
 
     return (
-        f"✅ **Weekly Training Plan Created!**\n\n"
-        f"I've generated a weekly plan from **{monday.date().isoformat()}** "
-        f"to **{sunday.date().isoformat()}**.\n\n"
-        f"**Plan Summary:**\n"
-        f"{save_status}"
-        f"• Target volume: {adjusted_volume_hours:.1f} hours\n"
-        f"{'• Load adjusted based on your feedback' if load_adjustment else ''}\n\n"
-        f"{calendar_message}"
+        f"✅ **Weekly Training Plan Created**\n\n"
+        f"• **{saved_count} training sessions** added to your calendar\n"
+        f"• Target volume: {adjusted_volume_hours:.1f} hours"
     )

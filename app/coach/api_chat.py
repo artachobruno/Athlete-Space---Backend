@@ -16,7 +16,7 @@ from app.coach.agents.orchestrator_deps import (
 from app.coach.config.models import USER_FACING_MODEL
 from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
-from app.coach.executor.errors import InvalidModificationSpecError, NoActionError
+from app.coach.executor.errors import ExecutionError, InvalidModificationSpecError, NoActionError, PersistenceError
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.services.response_postprocessor import postprocess_response
 from app.coach.services.state_builder import build_athlete_state
@@ -664,6 +664,7 @@ async def coach_chat(
             decision,
             deps,
             conversation_id,
+            normalized_user_message.content,
         )
         # Return immediately with acknowledgment message
         return CoachChatResponse(
@@ -678,8 +679,22 @@ async def coach_chat(
     # For read-only actions or NO_ACTION, execute synchronously (fast, non-blocking)
     try:
         executor_reply = await CoachActionExecutor.execute(
-            decision, deps, conversation_id=conversation_id
+            decision, deps, conversation_id=conversation_id, user_message=normalized_user_message.content
         )
+    except PersistenceError:
+        return CoachChatResponse(
+            intent="error",
+            reply=(
+                "I couldn't save your training plan to your calendar. "
+                "Nothing was changed. Please try again in a moment."
+            ),
+            conversation_id=conversation_id,
+            response_type=decision.response_type,
+            show_plan=decision.show_plan,
+            plan_items=decision.plan_items,
+        )
+    except ExecutionError:
+        raise
     except (NoActionError, InvalidModificationSpecError):
         return CoachChatResponse(
             intent="clarify",

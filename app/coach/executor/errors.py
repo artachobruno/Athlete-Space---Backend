@@ -24,3 +24,20 @@ class InvalidModificationSpecError(Exception):
     def __init__(self, message: str = "Incomplete modification spec — clarification must occur before execution"):
         self.message = message
         super().__init__(self.message)
+
+
+class ExecutionError(Exception):
+    """Raised when execution fails (e.g. calendar persistence)."""
+
+    def __init__(self, code: str, message: str | None = None):
+        self.code = code
+        self.message = message or f"Execution failed: {code}"
+        super().__init__(self.message)
+
+
+class PersistenceError(RuntimeError):
+    """Raised when a generated plan cannot be persisted."""
+
+    def __init__(self, message: str = "plan_commit_failed"):
+        self.message = message
+        super().__init__(self.message)

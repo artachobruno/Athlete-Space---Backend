@@ -236,7 +236,15 @@ async def test_plan_week_zero_volume_uses_min_default_no_allocation_error(
         captured_calculator.append(base_volume_calculator)
         return (
             [],
-            PersistResult(plan_id="test", created=0, updated=0, skipped=0, warnings=[]),
+            PersistResult(
+                plan_id="test",
+                created=7,
+                updated=0,
+                skipped=0,
+                warnings=[],
+                success=True,
+                session_ids=[f"sid-{i}" for i in range(7)],
+            ),
         )
 
     with (

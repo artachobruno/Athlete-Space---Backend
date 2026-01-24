@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 from loguru import logger
 from sqlalchemy import select
 
+from app.coach.executor.errors import ExecutionError
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.canonical_plan import CanonicalPlan, PlanSession
 from app.coach.tools.session_planner import save_planned_sessions
@@ -250,17 +251,18 @@ async def plan_tool(
         expected_count=len(sessions_dict),
     )
 
-    if persistence_status == "saved" and saved_count > 0:
-        logger.info(f"Saved {saved_count} sessions for {horizon} plan")
-        record_persistence_saved()
-    else:
-        logger.warning(
-            "Unified plan generated but NOT persisted (MCP down) — returning plan anyway",
+    if persistence_status != "saved" or saved_count <= 0:
+        logger.error(
+            "Unified plan persistence failed — raising",
             horizon=horizon,
             persistence_status=persistence_status,
-            expected_count=len(sessions_dict),
+            saved_count=saved_count,
         )
         record_persistence_degraded()
+        raise ExecutionError("calendar_persistence_failed")
+
+    logger.info(f"Saved {saved_count} sessions for {horizon} plan")
+    record_persistence_saved()
 
     # Generate response
     logger.debug(
@@ -475,19 +477,8 @@ def _generate_plan_response(plan: CanonicalPlan, saved_count: int) -> str:
     """
     horizon_name = {"day": "daily", "week": "weekly", "season": "season"}[plan.horizon]
 
-    if saved_count > 0:
-        save_status = f"• **{saved_count} training sessions** added to your calendar\n"
-        calendar_note = "Your planned sessions are now available in your calendar!"
-    else:
-        save_status = (
-            f"• **{len(plan.sessions)} training sessions** generated "
-            f"(not saved - calendar unavailable)\n"
-        )
-        calendar_note = (
-            "⚠️ **Note:** Your training plan was generated successfully, "
-            "but we couldn't save it to your calendar right now. "
-            "Please try again later or contact support."
-        )
+    save_status = f"• **{saved_count} training sessions** added to your calendar\n"
+    calendar_note = "Your planned sessions are now available in your calendar!"
 
     return (
         f"✅ **{horizon_name.capitalize()} Training Plan Created!**\n\n"

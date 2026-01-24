@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from app.calendar.training_summary import build_training_summary
+from app.coach.executor.errors import PersistenceError
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.constraints import TrainingConstraints
 from app.coach.tools.adjust_load import adjust_training_load
@@ -96,6 +97,8 @@ def plan_week_tool(arguments: dict) -> dict:
         result = asyncio.run(plan_week_tool_impl(state, user_id, athlete_id, user_feedback))
     except MCPError:
         raise
+    except PersistenceError as e:
+        raise MCPError("CALENDAR_PERSISTENCE_FAILED", "calendar_persistence_failed") from e
     except Exception as e:
         logger.error(f"Error planning week: {e}", exc_info=True)
         raise MCPError("INTERNAL_ERROR", f"Failed to plan week: {e!s}") from e

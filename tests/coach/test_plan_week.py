@@ -99,7 +99,15 @@ async def test_plan_week_generates_7_days(
         mock_week = PlannedWeek(week_index=1, focus=MagicMock(), sessions=mock_sessions)
         mock_pipeline.return_value = (
             [mock_week],
-            PersistResult(plan_id="test_plan", created=7, updated=0, skipped=0, warnings=[]),
+            PersistResult(
+                plan_id="test_plan",
+                created=7,
+                updated=0,
+                skipped=0,
+                warnings=[],
+                success=True,
+                session_ids=[f"sid-{i}" for i in range(7)],
+            ),
         )
 
         # Execute plan_week

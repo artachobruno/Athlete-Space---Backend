@@ -127,6 +127,8 @@ async def _execute_step_with_handling(
                     updated=0,
                     skipped=0,
                     warnings=[str(e)],
+                    success=False,
+                    session_ids=[],
                 ),
                 current_step=step,
             )

@@ -35,12 +35,17 @@ from app.services.intelligence.scheduler import trigger_daily_decision_for_user
 class PersistResult:
     """Result of plan persistence operation.
 
+    success=True iff at least one session was created or updated.
+    session_ids contains IDs of created/updated rows only; skipped rows are excluded.
+
     Attributes:
         plan_id: Unique plan identifier
         created: Number of sessions created
         updated: Number of sessions updated
         skipped: Number of sessions skipped
         warnings: List of warning messages
+        success: True iff created + updated > 0
+        session_ids: IDs of created/updated sessions (UUID strings)
     """
 
     plan_id: str
@@ -48,6 +53,8 @@ class PersistResult:
     updated: int
     skipped: int
     warnings: list[str]
+    success: bool
+    session_ids: list[str]
 
 
 def _generate_plan_id() -> str:
@@ -262,7 +269,7 @@ def _persist_week_sessions(
     *,
     plan_id: str,
     user_id: str,
-) -> tuple[int, int, int, list[str]]:
+) -> tuple[int, int, int, list[str], list[str]]:
     """Persist all sessions for a single week.
 
     Args:
@@ -274,7 +281,7 @@ def _persist_week_sessions(
         user_id: User ID
 
     Returns:
-        Tuple of (created_count, updated_count, skipped_count, warnings_list)
+        Tuple of (created_count, updated_count, skipped_count, warnings_list, session_ids)
     """
     # Group sessions by day_index for session_order
     sessions_by_day: dict[int, list[PlannedSession]] = {}
@@ -290,12 +297,13 @@ def _persist_week_sessions(
 
     week_created = week_updated = week_skipped = 0
     week_warnings: list[str] = []
+    week_session_ids: list[str] = []
 
     # Persist sessions for this week
     for day_idx, day_sessions in sessions_by_day.items():
         for session_order, session in enumerate(day_sessions):
             try:
-                result = _upsert_session(
+                outcome, session_id = _upsert_session(
                     db_session=db_session,
                     ctx=ctx,
                     planned_session=session,
@@ -306,10 +314,14 @@ def _persist_week_sessions(
                     session_order=session_order,
                 )
 
-                if result == "created":
+                if outcome == "created":
                     week_created += 1
-                elif result == "updated":
+                    if session_id:
+                        week_session_ids.append(session_id)
+                elif outcome == "updated":
                     week_updated += 1
+                    if session_id:
+                        week_session_ids.append(session_id)
                 else:
                     week_skipped += 1
 
@@ -333,10 +345,9 @@ def _persist_week_sessions(
                     f"error_type={type(e).__name__})"
                 )
                 logger.error(error_msg)
-                week_warnings.append(f"Week {week.week_index}, day {day_idx}: Failed to persist: {e}")
-                week_skipped += 1
+                raise RuntimeError(f"Week {week.week_index}, day {day_idx}: Failed to persist: {e}") from e
 
-    return week_created, week_updated, week_skipped, week_warnings
+    return week_created, week_updated, week_skipped, week_warnings, week_session_ids
 
 
 def _upsert_session(
@@ -346,10 +357,10 @@ def _upsert_session(
     *,
     week: PlannedWeek,
     plan_start: date,
-    plan_id: str,  # noqa: ARG001
+    plan_id: str,
     user_id: str,
     session_order: int,
-) -> str:
+) -> tuple[str, str | None]:
     """Upsert a single session into the database.
 
     Args:
@@ -363,7 +374,7 @@ def _upsert_session(
         session_order: Order of session within the day (0-based)
 
     Returns:
-        Result string: "created", "updated", or "skipped"
+        Tuple of (outcome "created"|"updated"|"skipped", session id or None)
     """
     # Compute calendar date
     session_date = _compute_session_date(plan_start, week.week_index, planned_session.day_index)
@@ -453,7 +464,7 @@ def _upsert_session(
         # Note: week_number, session_order, phase, source, philosophy_id, template_id
         # are not part of the PlannedSession model schema v2
 
-        return "updated"
+        return ("updated", db_session_obj.id)
 
     # Create new session (schema v2)
     try:
@@ -498,7 +509,7 @@ def _upsert_session(
         logger.error(error_msg)
         raise
 
-    return "created"
+    return ("created", db_session_obj.id)
 
 
 def persist_plan(
@@ -545,69 +556,62 @@ def persist_plan(
 
     created = updated = skipped = 0
     warnings: list[str] = []
+    session_ids: list[str] = []
 
     # Compute plan start date
     plan_start = _compute_plan_start_date(ctx)
 
-    # Import here to avoid circular imports
-    from app.db.session import get_session  # noqa: PLC0415
+    from app.db.session import get_session
 
-    # Persist week-by-week
-    for week in weeks:
-        try:
-            with get_session() as db_session:
-                week_created, week_updated, week_skipped, week_warnings = _persist_week_sessions(
-                    db_session=db_session,
-                    week=week,
-                    ctx=ctx,
-                    plan_start=plan_start,
-                    plan_id=plan_id,
-                    user_id=user_id,
-                )
-                created += week_created
-                updated += week_updated
-                skipped += week_skipped
-                warnings.extend(week_warnings)
-                db_session.commit()
+    # Single transaction: either all weeks persist or none. No partial writes.
+    with get_session() as db_session:
+        today = datetime.now(timezone.utc).date()
+        weeks_with_today: list[tuple[int, int]] = []  # (week_index, week_created + week_updated)
 
-            # Trigger daily decision regeneration if any session is for today
-            # Moved outside the with block to reduce nesting
-            try:
-                today = datetime.now(timezone.utc).date()
-                # Compute session dates from day_index and week_index (PlannedSession dataclass
-                # doesn't have starts_at - that's only on DBPlannedSession)
-                has_today_session = any(
-                    _compute_session_date(plan_start, week.week_index, session.day_index) == today
-                    for session in week.sessions
-                )
-                if has_today_session and (week_created > 0 or week_updated > 0):
-                    # Capture today in closure to avoid B023 - use default argument
-                    def _trigger_decision(today_arg=today):
-                        try:
-                            asyncio.run(trigger_daily_decision_for_user(user_id, athlete_id, today_arg))
-                        except Exception as e:
-                            logger.warning(f"[CALENDAR_PERSISTENCE] Background daily decision trigger failed: {e}")
-
-                    thread = threading.Thread(target=_trigger_decision, daemon=True)
-                    thread.start()
-                    logger.debug(
-                        f"[CALENDAR_PERSISTENCE] Triggered daily decision regeneration for user_id={user_id}, "
-                        f"athlete_id={athlete_id}, session_date={today.isoformat()}"
-                    )
-            except Exception as e:
-                # Don't fail plan persistence if decision trigger fails - just log the error
-                logger.warning(f"[CALENDAR_PERSISTENCE] Failed to trigger daily decision for user {user_id}: {e}")
-
-        except Exception as e:
-            # Week-level rollback (transaction already rolled back by context manager)
-            error_msg = f"Week {week.week_index} failed: {e}"
-            warnings.append(error_msg)
-            logger.error(
-                "B7: Week persistence failed",
-                week_index=week.week_index,
-                error=str(e),
+        for week in weeks:
+            week_created, week_updated, week_skipped, week_warnings, week_sids = _persist_week_sessions(
+                db_session=db_session,
+                week=week,
+                ctx=ctx,
+                plan_start=plan_start,
+                plan_id=plan_id,
+                user_id=user_id,
             )
-            # Continue with other weeks
+            created += week_created
+            updated += week_updated
+            skipped += week_skipped
+            warnings.extend(week_warnings)
+            session_ids.extend(week_sids)
+            has_today = any(
+                _compute_session_date(plan_start, week.week_index, s.day_index) == today
+                for s in week.sessions
+            )
+            if has_today and (week_created > 0 or week_updated > 0):
+                weeks_with_today.append((week.week_index, week_created + week_updated))
+
+        db_session.commit()
+
+        # TODO D: DB-side sanity check (deferred). Optional: after commit, verify
+        # count(PlannedSession.id.in_(session_ids)) == len(session_ids) in a fresh session.
+
+    # Trigger daily decision regeneration only after successful full commit
+    for week_index, _ in weeks_with_today:
+        try:
+
+            def _trigger_decision(today_arg=today, user=user_id, athlete=athlete_id):
+                try:
+                    asyncio.run(trigger_daily_decision_for_user(user, athlete, today_arg))
+                except Exception as e:
+                    logger.warning(f"[CALENDAR_PERSISTENCE] Background daily decision trigger failed: {e}")
+
+            thread = threading.Thread(target=_trigger_decision, daemon=True)
+            thread.start()
+            logger.debug(
+                f"[CALENDAR_PERSISTENCE] Triggered daily decision for user_id={user_id}, "
+                f"athlete_id={athlete_id}, week_index={week_index}"
+            )
+        except Exception as e:
+            logger.warning(f"[CALENDAR_PERSISTENCE] Failed to trigger daily decision for user {user_id}: {e}")
 
     logger.info(
         "B7: Calendar persistence complete",
@@ -617,6 +621,7 @@ def persist_plan(
         skipped=skipped,
         warning_count=len(warnings),
     )
+    logger.info("Persisted %d sessions to calendar", len(session_ids))
 
     return PersistResult(
         plan_id=plan_id,
@@ -624,4 +629,6 @@ def persist_plan(
         updated=updated,
         skipped=skipped,
         warnings=warnings,
+        success=(created + updated) > 0,
+        session_ids=session_ids,
     )

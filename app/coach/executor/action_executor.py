@@ -22,7 +22,11 @@ from app.coach.clarification import (
     generate_slot_clarification,
 )
 from app.coach.errors import ToolContractViolationError
-from app.coach.executor.errors import InvalidModificationSpecError
+from app.coach.executor.errors import ExecutionError, InvalidModificationSpecError, PersistenceError
+from app.coach.extraction.adjust_extractor import (
+    ExtractedTrainingAdjustment,
+    extract_training_adjustment,
+)
 from app.coach.extraction.modify_race_extractor import extract_race_modification_llm
 from app.coach.extraction.modify_season_extractor import extract_modify_season
 from app.coach.extraction.modify_week_extractor import extract_week_modification_llm
@@ -332,6 +336,8 @@ class CoachActionExecutor:
             ("adjust", None),
             ("adjust", "today"),
             ("adjust", "next_session"),
+            ("adjust", "week"),
+            ("adjust", "season"),
             ("log", None),
             ("log", "today"),
             ("confirm", None),
@@ -484,6 +490,7 @@ class CoachActionExecutor:
         decision: OrchestratorAgentResponse,
         deps: CoachDeps,
         conversation_id: str | None = None,
+        user_message: str | None = None,
     ) -> str:
         """Execute action based on orchestrator decision.
 
@@ -493,6 +500,7 @@ class CoachActionExecutor:
             decision: Decision from orchestrator
             deps: Dependencies with athlete state and context
             conversation_id: Optional conversation ID for progress tracking
+            user_message: Optional raw user message (used for adjust extraction; falls back to decision.message)
 
         Returns:
             Execution result message
@@ -533,10 +541,34 @@ class CoachActionExecutor:
 
         # Phase 6C: Safe for background execution
         # Individual _execute_* methods have try-except blocks that return error messages
-        # STATE 1: MISSING SLOTS - Ask exactly one blocking question
-        # If executable action exists but slots are incomplete, ask for missing slots
         target_action = decision.target_action or decision.next_executable_action
-        if target_action and decision.missing_slots and not decision.should_execute:
+
+        # ADJUST: Atomic path — no slot filling. Extract from user message (not assistant reply).
+        if target_action == "adjust_training_load":
+            text_for_adjust = user_message or decision.message or ""
+            extracted: ExtractedTrainingAdjustment = extract_training_adjustment(
+                text_for_adjust
+            )
+            if not extracted.is_complete():
+                logger.error(
+                    "InvalidModificationSpec: missing_adjustment_amount",
+                    intent=decision.intent,
+                    horizon=decision.horizon,
+                    athlete_id=deps.athlete_id,
+                )
+                raise InvalidModificationSpecError("missing_adjustment_amount")
+            base = decision.structured_data or {}
+            decision.structured_data = {**base, "volume_delta_pct": extracted.delta_pct}
+            decision.should_execute = True
+            decision.missing_slots = []
+
+        # STATE 1: MISSING SLOTS - Ask exactly one blocking question
+        if (
+            target_action
+            and target_action != "adjust_training_load"
+            and decision.missing_slots
+            and not decision.should_execute
+        ):
             # Assertion: must have missing slots to ask a question
             if len(decision.missing_slots) == 0:
                 raise RuntimeError("Must have missing slots to ask question, got empty list")
@@ -1485,7 +1517,12 @@ class CoachActionExecutor:
         deps: CoachDeps,
         conversation_id: str | None = None,
     ) -> str:
-        """Execute plan_week tool."""
+        """Execute plan_week tool.
+
+        INVARIANT:
+        A plan does not exist unless it is persisted.
+        Generation without persistence is an execution failure.
+        """
         if not deps.user_id or not isinstance(deps.user_id, str):
             return "I need your user ID to save a weekly plan. Please check your account settings."
         if deps.athlete_id is None:
@@ -1516,6 +1553,20 @@ class CoachActionExecutor:
                     "user_feedback": user_feedback if user_feedback else None,
                 },
             )
+            msg = result.get("message", "Weekly plan created.")
+            if msg and ("not saved" in msg or "calendar unavailable" in msg):
+                if conversation_id and step_info:
+                    step_id, label = step_info
+                    await CoachActionExecutor._emit_progress_event(
+                        conversation_id, step_id, label, "failed", message="Persistence failed"
+                    )
+                preview = (msg[:500] + "…") if len(msg) > 500 else msg
+                logger.error(
+                    f"Plan generation succeeded but persistence failed; aborting execution. message_preview={preview}",
+                    tool=tool_name,
+                    conversation_id=conversation_id,
+                )
+                raise PersistenceError("plan_commit_failed")
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
@@ -1532,9 +1583,10 @@ class CoachActionExecutor:
                 conversation_id=conversation_id,
                 athlete_id=deps.athlete_id,
             )
-            # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
-            return result.get("message", "Weekly plan created.")
+            return msg
+        except PersistenceError:
+            raise
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
@@ -1548,13 +1600,18 @@ class CoachActionExecutor:
                     "error_code": e.code,
                 },
             )
+            if "calendar_persistence_failed" in (e.message or ""):
+                raise PersistenceError("plan_commit_failed") from e
             return "Something went wrong while creating your weekly plan. Please try again."
+        except ExecutionError:
+            raise
         except Exception as e:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
-            logger.exception(
-                "Tool execution failed with unexpected error",
+            logger.error(
+                "Tool execution failed with unexpected error: {}",
+                str(e),
                 extra={
                     "tool": tool_name,
                     "conversation_id": conversation_id,
@@ -1587,7 +1644,12 @@ class CoachActionExecutor:
         deps: CoachDeps,
         conversation_id: str | None = None,
     ) -> str:
-        """Execute plan_race_build tool."""
+        """Execute plan_race_build tool.
+
+        INVARIANT:
+        A plan does not exist unless it is persisted.
+        Generation without persistence is an execution failure.
+        """
         logger.debug(
             "ActionExecutor: Starting plan_race_build execution",
             extra={
@@ -1850,7 +1912,12 @@ class CoachActionExecutor:
         deps: CoachDeps,
         conversation_id: str | None = None,
     ) -> str:
-        """Execute plan_season tool."""
+        """Execute plan_season tool.
+
+        INVARIANT:
+        A plan does not exist unless it is persisted.
+        Generation without persistence is an execution failure.
+        """
         if not deps.user_id or not isinstance(deps.user_id, str):
             return "I need your user ID to save a season plan. Please check your account settings."
         if deps.athlete_id is None:
@@ -1877,6 +1944,21 @@ class CoachActionExecutor:
                     "athlete_id": deps.athlete_id,
                 },
             )
+            msg = result.get("message", "Season plan created.")
+            if msg and ("not saved" in msg or "calendar unavailable" in msg):
+                if conversation_id and step_info:
+                    step_id, label = step_info
+                    await CoachActionExecutor._emit_progress_event(
+                        conversation_id, step_id, label, "failed", message="Persistence failed"
+                    )
+                preview = (msg[:500] + "…") if len(msg) > 500 else msg
+                logger.error(
+                    "Plan generation succeeded but persistence failed; aborting execution. message_preview=%s",
+                    preview,
+                    tool=tool_name,
+                    conversation_id=conversation_id,
+                )
+                raise PersistenceError("plan_commit_failed")
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
@@ -1893,9 +1975,10 @@ class CoachActionExecutor:
                 conversation_id=conversation_id,
                 athlete_id=deps.athlete_id,
             )
-            # Trigger summarization after successful tool execution (B34)
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
-            return result.get("message", "Season plan created.")
+            return msg
+        except PersistenceError:
+            raise
         except MCPError as e:
             if conversation_id and step_info:
                 step_id, label = step_info
@@ -1908,6 +1991,8 @@ class CoachActionExecutor:
                     "error_code": e.code,
                 },
             )
+            if "calendar_persistence_failed" in (e.message or ""):
+                raise PersistenceError("plan_commit_failed") from e
             return "Something went wrong while creating your season plan. Please try again."
         except Exception as e:
             if conversation_id and step_info:
@@ -1928,11 +2013,13 @@ class CoachActionExecutor:
         deps: CoachDeps,
         conversation_id: str | None = None,
     ) -> str:
-        """Execute adjust_training_load tool."""
-        # Extract user feedback from structured_data or message
-        user_feedback = decision.structured_data.get("user_feedback", "")
-        if not user_feedback and decision.message:
-            user_feedback = decision.message
+        """Execute adjust_training_load tool. Atomic — no slot filling; delta from extractor."""
+        structured = decision.structured_data or {}
+        delta_pct = structured.get("volume_delta_pct")
+        if delta_pct is None:
+            raise InvalidModificationSpecError("missing_adjustment_amount")
+
+        user_feedback = structured.get("user_feedback") or decision.message or ""
 
         tool_name = "adjust_training_load"
         step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
@@ -1946,7 +2033,10 @@ class CoachActionExecutor:
                 "adjust_training_load",
                 {
                     "state": deps.athlete_state.model_dump(),
+                    "user_id": deps.user_id,
+                    "athlete_id": deps.athlete_id,
                     "user_feedback": user_feedback,
+                    "volume_delta_pct": delta_pct,
                 },
             )
             if conversation_id and step_info:
@@ -1972,8 +2062,9 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
-            logger.exception(
-                "Tool execution failed",
+            logger.error(
+                "Tool execution failed: {}",
+                e.message,
                 extra={
                     "tool": tool_name,
                     "conversation_id": conversation_id,
@@ -1985,8 +2076,9 @@ class CoachActionExecutor:
             if conversation_id and step_info:
                 step_id, label = step_info
                 await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
-            logger.exception(
-                "Tool execution failed with unexpected error",
+            logger.error(
+                "Tool execution failed with unexpected error: {}",
+                str(e),
                 extra={
                     "tool": tool_name,
                     "conversation_id": conversation_id,

@@ -11,7 +11,7 @@ from app.coach.agents.orchestrator_agent import run_conversation
 from app.coach.agents.orchestrator_deps import AthleteProfileData, CoachDeps, RaceProfileData, TrainingPreferencesData
 from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
-from app.coach.executor.errors import InvalidModificationSpecError, NoActionError
+from app.coach.executor.errors import ExecutionError, InvalidModificationSpecError, NoActionError, PersistenceError
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
@@ -253,8 +253,15 @@ async def process_coach_chat(
 
     try:
         executor_reply = await CoachActionExecutor.execute(
-            decision, deps, conversation_id=conversation_id
+            decision, deps, conversation_id=conversation_id, user_message=message
         )
+    except PersistenceError:
+        return (
+            "I couldn't save your training plan to your calendar. "
+            "Nothing was changed. Please try again in a moment."
+        )
+    except ExecutionError:
+        raise
     except (NoActionError, InvalidModificationSpecError):
         return "I need a bit more detail before I can make that change. What would you like to modify?"
     except MCPError as e:
@@ -529,8 +536,15 @@ def dispatch_coach_chat(
 
         try:
             reply = await CoachActionExecutor.execute(
-                decision, deps, conversation_id=conversation_id
+                decision, deps, conversation_id=conversation_id, user_message=message
             )
+        except PersistenceError:
+            return (
+                "error",
+                "I couldn't save your training plan to your calendar. Nothing was changed. Please try again in a moment.",
+            )
+        except ExecutionError:
+            raise
         except (NoActionError, InvalidModificationSpecError):
             return (
                 "clarify",

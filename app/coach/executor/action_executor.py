@@ -7,7 +7,7 @@ Owns all MCP tool calls, retries, rate limiting, and safety logic.
 import json
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Optional
 
 from loguru import logger
 from sqlalchemy import select
@@ -22,6 +22,7 @@ from app.coach.clarification import (
     generate_slot_clarification,
 )
 from app.coach.errors import ToolContractViolationError
+from app.coach.executor.errors import NoActionError
 from app.coach.extraction.modify_race_extractor import extract_race_modification_llm
 from app.coach.extraction.modify_season_extractor import extract_modify_season
 from app.coach.extraction.modify_week_extractor import extract_week_modification_llm
@@ -972,7 +973,7 @@ class CoachActionExecutor:
         structured_data: dict[str, Any],
         message: str | None,
         existing_session: PlannedSession | None = None,
-    ) -> DayModification:
+    ) -> Optional[DayModification]:
         """Convert unstructured modification context to structured DayModification.
 
         This is a temporary bridge until NLU provides structured DayModification directly.
@@ -989,7 +990,6 @@ class CoachActionExecutor:
         Raises:
             ValueError: If modification cannot be inferred
         """
-        # Try to extract structured DayModification from structured_data first
         if "modification" in structured_data:
             mod_dict = structured_data["modification"]
             if isinstance(mod_dict, dict) and "change_type" in mod_dict:
@@ -1024,30 +1024,8 @@ class CoachActionExecutor:
                 change_type = "adjust_duration"
                 value = None  # Will need explicit value or infer from session
 
-        # Infer from message if still unclear
-        if not change_type and message:
-            message_lower = message.lower()
-            if "shorten" in message_lower or "reduce time" in message_lower or "less time" in message_lower:
-                change_type = "adjust_duration"
-            elif "reduce distance" in message_lower or "shorter distance" in message_lower:
-                change_type = "adjust_distance"
-            elif "change pace" in message_lower or "faster" in message_lower or "slower" in message_lower:
-                change_type = "adjust_pace"
-
-        # If still unclear, default to replace_metrics with minimal change
-        # This preserves session structure while allowing modification
         if not change_type:
-            change_type = "replace_metrics"
-            # Build minimal metrics dict from existing session if available
-            if existing_session:
-                metrics_dict: dict[str, Any] = {"primary": "distance" if existing_session.distance_mi else "duration"}
-                if existing_session.distance_mi:
-                    metrics_dict["distance_miles"] = existing_session.distance_mi
-                if existing_session.duration_minutes:
-                    metrics_dict["duration_min"] = existing_session.duration_minutes
-                value = metrics_dict
-            else:
-                value = None
+            return None
 
         if not reason and message:
             message_lower = message.lower()
@@ -1126,19 +1104,20 @@ class CoachActionExecutor:
                 ).scalar_one_or_none()
 
                 if not existing_session:
-                    return f"No planned session found for {target_date.isoformat()}. Please plan a session first."
+                    raise NoActionError("insufficient_modification_spec")
 
                 # Fetch athlete profile for race day protection (orchestrator owns DB access)
                 athlete_profile = db_session.execute(
                     select(AthleteProfile).where(AthleteProfile.athlete_id == deps.athlete_id)
                 ).scalar_one_or_none()
 
-                # Build structured DayModification from context
                 modification = CoachActionExecutor._build_day_modification_from_context(
                     structured_data=structured_data,
                     message=decision.message,
                     existing_session=existing_session,
                 )
+                if modification is None:
+                    raise NoActionError("insufficient_modification_spec")
 
                 # Get user request from decision message
                 user_request = decision.message or f"Modify session on {target_date.isoformat()}"
@@ -1197,6 +1176,8 @@ class CoachActionExecutor:
             change_type_label = modification.change_type.replace("_", " ").title()
             return f"Modified your session for {target_date.isoformat()}. Change: {change_type_label}."
 
+        except NoActionError:
+            raise
         except Exception as e:
             if conversation_id and step_info:
                 step_id, label = step_info
@@ -1249,17 +1230,8 @@ class CoachActionExecutor:
 
             extracted = await extract_week_modification_llm(user_message, today)
 
-            # Execution readiness: require change_type before mutating
             if extracted.change_type is None:
-                logger.warning(
-                    "Execution requested without complete modification spec (change_type missing)",
-                    tool_name=tool_name,
-                    conversation_id=conversation_id,
-                )
-                return (
-                    "I need a bit more detail before modifying your week. "
-                    "What would you like to change? (e.g. reduce volume, shift days, replace a day)"
-                )
+                raise NoActionError("insufficient_modification_spec")
 
             # Convert extracted to structured WeekModification
             week_modification = to_week_modification(extracted, today)
@@ -1320,6 +1292,8 @@ class CoachActionExecutor:
             message = result.get("message", "Week modified successfully")
             return f"{message}. Change: {change_type_label}."
 
+        except NoActionError:
+            raise
         except Exception as e:
             if conversation_id and step_info:
                 step_id, label = step_info
@@ -1372,7 +1346,9 @@ class CoachActionExecutor:
 
             extracted = await extract_race_modification_llm(user_message, today)
 
-            # Convert extracted to structured RaceModification
+            if extracted.change_type is None:
+                raise NoActionError("insufficient_modification_spec")
+
             race_modification = to_race_modification(extracted, today)
 
             # Call structured modify_race()
@@ -1422,6 +1398,8 @@ class CoachActionExecutor:
 
             return f"{message}. Change: {change_type_label}."
 
+        except NoActionError:
+            raise
         except Exception as e:
             if conversation_id and step_info:
                 step_id, label = step_info
@@ -1473,17 +1451,8 @@ class CoachActionExecutor:
 
             extracted = await extract_modify_season(user_message)
 
-            # Execution readiness: require change_type before mutating
             if extracted.change_type is None:
-                logger.warning(
-                    "Execution requested without complete modification spec (change_type missing)",
-                    tool_name=tool_name,
-                    conversation_id=conversation_id,
-                )
-                return (
-                    "I need a bit more detail before modifying your season. "
-                    "What would you like to change? (e.g. reduce volume, extend phase)"
-                )
+                raise NoActionError("insufficient_modification_spec")
 
             # Convert extracted to structured SeasonModification
             season_modification = adapt_extracted_season_modification(

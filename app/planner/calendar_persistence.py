@@ -25,6 +25,7 @@ from app.db.schema_v2_map import (
     minutes_to_seconds,
     normalize_sport,
 )
+from app.db.session import get_session
 from app.domains.training_plan.enums import DayType, PlanType, WeekFocus
 from app.domains.training_plan.models import PlanContext, PlannedSession, PlannedWeek, SessionTextOutput
 from app.plans.week_planner import assign_intent_from_day_type
@@ -303,13 +304,19 @@ def _persist_week_sessions(
     for day_idx, day_sessions in sessions_by_day.items():
         for session_order, session in enumerate(day_sessions):
             try:
+                # Extract session info for logging before upsert
+                text_output = session.text_output
+                title = text_output.title if text_output else f"{session.day_type.value.title()} Run"
+                description = text_output.description if text_output else ""
+                is_running = session.day_type != DayType.REST
+
                 outcome, session_id = _upsert_session(
                     db_session=db_session,
                     ctx=ctx,
                     planned_session=session,
                     week=week,
                     plan_start=plan_start,
-                    plan_id=plan_id,
+                    _plan_id=plan_id,
                     user_id=user_id,
                     session_order=session_order,
                 )
@@ -318,10 +325,38 @@ def _persist_week_sessions(
                     week_created += 1
                     if session_id:
                         week_session_ids.append(session_id)
+                    # Log description for running sessions
+                    if is_running:
+                        logger.info(
+                            f"Running session created: {title} - {description}",
+                            session_id=session_id,
+                            title=title,
+                            description=description,
+                            day_index=day_idx,
+                            week_index=week.week_index,
+                            session_order=session_order,
+                            day_type=session.day_type.value,
+                            distance_mi=session.distance,
+                            user_id=user_id,
+                        )
                 elif outcome == "updated":
                     week_updated += 1
                     if session_id:
                         week_session_ids.append(session_id)
+                    # Log description for running sessions that were updated
+                    if is_running:
+                        logger.info(
+                            f"Running session updated: {title} - {description}",
+                            session_id=session_id,
+                            title=title,
+                            description=description,
+                            day_index=day_idx,
+                            week_index=week.week_index,
+                            session_order=session_order,
+                            day_type=session.day_type.value,
+                            distance_mi=session.distance,
+                            user_id=user_id,
+                        )
                 else:
                     week_skipped += 1
 
@@ -357,7 +392,7 @@ def _upsert_session(
     *,
     week: PlannedWeek,
     plan_start: date,
-    plan_id: str,
+    _plan_id: str,  # Kept for API compatibility, not currently used
     user_id: str,
     session_order: int,
 ) -> tuple[str, str | None]:
@@ -369,7 +404,7 @@ def _upsert_session(
         planned_session: Planned session to persist
         week: Planned week containing the session
         plan_start: Plan start date (Monday of first week)
-        plan_id: Plan identifier (unused, kept for API compatibility)
+        _plan_id: Plan identifier (kept for API compatibility)
         user_id: User ID
         session_order: Order of session within the day (0-based)
 
@@ -546,12 +581,19 @@ def persist_plan(
     if not plan_id:
         plan_id = _generate_plan_id()
 
+    # Calculate total sessions to persist
+    total_sessions = sum(len(week.sessions) for week in weeks)
+
+    sessions_per_week = [len(week.sessions) for week in weeks]
     logger.info(
-        "B7: Starting calendar persistence",
+        f"B7: Starting calendar persistence - {total_sessions} sessions across {len(weeks)} weeks "
+        f"(sessions per week: {sessions_per_week})",
         plan_id=plan_id,
         user_id=user_id,
         athlete_id=athlete_id,
         week_count=len(weeks),
+        total_sessions_to_persist=total_sessions,
+        sessions_per_week=sessions_per_week,
     )
 
     created = updated = skipped = 0
@@ -560,8 +602,6 @@ def persist_plan(
 
     # Compute plan start date
     plan_start = _compute_plan_start_date(ctx)
-
-    from app.db.session import get_session
 
     # Single transaction: either all weeks persist or none. No partial writes.
     with get_session() as db_session:
@@ -613,15 +653,44 @@ def persist_plan(
         except Exception as e:
             logger.warning(f"[CALENDAR_PERSISTENCE] Failed to trigger daily decision for user {user_id}: {e}")
 
+    warnings_preview = warnings[:5] if warnings else []
     logger.info(
-        "B7: Calendar persistence complete",
+        f"B7: Calendar persistence complete - created={created}, updated={updated}, "
+        f"skipped={skipped}, session_ids={len(session_ids)}, warnings={len(warnings)} "
+        f"(attempted to persist {total_sessions} sessions)",
         plan_id=plan_id,
+        user_id=user_id,
+        athlete_id=athlete_id,
+        total_sessions_to_persist=total_sessions,
         created=created,
         updated=updated,
         skipped=skipped,
+        session_ids_count=len(session_ids),
         warning_count=len(warnings),
+        warnings=warnings_preview,
     )
-    logger.info("Persisted %d sessions to calendar", len(session_ids))
+    logger.info(
+        "Persisted sessions to calendar",
+        session_count=len(session_ids),
+        created=created,
+        updated=updated,
+        skipped=skipped,
+    )
+
+    # Warn if no sessions were created or updated
+    if created == 0 and updated == 0:
+        logger.warning(
+            f"B7: No sessions were created or updated during persistence - "
+            f"attempted {total_sessions} sessions, all {skipped} were skipped. "
+            f"Warnings: {warnings[:3] if warnings else 'none'}",
+            plan_id=plan_id,
+            user_id=user_id,
+            athlete_id=athlete_id,
+            total_sessions_to_persist=total_sessions,
+            skipped=skipped,
+            session_ids_count=len(session_ids),
+            warnings=warnings,
+        )
 
     return PersistResult(
         plan_id=plan_id,

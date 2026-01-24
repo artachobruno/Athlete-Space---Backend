@@ -93,14 +93,39 @@ def plan_week_tool(arguments: dict) -> dict:
         raise MCPError("INVALID_INPUT", "Missing athlete_id")
 
     try:
+        logger.info(
+            "MCP plan_week_tool: Starting plan generation",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            has_feedback=user_feedback is not None,
+        )
         state = _parse_athlete_state(state_dict)
         result = asyncio.run(plan_week_tool_impl(state, user_id, athlete_id, user_feedback))
+        logger.info(
+            "MCP plan_week_tool: Plan generation completed",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            result_length=len(result) if result else 0,
+            result_preview=result[:200] if result else None,
+        )
     except MCPError:
         raise
     except PersistenceError as e:
+        logger.error(
+            "MCP plan_week_tool: Persistence failed",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            error=str(e),
+        )
         raise MCPError("CALENDAR_PERSISTENCE_FAILED", "calendar_persistence_failed") from e
     except Exception as e:
-        logger.error(f"Error planning week: {e}", exc_info=True)
+        logger.error(
+            "MCP plan_week_tool: Error planning week",
+            user_id=user_id,
+            athlete_id=athlete_id,
+            error=str(e),
+            exc_info=True,
+        )
         raise MCPError("INTERNAL_ERROR", f"Failed to plan week: {e!s}") from e
     else:
         return {"message": result}

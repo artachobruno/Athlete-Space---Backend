@@ -4,6 +4,7 @@ This is the single planning tool that handles all horizons (day, week, season).
 Revision is handled by passing current_plan parameter.
 """
 
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, cast
 
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from app.coach.executor.errors import ExecutionError
 from app.coach.mcp_client import MCPError, call_tool
 from app.coach.schemas.canonical_plan import CanonicalPlan, PlanSession
+from app.coach.schemas.training_plan_schemas import TrainingPlan
 from app.coach.tools.session_planner import save_planned_sessions
 from app.coach.utils.llm_client import CoachLLMClient
 from app.db.models import User
@@ -264,6 +266,9 @@ async def plan_tool(
     logger.info(f"Saved {saved_count} sessions for {horizon} plan")
     record_persistence_saved()
 
+    # Log plan structure, weeks, overview, and summary
+    _log_plan_details(training_plan, plan, horizon, user_id, athlete_id)
+
     # Generate response
     logger.debug(
         "unified_plan: Generating plan response",
@@ -271,7 +276,7 @@ async def plan_tool(
         saved_count=saved_count,
         session_count=len(plan.sessions),
     )
-    response_message = _generate_plan_response(plan, saved_count=saved_count)
+    response_message = _generate_plan_response(plan, training_plan, saved_count=saved_count)
     logger.debug(
         "unified_plan: Plan response generated",
         horizon=horizon,
@@ -465,11 +470,122 @@ async def _apply_replacement_rules(
         logger.warning(f"Could not check existing sessions: {e.message}")
 
 
-def _generate_plan_response(plan: CanonicalPlan, saved_count: int) -> str:
+def _log_plan_details(
+    training_plan: TrainingPlan,
+    plan: CanonicalPlan,
+    horizon: str,
+    user_id: str | None = None,
+    athlete_id: int | None = None,
+) -> None:
+    """Log plan structure, weeks, overview, and summary.
+
+    Args:
+        training_plan: Original TrainingPlan from LLM
+        plan: CanonicalPlan representation
+        horizon: Plan horizon
+        user_id: User ID for logging context
+        athlete_id: Athlete ID for logging context
+    """
+    # Extract structure: group sessions by week
+    weeks_data: dict[int, dict[str, Any]] = defaultdict(lambda: {
+        "session_count": 0,
+        "sessions": [],
+        "types": defaultdict(int),
+        "intensities": defaultdict(int),
+        "total_duration": 0,
+        "total_distance": 0.0,
+    })
+
+    for session in training_plan.sessions:
+        week_num = session.week_number
+        weeks_data[week_num]["session_count"] += 1
+        weeks_data[week_num]["sessions"].append({
+            "title": session.title,
+            "date": session.date.isoformat() if session.date else None,
+            "sport": session.sport,
+            "intensity": session.intensity,
+            "duration_minutes": session.duration_minutes,
+            "distance_km": session.distance_km,
+        })
+        weeks_data[week_num]["types"][session.sport] += 1
+        weeks_data[week_num]["intensities"][session.intensity] += 1
+        if session.duration_minutes:
+            weeks_data[week_num]["total_duration"] += session.duration_minutes
+        if session.distance_km:
+            weeks_data[week_num]["total_distance"] += session.distance_km
+
+    # Convert to sorted list for logging
+    weeks_list = sorted(weeks_data.items())
+    total_weeks = len(weeks_list)
+
+    # Log plan structure
+    structure = {
+        "total_weeks": total_weeks,
+        "total_sessions": len(training_plan.sessions),
+        "plan_type": training_plan.plan_type,
+        "horizon": horizon,
+        "start_date": plan.start_date.isoformat(),
+        "end_date": plan.end_date.isoformat(),
+        "duration_days": (plan.end_date - plan.start_date).days + 1,
+    }
+    logger.info(
+        "Training plan structure",
+        structure=structure,
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
+
+    # Log each week
+    for week_num, week_data in weeks_list:
+        week_info = {
+            "week_number": week_num,
+            "session_count": week_data["session_count"],
+            "session_types": dict(week_data["types"]),
+            "intensity_distribution": dict(week_data["intensities"]),
+            "total_duration_minutes": week_data["total_duration"],
+            "total_distance_km": week_data["total_distance"],
+            "sessions": week_data["sessions"],
+        }
+        logger.info(
+            f"Training plan week {week_num}",
+            week=week_info,
+            user_id=user_id,
+            athlete_id=athlete_id,
+        )
+
+    # Log overview (rationale)
+    logger.info(
+        "Training plan overview",
+        overview={
+            "rationale": training_plan.rationale,
+            "assumptions": training_plan.assumptions,
+        },
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
+
+    # Generate and log summary
+    summary = {
+        "total_weeks": total_weeks,
+        "total_sessions": len(training_plan.sessions),
+        "average_sessions_per_week": round(len(training_plan.sessions) / total_weeks, 1) if total_weeks > 0 else 0,
+        "plan_type": training_plan.plan_type,
+        "rationale_summary": training_plan.rationale[:200] + "..." if len(training_plan.rationale) > 200 else training_plan.rationale,
+    }
+    logger.info(
+        "Training plan summary",
+        summary=summary,
+        user_id=user_id,
+        athlete_id=athlete_id,
+    )
+
+
+def _generate_plan_response(plan: CanonicalPlan, training_plan: TrainingPlan, saved_count: int) -> str:
     """Generate human-readable response for plan creation.
 
     Args:
         plan: Created plan
+        training_plan: Original TrainingPlan from LLM
         saved_count: Number of sessions saved
 
     Returns:
@@ -477,15 +593,72 @@ def _generate_plan_response(plan: CanonicalPlan, saved_count: int) -> str:
     """
     horizon_name = {"day": "daily", "week": "weekly", "season": "season"}[plan.horizon]
 
+    # Extract structure: group sessions by week
+    weeks_data: dict[int, dict[str, Any]] = defaultdict(lambda: {
+        "session_count": 0,
+        "types": defaultdict(int),
+    })
+
+    for session in training_plan.sessions:
+        week_num = session.week_number
+        weeks_data[week_num]["session_count"] += 1
+        weeks_data[week_num]["types"][session.sport] += 1
+
+    weeks_list = sorted(weeks_data.items())
+    total_weeks = len(weeks_list)
+
+    # Build structure section
+    structure_lines = [
+        f"• **{total_weeks} weeks** of training",
+        f"• **{len(training_plan.sessions)} total sessions**",
+        f"• Plan type: **{training_plan.plan_type}**",
+    ]
+
+    # Build weeks section
+    weeks_section = ""
+    if total_weeks > 0:
+        weeks_lines = []
+        for week_num, week_data in weeks_list[:10]:  # Show first 10 weeks
+            session_count = week_data["session_count"]
+            types_str = ", ".join([f"{count} {sport}" for sport, count in sorted(week_data["types"].items())])
+            weeks_lines.append(f"  **Week {week_num}**: {session_count} sessions ({types_str})")
+        if total_weeks > 10:
+            weeks_lines.append(f"  ... and {total_weeks - 10} more weeks")
+        weeks_section = "\n".join(weeks_lines)
+
+    # Build overview section
+    overview_section = training_plan.rationale if training_plan.rationale else "No overview provided."
+
+    # Build summary section
+    avg_sessions = round(len(training_plan.sessions) / total_weeks, 1) if total_weeks > 0 else 0
+    summary_lines = [
+        f"• **{total_weeks} weeks** of structured training",
+        f"• **{len(training_plan.sessions)} sessions** total (~{avg_sessions} per week)",
+        f"• Duration: **{(plan.end_date - plan.start_date).days + 1} days**",
+    ]
+    if training_plan.assumptions:
+        summary_lines.append(f"• **{len(training_plan.assumptions)} assumptions** considered")
+
     save_status = f"• **{saved_count} training sessions** added to your calendar\n"
     calendar_note = "Your planned sessions are now available in your calendar!"
 
-    return (
+    response = (
         f"✅ **{horizon_name.capitalize()} Training Plan Created!**\n\n"
         f"I've generated a {horizon_name} plan from **{plan.start_date}** "
         f"to **{plan.end_date}**.\n\n"
-        f"**Plan Summary:**\n"
+        f"**Plan Structure:**\n"
+        + "\n".join(structure_lines) + "\n\n"
+    )
+
+    if weeks_section:
+        response += f"**Weekly Breakdown:**\n{weeks_section}\n\n"
+
+    response += (
+        f"**Plan Overview:**\n{overview_section}\n\n"
+        f"**Summary:**\n"
+        + "\n".join(summary_lines) + "\n\n"
         f"{save_status}"
-        f"• Plan duration: {(plan.end_date - plan.start_date).days + 1} days\n\n"
         f"{calendar_note}"
     )
+
+    return response

@@ -559,13 +559,77 @@ def sync_user_activities(user_id: str, max_retries: int = 2) -> dict[str, int | 
         return {"error": f"Sync failed after {max_retries + 1} attempts: {error_msg}", "user_id": user_id}
 
 
+def _should_sync_user(account: StravaAccount, session, now: datetime) -> tuple[bool, str]:
+    """Determine if a user should be synced based on last sync time and activity patterns.
+
+    Args:
+        account: StravaAccount object
+        session: Database session
+        now: Current datetime
+
+    Returns:
+        Tuple of (should_sync: bool, reason: str)
+    """
+    from app.db.models import Activity
+
+    # Always sync if never synced before
+    if not account.last_sync_at:
+        return True, "First sync"
+
+    time_since_sync = now - account.last_sync_at
+
+    # Skip if synced very recently (within last 1 hour) - too soon for new activities
+    if time_since_sync < timedelta(hours=1):
+        return False, f"Synced {time_since_sync.total_seconds() / 3600:.1f} hours ago (too recent)"
+
+    # Always sync if it's been more than 6 hours (scheduler runs every 6 hours)
+    # This ensures we catch up even if user hasn't been active
+    if time_since_sync >= timedelta(hours=6):
+        return True, f"Last sync was {time_since_sync.total_seconds() / 3600:.1f} hours ago (scheduled sync)"
+
+    # For 1-6 hours since last sync, check if user is active
+    # If user has activities in the last 7 days, they're likely to have new activities
+    recent_activity_date = now - timedelta(days=7)
+    recent_activity = session.execute(
+        select(Activity)
+        .where(
+            Activity.user_id == account.user_id,
+            Activity.starts_at >= recent_activity_date,
+        )
+        .order_by(Activity.starts_at.desc())
+        .limit(1)
+    ).first()
+
+    if recent_activity:
+        # User is active - sync if it's been 2+ hours (reasonable time for new activity)
+        if time_since_sync >= timedelta(hours=2):
+            return True, f"Active user, last sync {time_since_sync.total_seconds() / 3600:.1f} hours ago"
+        return False, f"Active user, but synced {time_since_sync.total_seconds() / 3600:.1f} hours ago (too soon)"
+    else:
+        # User hasn't been active recently - only sync if it's been 4+ hours
+        # This reduces unnecessary syncs for inactive users
+        if time_since_sync >= timedelta(hours=4):
+            return True, f"Inactive user, last sync {time_since_sync.total_seconds() / 3600:.1f} hours ago (checking for new activities)"
+        return False, f"Inactive user, synced {time_since_sync.total_seconds() / 3600:.1f} hours ago (unlikely to have new activities)"
+
+
 def sync_all_users() -> dict[str, int | list[dict[str, int | str]]]:
     """Sync activities for all users with Strava accounts.
+
+    Only syncs users when:
+    - Never synced before (first sync)
+    - Last sync was 6+ hours ago (scheduled sync)
+    - Active users: last sync was 2+ hours ago
+    - Inactive users: last sync was 4+ hours ago
+
+    This reduces unnecessary API calls while ensuring active users stay up-to-date.
 
     Returns:
         Dictionary with total users synced and results per user
     """
     logger.info("[SYNC] Starting sync for all users")
+
+    now = datetime.now(timezone.utc)
 
     with get_session() as session:
         accounts = session.execute(select(StravaAccount)).all()
@@ -577,10 +641,25 @@ def sync_all_users() -> dict[str, int | list[dict[str, int | str]]]:
         logger.info(f"[SYNC] Found {len(accounts)} user(s) to sync")
 
         results = []
+        skipped_count = 0
         for account_row in accounts:
             account = account_row[0]
             user_id = account.user_id
 
+            # Check if user should be synced
+            should_sync, reason = _should_sync_user(account, session, now)
+
+            if not should_sync:
+                logger.debug(f"[SYNC] Skipping user_id={user_id} - {reason}")
+                skipped_count += 1
+                results.append({
+                    "skipped": True,
+                    "reason": reason,
+                    "user_id": user_id,
+                })
+                continue
+
+            logger.info(f"[SYNC] Syncing user_id={user_id} - {reason}")
             try:
                 result = sync_user_activities(user_id)
                 results.append(result)
@@ -588,13 +667,17 @@ def sync_all_users() -> dict[str, int | list[dict[str, int | str]]]:
                 logger.exception(f"[SYNC] Failed to sync user_id={user_id}: {e!s}")
                 results.append({"error": f"Failed to sync: {e!s}", "user_id": user_id})
 
-        successful = sum(1 for r in results if "error" not in r)
-        logger.info(f"[SYNC] Sync complete: {successful}/{len(accounts)} users synced successfully")
+        successful = sum(1 for r in results if "error" not in r and r.get("skipped") is not True)
+        logger.info(
+            f"[SYNC] Sync complete: {successful}/{len(accounts)} users synced successfully, "
+            f"{skipped_count} skipped (no new activities expected)"
+        )
 
         return {
             "total_users": len(accounts),
             "successful": successful,
-            "failed": len(accounts) - successful,
+            "skipped": skipped_count,
+            "failed": len(accounts) - successful - skipped_count,
             "results": results,
         }
 

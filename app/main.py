@@ -59,7 +59,9 @@ from app.core.observe import init as observe_init
 from app.db.models import Base
 from app.db.schema_check import verify_schema
 from app.db.session import get_engine
+from app.domains.training_plan.philosophy_selector_semantic import initialize_philosophy_vector_store
 from app.domains.training_plan.template_loader import initialize_template_library_from_cache
+from app.domains.training_plan.week_structure_selector_semantic import initialize_week_structure_vector_store
 from app.ingestion.api import router as ingestion_strava_router
 from app.ingestion.scheduler import ingestion_tick
 from app.ingestion.sync_scheduler import sync_tick
@@ -760,6 +762,32 @@ async def deferred_heavy_init():
         logger.error(
             "[TEMPLATE_LIBRARY] Planner will not work until template library is initialized. "
             "Run: python scripts/precompute_embeddings.py --templates"
+        )
+
+    # Step 3b: Initialize philosophy vector store (cache to reduce memory usage)
+    try:
+        logger.info("[PHILOSOPHY_VECTOR_STORE] Initializing philosophy vector store cache")
+        initialize_philosophy_vector_store()
+        logger.info("[PHILOSOPHY_VECTOR_STORE] Philosophy vector store initialized successfully")
+    except Exception as e:
+        logger.exception("[PHILOSOPHY_VECTOR_STORE] Failed to initialize philosophy vector store: {}", e)
+        # Non-critical - will fall back to loading on-demand, but less efficient
+        logger.warning(
+            "[PHILOSOPHY_VECTOR_STORE] Philosophy selection will work but may be slower. "
+            "Run: python scripts/precompute_embeddings.py --philosophies"
+        )
+
+    # Step 3c: Initialize week structure vector store (cache to reduce memory usage)
+    try:
+        logger.info("[WEEK_STRUCTURE_VECTOR_STORE] Initializing week structure vector store cache")
+        initialize_week_structure_vector_store()
+        logger.info("[WEEK_STRUCTURE_VECTOR_STORE] Week structure vector store initialized successfully")
+    except Exception as e:
+        logger.exception("[WEEK_STRUCTURE_VECTOR_STORE] Failed to initialize week structure vector store: {}", e)
+        # Non-critical - will fall back to loading on-demand, but less efficient
+        logger.warning(
+            "[WEEK_STRUCTURE_VECTOR_STORE] Week structure selection will work but may be slower. "
+            "Run: python scripts/precompute_embeddings.py --week-structures"
         )
 
     # Step 4: Run initial sync/ingestion ticks (non-blocking - don't wait for completion)

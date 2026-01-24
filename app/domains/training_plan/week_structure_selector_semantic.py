@@ -36,6 +36,10 @@ from app.planning.structure.types import StructureSpec
 CACHE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "embeddings"
 WEEK_STRUCTURES_CACHE = CACHE_DIR / "week_structures.json"
 
+# Global cache for week structure vector store (loaded once at startup)
+_week_structure_vector_store: VectorStore | None = None
+_embedded_structures_cache: list[EmbeddedStructureSpec] | None = None
+
 
 @dataclass
 class EmbeddedStructureSpec:
@@ -86,7 +90,7 @@ def _load_week_structure_vector_store() -> VectorStore:
 
 
 def _load_all_structures_with_embeddings() -> list[EmbeddedStructureSpec]:
-    """Load all structures with their embeddings.
+    """Load all structures with their embeddings (cached globally).
 
     Computes embeddings on-the-fly for structures missing from cache.
 
@@ -96,12 +100,18 @@ def _load_all_structures_with_embeddings() -> list[EmbeddedStructureSpec]:
     Raises:
         RuntimeError: If cache not found or structures can't be loaded
     """
+    global _embedded_structures_cache
+
+    # Return cached version if available
+    if _embedded_structures_cache is not None:
+        return _embedded_structures_cache
+
     # Load all structures from files
     all_structures = load_all_structures()
 
-    # Load vector store with embeddings (may be empty if cache doesn't exist)
+    # Load vector store with embeddings (uses global cache, may be empty if cache doesn't exist)
     try:
-        vector_store = _load_week_structure_vector_store()
+        vector_store = _get_week_structure_vector_store()
     except RuntimeError:
         # Cache doesn't exist - we'll compute all embeddings on-the-fly
         logger.warning(
@@ -142,7 +152,51 @@ def _load_all_structures_with_embeddings() -> list[EmbeddedStructureSpec]:
             )
             logger.debug(f"Computed embedding for structure {spec.metadata.id}")
 
+    # Cache the result
+    _embedded_structures_cache = embedded_structures
     return embedded_structures
+
+
+def _get_week_structure_vector_store() -> VectorStore:
+    """Get cached week structure vector store (loads once, then reuses).
+
+    Returns:
+        Cached VectorStore instance
+
+    Raises:
+        RuntimeError: If cache not found
+    """
+    global _week_structure_vector_store
+
+    if _week_structure_vector_store is not None:
+        return _week_structure_vector_store
+
+    try:
+        _week_structure_vector_store = _load_week_structure_vector_store()
+    except RuntimeError:
+        # Cache doesn't exist - create empty store
+        logger.warning(
+            "Week structure embeddings cache not found. Using empty vector store. "
+            "Run: python scripts/precompute_embeddings.py --week-structures to precompute."
+        )
+        _week_structure_vector_store = VectorStore([])
+
+    return _week_structure_vector_store
+
+
+def initialize_week_structure_vector_store() -> None:
+    """Initialize week structure vector store at startup.
+
+    This should be called once at application startup to load the vector store
+    into memory and cache it globally.
+
+    Note: This may create an empty store if cache doesn't exist, which is acceptable.
+    """
+    logger.info("Initializing week structure vector store cache")
+    _get_week_structure_vector_store()
+    # Pre-load embedded structures to cache them too
+    _load_all_structures_with_embeddings()
+    logger.info("Week structure vector store initialized and cached")
 
 
 def _map_session_type_to_day_type(session_type: str) -> DayType:
@@ -197,7 +251,7 @@ def load_week_structure_semantic(
         days_to_race=days_to_race,
     )
 
-    # Load ALL structures with embeddings (no filtering)
+    # Load ALL structures with embeddings (no filtering, uses global cache)
     all_embedded_structures = _load_all_structures_with_embeddings()
 
     if not all_embedded_structures:

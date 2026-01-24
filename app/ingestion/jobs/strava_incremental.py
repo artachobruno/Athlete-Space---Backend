@@ -16,6 +16,16 @@ def incremental_sync_user(user):
         dt.datetime.fromtimestamp(user.last_ingested_at, tz=dt.UTC) if user.last_ingested_at else dt.datetime.fromtimestamp(0, tz=dt.UTC)
     )
 
+    # Early exit: if last sync was very recent (e.g., < 1 hour), skip to avoid unnecessary API calls
+    time_since_sync = now - after
+    if time_since_sync < dt.timedelta(hours=1):
+        logger.debug(
+            f"[INCREMENTAL] Skipping incremental sync for athlete_id={user.athlete_id} - "
+            f"synced {time_since_sync.total_seconds() / 3600:.1f} hours ago "
+            f"(threshold: 1 hour)"
+        )
+        return
+
     # Always check for recent activities (last 48 hours) to ensure nothing is missing
     # This is a safety check to catch any activities that might have been missed
     recent_check_date = now - dt.timedelta(hours=48)

@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 
 from loguru import logger
@@ -16,12 +17,37 @@ class UserData(TypedDict):
     athlete_id: int
     backfill_done: bool
     backfill_updated_at: int | None
+    last_sync_at: datetime | None  # Optional: fetched from StravaAccount
 
 
 def _run_incremental_tasks(user_data: list[UserData]) -> None:
-    """Run incremental tasks for all users."""
+    """Run incremental tasks for all users, skipping recently synced ones."""
+    now = datetime.now(timezone.utc)
+    skip_threshold = timedelta(hours=1)  # Skip if synced within last hour
+
     for user_info in user_data:
         athlete_id = user_info["athlete_id"]
+        last_sync_at = user_info.get("last_sync_at")
+
+        # Skip if recently synced (check last_sync_at from StravaAccount)
+        if last_sync_at:
+            if isinstance(last_sync_at, datetime):
+                time_since_sync = now - last_sync_at
+            elif isinstance(last_sync_at, (int, float)):
+                # Handle timestamp
+                last_sync_dt = datetime.fromtimestamp(last_sync_at, tz=timezone.utc)
+                time_since_sync = now - last_sync_dt
+            else:
+                time_since_sync = None
+
+            if time_since_sync and time_since_sync < skip_threshold:
+                logger.debug(
+                    f"[SCHEDULER] Skipping incremental task for athlete_id={athlete_id} - "
+                    f"synced {time_since_sync.total_seconds() / 3600:.1f} hours ago "
+                    f"(threshold: {skip_threshold.total_seconds() / 3600:.1f} hours)"
+                )
+                continue
+
         try:
             logger.info(f"[SCHEDULER] Running incremental task for athlete_id={athlete_id}")
             incremental_task(athlete_id)
@@ -195,16 +221,27 @@ def ingestion_tick() -> None:
         logger.info(f"[SCHEDULER] Found {len(users)} user(s) to sync")
 
         # Extract user data while session is open
+        # Also fetch last_sync_at from StravaAccount to check if recently synced
+        from app.db.models import StravaAccount
+
         user_data_list: list[UserData] = []
         for user in users:
             athlete_id: int = user.athlete_id
             backfill_done_attr = getattr(user, "backfill_done", False)
             backfill_done: bool = backfill_done_attr if isinstance(backfill_done_attr, bool) else False
             backfill_updated_at: int | None = getattr(user, "backfill_updated_at", None)
+
+            # Get last_sync_at from StravaAccount (if exists)
+            last_sync_at = None
+            account = session.query(StravaAccount).filter_by(athlete_id=str(athlete_id)).first()
+            if account and account.last_sync_at:
+                last_sync_at = account.last_sync_at
+
             user_data_list.append({
                 "athlete_id": athlete_id,
                 "backfill_done": backfill_done,
                 "backfill_updated_at": backfill_updated_at,
+                "last_sync_at": last_sync_at,
             })
         user_data = user_data_list
 

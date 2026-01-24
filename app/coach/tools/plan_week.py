@@ -439,7 +439,7 @@ async def plan_week(
 
     # Calculate total sessions saved (created + updated)
     total_saved = saved_count + persist_result.updated
-    
+
     # Build message based on what happened
     if saved_count > 0 and persist_result.updated > 0:
         sessions_message = f"• **{saved_count} new sessions** added and **{persist_result.updated} sessions** updated in your calendar"
@@ -449,7 +449,7 @@ async def plan_week(
         sessions_message = f"• **{persist_result.updated} training sessions** updated in your calendar"
     else:
         sessions_message = f"• **0 training sessions** (all {persist_result.skipped} were skipped)"
-    
+
     return (
         f"✅ **Weekly Training Plan Created**\n\n"
         f"{sessions_message}\n"

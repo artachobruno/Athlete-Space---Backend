@@ -30,6 +30,10 @@ from app.embeddings.vector_store import EmbeddedItem, VectorStore
 CACHE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "embeddings"
 PHILOSOPHIES_CACHE = CACHE_DIR / "philosophies.json"
 
+# Global cache for philosophy vector store (loaded once at startup)
+_philosophy_vector_store: VectorStore | None = None
+_embedded_philosophies_cache: list[EmbeddedPhilosophyDoc] | None = None
+
 
 @dataclass
 class EmbeddedPhilosophyDoc:
@@ -80,7 +84,7 @@ def _load_philosophy_vector_store() -> VectorStore:
 
 
 def _load_all_philosophies_with_embeddings() -> list[EmbeddedPhilosophyDoc]:
-    """Load all philosophies with their embeddings.
+    """Load all philosophies with their embeddings (cached globally).
 
     Returns:
         List of EmbeddedPhilosophyDoc objects
@@ -88,11 +92,17 @@ def _load_all_philosophies_with_embeddings() -> list[EmbeddedPhilosophyDoc]:
     Raises:
         RuntimeError: If cache not found or philosophies can't be loaded
     """
+    global _embedded_philosophies_cache
+
+    # Return cached version if available
+    if _embedded_philosophies_cache is not None:
+        return _embedded_philosophies_cache
+
     # Load all philosophies from files
     all_philosophies = load_philosophies()
 
-    # Load vector store with embeddings
-    vector_store = _load_philosophy_vector_store()
+    # Load vector store with embeddings (uses global cache)
+    vector_store = _get_philosophy_vector_store()
 
     # Match philosophies with embeddings
     embedded_philosophies: list[EmbeddedPhilosophyDoc] = []
@@ -105,7 +115,43 @@ def _load_all_philosophies_with_embeddings() -> list[EmbeddedPhilosophyDoc]:
         else:
             logger.warning(f"No embedding found for philosophy {philosophy.id}, skipping")
 
+    # Cache the result
+    _embedded_philosophies_cache = embedded_philosophies
     return embedded_philosophies
+
+
+def _get_philosophy_vector_store() -> VectorStore:
+    """Get cached philosophy vector store (loads once, then reuses).
+
+    Returns:
+        Cached VectorStore instance
+
+    Raises:
+        RuntimeError: If cache not found
+    """
+    global _philosophy_vector_store
+
+    if _philosophy_vector_store is not None:
+        return _philosophy_vector_store
+
+    _philosophy_vector_store = _load_philosophy_vector_store()
+    return _philosophy_vector_store
+
+
+def initialize_philosophy_vector_store() -> None:
+    """Initialize philosophy vector store at startup.
+
+    This should be called once at application startup to load the vector store
+    into memory and cache it globally.
+
+    Raises:
+        RuntimeError: If cache not found
+    """
+    logger.info("Initializing philosophy vector store cache")
+    _get_philosophy_vector_store()
+    # Pre-load embedded philosophies to cache them too
+    _load_all_philosophies_with_embeddings()
+    logger.info("Philosophy vector store initialized and cached")
 
 
 def _determine_audience(athlete_state: AthleteState) -> str:
@@ -177,7 +223,7 @@ def select_philosophy_semantic(
             audience=match.audience,
         )
 
-    # Load ALL philosophies with embeddings (no filtering)
+    # Load ALL philosophies with embeddings (no filtering, uses global cache)
     all_embedded_philosophies = _load_all_philosophies_with_embeddings()
 
     if not all_embedded_philosophies:

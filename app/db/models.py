@@ -1203,6 +1203,20 @@ class UserSettings(Base):  # noqa: PLR0904
         self._set_pref("workout_reminders", value)
 
     @property
+    def vocabulary_level(self) -> str | None:
+        """Coach vocabulary level (foundational, intermediate, advanced).
+        
+        Controls the canonical language layer used for workout names,
+        narratives, and LLM responses. Defaults to 'intermediate' if not set.
+        """
+        result = self._get_pref("vocabulary_level")
+        return str(result) if result else None
+
+    @vocabulary_level.setter
+    def vocabulary_level(self, value: str | None) -> None:
+        self._set_pref("vocabulary_level", value)
+
+    @property
     def training_load_alerts(self) -> bool:
         """Whether training load alerts are enabled."""
         return bool(self._get_pref("training_load_alerts", True))

@@ -96,12 +96,34 @@ def migrate_add_climate_tables() -> None:
         if not _table_exists(db, "activity_climate_samples"):
             logger.info("Creating activity_climate_samples table")
             if is_postgres:
-                db.execute(
+                # Detect actual type of activities.id
+                activity_id_type_result = db.execute(
                     text(
                         """
+                        SELECT data_type
+                        FROM information_schema.columns
+                        WHERE table_name = 'activities'
+                        AND column_name = 'id'
+                        """
+                    )
+                ).fetchone()
+                
+                activity_id_type = "VARCHAR"
+                if activity_id_type_result:
+                    db_type = activity_id_type_result[0]
+                    if db_type in ("uuid", "character varying"):
+                        if db_type == "uuid":
+                            activity_id_type = "UUID"
+                        else:
+                            activity_id_type = "VARCHAR"
+                    logger.info(f"Detected activities.id type: {db_type}, using {activity_id_type} for foreign key")
+                
+                db.execute(
+                    text(
+                        f"""
                         CREATE TABLE activity_climate_samples (
                           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                          activity_id VARCHAR NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+                          activity_id {activity_id_type} NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
                           sample_time TIMESTAMP WITH TIME ZONE NOT NULL,
                           lat DOUBLE PRECISION,
                           lon DOUBLE PRECISION,

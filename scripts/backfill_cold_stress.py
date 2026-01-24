@@ -48,9 +48,9 @@ def backfill_cold_stress() -> dict[str, int]:
     db: Session = SessionLocal()
     try:
         # Find activities with climate data but missing cold stress fields
+        # Check for temperature and wind directly (more defensive - works even if has_climate_data doesn't exist)
         activities = db.execute(
             select(Activity).where(
-                Activity.has_climate_data.is_(True),
                 Activity.avg_temperature_c.isnot(None),
                 Activity.wind_avg_mps.isnot(None),
             )

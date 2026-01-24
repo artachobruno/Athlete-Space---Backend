@@ -58,14 +58,15 @@ def backfill_heat_acclimation(days: int = 60) -> dict[str, int]:
     db: Session = SessionLocal()
     try:
         # Get all unique user_ids with activities in date range
+        # Check for heat_stress_index directly (more defensive - works even if has_climate_data doesn't exist)
         user_ids_result = db.execute(
             text(
                 """
                 SELECT DISTINCT user_id
                 FROM activities
                 WHERE starts_at >= :cutoff_date
-                AND has_climate_data = TRUE
                 AND heat_stress_index IS NOT NULL
+                AND heat_stress_index >= 0.50
                 ORDER BY user_id
                 """
             ),
@@ -82,12 +83,12 @@ def backfill_heat_acclimation(days: int = 60) -> dict[str, int]:
             logger.info(f"Processing user {user_id}")
 
             # Get all activities for this user in chronological order
+            # Check for heat_stress_index directly (more defensive)
             activities = db.execute(
                 select(Activity)
                 .where(
                     Activity.user_id == user_id,
                     Activity.starts_at >= cutoff_date,
-                    Activity.has_climate_data.is_(True),
                     Activity.heat_stress_index.isnot(None),
                     Activity.heat_stress_index >= 0.50,  # Only activities with meaningful heat
                 )

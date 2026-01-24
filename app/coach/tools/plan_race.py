@@ -1049,7 +1049,8 @@ async def create_and_save_plan_new(
         )
 
         # Extract persistence status from result
-        saved_count = result.get("saved_count", 0)
+        saved_count_raw = result.get("saved_count", 0)
+        saved_count = int(saved_count_raw) if isinstance(saved_count_raw, (int, str)) else 0
         persistence_status = result.get("persistence_status", "degraded")
 
         # Log persistence status for frontend banner, AI dashboard, ops tracking, future retry jobs

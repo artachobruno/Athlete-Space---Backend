@@ -30,10 +30,6 @@ from app.embeddings.vector_store import EmbeddedItem, VectorStore
 CACHE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "embeddings"
 PHILOSOPHIES_CACHE = CACHE_DIR / "philosophies.json"
 
-# Global cache for philosophy vector store (loaded once at startup)
-_philosophy_vector_store: VectorStore | None = None
-_embedded_philosophies_cache: list[EmbeddedPhilosophyDoc] | None = None
-
 
 @dataclass
 class EmbeddedPhilosophyDoc:
@@ -51,6 +47,12 @@ class EmbeddedPhilosophyDoc:
     def id(self) -> str:
         """Get philosophy ID for logging."""
         return self.philosophy.id
+
+
+# Global cache for philosophy vector store (loaded once at startup)
+# Defined after EmbeddedPhilosophyDoc to avoid forward reference issues
+_philosophy_vector_store: VectorStore | None = None
+_embedded_philosophies_cache: list[EmbeddedPhilosophyDoc] | None = None
 
 
 def _load_philosophy_vector_store() -> VectorStore:

@@ -265,6 +265,7 @@ def get_activities(
                 "has_streams": getattr(activity, "streams_data", None) is not None,
                 "planned_session_id": planned_session_id,  # Include pairing info
                 "coach_feedback": coach_feedback,  # Include coach feedback from workout interpretation
+                "conditions_label": activity.conditions_label,  # Climate conditions label (UI-facing)
             })
 
         logger.info(f"[ACTIVITIES] Returning {len(activities)} activities (total: {total})")
@@ -341,6 +342,7 @@ def get_activity(
             "streams_data": activity.streams_data,
             "created_at": activity.created_at.isoformat(),
             "coach_feedback": coach_feedback,  # Include coach feedback from workout interpretation
+            "conditions_label": activity.conditions_label,  # Climate conditions label (UI-facing)
         }
 
 

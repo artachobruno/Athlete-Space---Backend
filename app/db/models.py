@@ -177,6 +177,20 @@ class Activity(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    # Climate summary columns (coach-facing)
+    has_climate_data: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    avg_temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_dew_point_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_dew_point_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_avg_mps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    precip_total_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    heat_stress_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    conditions_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    heat_tss_adjustment_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    adjusted_tss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    climate_model_version: Mapped[str | None] = mapped_column(String, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("user_id", "source", "source_activity_id", name="uq_activity_user_source_id"),
         Index("idx_activities_user_time", "user_id", "starts_at"),  # Common query: user activities by date range
@@ -1792,4 +1806,59 @@ class AthleteBio(Base):
     __table_args__ = (
         Index("idx_athlete_bios_user_id", "user_id"),
         Index("idx_athlete_bios_stale", "stale"),
+    )
+
+
+class ActivityClimateSample(Base):
+    """Raw climate samples for activities.
+
+    Stores time-series climate data sampled during activity ingestion.
+    Each sample represents weather conditions at a specific time/location.
+    """
+
+    __tablename__ = "activity_climate_samples"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    activity_id: Mapped[str] = mapped_column(String, ForeignKey("activities.id", ondelete="CASCADE"), nullable=False, index=True)
+    sample_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    humidity_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dew_point_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_speed_mps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_direction_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    precip_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    source: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("idx_activity_climate_samples_activity_time", "activity_id", "sample_time"),
+    )
+
+
+class AthleteClimateProfile(Base):
+    """Athlete climate baseline for comparison.
+
+    Stores athlete's hometown climate context and baseline metrics.
+    Used for comparing activity conditions to athlete's normal environment.
+    """
+
+    __tablename__ = "athlete_climate_profile"
+
+    athlete_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    home_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    home_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    climate_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    avg_summer_temp_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_summer_dew_point_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )

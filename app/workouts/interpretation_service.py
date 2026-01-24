@@ -9,7 +9,9 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.workouts.execution_models import StepCompliance, WorkoutComplianceSummary
+from app.coach.utils.climate_feedback import get_climate_feedback_context
+from app.db.models import Activity
+from app.workouts.execution_models import StepCompliance, WorkoutComplianceSummary, WorkoutExecution
 from app.workouts.llm.evaluator import WorkoutLLMEvaluator
 from app.workouts.models import WorkoutStep
 from app.workouts.targets_utils import get_target_max, get_target_metric, get_target_min, get_target_value
@@ -111,6 +113,22 @@ class InterpretationService:
 
             planned_target = InterpretationService._format_planned_target(step)
 
+            # Get climate context for activity if available
+            weather_context = None
+            workout_execution = (
+                session.execute(select(WorkoutExecution).where(WorkoutExecution.workout_id == workout_id))
+                .scalar_one_or_none()
+            )
+            if workout_execution and workout_execution.activity_id:
+                activity = session.get(Activity, workout_execution.activity_id)
+                if activity:
+                    duration_min = (activity.duration_seconds / 60.0) if activity.duration_seconds else None
+                    weather_context = get_climate_feedback_context(
+                        activity_id=activity.id,
+                        sport=activity.sport,
+                        duration_min=duration_min,
+                    )
+
             # Generate interpretation
             interpretation = await self.evaluator.evaluate_step(
                 step_type=step.step_type,  # Use step_type from database model
@@ -119,7 +137,7 @@ class InterpretationService:
                 overshoot_pct=overshoot_pct,
                 undershoot_pct=undershoot_pct,
                 pause_seconds=compliance.pause_seconds,
-                weather=None,  # TODO: Add weather context if available
+                weather=weather_context,
                 fatigue=None,  # TODO: Add fatigue context if available
             )
 

@@ -437,9 +437,6 @@ async def plan_week(
             athlete_id=athlete_id,
         )
 
-    # Calculate total sessions saved (created + updated)
-    total_saved = saved_count + persist_result.updated
-
     # Build message based on what happened
     if saved_count > 0 and persist_result.updated > 0:
         sessions_message = f"• **{saved_count} new sessions** added and **{persist_result.updated} sessions** updated in your calendar"

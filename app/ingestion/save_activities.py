@@ -15,10 +15,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, StravaAccount, UserSettings
+from app.ingestion.climate_sampling import sample_activity_climate
 from app.metrics.computation_service import trigger_recompute_on_new_activities
 from app.metrics.effort_service import compute_activity_effort
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
 from app.pairing.auto_pairing_service import try_auto_pair
+from app.processing.activity_climate_aggregator import aggregate_activity_climate
 from app.services.intelligence.scheduler import trigger_daily_decision_for_user
 from app.state.models import ActivityRecord
 from app.utils.sport_utils import normalize_sport_type
@@ -279,6 +281,17 @@ def _create_new_activity(
         try_auto_pair(activity=activity, session=session)
     except Exception as e:
         logger.warning(f"[SAVE_ACTIVITIES] Auto-pairing failed for activity {strava_id}: {e}")
+
+    # Sample climate data if GPS is available
+    if streams_data is not None:
+        try:
+            samples_count = sample_activity_climate(session, activity)
+            if samples_count > 0:
+                # Aggregate climate data immediately after sampling
+                session.commit()  # Commit samples first
+                aggregate_activity_climate(session, activity)
+        except Exception as e:
+            logger.warning(f"[SAVE_ACTIVITIES] Climate sampling/aggregation failed for activity {strava_id}: {e}")
 
     logger.info(f"[SAVE_ACTIVITIES] Added new activity: {strava_id} for user {user_id}")
 

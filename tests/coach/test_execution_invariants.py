@@ -273,7 +273,7 @@ async def test_plan_week_fails_if_not_persisted(deps):
         should_execute=True,
     )
 
-    async def _mock_plan_week_return_not_saved(*args, **kwargs):
+    def _mock_plan_week_return_not_saved(*args, **kwargs):
         return {"message": "Plan generated but not saved - calendar unavailable."}
 
     with (

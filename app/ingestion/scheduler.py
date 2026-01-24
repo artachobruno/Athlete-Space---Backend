@@ -222,8 +222,6 @@ def ingestion_tick() -> None:
 
         # Extract user data while session is open
         # Also fetch last_sync_at from StravaAccount to check if recently synced
-        from app.db.models import StravaAccount
-
         user_data_list: list[UserData] = []
         for user in users:
             athlete_id: int = user.athlete_id

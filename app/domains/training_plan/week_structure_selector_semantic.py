@@ -36,10 +36,6 @@ from app.planning.structure.types import StructureSpec
 CACHE_DIR = Path(__file__).parent.parent.parent.parent / "data" / "embeddings"
 WEEK_STRUCTURES_CACHE = CACHE_DIR / "week_structures.json"
 
-# Global cache for week structure vector store (loaded once at startup)
-_week_structure_vector_store: VectorStore | None = None
-_embedded_structures_cache: list[EmbeddedStructureSpec] | None = None
-
 
 @dataclass
 class EmbeddedStructureSpec:
@@ -57,6 +53,12 @@ class EmbeddedStructureSpec:
     def id(self) -> str:
         """Get structure ID for logging."""
         return self.spec.metadata.id
+
+
+# Global cache for week structure vector store (loaded once at startup)
+# Defined after EmbeddedStructureSpec to avoid forward reference issues
+_week_structure_vector_store: VectorStore | None = None
+_embedded_structures_cache: list[EmbeddedStructureSpec] | None = None
 
 
 def _load_week_structure_vector_store() -> VectorStore:

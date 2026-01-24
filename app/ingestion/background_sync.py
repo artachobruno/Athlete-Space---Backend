@@ -570,8 +570,6 @@ def _should_sync_user(account: StravaAccount, session, now: datetime) -> tuple[b
     Returns:
         Tuple of (should_sync: bool, reason: str)
     """
-    from app.db.models import Activity
-
     # Always sync if never synced before
     if not account.last_sync_at:
         return True, "First sync"
@@ -605,12 +603,11 @@ def _should_sync_user(account: StravaAccount, session, now: datetime) -> tuple[b
         if time_since_sync >= timedelta(hours=2):
             return True, f"Active user, last sync {time_since_sync.total_seconds() / 3600:.1f} hours ago"
         return False, f"Active user, but synced {time_since_sync.total_seconds() / 3600:.1f} hours ago (too soon)"
-    else:
-        # User hasn't been active recently - only sync if it's been 4+ hours
-        # This reduces unnecessary syncs for inactive users
-        if time_since_sync >= timedelta(hours=4):
-            return True, f"Inactive user, last sync {time_since_sync.total_seconds() / 3600:.1f} hours ago (checking for new activities)"
-        return False, f"Inactive user, synced {time_since_sync.total_seconds() / 3600:.1f} hours ago (unlikely to have new activities)"
+    # User hasn't been active recently - only sync if it's been 4+ hours
+    # This reduces unnecessary syncs for inactive users
+    if time_since_sync >= timedelta(hours=4):
+        return True, f"Inactive user, last sync {time_since_sync.total_seconds() / 3600:.1f} hours ago (checking for new activities)"
+    return False, f"Inactive user, synced {time_since_sync.total_seconds() / 3600:.1f} hours ago (unlikely to have new activities)"
 
 
 def sync_all_users() -> dict[str, int | list[dict[str, int | str]]]:

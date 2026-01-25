@@ -38,8 +38,16 @@ MAX_WEEKLY_EXPLANATION_LENGTH = 1000
 MIN_DAILY_EXPLANATION_LENGTH = 50
 MAX_DAILY_EXPLANATION_LENGTH = 500
 
-# Allowed recommendation types for daily decisions
-ALLOWED_DAILY_RECOMMENDATIONS = {"rest", "easy", "moderate", "hard", "race"}
+# Allowed recommendation types for daily decisions (must match DailyDecision schema and daily_decision.txt)
+ALLOWED_DAILY_RECOMMENDATIONS = {
+    "rest",
+    "easy",
+    "easy_with_caution",
+    "moderate",
+    "moderate_with_caution",
+    "hard",
+    "race",
+}
 
 # Allowed risk levels
 ALLOWED_RISK_LEVELS = {"none", "low", "medium", "high"}

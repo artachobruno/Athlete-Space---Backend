@@ -22,6 +22,7 @@ from app.coach.services.response_postprocessor import postprocess_response
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
 from app.coach.utils.context_management import save_context
+from app.coach.utils.plan_items_filter import filter_athlete_facing_plan_items
 from app.coach.utils.schemas import (
     ActionStepResponse,
     CoachChatRequest,
@@ -666,14 +667,16 @@ async def coach_chat(
             conversation_id,
             normalized_user_message.content,
         )
-        # Return immediately with acknowledgment message
+        # Return immediately with acknowledgment message.
+        # Never attach plan_items/show_plan here (Fix 1 & 3): planner trace must not leak.
+        # Real plan is delivered via progress/final when execution completes.
         return CoachChatResponse(
             intent=decision.intent,
             reply="I'm working on your request. You'll see updates as I progress.",
             conversation_id=conversation_id,
             response_type=decision.response_type,
-            show_plan=decision.show_plan,
-            plan_items=decision.plan_items,
+            show_plan=False,
+            plan_items=None,
         )
 
     # For read-only actions or NO_ACTION, execute synchronously (fast, non-blocking)
@@ -690,8 +693,8 @@ async def coach_chat(
             ),
             conversation_id=conversation_id,
             response_type=decision.response_type,
-            show_plan=decision.show_plan,
-            plan_items=decision.plan_items,
+            show_plan=False,
+            plan_items=None,
         )
     except ExecutionError:
         raise
@@ -701,8 +704,8 @@ async def coach_chat(
             reply="I need a bit more detail before I can make that change. What would you like to modify?",
             conversation_id=conversation_id,
             response_type=decision.response_type,
-            show_plan=decision.show_plan,
-            plan_items=decision.plan_items,
+            show_plan=False,
+            plan_items=None,
         )
 
     # Style LLM: Rewrite structured decision into natural coach message
@@ -769,13 +772,23 @@ async def coach_chat(
         # Fallback to original reply if normalization fails
         reply_content = reply
 
+    # Fix 2: Clarify gate – never show plan when asking for clarification
+    is_clarify = bool(decision.missing_slots)
+    if is_clarify:
+        out_show_plan = False
+        out_plan_items = None
+    else:
+        filtered = filter_athlete_facing_plan_items(decision.plan_items)
+        out_plan_items = filtered
+        out_show_plan = bool(decision.show_plan and filtered)
+
     return CoachChatResponse(
         intent=decision.intent,
         reply=reply_content,
         conversation_id=conversation_id,
         response_type=decision.response_type,
-        show_plan=decision.show_plan,
-        plan_items=decision.plan_items,
+        show_plan=out_show_plan,
+        plan_items=out_plan_items,
     )
 
 

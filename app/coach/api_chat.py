@@ -772,7 +772,7 @@ async def coach_chat(
         # Fallback to original reply if normalization fails
         reply_content = reply
 
-    # Fix 2: Clarify gate – never show plan when asking for clarification
+    # Fix 2: Clarify gate - never show plan when asking for clarification
     is_clarify = bool(decision.missing_slots)
     if is_clarify:
         out_show_plan = False

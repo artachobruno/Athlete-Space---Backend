@@ -1,5 +1,4 @@
-"""
-Canonical Coach Vocabulary System
+"""Canonical Coach Vocabulary System.
 
 This module provides the shared language layer that sits between internal logic
 and presentation. It provides deterministic, coach-written workout names that
@@ -24,14 +23,25 @@ from typing import Literal
 
 CoachVocabularyLevel = Literal["foundational", "intermediate", "advanced"]
 
+
+def normalize_vocabulary_level(s: str | None) -> CoachVocabularyLevel:
+    """Return a valid CoachVocabularyLevel, defaulting to intermediate."""
+    if s == "foundational":
+        return "foundational"
+    if s == "intermediate":
+        return "intermediate"
+    if s == "advanced":
+        return "advanced"
+    return "intermediate"
+
+
 # Calendar sport types (matches frontend CalendarSport)
 CalendarSport = Literal["run", "ride", "swim", "strength", "race", "other"]
 
 # Calendar intent types (matches frontend CalendarIntent)
 CalendarIntent = Literal["easy", "steady", "tempo", "intervals", "long", "rest"]
 
-# Canonical workout display names
-# Structure: workout_display_names[sport][intent][vocabulary_level]
+# Canonical workout display names (keys: sport -> intent -> vocabulary_level)
 WORKOUT_DISPLAY_NAMES: dict[
     CalendarSport,
     dict[CalendarIntent, dict[CoachVocabularyLevel, str]],
@@ -233,27 +243,27 @@ WORKOUT_DISPLAY_NAMES: dict[
 
 def normalize_calendar_sport(sport: str | None, title: str | None = None) -> CalendarSport:
     """Normalize backend sport type to calendar sport type.
-    
+
     Args:
         sport: Backend sport string (e.g., 'run', 'running', 'Run')
         title: Optional title to check for race keywords
-        
+
     Returns:
         Normalized calendar sport type
     """
     if not sport:
         return "other"
-    
+
     lower = sport.lower()
     title_lower = (title or "").lower()
-    
+
     # Check title first for race/event keywords
     if any(
         keyword in title_lower
         for keyword in ["race", "marathon", "5k", "10k", "half marathon", "ironman", "triathlon", "event"]
     ):
         return "race"
-    
+
     if "race" in lower or "event" in lower:
         return "race"
     if "run" in lower or lower == "running":
@@ -264,24 +274,24 @@ def normalize_calendar_sport(sport: str | None, title: str | None = None) -> Cal
         return "swim"
     if "strength" in lower or "weight" in lower or "gym" in lower:
         return "strength"
-    
+
     return "other"
 
 
 def normalize_calendar_intent(intent: str | None) -> CalendarIntent:
     """Normalize backend intent type to calendar intent type.
-    
+
     Args:
         intent: Backend intent string (e.g., 'easy', 'recovery', 'aerobic')
-        
+
     Returns:
         Normalized calendar intent type
     """
     if not intent:
         return "easy"
-    
+
     lower = intent.lower()
-    
+
     if "easy" in lower or "recovery" in lower or "aerobic" in lower:
         return "easy"
     if "steady" in lower or "endurance" in lower:
@@ -294,7 +304,7 @@ def normalize_calendar_intent(intent: str | None) -> CalendarIntent:
         return "long"
     if "rest" in lower or "off" in lower:
         return "rest"
-    
+
     return "easy"
 
 
@@ -305,58 +315,58 @@ def resolve_workout_display_name(
     title: str | None = None,
 ) -> str:
     """Resolve canonical coach vocabulary for workout display names.
-    
+
     This is the shared language layer that provides deterministic workout
     names based on sport, intent, and vocabulary level. Used by:
-    
+
     - UI card titles (via calendarAdapter)
     - Weekly narrative text (future)
     - Modal narrative blocks (future)
     - LLM coach responses (as a consumer, not generator)
-    
+
     The LLM coach should reference these names but never invent new ones.
     This ensures consistent coach voice across all touchpoints.
-    
+
     Args:
         sport: Backend sport type (e.g., 'run', 'ride', 'swim')
         intent: Backend intent type (e.g., 'easy', 'tempo', 'long')
         vocabulary_level: Coach vocabulary level (defaults to 'intermediate')
         title: Optional title for sport normalization (checks for race keywords)
-        
+
     Returns:
         Canonical workout display name
-        
+
     Examples:
         >>> resolve_workout_display_name('run', 'easy', 'intermediate')
         'Aerobic Maintenance Run'
-        
+
         >>> resolve_workout_display_name('run', 'tempo', 'advanced')
         'Lactate Threshold Tempo'
-        
+
         >>> resolve_workout_display_name('run', 'easy')  # defaults to intermediate
         'Aerobic Maintenance Run'
     """
     level: CoachVocabularyLevel = vocabulary_level or "intermediate"
-    
+
     normalized_sport = normalize_calendar_sport(sport, title)
     normalized_intent = normalize_calendar_intent(intent)
-    
+
     sport_names = WORKOUT_DISPLAY_NAMES.get(normalized_sport)
     if not sport_names:
         return intent or "Workout"
-    
+
     intent_names = sport_names.get(normalized_intent)
     if not intent_names:
         return intent or "Workout"
-    
+
     display_name = intent_names.get(level)
     if display_name:
         return display_name
-    
+
     # Fallback to intermediate if level not found
     fallback_name = intent_names.get("intermediate")
     if fallback_name:
         return fallback_name
-    
+
     # Final fallback to intent string
     return intent or "Workout"

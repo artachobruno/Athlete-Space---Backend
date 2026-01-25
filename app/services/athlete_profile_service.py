@@ -170,7 +170,11 @@ def get_profile_schema(session: Session, user_id: str) -> AthleteProfileSchema:
         # Table doesn't exist yet (migration not run)
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "undefinedtable" in error_msg or "no such table" in error_msg:
-            logger.warning(f"athlete_bios table does not exist yet for user_id={user_id}, skipping bio retrieval. Run migrations to create the table.")
+            logger.warning(
+                "athlete_bios table does not exist yet for user_id=%s, skipping bio retrieval. "
+                "Run migrations to create the table.",
+                user_id,
+            )
         else:
             # Re-raise if it's a different programming error
             raise

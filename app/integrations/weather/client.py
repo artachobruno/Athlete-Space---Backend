@@ -111,7 +111,8 @@ class WeatherClient:
                 "Set OPENWEATHER_API_KEY to use OpenWeatherMap instead."
             )
 
-    def is_available(self) -> bool:
+    @staticmethod
+    def is_available() -> bool:
         """Return True if weather fetch is available (OWM or Open-Meteo)."""
         return True
 

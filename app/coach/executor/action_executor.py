@@ -44,6 +44,7 @@ from app.core.slot_extraction import generate_clarification_for_missing_slots
 from app.core.slot_gate import REQUIRED_SLOTS, validate_slots
 from app.db.models import Activity, AthleteProfile, PlannedSession, PlanRevision, SeasonPlan
 from app.db.session import get_session
+from app.domains.training_plan.template_loader import ensure_template_library_from_cache
 from app.orchestrator.routing import route_with_safety_check
 from app.planner.plan_day_simple import plan_single_day
 from app.planner.plan_race_simple import plan_race_simple
@@ -1661,6 +1662,9 @@ class CoachActionExecutor:
                 "should_execute": decision.should_execute,
             },
         )
+
+        # Ensure template library is initialized (lazy init if startup init not run yet or failed)
+        ensure_template_library_from_cache()
 
         # FIX 4: Hard guard - crash loudly if execution is attempted with missing slots
         # This ensures orchestrator bugs never reach MCP, failures are obvious not silent

@@ -34,6 +34,7 @@ def materialize_week(
         pace_min_per_mile: Pace model - minutes per mile
         generate_coach_text: Whether to generate optional coach text via LLM
         philosophy_tags: Optional philosophy tags for coach text context
+        vocabulary_level: Vocabulary level for canonical workout names (e.g. intermediate).
 
     Returns:
         List of ConcreteSession objects (rest days excluded)

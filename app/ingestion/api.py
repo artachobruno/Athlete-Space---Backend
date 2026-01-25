@@ -14,9 +14,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies.auth import get_current_user_id
+from app.coach.vocabulary_upgrade import auto_upgrade_vocabulary_level
 from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
-from app.db.models import Activity, StravaAccount, UserSettings
+from app.db.models import Activity, StravaAccount
+from app.db.models import UserSettings as UserSettingsModel
 from app.db.session import get_session
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
@@ -296,7 +298,7 @@ def ingest_activities(
 
             # Compute TSS (works with or without streams_data - uses HR/RPE fallbacks if streams not available)
             try:
-                user_settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                user_settings = session.query(UserSettingsModel).filter_by(user_id=user_id).first()
                 athlete_thresholds = _build_athlete_thresholds(user_settings)
                 tss = compute_activity_tss(activity, athlete_thresholds)
                 activity.tss = tss
@@ -393,7 +395,7 @@ def ingest_activities(
 
                     # Compute TSS (works with or without streams_data - uses HR/RPE fallbacks if streams not available)
                     try:
-                        user_settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                        user_settings = session.query(UserSettingsModel).filter_by(user_id=user_id).first()
                         athlete_thresholds = _build_athlete_thresholds(user_settings)
                         tss = compute_activity_tss(activity, athlete_thresholds)
                         activity.tss = tss
@@ -432,14 +434,11 @@ def ingest_activities(
         # Auto-upgrade vocabulary level if user meets criteria (non-blocking)
         if imported_count > 0:
             try:
-                from app.coach.vocabulary_upgrade import auto_upgrade_vocabulary_level
-                from app.db.models import UserSettings
-                
-                settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                user_settings = session.query(UserSettingsModel).filter_by(user_id=user_id).first()
                 upgraded = auto_upgrade_vocabulary_level(
                     session=session,
                     user_id=user_id,
-                    settings=settings,
+                    settings=user_settings,
                 )
                 if upgraded:
                     logger.info(
@@ -542,7 +541,7 @@ def strava_ingest(
         return result
 
 
-def _build_athlete_thresholds(user_settings: UserSettings | None) -> AthleteThresholds | None:
+def _build_athlete_thresholds(user_settings: UserSettingsModel | None) -> AthleteThresholds | None:
     """Build AthleteThresholds from UserSettings.
 
     Args:

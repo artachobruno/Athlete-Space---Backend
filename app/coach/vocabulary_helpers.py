@@ -8,16 +8,16 @@ from app.db.session import get_session
 
 def get_vocabulary_level_for_user(user_id: str | None) -> CoachVocabularyLevel:
     """Get vocabulary level for a user, defaulting to intermediate.
-    
+
     Args:
         user_id: User ID (None returns 'intermediate')
-        
+
     Returns:
         Coach vocabulary level
     """
     if not user_id:
         return "intermediate"
-    
+
     try:
         with get_session() as session:
             settings = session.query(UserSettings).filter_by(user_id=user_id).first()

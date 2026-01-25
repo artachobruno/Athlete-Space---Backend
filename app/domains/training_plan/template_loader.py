@@ -6,6 +6,7 @@ the template library for embedding-only selection.
 
 import json
 import re
+import threading
 from pathlib import Path
 
 import yaml
@@ -19,7 +20,10 @@ from app.domains.training_plan.session_template_selector import (
 from app.domains.training_plan.template_selector_embedding import (
     EmbeddedTemplate,
     initialize_template_library,
+    is_template_library_initialized,
 )
+
+_template_library_init_lock = threading.Lock()
 
 # Cache directory
 # Path from app/domains/training_plan/template_loader.py to project root:
@@ -169,6 +173,24 @@ def initialize_template_library_from_cache() -> None:
     templates = load_templates_with_embeddings()
     initialize_template_library(templates)
     logger.info("Template library initialized from cache")
+
+
+def ensure_template_library_from_cache() -> None:
+    r"""Ensure template library is initialized, lazy-initing from cache if needed.
+
+    Idempotent and thread-safe. Use before planner code that calls get_template_library()
+    (e.g. plan_race) to avoid "Template library not initialized" when startup init
+    has not run yet or failed.
+
+    Raises:
+        RuntimeError: If cache not found or template library cannot be initialized
+    """
+    if is_template_library_initialized():
+        return
+    with _template_library_init_lock:
+        if is_template_library_initialized():
+            return
+        initialize_template_library_from_cache()
 
 
 def load_all_session_templates(domain: str) -> list[tuple[SessionTemplate, list[float]]]:

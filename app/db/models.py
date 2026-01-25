@@ -1205,7 +1205,7 @@ class UserSettings(Base):  # noqa: PLR0904
     @property
     def vocabulary_level(self) -> str | None:
         """Coach vocabulary level (foundational, intermediate, advanced).
-        
+
         Controls the canonical language layer used for workout names,
         narratives, and LLM responses. Defaults to 'intermediate' if not set.
         """

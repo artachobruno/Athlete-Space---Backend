@@ -1794,9 +1794,9 @@ def _build_unified_profile_response(
 
     # Get vocabulary_level from settings (defaults to intermediate)
     vocabulary_level = prefs.get("vocabulary_level")
-    if vocabulary_level not in ("foundational", "intermediate", "advanced"):
+    if vocabulary_level not in {"foundational", "intermediate", "advanced"}:
         vocabulary_level = "intermediate"
-    
+
     return {
         "first_name": user_first_name,
         "last_name": user_last_name,

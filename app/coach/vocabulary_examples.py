@@ -1,5 +1,4 @@
-"""
-Examples: Using Canonical Coach Vocabulary in LLM Prompts
+"""Examples: Using Canonical Coach Vocabulary in LLM Prompts.
 
 This module demonstrates how to integrate the canonical coach vocabulary
 system into LLM prompts and coach text generation.
@@ -14,8 +13,8 @@ This ensures tone consistency and prevents language drift.
 from typing import TYPE_CHECKING
 
 from app.coach.vocabulary import (
-    resolve_workout_display_name,
     CoachVocabularyLevel,
+    resolve_workout_display_name,
 )
 
 if TYPE_CHECKING:
@@ -25,20 +24,20 @@ if TYPE_CHECKING:
 
 def get_user_vocabulary_level(settings: "UserSettings | None") -> CoachVocabularyLevel:
     """Get user's vocabulary level from settings, defaulting to intermediate.
-    
+
     Args:
         settings: User settings object (may be None)
-        
+
     Returns:
         Coach vocabulary level ('foundational', 'intermediate', or 'advanced')
     """
     if not settings:
         return "intermediate"
-    
+
     level = settings.vocabulary_level
-    if level in ("foundational", "intermediate", "advanced"):
+    if level in {"foundational", "intermediate", "advanced"}:
         return level  # type: ignore[return-value]
-    
+
     return "intermediate"
 
 
@@ -47,21 +46,21 @@ def build_llm_prompt_with_canonical_name(
     settings: "UserSettings | None",
 ) -> str:
     """Build LLM prompt that references canonical workout name.
-    
+
     Example of correct LLM integration:
     - LLM prompt includes canonical name
     - LLM references the name but doesn't invent it
     - LLM provides context around the canonical name
-    
+
     Args:
         session: Concrete session with sport and intent
         settings: User settings (for vocabulary level)
-        
+
     Returns:
         Formatted prompt string with canonical workout name
     """
     vocabulary_level = get_user_vocabulary_level(settings)
-    
+
     # Resolve canonical workout name
     canonical_name = resolve_workout_display_name(
         sport=session.sport,
@@ -69,9 +68,9 @@ def build_llm_prompt_with_canonical_name(
         vocabulary_level=vocabulary_level,
         title=session.title,
     )
-    
+
     # Build prompt that references canonical name
-    prompt = f"""Today's session: {canonical_name}
+    return f"""Today's session: {canonical_name}
 
 This is a {session.intent} session focusing on {_get_intent_purpose(session.intent)}.
 
@@ -89,15 +88,13 @@ Do NOT:
 
 Reference the session as: {canonical_name}
 """
-    
-    return prompt
 
 
 def _get_intent_purpose(intent: str | None) -> str:
     """Get purpose description for intent (helper for prompts)."""
     if not intent:
         return "aerobic development"
-    
+
     intent_lower = intent.lower()
     if "easy" in intent_lower or "recovery" in intent_lower:
         return "aerobic recovery and adaptation"
@@ -107,7 +104,7 @@ def _get_intent_purpose(intent: str | None) -> str:
         return "VO₂max development"
     if "long" in intent_lower or "endurance" in intent_lower:
         return "aerobic endurance development"
-    
+
     return "aerobic development"
 
 
@@ -117,18 +114,18 @@ def build_weekly_report_context_with_canonical_names(
     settings: "UserSettings | None",
 ) -> str:
     """Build weekly report context using canonical workout names.
-    
+
     Example showing how to use canonical names in weekly narratives.
-    
+
     Args:
         sessions: List of sessions for the week
         settings: User settings (for vocabulary level)
-        
+
     Returns:
         Formatted context string with canonical names
     """
     vocabulary_level = get_user_vocabulary_level(settings)
-    
+
     session_names = []
     for session in sessions:
         canonical_name = resolve_workout_display_name(
@@ -138,8 +135,8 @@ def build_weekly_report_context_with_canonical_names(
             title=session.title,
         )
         session_names.append(f"- {canonical_name}")
-    
-    context = f"""Weekly Training Summary:
+
+    return f"""Weekly Training Summary:
 
 Planned sessions this week:
 {chr(10).join(session_names)}
@@ -150,8 +147,6 @@ When generating the weekly report:
 - Use the vocabulary level: {vocabulary_level}
 - Maintain consistent coach voice
 """
-    
-    return context
 
 
 # Example: Session Title Generation (Fallback)
@@ -162,20 +157,20 @@ def generate_session_title_with_canonical_name(
     title: str | None = None,
 ) -> str:
     """Generate session title using canonical vocabulary.
-    
+
     Use this instead of generating titles from template_kind or inventing names.
-    
+
     Args:
         sport: Backend sport type
         intent: Backend intent type
         settings: User settings (for vocabulary level)
         title: Optional title for sport normalization
-        
+
     Returns:
         Canonical workout display name
     """
     vocabulary_level = get_user_vocabulary_level(settings)
-    
+
     return resolve_workout_display_name(
         sport=sport,
         intent=intent,
@@ -213,12 +208,12 @@ def add_vocabulary_guardrails_to_prompt(
     vocabulary_level: CoachVocabularyLevel,
 ) -> str:
     """Add vocabulary guardrails to LLM prompt.
-    
+
     Args:
         base_prompt: Base prompt text
         canonical_name: Canonical workout name to use
         vocabulary_level: User's vocabulary level
-        
+
     Returns:
         Prompt with guardrails added
     """
@@ -226,7 +221,7 @@ def add_vocabulary_guardrails_to_prompt(
         canonical_name=canonical_name,
         vocabulary_level=vocabulary_level,
     )
-    
+
     return f"""{base_prompt}
 
 {guardrails}

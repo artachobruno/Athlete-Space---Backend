@@ -84,6 +84,154 @@ def _column_exists(db, table_name: str, column_name: str) -> bool:
     return any(col[1] == column_name for col in result)
 
 
+def _resolve_activities_id_type(db) -> str:
+    """Resolve activities.id column type for PostgreSQL (UUID or VARCHAR)."""
+    if not _is_postgresql():
+        return "VARCHAR"
+    r = db.execute(
+        text(
+            """
+            SELECT data_type FROM information_schema.columns
+            WHERE table_name = 'activities' AND column_name = 'id'
+            """
+        )
+    ).fetchone()
+    if not r:
+        return "VARCHAR"
+    db_type = r[0]
+    if db_type == "uuid":
+        return "UUID"
+    if db_type == "character varying":
+        return "VARCHAR"
+    return "VARCHAR"
+
+
+def _resolve_users_id_type(db) -> str:
+    """Resolve users.id column type for PostgreSQL (UUID or VARCHAR)."""
+    if not _is_postgresql():
+        return "VARCHAR"
+    r = db.execute(
+        text(
+            """
+            SELECT data_type FROM information_schema.columns
+            WHERE table_name = 'users' AND column_name = 'id'
+            """
+        )
+    ).fetchone()
+    if not r:
+        return "VARCHAR"
+    db_type = r[0]
+    if db_type == "uuid":
+        return "UUID"
+    if db_type == "character varying":
+        return "VARCHAR"
+    return "VARCHAR"
+
+
+def _create_activity_climate_samples(db, is_postgres: bool) -> None:
+    """Create activity_climate_samples table."""
+    if is_postgres:
+        activity_id_type = _resolve_activities_id_type(db)
+        db.execute(
+            text(
+                f"""
+                CREATE TABLE activity_climate_samples (
+                  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                  activity_id {activity_id_type} NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+                  sample_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                  lat DOUBLE PRECISION,
+                  lon DOUBLE PRECISION,
+                  temperature_c REAL,
+                  humidity_pct REAL,
+                  dew_point_c REAL,
+                  wind_speed_mps REAL,
+                  wind_direction_deg REAL,
+                  precip_mm REAL,
+                  source TEXT,
+                  created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                CREATE INDEX idx_activity_climate_samples_activity_time
+                ON activity_climate_samples (activity_id, sample_time)
+                """
+            )
+        )
+    else:
+        db.execute(
+            text(
+                """
+                CREATE TABLE activity_climate_samples (
+                  id TEXT PRIMARY KEY,
+                  activity_id TEXT NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+                  sample_time TIMESTAMP NOT NULL,
+                  lat REAL,
+                  lon REAL,
+                  temperature_c REAL,
+                  humidity_pct REAL,
+                  dew_point_c REAL,
+                  wind_speed_mps REAL,
+                  wind_direction_deg REAL,
+                  precip_mm REAL,
+                  source TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                CREATE INDEX idx_activity_climate_samples_activity_time
+                ON activity_climate_samples (activity_id, sample_time)
+                """
+            )
+        )
+
+
+def _create_athlete_climate_profile(db, is_postgres: bool) -> None:
+    """Create athlete_climate_profile table."""
+    if is_postgres:
+        user_id_type = _resolve_users_id_type(db)
+        db.execute(
+            text(
+                f"""
+                CREATE TABLE athlete_climate_profile (
+                  athlete_id {user_id_type} PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                  home_lat DOUBLE PRECISION,
+                  home_lon DOUBLE PRECISION,
+                  climate_type TEXT,
+                  avg_summer_temp_c REAL,
+                  avg_summer_dew_point_c REAL,
+                  created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+                """
+            )
+        )
+    else:
+        db.execute(
+            text(
+                """
+                CREATE TABLE athlete_climate_profile (
+                  athlete_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                  home_lat REAL,
+                  home_lon REAL,
+                  climate_type TEXT,
+                  avg_summer_temp_c REAL,
+                  avg_summer_dew_point_c REAL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
+
 def migrate_add_climate_tables() -> None:
     """Add climate data tables and columns."""
     logger.info("Starting migration: add climate data tables and columns")
@@ -95,89 +243,7 @@ def migrate_add_climate_tables() -> None:
         # 1. Create activity_climate_samples table
         if not _table_exists(db, "activity_climate_samples"):
             logger.info("Creating activity_climate_samples table")
-            if is_postgres:
-                # Detect actual type of activities.id
-                activity_id_type_result = db.execute(
-                    text(
-                        """
-                        SELECT data_type
-                        FROM information_schema.columns
-                        WHERE table_name = 'activities'
-                        AND column_name = 'id'
-                        """
-                    )
-                ).fetchone()
-                
-                activity_id_type = "VARCHAR"
-                if activity_id_type_result:
-                    db_type = activity_id_type_result[0]
-                    if db_type in ("uuid", "character varying"):
-                        if db_type == "uuid":
-                            activity_id_type = "UUID"
-                        else:
-                            activity_id_type = "VARCHAR"
-                    logger.info(f"Detected activities.id type: {db_type}, using {activity_id_type} for foreign key")
-                
-                db.execute(
-                    text(
-                        f"""
-                        CREATE TABLE activity_climate_samples (
-                          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                          activity_id {activity_id_type} NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
-                          sample_time TIMESTAMP WITH TIME ZONE NOT NULL,
-                          lat DOUBLE PRECISION,
-                          lon DOUBLE PRECISION,
-                          temperature_c REAL,
-                          humidity_pct REAL,
-                          dew_point_c REAL,
-                          wind_speed_mps REAL,
-                          wind_direction_deg REAL,
-                          precip_mm REAL,
-                          source TEXT,
-                          created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
-                        )
-                        """
-                    )
-                )
-                db.execute(
-                    text(
-                        """
-                        CREATE INDEX idx_activity_climate_samples_activity_time
-                        ON activity_climate_samples (activity_id, sample_time)
-                        """
-                    )
-                )
-            else:
-                # SQLite
-                db.execute(
-                    text(
-                        """
-                        CREATE TABLE activity_climate_samples (
-                          id TEXT PRIMARY KEY,
-                          activity_id TEXT NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
-                          sample_time TIMESTAMP NOT NULL,
-                          lat REAL,
-                          lon REAL,
-                          temperature_c REAL,
-                          humidity_pct REAL,
-                          dew_point_c REAL,
-                          wind_speed_mps REAL,
-                          wind_direction_deg REAL,
-                          precip_mm REAL,
-                          source TEXT,
-                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                        """
-                    )
-                )
-                db.execute(
-                    text(
-                        """
-                        CREATE INDEX idx_activity_climate_samples_activity_time
-                        ON activity_climate_samples (activity_id, sample_time)
-                        """
-                    )
-                )
+            _create_activity_climate_samples(db, is_postgres)
             logger.info("Created activity_climate_samples table")
         else:
             logger.info("activity_climate_samples table already exists, skipping")
@@ -211,63 +277,7 @@ def migrate_add_climate_tables() -> None:
         # 3. Create athlete_climate_profile table
         if not _table_exists(db, "athlete_climate_profile"):
             logger.info("Creating athlete_climate_profile table")
-            if is_postgres:
-                # Detect actual type of users.id
-                user_id_type_result = db.execute(
-                    text(
-                        """
-                        SELECT data_type
-                        FROM information_schema.columns
-                        WHERE table_name = 'users'
-                        AND column_name = 'id'
-                        """
-                    )
-                ).fetchone()
-                
-                user_id_type = "VARCHAR"
-                if user_id_type_result:
-                    db_type = user_id_type_result[0]
-                    if db_type in ("uuid", "character varying"):
-                        if db_type == "uuid":
-                            user_id_type = "UUID"
-                        else:
-                            user_id_type = "VARCHAR"
-                    logger.info(f"Detected users.id type: {db_type}, using {user_id_type} for foreign key")
-                
-                db.execute(
-                    text(
-                        f"""
-                        CREATE TABLE athlete_climate_profile (
-                          athlete_id {user_id_type} PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-                          home_lat DOUBLE PRECISION,
-                          home_lon DOUBLE PRECISION,
-                          climate_type TEXT,
-                          avg_summer_temp_c REAL,
-                          avg_summer_dew_point_c REAL,
-                          created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-                          updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
-                        )
-                        """
-                    )
-                )
-            else:
-                # SQLite
-                db.execute(
-                    text(
-                        """
-                        CREATE TABLE athlete_climate_profile (
-                          athlete_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-                          home_lat REAL,
-                          home_lon REAL,
-                          climate_type TEXT,
-                          avg_summer_temp_c REAL,
-                          avg_summer_dew_point_c REAL,
-                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                        """
-                    )
-                )
+            _create_athlete_climate_profile(db, is_postgres)
             logger.info("Created athlete_climate_profile table")
         else:
             logger.info("athlete_climate_profile table already exists, skipping")

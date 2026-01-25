@@ -7,7 +7,7 @@ Uses canonical coach vocabulary for workout titles.
 
 from loguru import logger
 
-from app.coach.vocabulary import resolve_workout_display_name
+from app.coach.vocabulary import normalize_vocabulary_level, resolve_workout_display_name
 from app.domains.training_plan.models import SessionTextInput, SessionTextOutput
 
 
@@ -118,6 +118,7 @@ def generate_fallback_session_text(
 
     Args:
         input_data: Session text input
+        vocabulary_level: Optional vocabulary level for display names (unused in fallback).
 
     Returns:
         SessionTextOutput with fallback description
@@ -235,7 +236,7 @@ def generate_fallback_session_text(
     # Generate title using canonical coach vocabulary
     # Extract sport and intent from template_kind
     template_kind_lower = input_data.template_kind.lower()
-    
+
     # Map template_kind to sport (default: run)
     sport = "run"  # Default sport
     if "ride" in template_kind_lower or "bike" in template_kind_lower or "cycling" in template_kind_lower:
@@ -244,7 +245,7 @@ def generate_fallback_session_text(
         sport = "swim"
     elif "strength" in template_kind_lower or "weight" in template_kind_lower:
         sport = "strength"
-    
+
     # Map template_kind to intent
     intent = "easy"  # Default intent
     if "interval" in template_kind_lower or "cruise" in template_kind_lower:
@@ -255,12 +256,12 @@ def generate_fallback_session_text(
         intent = "long"
     elif "easy" in template_kind_lower or "recovery" in template_kind_lower:
         intent = "easy"
-    
+
     # Resolve canonical workout name
     title = resolve_workout_display_name(
         sport=sport,
         intent=intent,
-        vocabulary_level=vocabulary_level or "intermediate",
+        vocabulary_level=normalize_vocabulary_level(vocabulary_level),
     )
 
     output = SessionTextOutput(

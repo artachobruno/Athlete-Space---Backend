@@ -140,6 +140,11 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 _template_library: TemplateLibrary | None = None
 
 
+def is_template_library_initialized() -> bool:
+    """Return True if the global template library has been initialized."""
+    return _template_library is not None
+
+
 def initialize_template_library(templates: list[EmbeddedTemplate]) -> None:
     """Initialize global template library at startup.
 

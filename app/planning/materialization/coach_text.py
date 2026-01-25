@@ -24,7 +24,7 @@ from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
-from app.coach.vocabulary import resolve_workout_display_name
+from app.coach.vocabulary import normalize_vocabulary_level, resolve_workout_display_name
 from app.planning.errors import PlanningInvariantError
 from app.planning.library.session_template import SessionTemplate
 from app.planning.materialization.models import ConcreteSession
@@ -67,6 +67,7 @@ async def generate_coach_text(
         session: Concrete session (for context only - LLM may not change it)
         template: Session template (for intent/purpose)
         philosophy_tags: Optional philosophy tags for context
+        vocabulary_level: Vocabulary level for canonical workout names (e.g. intermediate).
 
     Returns:
         Coach text string, or None if generation fails or is disabled
@@ -78,7 +79,7 @@ async def generate_coach_text(
         # Resolve canonical workout name using vocabulary system
         # Extract sport and intent from session_type and template
         session_type_lower = session.session_type.lower()
-        
+
         # Map session_type to sport (default: run)
         sport = "run"
         if "ride" in session_type_lower or "bike" in session_type_lower or "cycling" in session_type_lower:
@@ -87,7 +88,7 @@ async def generate_coach_text(
             sport = "swim"
         elif "strength" in session_type_lower or "weight" in session_type_lower:
             sport = "strength"
-        
+
         # Map session_type to intent
         intent = "easy"
         if "interval" in session_type_lower or "cruise" in session_type_lower:
@@ -102,14 +103,14 @@ async def generate_coach_text(
             intent = "steady"
         elif "rest" in session_type_lower:
             intent = "rest"
-        
+
         canonical_name = resolve_workout_display_name(
             sport=sport,
             intent=intent,
-            vocabulary_level=vocabulary_level or "intermediate",
+            vocabulary_level=normalize_vocabulary_level(vocabulary_level),
             title=None,
         )
-        
+
         # Build user prompt with canonical name
         prompt_parts = [
             f"Today's session: {canonical_name}",
@@ -220,6 +221,7 @@ def generate_coach_text_sync(
         session: Concrete session
         template: Session template
         philosophy_tags: Optional philosophy tags
+        vocabulary_level: Vocabulary level for canonical workout names (e.g. intermediate).
 
     Returns:
         Coach text string, or None if generation fails

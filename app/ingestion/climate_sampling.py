@@ -38,8 +38,8 @@ def sample_activity_climate(
     if weather_client is None:
         weather_client = get_weather_client()
 
-    if not weather_client.api_key:
-        logger.debug(f"[CLIMATE] Skipping climate sampling for activity {activity.id}: API key not configured")
+    if not weather_client.is_available():
+        logger.debug(f"[CLIMATE] Skipping climate sampling for activity {activity.id}: weather provider not available")
         return 0
 
     # Extract GPS data from streams

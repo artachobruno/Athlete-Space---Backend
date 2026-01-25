@@ -95,8 +95,8 @@ def backfill_climate_for_activities(
     db = SessionLocal()
     weather_client = get_weather_client()
 
-    if not weather_client.api_key:
-        logger.error("Weather API key not configured. Cannot backfill climate data.")
+    if not weather_client.is_available():
+        logger.error("Weather provider not available. Cannot backfill climate data.")
         return {
             "processed": 0,
             "sampled": 0,

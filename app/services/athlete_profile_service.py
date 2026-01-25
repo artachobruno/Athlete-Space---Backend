@@ -12,6 +12,7 @@ from typing import Any
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.db.models import AthleteBio, AthleteProfile
@@ -154,16 +155,25 @@ def get_profile_schema(session: Session, user_id: str) -> AthleteProfileSchema:
     training_context = TrainingContextProfile.model_validate(profile.training_context or {})
     preferences = PreferenceProfile.model_validate(profile.preferences or {})
 
-    # Get bio if exists
+    # Get bio if exists (handle case where table doesn't exist yet)
     bio = None
-    bio_record = session.query(AthleteBio).filter_by(user_id=user_id).order_by(AthleteBio.created_at.desc()).first()
-    if bio_record:
-        bio = NarrativeBio(
-            text=bio_record.text,
-            confidence_score=bio_record.confidence_score,
-            source=bio_record.source,
-            depends_on_hash=bio_record.depends_on_hash,
-        )
+    try:
+        bio_record = session.query(AthleteBio).filter_by(user_id=user_id).order_by(AthleteBio.created_at.desc()).first()
+        if bio_record:
+            bio = NarrativeBio(
+                text=bio_record.text,
+                confidence_score=bio_record.confidence_score,
+                source=bio_record.source,
+                depends_on_hash=bio_record.depends_on_hash,
+            )
+    except ProgrammingError as e:
+        # Table doesn't exist yet (migration not run)
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedtable" in error_msg or "no such table" in error_msg:
+            logger.warning(f"athlete_bios table does not exist yet for user_id={user_id}, skipping bio retrieval. Run migrations to create the table.")
+        else:
+            # Re-raise if it's a different programming error
+            raise
 
     return AthleteProfileSchema(
         identity=identity,

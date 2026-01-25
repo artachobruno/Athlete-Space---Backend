@@ -85,6 +85,7 @@ from scripts.migrate_add_athlete_id_to_profiles import migrate_add_athlete_id_to
 from scripts.migrate_add_coach_feedback_table import migrate_add_coach_feedback_table
 from scripts.migrate_add_coach_feedback_to_calendar_view import migrate_add_coach_feedback_to_calendar_view
 from scripts.migrate_add_conversation_summaries_table import migrate_add_conversation_summaries_table
+from scripts.migrate_create_athlete_bios_table import migrate_create_athlete_bios_table
 from scripts.migrate_add_conversation_summary import migrate_add_conversation_summary
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
@@ -564,6 +565,14 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_add_coach_feedback_to_calendar_view: {e}")
         logger.exception(f"Migration failed: migrate_add_coach_feedback_to_calendar_view - {e}")
+
+    try:
+        logger.info("Running migration: athlete_bios table")
+        migrate_create_athlete_bios_table()
+        logger.info("✓ Migration completed: athlete_bios table")
+    except Exception as e:
+        migration_errors.append(f"migrate_create_athlete_bios_table: {e}")
+        logger.exception(f"Migration failed: migrate_create_athlete_bios_table - {e}")
 
     if migration_errors:
         logger.error(

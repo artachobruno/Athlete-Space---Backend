@@ -43,6 +43,10 @@ from app.workouts.targets_utils import get_distance_meters, get_duration_seconds
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
+# Only treat SessionLinks as "paired" when status is confirmed or proposed (not rejected).
+# Rejected links should not hide the activity - we show both planned and activity.
+ACTIVE_LINK_STATUSES: frozenset[str] = frozenset({"confirmed", "proposed"})
+
 # Schema v2: Use calendar_items view for unified querying
 SQL_CALENDAR_ITEMS = text("""
 SELECT kind, starts_at, ends_at, sport, title, status, payload
@@ -402,11 +406,11 @@ def get_season(user_id: str = Depends(get_current_user_id)):
 
             if kind == "planned":
                 link = get_link_for_planned(session, item_id)
-                if link:
+                if link and link.status in ACTIVE_LINK_STATUSES:
                     pairing_map[item_id] = link.activity_id
             elif kind == "activity":
                 link = get_link_for_activity(session, item_id)
-                if link:
+                if link and link.status in ACTIVE_LINK_STATUSES:
                     activity_pairing_map[item_id] = link.planned_session_id
 
         # Enrich view rows with pairing info before converting to CalendarSession
@@ -521,11 +525,11 @@ def get_week(user_id: str = Depends(get_current_user_id)):
 
                 if kind == "planned":
                     link = get_link_for_planned(session, item_id)
-                    if link:
+                    if link and link.status in ACTIVE_LINK_STATUSES:
                         pairing_map[item_id] = link.activity_id
                 elif kind == "activity":
                     link = get_link_for_activity(session, item_id)
-                    if link:
+                    if link and link.status in ACTIVE_LINK_STATUSES:
                         activity_pairing_map[item_id] = link.planned_session_id
 
             # Enrich view rows with pairing info before converting to CalendarSession
@@ -1028,11 +1032,11 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
 
                 if kind == "planned":
                     link = get_link_for_planned(session, item_id)
-                    if link:
+                    if link and link.status in ACTIVE_LINK_STATUSES:
                         pairing_map[item_id] = link.activity_id
                 elif kind == "activity":
                     link = get_link_for_activity(session, item_id)
-                    if link:
+                    if link and link.status in ACTIVE_LINK_STATUSES:
                         activity_pairing_map[item_id] = link.planned_session_id
 
             # Enrich view rows with pairing info before processing

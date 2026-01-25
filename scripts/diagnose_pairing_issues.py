@@ -113,7 +113,7 @@ def diagnose_pairing(
         logger.info(f"📅 {date_str}")
         logger.info("  Activities:")
         for activity in activities_by_date[date_str]:
-            duration_str = f"{activity.duration_seconds/60:.1f}min" if activity.duration_seconds else "no duration"
+            duration_str = f"{activity.duration_seconds / 60:.1f}min" if activity.duration_seconds else "no duration"
             logger.info(
                 f"    - {activity.id[:8]}... {activity.sport} {duration_str} "
                 f"(starts_at={activity.starts_at})"

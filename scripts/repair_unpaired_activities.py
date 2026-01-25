@@ -108,8 +108,8 @@ def repair_pairings(
     for activity in unpaired_activities:
         try:
             activity_date = activity.starts_at.date() if activity.starts_at else None
-            duration_str = f"{activity.duration_seconds/60:.1f}min" if activity.duration_seconds else "no duration"
-            
+            duration_str = f"{activity.duration_seconds / 60:.1f}min" if activity.duration_seconds else "no duration"
+
             if dry_run:
                 logger.info(
                     f"[DRY RUN] Would attempt to pair activity {activity.id} "

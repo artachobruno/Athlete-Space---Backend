@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta, timezone
 
 from loguru import logger
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from app.calendar.training_summary import build_training_summary
 from app.coach.executor.errors import PersistenceError
 from app.coach.mcp_client import MCPError, call_tool
+from app.coach.progress_steps import PLAN_WEEK_STEPS
 from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.constraints import TrainingConstraints
 from app.coach.schemas.load_adjustment import LoadAdjustmentDecision
@@ -84,11 +86,15 @@ def _check_weekly_plan_exists(user_id: str | None, athlete_id: int | None) -> bo
         return False
 
 
+ProgressEmitter = Callable[[str, str, str], Awaitable[None]]
+
+
 async def plan_week(
     state: AthleteState,
     user_id: str | None = None,
     athlete_id: int | None = None,
     user_feedback: str | None = None,
+    emit_progress: ProgressEmitter | None = None,
 ) -> str:
     """B8: Unified Planning Tool - Create weekly planned sessions.
 
@@ -113,6 +119,7 @@ async def plan_week(
         user_id: User ID (required for saving sessions)
         athlete_id: Athlete ID (required for saving sessions)
         user_feedback: Optional user feedback for constraint generation
+        emit_progress: Optional async callback (step_id, label, status) to emit progress per phase.
 
     Returns:
         Success message with session count
@@ -127,6 +134,10 @@ async def plan_week(
         flags=state.flags,
         has_feedback=user_feedback is not None,
     )
+
+    async def _emit(step_id: str, label: str, status: str) -> None:
+        if emit_progress:
+            await emit_progress(step_id, label, status)
 
     # Validation guardrails
     if not user_id or not athlete_id:
@@ -147,9 +158,11 @@ async def plan_week(
     if state.confidence < 0.1:
         return "[CLARIFICATION] athlete_state_confidence_low"
 
-    # B16: Build TrainingSummary
-    logger.info("B8: Building TrainingSummary (B16)...")
+    # Phase 1: Review CTL / ATL / TSB (B16)
+    step_id, label = PLAN_WEEK_STEPS[0]
+    await _emit(step_id, label, "in_progress")
     try:
+        logger.info("B8: Building TrainingSummary (B16)...")
         training_summary = build_training_summary(
             user_id=user_id,
             athlete_id=athlete_id,
@@ -160,11 +173,15 @@ async def plan_week(
             compliance=training_summary.execution.get("compliance_rate", 0.0),
             sessions_completed=training_summary.execution.get("completed_sessions", 0),
         )
+        await _emit(step_id, label, "completed")
     except Exception as e:
+        await _emit(step_id, label, "failed")
         logger.exception(f"B8: Failed to build TrainingSummary: {e}")
         return f"[CLARIFICATION] Failed to build training summary: {e}"
 
-    # B17 + B18: Build constraints and load adjustment if feedback provided
+    # Phase 2: Determine weekly focus (B17 + B18)
+    step_id, label = PLAN_WEEK_STEPS[1]
+    await _emit(step_id, label, "in_progress")
     load_adjustment: LoadAdjustmentDecision | None = None
     if user_feedback:
         logger.info(
@@ -226,6 +243,7 @@ async def plan_week(
         except Exception as e:
             logger.warning(f"B8: Failed to compute constraints/adjustment, using defaults: {e}")
             load_adjustment = None
+    await _emit(step_id, label, "completed")
 
     # Calculate week dates in user's timezone
     if user_id:
@@ -343,6 +361,9 @@ async def plan_week(
         # TODO: Use athlete's race goal pace from AthletePaceProfile when available
         return adjusted_volume_hours * 7.5  # ~7.5 miles per hour at 8 min/mile
 
+    # Phase 3: Plan key workouts (pipeline)
+    step_id, label = PLAN_WEEK_STEPS[2]
+    await _emit(step_id, label, "in_progress")
     try:
         planned_weeks, persist_result = await execute_canonical_pipeline(
             ctx=ctx,
@@ -352,6 +373,7 @@ async def plan_week(
             plan_id=plan_id,
             base_volume_calculator=volume_calculator,
         )
+        await _emit(step_id, label, "completed")
         # Log plan structure before persistence
         total_sessions_generated = sum(len(week.sessions) for week in planned_weeks)
         sessions_per_week = [len(week.sessions) for week in planned_weeks]
@@ -367,6 +389,7 @@ async def plan_week(
             athlete_id=athlete_id,
         )
     except Exception as e:
+        await _emit(step_id, label, "failed")
         logger.error(
             "Execution failed: calendar persistence error",
             error=str(e),
@@ -374,6 +397,11 @@ async def plan_week(
             athlete_id=athlete_id,
         )
         raise PersistenceError("plan_commit_failed") from e
+
+    # Phase 4: Insert recovery (persist done; checklist final step)
+    step_id, label = PLAN_WEEK_STEPS[3]
+    await _emit(step_id, label, "in_progress")
+    await _emit(step_id, label, "completed")
 
     saved_count = persist_result.created
     session_ids_count = len(persist_result.session_ids) if persist_result.session_ids else 0

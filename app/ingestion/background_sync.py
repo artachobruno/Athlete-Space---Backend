@@ -195,47 +195,239 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
     # Calculate date range (use last_sync_at if available, otherwise last 90 days)
     now = datetime.now(timezone.utc)
     if account.last_sync_at:
+        # Use last_sync_at as the starting point - this is the timestamp of the newest activity we've already synced
+        # We fetch activities AFTER this timestamp to get only new activities
         after_date = account.last_sync_at
-        # Add 1 second buffer to avoid missing activities
+        # Add 1 second buffer to avoid missing activities that might have the exact same timestamp
         after_date += timedelta(seconds=1)
 
-        # Detect large gaps (e.g., sync stopped for months)
-        # If last_sync_at is more than 7 days old, extend sync window to cover the gap
-        gap_days = (now - after_date).days
-        if gap_days > 7:
-            logger.info(
-                f"[SYNC] Large gap detected: {gap_days} days since last sync. Extending sync window to cover gap and ensure we catch up."
-            )
-            # Extend sync window to cover the gap, but cap at 90 days to avoid rate limits
-            # We'll progressively sync older data via history backfill
-            max_sync_window = now - timedelta(days=90)
-            after_date = max(after_date, max_sync_window)
-            logger.info(f"[SYNC] Extended sync window to {after_date.isoformat()} (covering {gap_days} day gap, capped at 90 days)")
+        logger.info(
+            f"[SYNC] Incremental sync: fetching activities after {after_date.isoformat()} "
+            f"(last synced activity was at {account.last_sync_at.isoformat()})"
+        )
     else:
         # First sync: fetch last 90 days to ensure we have enough data for metrics
         after_date = now - timedelta(days=90)
         logger.info(f"[SYNC] First sync for user_id={user_id}, fetching last 90 days")
 
-    # Always check for recent activities (last 48 hours) to ensure nothing is missing
-    # This is a safety check to catch any activities that might have been missed
-    recent_check_date = now - timedelta(hours=48)
-    if after_date > recent_check_date:
-        # If our sync window is very recent, extend it to cover last 48 hours
-        logger.info(
-            f"[SYNC] Extending sync window to cover last 48 hours for safety check: "
-            f"after_date={after_date.isoformat()} -> recent_check_date={recent_check_date.isoformat()}"
-        )
-        after_date = recent_check_date
+    # Note: We removed the "large gap" and "recent check" logic because:
+    # 1. If there's a large gap, history backfill will handle older activities
+    # 2. We want to fetch ONLY new activities (after last_sync_at) to avoid refetching
+    # 3. The system will continue syncing until all activities are fetched via incremental syncs
 
     logger.info(f"[SYNC] Fetching activities for user_id={user_id} from {after_date.isoformat()} to {now.isoformat()}")
 
     # Create Strava client
     client = StravaClient(access_token=access_token)
 
-    # Fetch activities from Strava
+    # Fetch activities from Strava using generator to avoid loading all into memory
+    imported_count = 0
+    skipped_count = 0
+    duplicate_count = 0
+    batch_size = 50  # Process 50 activities at a time to limit memory usage
+    batch_activities: list = []
+    all_activities_timestamps: list[datetime] = []  # Track timestamps to determine newest
+
+    def _process_batch(batch: list) -> None:
+        """Process a batch of activities and commit to database."""
+        nonlocal imported_count, skipped_count
+        batch_created: list[Activity] = []
+
+        for strava_activity_item in batch:
+            strava_id = str(strava_activity_item.id)
+
+            # Check if activity already exists (prevents duplicates)
+            existing = session.execute(
+                select(Activity).where(
+                    Activity.user_id == user_id,
+                    Activity.source == "strava",
+                    Activity.source_activity_id == str(strava_id),
+                )
+            ).first()
+
+            if existing:
+                skipped_count += 1
+                logger.debug(f"[SYNC] Activity {strava_id} already exists for user_id={user_id}, skipping")
+                continue
+
+            # Extract fields from Strava activity
+            start_time_raw = strava_activity_item.start_date
+            if isinstance(start_time_raw, datetime):
+                start_time = start_time_raw
+            else:
+                # Convert to string and handle ISO format
+                date_string = str(start_time_raw)
+                # Replace Z with +00:00 for ISO format compatibility using string method
+                if "Z" in date_string:
+                    date_string = date_string.replace("Z", "+00:00")
+                start_time = datetime.fromisoformat(date_string)
+
+            # Store raw JSON in metrics
+            raw_json = strava_activity_item.raw if strava_activity_item.raw else {}
+            metrics_dict: dict = {}
+            if raw_json:
+                metrics_dict["raw_json"] = raw_json
+
+            # Normalize sport type and title
+            sport_type = normalize_sport_type(strava_activity_item.type)
+            title = normalize_activity_title(
+                strava_title=strava_activity_item.name,
+                sport=sport_type,
+                distance_meters=strava_activity_item.distance,
+                duration_seconds=strava_activity_item.elapsed_time,
+            )
+
+            # Create new activity record
+            activity = Activity(
+                user_id=user_id,
+                source="strava",
+                source_activity_id=strava_id,
+                sport=sport_type,
+                title=title,
+                starts_at=start_time,
+                duration_seconds=strava_activity_item.elapsed_time,
+                distance_meters=strava_activity_item.distance,
+                elevation_gain_meters=strava_activity_item.total_elevation_gain,
+                metrics=metrics_dict,
+            )
+            session.add(activity)
+            session.flush()  # Ensure ID is generated
+
+            # PHASE 3: Enforce workout + execution creation (mandatory invariant)
+            workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+            WorkoutFactory.attach_activity(session, workout, activity)
+
+            # Compute TSS (works with or without streams_data - uses HR/RPE fallbacks if streams not available)
+            try:
+                user_settings = session.query(UserSettings).filter_by(user_id=user_id).first()
+                athlete_thresholds = _build_athlete_thresholds(user_settings)
+                tss = compute_activity_tss(activity, athlete_thresholds)
+                activity.tss = tss
+                activity.tss_version = "v2"
+                logger.debug(
+                    f"[SYNC] Computed TSS for activity {strava_id}: tss={tss}, version=v2"
+                )
+            except Exception as e:
+                logger.warning(f"[SYNC] Failed to compute TSS for activity {strava_id}: {e}")
+
+            # Attempt auto-pairing with planned sessions
+            try:
+                try_auto_pair(activity=activity, session=session)
+            except Exception as e:
+                logger.warning(f"[SYNC] Auto-pairing failed for activity {strava_id}: {e}")
+
+            batch_created.append(activity)
+            imported_count += 1
+
+        # Commit batch to reduce memory usage
+        try:
+            session.commit()
+
+            # PHASE 7: Assert invariant holds (guard check) for this batch
+            try:
+                for activity in batch_created:
+                    session.refresh(activity)
+                    assert_activity_has_workout(activity)
+                    assert_activity_has_execution(session, activity)
+            except AssertionError:
+                # Log but don't fail the request - invariant violation is logged
+                pass
+
+            logger.debug(f"[SYNC] Processed batch, imported {len(batch_created)} activities")
+
+        except IntegrityError as e:
+            # Handle duplicate constraint violations (race condition: activity inserted between check and commit)
+            session.rollback()
+            logger.warning(
+                f"[SYNC] IntegrityError during batch commit (duplicate detected): {e}. "
+                "Retrying batch with individual commits."
+            )
+            # Retry batch: commit activities one by one to identify which ones are duplicates
+            for strava_activity_item in batch:
+                strava_id = str(strava_activity_item.id)
+                # Re-check if exists (may have been inserted by another process)
+                existing = session.execute(
+                    select(Activity).where(
+                        Activity.user_id == user_id,
+                        Activity.source == "strava",
+                        Activity.source_activity_id == str(strava_id),
+                    )
+                ).first()
+
+                if existing:
+                    skipped_count += 1
+                    continue
+
+                # Re-create activity (simplified - just the essential fields)
+                # This is a fallback, so we skip TSS computation and auto-pairing
+                start_time_raw = strava_activity_item.start_date
+                if isinstance(start_time_raw, datetime):
+                    start_time = start_time_raw
+                else:
+                    date_string = str(start_time_raw)
+                    if "Z" in date_string:
+                        date_string = date_string.replace("Z", "+00:00")
+                    start_time = datetime.fromisoformat(date_string)
+
+                raw_json = strava_activity_item.raw if strava_activity_item.raw else {}
+                metrics_dict: dict = {}
+                if raw_json:
+                    metrics_dict["raw_json"] = raw_json
+
+                sport_type = normalize_sport_type(strava_activity_item.type)
+                title = normalize_activity_title(
+                    strava_title=strava_activity_item.name,
+                    sport=sport_type,
+                    distance_meters=strava_activity_item.distance,
+                    duration_seconds=strava_activity_item.elapsed_time,
+                )
+
+                activity = Activity(
+                    user_id=user_id,
+                    source="strava",
+                    source_activity_id=strava_id,
+                    sport=sport_type,
+                    title=title,
+                    starts_at=start_time,
+                    duration_seconds=strava_activity_item.elapsed_time,
+                    distance_meters=strava_activity_item.distance,
+                    elevation_gain_meters=strava_activity_item.total_elevation_gain,
+                    metrics=metrics_dict,
+                )
+                session.add(activity)
+                session.flush()
+
+                workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+                WorkoutFactory.attach_activity(session, workout, activity)
+
+                try:
+                    session.commit()
+                    imported_count += 1
+                except IntegrityError:
+                    session.rollback()
+                    skipped_count += 1
+
+    # Fetch activities using generator and process in batches
     try:
-        strava_activities = client.get_activities(after_ts=after_date)
-        logger.info(f"[SYNC] Fetched {len(strava_activities)} activities from Strava for user_id={user_id}")
+        activity_generator = client.yield_activities(after_ts=after_date)
+        total_fetched = 0
+
+        for strava_activity in activity_generator:
+            total_fetched += 1
+            all_activities_timestamps.append(strava_activity.start_date)
+            batch_activities.append(strava_activity)
+
+            # Process batch when it reaches batch_size
+            if len(batch_activities) >= batch_size:
+                _process_batch(batch_activities)
+                batch_activities = []
+
+        # Process any remaining activities in the final batch
+        if batch_activities:
+            _process_batch(batch_activities)
+
+        logger.info(f"[SYNC] Fetched {total_fetched} activities from Strava for user_id={user_id}")
+
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 429:
             logger.warning(f"[SYNC] Rate limited while fetching activities for user_id={user_id}")
@@ -246,212 +438,72 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         logger.exception(f"[SYNC] Unexpected error fetching activities for user_id={user_id}: {e!s}")
         raise SyncError(f"Unexpected error fetching activities: {e!s}") from e
 
-    # Store activities in database (idempotent upsert)
-    imported_count = 0
-    skipped_count = 0
-    duplicate_count = 0
-    created_activities: list[Activity] = []
+    # Determine the actual newest activity timestamp synced (not 'now')
+    # This ensures we only fetch new activities on the next sync, not refetch existing ones
+    newest_activity_time: datetime | None = None
+    if all_activities_timestamps:
+        # Find the newest activity start_date from the fetched activities
+        newest_activity_time = max(all_activities_timestamps)
+        # Ensure timezone-aware
+        if newest_activity_time.tzinfo is None:
+            newest_activity_time = newest_activity_time.replace(tzinfo=timezone.utc)
+        logger.info(
+            f"[SYNC] Newest activity synced: {newest_activity_time.isoformat()} "
+            f"(from {total_fetched} activities fetched)"
+        )
 
-    for strava_activity in strava_activities:
-        strava_id = str(strava_activity.id)
-
-        # Check if activity already exists (prevents duplicates)
-        existing = session.execute(
-            select(Activity).where(
-                Activity.user_id == user_id,
-                Activity.source == "strava",
-                Activity.source_activity_id == str(strava_id),
+    # Clear timestamps from memory
+    del all_activities_timestamps
+    # Update last_sync_at to the actual newest activity timestamp (not 'now')
+    # This ensures we don't refetch activities on the next sync
+    # Only update if we actually synced activities, otherwise keep existing last_sync_at
+    if newest_activity_time is not None:
+        # Only update if this is newer than existing last_sync_at
+        if account.last_sync_at is None or newest_activity_time > account.last_sync_at:
+            account.last_sync_at = newest_activity_time
+            logger.info(
+                f"[SYNC] Updated last_sync_at to newest activity: {newest_activity_time.isoformat()}"
             )
-        ).first()
-
-        if existing:
-            skipped_count += 1
-            logger.debug(f"[SYNC] Activity {strava_id} already exists for user_id={user_id}, skipping")
-            continue
-
-        # Extract fields from Strava activity
-        start_time_raw = strava_activity.start_date
-        if isinstance(start_time_raw, datetime):
-            start_time = start_time_raw
         else:
-            # Convert to string and handle ISO format
-            date_string = str(start_time_raw)
-            # Replace Z with +00:00 for ISO format compatibility using string method
-            if "Z" in date_string:
-                date_string = date_string.replace("Z", "+00:00")
-            start_time = datetime.fromisoformat(date_string)
-
-        # Store raw JSON in metrics
-        raw_json = strava_activity.raw if strava_activity.raw else {}
-        metrics_dict: dict = {}
-        if raw_json:
-            metrics_dict["raw_json"] = raw_json
-
-        # Normalize sport type and title
-        sport_type = normalize_sport_type(strava_activity.type)
-        title = normalize_activity_title(
-            strava_title=strava_activity.name,
-            sport=sport_type,
-            distance_meters=strava_activity.distance,
-            duration_seconds=strava_activity.elapsed_time,
-        )
-
-        # Create new activity record
-        activity = Activity(
-            user_id=user_id,
-            source="strava",
-            source_activity_id=strava_id,
-            sport=sport_type,
-            title=title,
-            starts_at=start_time,
-            duration_seconds=strava_activity.elapsed_time,
-            distance_meters=strava_activity.distance,
-            elevation_gain_meters=strava_activity.total_elevation_gain,
-            metrics=metrics_dict,
-        )
-        session.add(activity)
-        session.flush()  # Ensure ID is generated
-
-        # PHASE 3: Enforce workout + execution creation (mandatory invariant)
-        workout = WorkoutFactory.get_or_create_for_activity(session, activity)
-        WorkoutFactory.attach_activity(session, workout, activity)
-
-        # Compute TSS (works with or without streams_data - uses HR/RPE fallbacks if streams not available)
-        try:
-            user_settings = session.query(UserSettings).filter_by(user_id=user_id).first()
-            athlete_thresholds = _build_athlete_thresholds(user_settings)
-            tss = compute_activity_tss(activity, athlete_thresholds)
-            activity.tss = tss
-            activity.tss_version = "v2"
             logger.debug(
-                f"[SYNC] Computed TSS for activity {strava_id}: tss={tss}, version=v2"
+                f"[SYNC] Keeping existing last_sync_at ({account.last_sync_at.isoformat()}) "
+                f"as it's newer than synced activity ({newest_activity_time.isoformat()})"
             )
-        except Exception as e:
-            logger.warning(f"[SYNC] Failed to compute TSS for activity {strava_id}: {e}")
+    elif imported_count > 0:
+        # If we imported activities but couldn't determine newest (shouldn't happen), use now as fallback
+        logger.warning(
+            "[SYNC] Imported activities but couldn't determine newest timestamp, using 'now' as fallback"
+        )
+        account.last_sync_at = now
+    # If no activities were imported, don't update last_sync_at (keep existing value)
 
-        # Attempt auto-pairing with planned sessions
-        try:
-            try_auto_pair(activity=activity, session=session)
-        except Exception as e:
-            logger.warning(f"[SYNC] Auto-pairing failed for activity {strava_id}: {e}")
-
-        created_activities.append(activity)
-        imported_count += 1
-
-    # Update last_sync_at and success tracking on success
-    account.last_sync_at = now
     account.sync_success_count = (account.sync_success_count or 0) + 1
     account.last_sync_error = None
 
-    # Commit all changes
+    # Final commit for account updates
     try:
         session.commit()
-
-        # PHASE 7: Assert invariant holds (guard check)
-        try:
-            for activity in created_activities:
-                session.refresh(activity)
-                assert_activity_has_workout(activity)
-                assert_activity_has_execution(session, activity)
-        except AssertionError:
-            # Log but don't fail the request - invariant violation is logged
-            pass
-
     except IntegrityError as e:
-        # Handle duplicate constraint violations (race condition: activity inserted between check and commit)
+        # This should not happen now since we handle it per batch, but keep as safety net
         session.rollback()
         logger.warning(
-            f"[SYNC] IntegrityError during commit (duplicate detected): {e}. "
-            "This may indicate concurrent sync operations. Retrying with individual commits."
+            f"[SYNC] IntegrityError during final commit: {e}. "
+            "This should have been handled per batch."
         )
-        # Retry: commit activities one by one to identify which ones are duplicates
-        retry_imported = 0
-        retry_duplicate = 0
-        for strava_activity in strava_activities:
-            strava_id = str(strava_activity.id)
-            # Re-check if exists (may have been inserted by another process)
-            existing = session.execute(
-                select(Activity).where(
-                    Activity.user_id == user_id,
-                    Activity.source == "strava",
-                    Activity.source_activity_id == str(strava_id),
-                )
-            ).first()
-            if existing:
-                retry_duplicate += 1
-                continue
-            # Re-create activity and try to save individually
-            start_time_raw = strava_activity.start_date
-            if isinstance(start_time_raw, datetime):
-                start_time = start_time_raw
-            else:
-                date_string = str(start_time_raw)
-                if "Z" in date_string:
-                    date_string = date_string.replace("Z", "+00:00")
-                start_time = datetime.fromisoformat(date_string)
-            raw_json = strava_activity.raw if strava_activity.raw else {}
-            metrics_dict: dict = {}
-            if raw_json:
-                metrics_dict["raw_json"] = raw_json
-            try:
-                # Normalize sport type to allowed values
-                sport_type = normalize_sport_type(strava_activity.type)
-
-                activity = Activity(
-                    user_id=user_id,
-                    source="strava",
-                    source_activity_id=strava_id,
-                    sport=sport_type,
-                    starts_at=start_time,
-                    duration_seconds=strava_activity.elapsed_time,
-                    distance_meters=strava_activity.distance,
-                    elevation_gain_meters=strava_activity.total_elevation_gain,
-                    metrics=metrics_dict,
-                )
-                session.add(activity)
-                session.flush()  # Ensure ID is generated
-
-                # PHASE 3: Enforce workout + execution creation (mandatory invariant)
-                workout = WorkoutFactory.get_or_create_for_activity(session, activity)
-                WorkoutFactory.attach_activity(session, workout, activity)
-
-                # Compute TSS (works with or without streams_data - uses HR/RPE fallbacks if streams not available)
-                try:
-                    user_settings = session.query(UserSettings).filter_by(user_id=user_id).first()
-                    athlete_thresholds = _build_athlete_thresholds(user_settings)
-                    tss = compute_activity_tss(activity, athlete_thresholds)
-                    activity.tss = tss
-                    activity.tss_version = "v2"
-                    logger.debug(
-                        f"[SYNC] Computed TSS for activity {strava_id} (retry): tss={tss}, version=v2"
-                    )
-                except Exception as e:
-                    logger.warning(f"[SYNC] Failed to compute TSS for activity {strava_id} (retry): {e}")
-
-                # Attempt auto-pairing with planned sessions
-                try:
-                    try_auto_pair(activity=activity, session=session)
-                except Exception as e:
-                    logger.warning(f"[SYNC] Auto-pairing failed for activity {strava_id} (retry): {e}")
-
-                session.commit()
-                retry_imported += 1
-            except IntegrityError:
-                session.rollback()
-                retry_duplicate += 1
-                logger.debug(f"[SYNC] Activity {strava_id} duplicate in retry, skipping")
-        # Update counts (retry_duplicate includes activities that were duplicates in retry)
-        imported_count = retry_imported
-        duplicate_count = retry_duplicate
-        skipped_count = 0  # Reset since we're retrying everything
-        # Update last_sync_at
-        account.last_sync_at = now
-        session.commit()
+        # Fallback: try to update account anyway
+        try:
+            account.last_sync_at = now
+            account.sync_success_count = (account.sync_success_count or 0) + 1
+            account.last_sync_error = None
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("[SYNC] Failed to update account after batch processing")
 
     logger.info(
         f"[SYNC] Sync complete for user_id={user_id}: "
         f"imported={imported_count}, skipped={skipped_count}, duplicates={duplicate_count}, "
-        f"total_fetched={len(strava_activities)}"
+        f"total_fetched={total_fetched}"
     )
 
     # Trigger metrics recomputation if new activities were imported
@@ -466,7 +518,7 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
     return {
         "imported": imported_count,
         "skipped": skipped_count,
-        "total_fetched": len(strava_activities),
+        "total_fetched": total_fetched,
     }
 
 

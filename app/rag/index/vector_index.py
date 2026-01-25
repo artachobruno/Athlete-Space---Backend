@@ -15,14 +15,32 @@ from app.rag.types import RagChunk
 class VectorIndex:
     """In-memory vector index with exact cosine similarity search."""
 
-    def __init__(self, embedded_chunks: list[EmbeddedChunk]):
+    def __init__(
+        self,
+        embedded_chunks: list[EmbeddedChunk] | None = None,
+        chunks: list[RagChunk] | None = None,
+        vectors: np.ndarray | None = None,
+    ):
         """Initialize vector index.
 
         Args:
-            embedded_chunks: List of embedded chunks to index
+            embedded_chunks: List of embedded chunks to index (legacy interface)
+            chunks: List of chunks (used with vectors parameter)
+            vectors: Numpy array of embeddings (N x D), used with chunks parameter
+
+        Either embedded_chunks OR (chunks + vectors) must be provided.
         """
-        self.chunks: list[RagChunk] = [ec.chunk for ec in embedded_chunks]
-        self.vectors = np.array([ec.vector for ec in embedded_chunks], dtype=np.float32)
+        if embedded_chunks is not None:
+            # Legacy interface: convert from EmbeddedChunk list
+            self.chunks: list[RagChunk] = [ec.chunk for ec in embedded_chunks]
+            self.vectors = np.array([ec.vector for ec in embedded_chunks], dtype=np.float32)
+        elif chunks is not None and vectors is not None:
+            # Optimized interface: use numpy array directly (avoids list conversion)
+            self.chunks = chunks
+            # Ensure vectors is float32 and contiguous for efficiency
+            self.vectors = np.ascontiguousarray(vectors, dtype=np.float32)
+        else:
+            raise ValueError("Either embedded_chunks or (chunks + vectors) must be provided")
 
         # Normalize vectors for cosine similarity
         norms = np.linalg.norm(self.vectors, axis=1, keepdims=True)

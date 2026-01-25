@@ -263,9 +263,25 @@ def _save_activities_batch(session, activities: list, user_id: str) -> int:
         Number of activities saved
     """
     saved_count = 0
+    skipped_count = 0
     for activity in activities:
         try:
             strava_id = str(activity.id)
+
+            # Check if activity already exists (prevents duplicates and refetching)
+            existing = session.execute(
+                select(Activity).where(
+                    Activity.user_id == user_id,
+                    Activity.source == "strava",
+                    Activity.source_activity_id == strava_id,
+                )
+            ).first()
+
+            if existing:
+                skipped_count += 1
+                logger.debug(f"[HISTORY_BACKFILL] Activity {strava_id} already exists for user_id={user_id}, skipping")
+                continue
+
             raw_json = _build_raw_json(activity)
 
             # Store raw_json and streams_data in metrics dict
@@ -305,12 +321,18 @@ def _save_activities_batch(session, activities: list, user_id: str) -> int:
             session.add(activity_obj)
             saved_count += 1
         except IntegrityError:
+            # Fallback: handle race condition where activity was inserted between check and commit
             session.rollback()
+            skipped_count += 1
+            logger.debug(f"[HISTORY_BACKFILL] Activity {activity.id} duplicate detected (race condition), skipping")
             continue
         except Exception as e:
             logger.error(f"[HISTORY_BACKFILL] Failed to save activity {activity.id} for user_id={user_id}: {e}")
             session.rollback()
             continue
+
+    if skipped_count > 0:
+        logger.info(f"[HISTORY_BACKFILL] Skipped {skipped_count} duplicate activities for user_id={user_id}")
 
     try:
         session.commit()

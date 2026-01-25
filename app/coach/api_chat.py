@@ -18,6 +18,7 @@ from app.coach.execution_guard import TurnExecutionGuard
 from app.coach.executor.action_executor import CoachActionExecutor
 from app.coach.executor.errors import ExecutionError, InvalidModificationSpecError, NoActionError, PersistenceError
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
+from app.coach.progress_steps import PLAN_WEEK_STEPS
 from app.coach.services.response_postprocessor import postprocess_response
 from app.coach.services.state_builder import build_athlete_state
 from app.coach.tools.cold_start import welcome_new_user
@@ -631,19 +632,33 @@ async def coach_chat(
 
     # CRITICAL: Emit planned events ONLY if action is EXECUTE
     # NO_ACTION must be pure - no side effects, no events, no DB writes
-    if decision.action == "EXECUTE" and decision.action_plan:
-        logger.info(
-            "Emitting planned events for action plan",
-            conversation_id=conversation_id,
-            step_count=len(decision.action_plan.steps),
-        )
-        for step in decision.action_plan.steps:
-            await emit_progress_event_safe(
+    if decision.action == "EXECUTE":
+        if decision.target_action == "plan_week":
+            logger.info(
+                "Emitting planned events for plan_week (four phases)",
                 conversation_id=conversation_id,
-                step_id=step.id,
-                label=step.label,
-                status="planned",
+                step_count=len(PLAN_WEEK_STEPS),
             )
+            for step_id, label in PLAN_WEEK_STEPS:
+                await emit_progress_event_safe(
+                    conversation_id=conversation_id,
+                    step_id=step_id,
+                    label=label,
+                    status="planned",
+                )
+        elif decision.action_plan:
+            logger.info(
+                "Emitting planned events for action plan",
+                conversation_id=conversation_id,
+                step_count=len(decision.action_plan.steps),
+            )
+            for step in decision.action_plan.steps:
+                await emit_progress_event_safe(
+                    conversation_id=conversation_id,
+                    step_id=step.id,
+                    label=step.label,
+                    status="planned",
+                )
 
     # Phase 6C: Execute action (synchronously for read-only, asynchronously for write operations)
     # Read-only actions (explain, read) are fast and should return immediately

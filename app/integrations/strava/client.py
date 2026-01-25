@@ -96,6 +96,70 @@ class StravaClient:
         logger.info(f"[STRAVA_CLIENT] Fetched {len(activities)} activities from backfill page {page}")
         return activities
 
+    def yield_activities(
+        self,
+        *,
+        after_ts: dt.datetime | None = None,
+        per_page: int = 200,
+    ):
+        """Yield activities from Strava API page by page (generator).
+
+        Memory-efficient: yields activities as they're fetched instead of accumulating all in memory.
+        Use this for incremental sync to avoid loading all activities into memory at once.
+
+        Args:
+            after_ts: Only fetch activities after this timestamp (optional, triggers pagination)
+            per_page: Number of activities per page (max 200)
+
+        Yields:
+            StravaActivity objects, one page at a time
+        """
+        logger.info(f"[STRAVA_CLIENT] Yielding activities (after_ts={after_ts}, per_page={per_page})")
+        page = 1
+        total_yielded = 0
+
+        while True:
+            logger.debug(f"[STRAVA_CLIENT] Fetching page {page}")
+            quota_manager.wait_for_slot()
+
+            pagination_params: dict[str, int | str] = {
+                "page": page,
+                "per_page": min(per_page, 200),  # Strava max is 200
+            }
+            if after_ts:
+                pagination_params["after"] = int(after_ts.timestamp())
+
+            resp = httpx.get(
+                f"{STRAVA_BASE_URL}/athlete/activities",
+                headers=self._headers(),
+                params=pagination_params,
+                timeout=15,
+            )
+
+            quota_manager.update_from_headers(dict(resp.headers))
+            resp.raise_for_status()
+
+            payload = resp.json()
+            if not payload:
+                logger.info(f"[STRAVA_CLIENT] No more activities (page {page} was empty)")
+                break
+
+            page_activities = [StravaActivity(**raw, raw=raw) for raw in payload]
+            total_yielded += len(page_activities)
+            logger.info(f"[STRAVA_CLIENT] Fetched {len(page_activities)} activities from page {page} (total yielded: {total_yielded})")
+
+            # Yield all activities from this page
+            yield from page_activities
+
+            # If we got fewer than per_page, we've reached the end
+            if len(page_activities) < per_page:
+                logger.info(f"[STRAVA_CLIENT] Reached end of activities (got {len(page_activities)} < {per_page})")
+                break
+
+            page += 1
+
+        logger.info(f"[STRAVA_CLIENT] Finished yielding {total_yielded} total activities")
+
     def get_activities(
         self,
         *,
@@ -116,6 +180,10 @@ class StravaClient:
 
         Returns:
             List of StravaActivity objects
+
+        Note:
+            For incremental sync with many activities, consider using `yield_activities()` instead
+            to avoid loading all activities into memory at once.
         """
         # If `before` is provided, fetch only one page (for history backfill)
         if before is not None:
@@ -147,6 +215,8 @@ class StravaClient:
             return activities
 
         # If `after_ts` is provided, fetch all pages with pagination (for incremental sync)
+        # For backward compatibility, we still accumulate all activities
+        # New code should use yield_activities() for memory efficiency
         logger.info(f"[STRAVA_CLIENT] Fetching activities (after_ts={after_ts}, per_page={per_page})")
         all_activities = []
         page = 1

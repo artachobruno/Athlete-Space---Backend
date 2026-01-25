@@ -70,7 +70,8 @@ def _generate_plan_id() -> str:
 def _compute_plan_start_date(ctx: PlanContext) -> date:
     """Compute plan start date from context.
 
-    For race plans: start_date = target_date - weeks
+    For race plans: start_date ensures the last week includes the race date.
+    The plan spans exactly ctx.weeks weeks, with week ctx.weeks containing the race date.
     For season plans: start_date = today (Monday of current week)
 
     Args:
@@ -80,15 +81,15 @@ def _compute_plan_start_date(ctx: PlanContext) -> date:
         Start date (Monday of first week)
     """
     if ctx.target_date:
-        # Race plan: work backwards from target date
+        # Race plan: ensure the last week includes the race date
         target = date.fromisoformat(ctx.target_date)
-        # Start date is (weeks) weeks before target, on a Monday
-        # Calculate Monday of the week that is (weeks) weeks before target
-        weeks_before = ctx.weeks
-        approximate_start = target - timedelta(weeks=weeks_before)
-        # Find Monday of that week
-        days_since_monday = approximate_start.weekday()
-        return approximate_start - timedelta(days=days_since_monday)
+        # Find the Monday of the week containing the race date (this is week ctx.weeks)
+        days_since_monday = target.weekday()
+        race_week_monday = target - timedelta(days=days_since_monday)
+        # Go back (weeks - 1) weeks from race week Monday to get start date
+        # This ensures week 1 starts (weeks - 1) weeks before race week
+        weeks_before = ctx.weeks - 1
+        return race_week_monday - timedelta(weeks=weeks_before)
 
     # Season plan: start from Monday of current week
 
@@ -547,6 +548,117 @@ def _upsert_session(
     return ("created", db_session_obj.id)
 
 
+def _ensure_race_session(
+    db_session: Session,
+    race_date: date,
+    plan_start: date,
+    ctx: PlanContext,
+    user_id: str,
+    weeks: list[PlannedWeek],
+) -> str | None:
+    """Ensure a race session exists on the race date.
+
+    Checks if a race session already exists on the race date. If not, creates one.
+    This ensures race plans always include the race itself as a planned session.
+
+    Args:
+        db_session: Database session
+        race_date: Race date
+        plan_start: Plan start date (Monday of first week)
+        ctx: Plan context
+        user_id: User ID
+        weeks: List of planned weeks (to check if race is already in plan)
+
+    Returns:
+        Session ID if race session was created, None if it already exists
+    """
+    # Check if race date falls within any week in the plan
+    for week in weeks:
+        week_start = _compute_session_date(plan_start, week.week_index, 0)  # Monday of this week
+        week_end = week_start + timedelta(days=6)  # Sunday of this week
+        if week_start <= race_date <= week_end:
+            # Check if there's already a race session in this week on the race date
+            for session in week.sessions:
+                session_date = _compute_session_date(plan_start, week.week_index, session.day_index)
+                if session_date == race_date and session.day_type == DayType.RACE:
+                    # Race session already exists in the plan
+                    logger.debug(
+                        "Race session already exists in plan",
+                        race_date=race_date.isoformat(),
+                        week_index=week.week_index,
+                        day_index=session.day_index,
+                    )
+                    return None
+            break
+
+    # Check if race session already exists in database on race date
+    # Check for any session on race date with session_type="race"
+    race_date_start = datetime.combine(race_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    race_date_end = datetime.combine(race_date, datetime.max.time()).replace(tzinfo=timezone.utc)
+    sport = normalize_sport("run")
+
+    existing_query = select(DBPlannedSession).where(
+        and_(
+            DBPlannedSession.user_id == user_id,
+            DBPlannedSession.starts_at >= race_date_start,
+            DBPlannedSession.starts_at <= race_date_end,
+            DBPlannedSession.sport == sport,
+            DBPlannedSession.session_type == "race",
+        )
+    )
+    existing = db_session.execute(existing_query).scalar_one_or_none()
+
+    if existing:
+        logger.debug(
+            "Race session already exists in database",
+            race_date=race_date.isoformat(),
+            session_id=existing.id,
+        )
+        return None
+
+    # Create race session
+    race_distance_str = ctx.race_distance.value if ctx.race_distance else "Race"
+    race_title = f"{race_distance_str} Race"
+    race_starts_at = combine_date_time(race_date, "06:00")  # Default race time
+
+    try:
+        race_session = DBPlannedSession(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            starts_at=race_starts_at,
+            sport=sport,
+            title=race_title,
+            session_type="race",
+            intensity="race",
+            intent="race",
+            notes=f"Race day: {race_distance_str}",
+            season_plan_id=None,  # Race plans don't have season_plan_id
+            tags=["race"],
+            status="planned",
+            distance_meters=None,  # Race distance not known in advance
+            duration_seconds=None,  # Race duration not known in advance
+        )
+
+        db_session.add(race_session)
+        logger.info(
+            "Created race session on race date",
+            race_date=race_date.isoformat(),
+            session_id=race_session.id,
+            title=race_title,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to create race session",
+            race_date=race_date.isoformat(),
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+        # Don't raise - this is best-effort, plan can still succeed without explicit race session
+        return None
+    else:
+        return race_session.id
+
+
 def persist_plan(
     ctx: PlanContext,
     weeks: list[PlannedWeek],
@@ -628,6 +740,27 @@ def persist_plan(
             )
             if has_today and (week_created > 0 or week_updated > 0):
                 weeks_with_today.append((week.week_index, week_created + week_updated))
+
+        # Ensure race session is included on race date for race plans
+        if ctx.plan_type == PlanType.RACE and ctx.target_date:
+            race_date_obj = date.fromisoformat(ctx.target_date)
+            race_session_id = _ensure_race_session(
+                db_session=db_session,
+                race_date=race_date_obj,
+                plan_start=plan_start,
+                ctx=ctx,
+                user_id=user_id,
+                weeks=weeks,
+            )
+            if race_session_id:
+                session_ids.append(race_session_id)
+                created += 1
+                logger.info(
+                    "Added race session on race date",
+                    race_date=race_date_obj.isoformat(),
+                    session_id=race_session_id,
+                    user_id=user_id,
+                )
 
         db_session.commit()
 

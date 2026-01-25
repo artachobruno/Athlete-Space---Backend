@@ -32,12 +32,14 @@ from app.coach.extraction.modify_season_extractor import extract_modify_season
 from app.coach.extraction.modify_week_extractor import extract_week_modification_llm
 from app.coach.mcp_client import MCPError, call_tool, emit_progress_event_safe
 from app.coach.policy.weekly_policy_v0 import decide_weekly_action
+from app.coach.schemas.athlete_state import AthleteState
 from app.coach.schemas.orchestrator_response import OrchestratorAgentResponse
 from app.coach.services.conversation_progress import get_conversation_progress
 from app.coach.tools.modify_day import modify_day
 from app.coach.tools.modify_race import modify_race
 from app.coach.tools.modify_season import modify_season
 from app.coach.tools.modify_week import modify_week
+from app.coach.tools.plan_week import plan_week as plan_week_fn
 from app.config.settings import settings
 from app.core.conversation_summary import save_conversation_summary, summarize_conversation
 from app.core.slot_extraction import generate_clarification_for_missing_slots
@@ -1523,75 +1525,97 @@ class CoachActionExecutor:
         INVARIANT:
         A plan does not exist unless it is persisted.
         Generation without persistence is an execution failure.
+
+        When conversation_id is set, calls plan_week directly with emit_progress
+        so the checklist updates per phase (review, focus, workouts, recovery).
         """
         if not deps.user_id or not isinstance(deps.user_id, str):
             return "I need your user ID to save a weekly plan. Please check your account settings."
         if deps.athlete_id is None:
             return "I need your athlete ID to create a weekly plan. Please check your account settings."
+        if deps.athlete_state is None:
+            return "I need your athlete state to create a weekly plan. Please sync your activities first."
 
         tool_name = "plan_week"
-        step_info = await CoachActionExecutor._find_step_id_for_tool(decision, tool_name)
-
-        if conversation_id and step_info:
-            step_id, label = step_info
-            await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "in_progress")
-
-        # Extract user feedback if available (for B17/B18 constraint generation)
         user_feedback = decision.structured_data.get("user_feedback", "")
         if not user_feedback and decision.message:
-            # Check if message contains feedback keywords
             feedback_keywords = ["fatigue", "tired", "sore", "pain", "wrecked", "adjust"]
-            if any(keyword in decision.message.lower() for keyword in feedback_keywords):
+            if any(kw in (decision.message or "").lower() for kw in feedback_keywords):
                 user_feedback = decision.message
+        user_feedback_val = user_feedback if user_feedback else None
+        state: AthleteState = deps.athlete_state
+        user_id = deps.user_id
+        athlete_id = deps.athlete_id
+
+        if conversation_id:
+            async def emit_progress(step_id: str, label: str, status: str) -> None:
+                await CoachActionExecutor._emit_progress_event(
+                    conversation_id, step_id, label, status
+                )
+
+            try:
+                msg = await plan_week_fn(
+                    state,
+                    user_id=user_id,
+                    athlete_id=athlete_id,
+                    user_feedback=user_feedback_val,
+                    emit_progress=emit_progress,
+                )
+                if msg and ("not saved" in msg or "calendar unavailable" in msg):
+                    raise PersistenceError("plan_commit_failed")
+                logger.info(
+                    "Tool executed successfully",
+                    tool=tool_name,
+                    conversation_id=conversation_id,
+                )
+                logger.info(
+                    f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
+                    tool=tool_name,
+                    intent=decision.intent,
+                    horizon=decision.horizon,
+                    conversation_id=conversation_id,
+                    athlete_id=athlete_id,
+                )
+                await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
+                return msg
+            except PersistenceError:
+                raise
+            except Exception as e:
+                logger.error(
+                    "Tool execution failed with unexpected error: {}",
+                    str(e),
+                    extra={"tool": tool_name, "conversation_id": conversation_id},
+                )
+                return "Something went wrong while creating your weekly plan. Please try again."
 
         try:
             result = await call_tool(
                 "plan_week",
                 {
-                    "state": deps.athlete_state.model_dump(),
-                    "user_id": deps.user_id,
-                    "athlete_id": deps.athlete_id,
-                    "user_feedback": user_feedback if user_feedback else None,
+                    "state": state.model_dump(),
+                    "user_id": user_id,
+                    "athlete_id": athlete_id,
+                    "user_feedback": user_feedback_val,
                 },
             )
             msg = result.get("message", "Weekly plan created.")
             if msg and ("not saved" in msg or "calendar unavailable" in msg):
-                if conversation_id and step_info:
-                    step_id, label = step_info
-                    await CoachActionExecutor._emit_progress_event(
-                        conversation_id, step_id, label, "failed", message="Persistence failed"
-                    )
-                preview = (msg[:500] + "…") if len(msg) > 500 else msg
                 logger.error(
-                    f"Plan generation succeeded but persistence failed; aborting execution. message_preview={preview}",
+                    "Plan generation succeeded but persistence failed; aborting execution.",
                     tool=tool_name,
                     conversation_id=conversation_id,
                 )
                 raise PersistenceError("plan_commit_failed")
-            if conversation_id and step_info:
-                step_id, label = step_info
-                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "completed")
             logger.info(
                 "Tool executed successfully",
                 tool=tool_name,
                 conversation_id=conversation_id,
-            )
-            logger.info(
-                f"Tool executed: tool={tool_name}, intent={decision.intent}, horizon={decision.horizon}",
-                tool=tool_name,
-                intent=decision.intent,
-                horizon=decision.horizon,
-                conversation_id=conversation_id,
-                athlete_id=deps.athlete_id,
             )
             await CoachActionExecutor._trigger_summarization_if_needed(conversation_id)
             return msg
         except PersistenceError:
             raise
         except MCPError as e:
-            if conversation_id and step_info:
-                step_id, label = step_info
-                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=e.message)
             logger.error(
                 "Tool execution failed: {}",
                 e.message,
@@ -1604,19 +1628,11 @@ class CoachActionExecutor:
             if "calendar_persistence_failed" in (e.message or ""):
                 raise PersistenceError("plan_commit_failed") from e
             return "Something went wrong while creating your weekly plan. Please try again."
-        except ExecutionError:
-            raise
         except Exception as e:
-            if conversation_id and step_info:
-                step_id, label = step_info
-                await CoachActionExecutor._emit_progress_event(conversation_id, step_id, label, "failed", message=str(e))
             logger.error(
                 "Tool execution failed with unexpected error: {}",
                 str(e),
-                extra={
-                    "tool": tool_name,
-                    "conversation_id": conversation_id,
-                },
+                extra={"tool": tool_name, "conversation_id": conversation_id},
             )
             return "Something went wrong while creating your weekly plan. Please try again."
 

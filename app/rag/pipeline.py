@@ -213,13 +213,10 @@ class RagPipeline:
                 f"Chunk count mismatch: {len(chunks)} chunks but {embeddings.shape[0]} embeddings"
             )
 
-        # Reconstruct embedded chunks
-        embedded_chunks: list[EmbeddedChunk] = []
-        for chunk, vector in zip(chunks, embeddings, strict=True):
-            embedded_chunks.append(EmbeddedChunk(chunk=chunk, vector=vector.tolist()))
-
-        # Rebuild indexes
-        vector_index = VectorIndex(embedded_chunks)
+        # Rebuild indexes using optimized interface that avoids list conversion
+        # This saves memory by passing numpy arrays directly instead of converting
+        # to lists and back to numpy arrays
+        vector_index = VectorIndex(chunks=chunks, vectors=embeddings)
         metadata_index = MetadataIndex(chunks)
 
         # Create retriever

@@ -131,7 +131,8 @@ EXECUTION CONTROL RULES (CRITICAL):
    - Do NOT infer distances
    - Do NOT extract mileage
    - Do NOT interpret targets
-   - Do NOT set filled_slots
+   - filled_slots and missing_slots are populated downstream by the extractor
+   - The orchestrator may set them to null
    - You ONLY decide which attributes are required/optional
 
 4. EXECUTION is determined by extractor output
@@ -207,6 +208,10 @@ If missing_slots.length > 0:
 → No paragraphs. No lists. No explanations.
 → The question must remove the next blocker.
 
+When next_question is not null:
+• message MUST be null
+• No other user-facing text is allowed
+
 Examples:
 ❌ BAD: "I can build your plan. I need the race date. Also, what's your goal time? And where is the race?"
 ✅ GOOD: "What is the date of your marathon?"
@@ -263,6 +268,7 @@ Rules for action plans:
 - Each step must have a unique id (short identifier) and a label (user-facing description)
 - If action = "NO_ACTION", action_plan can be null or empty
 - If action = "EXECUTE", action_plan must contain at least one step
+- If target_action = null, action_plan MUST be null
 
 Example action plan:
 {
@@ -300,6 +306,13 @@ RESPONSE TYPE RULES:
 - Use "session_plan" for individual session planning responses
 - Use "recommendation" for session recommendations or training advice
 - Use "summary" for summarizing training state or progress
+
+response_type must be consistent with intent:
+- explain intent → explanation or summary
+- plan intent → plan / weekly_plan / season_plan / session_plan
+- recommend intent → recommendation
+- question intent → question
+- Do NOT mix planning response types with non-planning intents
 
 PLAN VISIBILITY (show_plan):
 
@@ -399,7 +412,7 @@ OUTPUT FORMAT:
 
 Return a JSON object with:
 
-- intent
+- intent (REQUIRED: must be one of the AVAILABLE INTENTS listed above - the resolved user intent for this turn)
 - horizon
 - action
 - confidence
@@ -418,8 +431,8 @@ EXECUTION CONTROL FIELDS (REQUIRED):
   * Do NOT extract values - the extractor will do that
 - optional_attributes: List of optional attributes (e.g., ["target_time", "weekly_mileage"])
   * Attributes that are helpful but not required
-- filled_slots: Dictionary of slots filled by extractor (DO NOT set this - extractor will populate)
-- missing_slots: List of slots still missing (computed from extractor output)
+- filled_slots: Dictionary of slots filled by extractor (OPTIONAL: may be null - extractor will populate this downstream)
+- missing_slots: List of slots still missing (OPTIONAL: may be null - computed from extractor output downstream)
 - next_question: SINGLE question to remove next blocker (ONE question only, no paragraphs, null if should_execute = true)
 - should_execute: true when extractor reports all required attributes found - execute immediately, no confirmation
 

@@ -12,7 +12,19 @@ Rules:
 - If information is not available, set field to null
 - Be conservative - don't guess or infer
 - Dates should be in YYYY-MM-DD format (use YYYY-MM-XX if only month/year known)
-- Goal times should be normalized to standard format (HH:MM:SS or descriptive like "sub-4")
+
+Event type normalization:
+- Event type should be normalized to a high-level category
+- Examples: "Ironman", "70.3" → "triathlon"; "ultra", "50K", "100-mile" → "ultra"; "trail race" → "trail"
+- Do NOT infer distance from event type
+
+Goal time normalization:
+- Normalize goal_time as HH:MM:SS when an exact time is stated
+- Descriptive strings only when explicitly phrased that way (e.g., "sub-4", "break 20")
+- Do NOT convert vague phrases like "around", "about", or "close to" into exact times
+
+Distance handling:
+- If distance is already implied by event type (e.g., marathon, half marathon), leave distance as null unless explicitly stated otherwise
 
 Example inputs:
 - "marathon in April 2025" -> event_type: "marathon", event_date: "2025-04-XX"

@@ -22,7 +22,7 @@ Generate a **weekly training intent**.
 
 This intent defines:
 • Strategic direction for the week
-• Target weekly volume (range, not prescription)
+• Target weekly volume (anchor, not prescription)
 • Intensity distribution guidance
 • Primary adaptation goal
 • Explicit risk awareness and mitigation
@@ -69,12 +69,14 @@ DO NOT:
 • Ignore fatigue, illness, or injury risk signals
 • Use unexplained jargon
 • Violate the SeasonPlan's strategy
+• Imply specific weekly structures (e.g., "early week easier, weekend long")
+• Intensity guidance must be qualitative only - do NOT specify counts, days, or sequencing
 
 EDGE CASE HANDLING:
 • If training_history shows extended gaps (>7 days), assume illness/break and be conservative
 • If recent_decisions show many missed workouts, reduce volume and intensity
 • If athlete_state shows high fatigue with low activity, prioritize recovery
-• When returning from breaks, start at 50% of previous volume and build gradually
+• When returning from breaks, start conservatively and build gradually
 
 ----------------------------------------------------------------
 WEEKLY DECISION PRINCIPLES
@@ -88,10 +90,11 @@ WEEKLY DECISION PRINCIPLES
 6. When uncertainty is high, default to restraint.
 
 ----------------------------------------------------------------
-VOLUME CHANGE RULES (GUARDRAILS)
+VOLUME CHANGE CONSTRAINTS (SAFETY BOUNDS)
 ----------------------------------------------------------------
 
-These are safety constraints, not optimization targets:
+These describe limits, not targets.
+Do NOT calculate, optimize, or explicitly reference these values in output.
 
 • Maximum week-over-week increase: 20%
 • Maximum week-over-week decrease: 30% (for recovery)
@@ -132,7 +135,8 @@ focus:
 volume_target_hours:
 • Single numeric target for planning context
 • Must align with SeasonPlan range
-• Not a prescription, but an anchor
+• This is a contextual anchor, not a prescription
+• Daily decisions may vary around this number
 
 intensity_distribution:
 • Describe emphasis, not zones
@@ -150,6 +154,7 @@ risk_notes:
 confidence:
 • Confidence in plan suitability
 • Range: 0.0–1.0
+• Reflects suitability of this intent given data quality and athlete state, not certainty of execution
 
 explanation:
 • 100–1000 characters
@@ -157,6 +162,7 @@ explanation:
 • Focus on restraint, sustainability, and alignment
 • If previous_week_intent is provided, explicitly explain what changed and why
 • Compare volume, focus, and risk changes from previous week
+• If recent execution deviated meaningfully from plan, explicitly acknowledge this and explain how the intent adapts
 • No metric definitions
 • No hedging language
 • No alarmism

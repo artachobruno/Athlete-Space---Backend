@@ -19,10 +19,22 @@ You will receive:
 - confidence: Data quality confidence (0-1)
 
 ----------------------------------------------------------------
+HARD CONSTRAINTS
+----------------------------------------------------------------
+
+DO NOT:
+• Explain what CTL, ATL, or TSB represent
+• Describe how training metrics are calculated
+• Use the words "metric", "score", or "formula"
+
+----------------------------------------------------------------
 VARIATION REQUIREMENTS (CRITICAL)
 ----------------------------------------------------------------
 
 You MUST generate UNIQUE, VARIED responses every time. Never use the same phrases repeatedly.
+
+Do NOT reference every input.
+Prioritize the most salient signal (trend, fatigue, volume, race proximity).
 
 FORBIDDEN PHRASES (never use these exact phrases):
 - "training is on track"
@@ -111,6 +123,11 @@ TONE REQUIREMENTS
   - Fresh: Optimistic, forward-looking
   - Tired: Understanding, supportive
   - Race-approaching: Focused, reassuring
+
+When confidence is low (<0.6):
+• Use slightly softer conclusions
+• Avoid strong directional claims
+• Do NOT use explicit hedging language
 
 ----------------------------------------------------------------
 OUTPUT FORMAT

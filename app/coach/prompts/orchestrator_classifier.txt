@@ -9,7 +9,7 @@ You MUST output valid JSON matching this exact schema:
   "horizon": "day | week | season | none",
   "confidence": 0.0-1.0,
   "action": "NO_TOOL | CALL_TOOL",
-  "tool_name": "plan | revise | none",
+  "tool_name": "plan | none",
   "read_only": true | false,
   "reason": "brief explanation"
 }
@@ -18,16 +18,17 @@ RULES (MANDATORY):
 
 1. action=CALL_TOOL only if confidence >= 0.7
 2. If action=NO_TOOL, tool_name must be "none"
-3. If action=CALL_TOOL, tool_name must be "plan" or "revise" (not "none")
+3. If action=CALL_TOOL, tool_name must be "plan" (not "none")
 4. Horizon is REQUIRED for "plan" or "revise" intents (cannot be "none")
 5. Horizon can be "none" only for "explain", "assess", or "question" intents
+6. If the user message contains both explanation and planning intent, prioritize planning intent only when explicitly requested
 
 INTENT CLASSIFICATION:
 
 - "plan": User wants to create a new training plan
 - "revise": User wants to modify an existing plan
-- "explain": User wants explanation of training state, plans, or concepts
-- "assess": User wants assessment of fitness, readiness, or performance
+- "explain": User wants explanation of training state, plans, or concepts (help user understand)
+- "assess": User wants assessment of fitness, readiness, or performance (evaluate status)
 - "question": General question that doesn't require tool execution
 
 HORIZON:
@@ -40,13 +41,17 @@ HORIZON:
 TOOL NAMES:
 
 - "plan": The unified planning tool (handles all horizons and revisions)
-- "revise": DEPRECATED - use "plan" with current_plan parameter instead
 - "none": No tool to call
+
+Note: For "revise" intent, always use tool_name "plan" (the unified tool handles revisions)
 
 CONFIDENCE:
 
 - 0.0-0.6: Low confidence - use NO_TOOL, respond conversationally
 - 0.7-1.0: High confidence - can use CALL_TOOL
+
+Confidence reflects how explicit and unambiguous the user's request is.
+Clear action verbs and specific horizons imply higher confidence.
 
 READ_ONLY:
 

@@ -15,6 +15,22 @@ Rules:
 - Recovery status should reflect current state, not historical state
 - Restrictions should be specific to activities mentioned
 
+Severity and recovery status:
+- Severity reflects the worst stated severity
+- Recovery status reflects the current state
+- Do NOT infer one from the other
+
+Date handling:
+- Do NOT normalize relative dates into calendar dates
+- Preserve phrases like "6 months ago" as provided
+
+Recovery status "preventive care":
+- Only use "preventive care" if an injury or vulnerable area is explicitly mentioned
+- Do NOT create injuries from general maintenance or soreness
+
+Body part laterality:
+- Do NOT infer left/right unless explicitly stated
+
 Example inputs:
 - "Previous knee injury, fully recovered" -> injury_type: "knee injury", recovery_status: "fully recovered"
 - "IT band syndrome in right leg, ongoing, avoid long runs" -> injury_type: "IT band syndrome", body_part: "right leg", recovery_status: "ongoing", restrictions: "avoid long runs"

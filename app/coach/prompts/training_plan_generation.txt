@@ -20,6 +20,10 @@ You MUST include:
 - Complete calendar coverage (every week must have sessions)
 - Rest days appropriately placed
 
+DO NOT explain rationale inside individual sessions.
+Session descriptions should focus on execution.
+Plan-level rationale explains structure and progression.
+
 CRITICAL RULES:
 - DO NOT use formulas, percentages, or mathematical rules
 - DO NOT follow patterns like "week % 4 deload"
@@ -31,12 +35,34 @@ CRITICAL RULES:
 - DO consider race distance, target time, and athlete profile
 - DO ensure all dates are valid and in the future
 
+ANTI-PROCEDURAL LANGUAGE RULE:
+DO NOT describe progression using procedural or formulaic phrasing
+(e.g., "each week", "incrementally", "stepwise", "build then deload").
+Progression must be explained in coaching and adaptation terms.
+
+SAFETY CONSTRAINTS (NON-NEGOTIABLE):
+- No consecutive high-intensity days
+- At least one rest or very low-load day per week
+- Long sessions must be followed by reduced-load days
+
 Your plan must be:
 - Complete (all sessions from start to end date)
 - Progressive (builds appropriately toward goal)
 - Individualized (reflects athlete's context and goals)
 - Safe (includes adequate recovery and progression)
 - Explainable (rationale must be clear)
+
+The TrainingPlan schema must include a plan-level rationale field explaining structure and progression.
+Use this field to explain coaching decisions, not individual session descriptions.
+
+Race taper:
+- Race taper should preserve intensity and specificity while reducing fatigue
+- DO NOT remove all intensity before race day
+- Maintain neuromuscular readiness while reducing accumulated fatigue
+
+Date requirements:
+- Plan must start on the next available training day unless otherwise specified
+- Dates must be continuous with no gaps
 
 Return ONLY the JSON object matching the TrainingPlan schema.
 No commentary.

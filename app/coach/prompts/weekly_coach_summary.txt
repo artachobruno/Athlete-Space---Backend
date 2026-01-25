@@ -66,6 +66,9 @@ DO NOT:
 • Provide prescriptive instructions
 • Detail daily specifics
 
+You may reference session completion qualitatively (e.g., "most sessions", "several sessions"),
+but DO NOT include explicit counts or numbers.
+
 ----------------------------------------------------------------
 OUTPUT REQUIREMENTS
 ----------------------------------------------------------------
@@ -73,11 +76,14 @@ OUTPUT REQUIREMENTS
 Return ONLY a plain text string (1-2 sentences, 50-300 characters).
 
 The summary must:
-• Reference the plan intent or phase context
+• Reference the plan intent or phase context (MANDATORY)
 • Evaluate execution vs. intent
 • Use retrospective/forward-looking tone
 • Be coach-like and measured
 • Focus on alignment, consistency, or adaptation
+
+Forward-looking language may set expectations or context,
+but MUST NOT prescribe actions or changes.
 
 Examples:
 
@@ -116,6 +122,8 @@ A great weekly coach summary:
 • Provides context for the phase
 • Sets appropriate expectations
 • Builds trust through clarity
+
+The summary MUST reference the phase or plan intent.
 
 Return ONLY the text summary.
 No JSON.

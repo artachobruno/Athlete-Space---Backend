@@ -269,6 +269,16 @@ def get_activities(
                 "coach_feedback": coach_feedback,  # Include coach feedback from workout interpretation
                 "conditions_label": activity.conditions_label,  # Climate conditions label (UI-facing)
                 "climate_expectation": climate_exp,  # One-line climate expectation (outdoor aerobic only)
+                # v1.1: Heat acclimation fields
+                "heat_stress_index": activity.heat_stress_index,
+                "heat_acclimation_score": activity.heat_acclimation_score,
+                "effective_heat_stress_index": activity.effective_heat_stress_index,
+                # v2.0: Cold stress fields
+                "wind_chill_c": activity.wind_chill_c,
+                "cold_stress_index": activity.cold_stress_index,
+                "avg_temperature_c": activity.avg_temperature_c,
+                "avg_dew_point_c": activity.avg_dew_point_c,
+                "wind_avg_mps": activity.wind_avg_mps,
             })
 
         logger.info(f"[ACTIVITIES] Returning {len(activities)} activities (total: {total})")
@@ -347,6 +357,16 @@ def get_activity(
             "coach_feedback": coach_feedback,  # Include coach feedback from workout interpretation
             "conditions_label": activity.conditions_label,  # Climate conditions label (UI-facing)
             "climate_expectation": climate_exp,  # One-line climate expectation (outdoor aerobic only)
+            # v1.1: Heat acclimation fields
+            "heat_stress_index": activity.heat_stress_index,
+            "heat_acclimation_score": activity.heat_acclimation_score,
+            "effective_heat_stress_index": activity.effective_heat_stress_index,
+            # v2.0: Cold stress fields
+            "wind_chill_c": activity.wind_chill_c,
+            "cold_stress_index": activity.cold_stress_index,
+            "avg_temperature_c": activity.avg_temperature_c,
+            "avg_dew_point_c": activity.avg_dew_point_c,
+            "wind_avg_mps": activity.wind_avg_mps,
         }
 
 

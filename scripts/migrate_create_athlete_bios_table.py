@@ -70,13 +70,36 @@ def migrate_create_athlete_bios_table() -> None:
             logger.info("Creating athlete_bios table...")
 
             if _is_postgresql():
-                # PostgreSQL: Use VARCHAR for id, TEXT for bio content, TIMESTAMP WITH TIME ZONE
-                conn.execute(
+                # Check the actual type of users.id column to match it
+                users_id_type_result = conn.execute(
                     text(
                         """
+                        SELECT data_type
+                        FROM information_schema.columns
+                        WHERE table_name = 'users' AND column_name = 'id'
+                        """
+                    )
+                ).fetchone()
+                
+                user_id_type = "VARCHAR"
+                if users_id_type_result:
+                    db_type = users_id_type_result[0]
+                    if db_type in ("uuid", "character varying"):
+                        if db_type == "uuid":
+                            user_id_type = "UUID"
+                        else:
+                            user_id_type = "VARCHAR"
+                    logger.info(f"Detected users.id type: {db_type}, using {user_id_type} for foreign key")
+                
+                id_type = "VARCHAR"  # Primary key is always VARCHAR (string UUID)
+                
+                # PostgreSQL: Use VARCHAR for id, match users.id type for user_id, TEXT for bio content
+                conn.execute(
+                    text(
+                        f"""
                         CREATE TABLE athlete_bios (
-                            id VARCHAR PRIMARY KEY,
-                            user_id VARCHAR NOT NULL,
+                            id {id_type} PRIMARY KEY,
+                            user_id {user_id_type} NOT NULL,
                             text TEXT NOT NULL,
                             confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0.0,
                             source VARCHAR NOT NULL,

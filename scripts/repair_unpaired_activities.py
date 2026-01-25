@@ -40,12 +40,12 @@ from app.pairing.auto_pairing_service import try_auto_pair
 from app.pairing.session_links import get_link_for_activity, get_link_for_planned
 
 
-def find_candidate_pairs(
+def get_unpaired_activities(
     db: Session,
     user_id: str | None = None,
     days: int | None = None,
-) -> list[tuple[PlannedSession, Activity]]:
-    """Find planned sessions and activities that appear to match but aren't paired.
+) -> list[Activity]:
+    """Get all unpaired activities.
 
     Args:
         db: Database session
@@ -53,25 +53,9 @@ def find_candidate_pairs(
         days: Optional number of days to look back
 
     Returns:
-        List of (planned_session, activity) tuples that appear to match
+        List of unpaired activities
     """
-    candidates: list[tuple[PlannedSession, Activity]] = []
-
-    # Get all unpaired planned sessions
-    planned_query = select(PlannedSession).where(
-        PlannedSession.status.notin_(["deleted", "skipped", "completed"]),
-    )
-
-    if user_id:
-        planned_query = planned_query.where(PlannedSession.user_id == user_id)
-
-    if days:
-        cutoff_date = datetime.now(UTC) - timedelta(days=days)
-        planned_query = planned_query.where(PlannedSession.starts_at >= cutoff_date)
-
-    planned_sessions = list(db.scalars(planned_query).all())
-
-    # Get all unpaired activities
+    # Get all activities
     activities_query = select(Activity).where(Activity.user_id.isnot(None))
 
     if user_id:
@@ -90,48 +74,7 @@ def find_candidate_pairs(
         if not link:
             unpaired_activities.append(activity)
 
-    logger.info(
-        f"Found {len(planned_sessions)} unpaired planned sessions and {len(unpaired_activities)} unpaired activities"
-    )
-
-    # Find matches by date and type
-    for planned in planned_sessions:
-        # Skip if already paired
-        link = get_link_for_planned(db, planned.id)
-        if link:
-            continue
-
-        planned_date = planned.starts_at.date() if planned.starts_at else None
-        if not planned_date:
-            continue
-
-        # Find activities on the same day with matching type
-        for activity in unpaired_activities:
-            activity_date = activity.starts_at.date() if activity.starts_at else None
-            if not activity_date:
-                continue
-
-            if activity_date == planned_date:
-                # Check if types match (simplified - just check sport)
-                if activity.sport and planned.type:
-                    # Normalize types for comparison
-                    activity_sport = activity.sport.lower()
-                    planned_type = planned.type.lower()
-
-                    # Basic matching: exact match or both are "run"
-                    if activity_sport == planned_type or (
-                        activity_sport == "run" and planned_type in ["easy", "long", "threshold", "tempo", "interval"]
-                    ):
-                        # Check duration match (within 20% tolerance)
-                        if planned.duration_minutes and activity.duration_seconds:
-                            planned_duration_min = planned.duration_minutes
-                            activity_duration_min = activity.duration_seconds / 60.0
-                            diff_pct = abs(planned_duration_min - activity_duration_min) / planned_duration_min
-
-                            if diff_pct <= 0.2:  # 20% tolerance
-                                candidates.append((planned, activity))
-
-    return candidates
+    return unpaired_activities
 
 
 def repair_pairings(
@@ -152,45 +95,50 @@ def repair_pairings(
         Dictionary with statistics
     """
     stats: dict[str, int] = {
-        "candidates_found": 0,
+        "activities_found": 0,
         "paired": 0,
         "failed": 0,
     }
 
-    candidates = find_candidate_pairs(db, user_id=user_id, days=days)
-    stats["candidates_found"] = len(candidates)
+    unpaired_activities = get_unpaired_activities(db, user_id=user_id, days=days)
+    stats["activities_found"] = len(unpaired_activities)
 
-    logger.info(f"Found {len(candidates)} candidate pairs to repair")
+    logger.info(f"Found {len(unpaired_activities)} unpaired activities to attempt pairing")
 
-    for planned, activity in candidates:
+    for activity in unpaired_activities:
         try:
+            activity_date = activity.starts_at.date() if activity.starts_at else None
+            duration_str = f"{activity.duration_seconds/60:.1f}min" if activity.duration_seconds else "no duration"
+            
             if dry_run:
                 logger.info(
-                    f"[DRY RUN] Would attempt to pair planned session {planned.id} "
-                    f"({planned.type} on {planned.starts_at.date()}, {planned.duration_minutes}min) "
-                    f"with activity {activity.id} "
-                    f"({activity.sport} on {activity.starts_at.date()}, {activity.duration_seconds/60:.1f}min)"
+                    f"[DRY RUN] Would attempt to pair activity {activity.id} "
+                    f"({activity.sport} on {activity_date}, {duration_str})"
                 )
             else:
-                # Try pairing from activity side (more reliable)
+                # Try pairing from activity side (uses auto-pairing service matching logic)
+                # This will check date, type, and duration matching automatically
                 try_auto_pair(activity=activity, session=db)
                 db.commit()
 
-                # Check if pairing succeeded
+                # Check if pairing succeeded (could be paired to any planned session)
                 link = get_link_for_activity(db, activity.id)
-                if link and link.planned_session_id == planned.id:
+                if link:
                     stats["paired"] += 1
                     logger.info(
-                        f"✅ Successfully paired planned session {planned.id} with activity {activity.id}"
+                        f"✅ Successfully paired activity {activity.id} with planned session {link.planned_session_id}"
                     )
                 else:
                     stats["failed"] += 1
-                    logger.debug(f"❌ Failed to pair planned session {planned.id} with activity {activity.id}")
+                    logger.debug(
+                        f"❌ Auto-pairing service did not pair activity {activity.id} "
+                        f"(no matching planned session found)"
+                    )
 
         except Exception as e:
             stats["failed"] += 1
             logger.error(
-                f"Error pairing planned {planned.id} with activity {activity.id}: {e}",
+                f"Error attempting to pair activity {activity.id}: {e}",
                 exc_info=True,
             )
             db.rollback()
@@ -243,9 +191,9 @@ def main() -> None:
 
         logger.info("=" * 80)
         logger.info("Summary:")
-        logger.info(f"  Candidate pairs found: {stats['candidates_found']}")
+        logger.info(f"  Unpaired activities found: {stats['activities_found']}")
         if dry_run:
-            logger.info(f"  Would attempt to pair: {stats['candidates_found']}")
+            logger.info(f"  Would attempt to pair: {stats['activities_found']}")
             logger.info("  (Run with --no-dry-run to actually pair)")
         else:
             logger.info(f"  Successfully paired: {stats['paired']}")

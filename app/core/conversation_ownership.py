@@ -111,3 +111,62 @@ def get_conversation_owner(conversation_id: str) -> str | None:
         if ownership is None:
             return None
         return ownership.user_id
+
+
+def validate_conversation_ownership_from_path(
+    conversation_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> str:
+    """Validate conversation ownership using path parameter.
+
+    This is a variant of validate_conversation_ownership that uses the path parameter
+    instead of reading from request state. Use this for endpoints where conversation_id
+    is in the URL path.
+
+    Args:
+        conversation_id: Conversation ID from path parameter
+        user_id: Authenticated user ID (from auth dependency, required)
+
+    Returns:
+        Authenticated user_id
+
+    Raises:
+        HTTPException: 401 if unauthenticated (from get_current_user_id)
+        HTTPException: 403 if ownership mismatch
+        HTTPException: 404 if conversation doesn't exist
+    """
+    with get_session() as db:
+        ownership = db.execute(
+            select(ConversationOwnership).where(ConversationOwnership.conversation_id == conversation_id)
+        ).scalar_one_or_none()
+
+        if ownership is None:
+            # Conversation doesn't exist - return 404
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found",
+            )
+
+        # Validate ownership
+        owner_user_id = ownership.user_id
+        if owner_user_id != user_id:
+            logger.error(
+                "Conversation ownership violation",
+                conversation_id=conversation_id,
+                requesting_user_id=user_id,
+                owner_user_id=owner_user_id,
+                event="ownership_violation",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: This conversation belongs to another user",
+            )
+
+        logger.debug(
+            "Conversation ownership validated",
+            conversation_id=conversation_id,
+            user_id=user_id,
+            event="ownership_validated",
+        )
+
+    return user_id

@@ -32,9 +32,10 @@ from app.coach.utils.schemas import (
     ProgressResponse,
 )
 from app.core.conversation_id import get_conversation_id
-from app.core.conversation_ownership import validate_conversation_ownership
+from app.core.conversation_ownership import validate_conversation_ownership, validate_conversation_ownership_from_path
 from app.core.message import Message, normalize_message
 from app.core.observe import set_association_properties, trace
+from app.core.prompt_history import get_prompt_history
 from app.core.redis_conversation_store import write_message
 from app.core.trace_metadata import get_trace_metadata
 from app.db.message_repository import persist_message
@@ -810,32 +811,20 @@ async def coach_chat(
 @router.get("/conversations/{conversation_id}/progress", response_model=ProgressResponse)
 async def get_conversation_progress(
     conversation_id: str,
-    request: Request,
-    _user_id: str = Depends(validate_conversation_ownership),
+    _user_id: str = Depends(validate_conversation_ownership_from_path),
 ) -> ProgressResponse:
     """Get progress events for a conversation.
 
     Args:
         conversation_id: Conversation ID from path parameter
-        request: FastAPI request object (for context validation)
         _user_id: Authenticated user ID (from ownership validation, unused but required for validation)
 
     Returns:
         ProgressResponse with steps and events
     """
-    # Validate that path parameter matches context (optional validation)
-    # Ownership is validated by validate_conversation_ownership dependency
-    context_conversation_id = get_conversation_id(request)
-    if context_conversation_id != conversation_id:
-        logger.warning(
-            "Conversation ID mismatch between path and context",
-            path_conversation_id=conversation_id,
-            context_conversation_id=context_conversation_id,
-        )
     logger.info(
         "Fetching conversation progress",
         conversation_id=conversation_id,
-        context_conversation_id=context_conversation_id,
     )
     with get_session() as db:
         # Fetch all events for this conversation
@@ -890,3 +879,51 @@ async def get_conversation_progress(
                 )
 
         return ProgressResponse(steps=steps, events=event_responses)
+
+
+@router.get("/conversations/{conversation_id}/messages")
+async def get_conversation_messages(
+    conversation_id: str,
+    _user_id: str = Depends(validate_conversation_ownership_from_path),
+) -> list[dict[str, str | bool | dict[str, str | int | None] | list[dict[str, str | None]] | None]]:
+    """Get messages for a conversation.
+
+    Args:
+        conversation_id: Conversation ID from path parameter
+        _user_id: Authenticated user ID (from ownership validation, unused but required for validation)
+
+    Returns:
+        List of conversation messages in format expected by frontend
+    """
+    logger.info(
+        "Fetching conversation messages",
+        conversation_id=conversation_id,
+    )
+
+    # Get messages from prompt history (Redis first, then DB fallback)
+    messages = get_prompt_history(conversation_id, limit=100)
+
+    # Convert Message objects to frontend format
+    result = []
+    for msg in messages:
+        # Extract metadata fields that frontend expects
+        metadata = msg.metadata or {}
+        result.append(
+            {
+                "id": metadata.get("message_id", ""),
+                "role": msg.role if msg.role != "system" else "assistant",  # Frontend doesn't expect "system"
+                "content": msg.content,
+                "transient": metadata.get("transient", False),
+                "stage": metadata.get("stage"),
+                "message_type": metadata.get("message_type"),
+                "show_plan": metadata.get("show_plan", False),
+                "plan_items": metadata.get("plan_items"),
+                "metadata": {
+                    "week_number": metadata.get("week_number"),
+                    "total_weeks": metadata.get("total_weeks"),
+                },
+                "created_at": msg.ts,
+            }
+        )
+
+    return result

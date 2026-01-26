@@ -12,7 +12,7 @@ If no user_id is provided, it will prompt for it.
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to Python path
@@ -38,12 +38,12 @@ def main() -> None:
     logger.info(f"Triggering metrics recomputation for user_id={user_id}")
 
     # Recompute last 50 days (CTL window + buffer) to ensure we get all recent days
-    since_date = datetime.now(tz=timezone.utc).date() - timedelta(days=50)
+    since_date = datetime.now(tz=UTC).date() - timedelta(days=50)
 
     try:
         result = recompute_metrics_for_user(user_id, since_date=since_date)
         logger.info(f"Recomputation complete: {result}")
-        print(f"\n✅ Metrics recomputation complete!")
+        print("\n✅ Metrics recomputation complete!")
         print(f"   - Created: {result.get('daily_created', 0)} days")
         print(f"   - Updated: {result.get('daily_updated', 0)} days")
         print(f"   - Skipped: {result.get('daily_skipped', 0)} days (historical)")

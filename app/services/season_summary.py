@@ -268,11 +268,11 @@ async def build_season_summary(
         if not plan_model:
             # Get the next upcoming race (or most recent if all are in the past)
             now_utc = datetime.now(timezone.utc)
-            
+
             logger.info(
                 f"Checking for race plans: user_id={user_id}, athlete_id={athlete_id}"
             )
-            
+
             # Query by both athlete_id OR user_id to catch any race plans
             # This handles cases where race might be saved with either identifier
             race_plan = session.execute(
@@ -282,12 +282,12 @@ async def build_season_summary(
                 )
                 .order_by(RacePlan.race_date)
             ).scalar_one_or_none()
-            
+
             if not race_plan:
                 logger.warning(
                     f"No race plan found for athlete_id={athlete_id} OR user_id={user_id}"
                 )
-            
+
             # If we found a race but it's in the past, get the most recent one
             if race_plan and race_plan.race_date < now_utc:
                 logger.info(
@@ -344,16 +344,22 @@ async def build_season_summary(
                     select(RacePlan)
                     .where(RacePlan.user_id == user_id)
                 ).scalars().all()
-                
+
                 all_races_by_athlete = session.execute(
                     select(RacePlan)
                     .where(RacePlan.athlete_id == athlete_id)
                 ).scalars().all()
-                
+
+                races_by_user_str = (
+                    f"{[(r.id, r.race_date, r.athlete_id) for r in all_races_by_user]}"
+                )
+                races_by_athlete_str = (
+                    f"{[(r.id, r.race_date, r.user_id) for r in all_races_by_athlete]}"
+                )
                 logger.warning(
                     f"No race plan found for athlete_id={athlete_id}, user_id={user_id}. "
-                    f"Found {len(all_races_by_user)} race plans by user_id: {[(r.id, r.race_date, r.athlete_id) for r in all_races_by_user]}, "
-                    f"Found {len(all_races_by_athlete)} race plans by athlete_id: {[(r.id, r.race_date, r.user_id) for r in all_races_by_athlete]}"
+                    f"Found {len(all_races_by_user)} race plans by user_id: {races_by_user_str}, "
+                    f"Found {len(all_races_by_athlete)} race plans by athlete_id: {races_by_athlete_str}"
                 )
                 raise ValueError("Season plan not available. The coach is still learning about your training patterns.")
         else:

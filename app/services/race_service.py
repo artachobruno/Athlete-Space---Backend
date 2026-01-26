@@ -49,7 +49,7 @@ def resolve_race_focus(
         # Compare dates only (ignore time component) by normalizing to start of day
         race_date_start = race_date.replace(hour=0, minute=0, second=0, microsecond=0)
         race_date_end = race_date_start.replace(hour=23, minute=59, second=59, microsecond=999999)
-        
+
         existing_race = db.execute(
             select(RacePlan).where(
                 RacePlan.athlete_id == athlete_id,
@@ -89,7 +89,7 @@ def resolve_race_focus(
         # Create new race
         # Normalize race_date to start of day for consistency
         race_date_normalized = race_date.replace(hour=0, minute=0, second=0, microsecond=0)
-        
+
         new_race = RacePlan(
             user_id=user_id,
             athlete_id=athlete_id,
@@ -100,11 +100,11 @@ def resolve_race_focus(
             priority=priority,
         )
         db.add(new_race)
-        
+
         try:
             db.commit()
             db.refresh(new_race)
-            
+
             logger.info(
                 "Created new race",
                 race_id=new_race.id,

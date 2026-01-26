@@ -57,6 +57,9 @@ def upsert_link(
     method: str,
     confidence: float | None = None,
     notes: str | None = None,
+    match_reason: dict | None = None,
+    deltas: dict | None = None,
+    resolved_at: datetime | None = None,
 ) -> SessionLink:
     """Create or update a link between a planned session and an activity.
 
@@ -144,6 +147,12 @@ def upsert_link(
         existing_link.method = method
         existing_link.confidence = confidence
         existing_link.notes = notes
+        if match_reason is not None:
+            existing_link.match_reason = match_reason
+        if deltas is not None:
+            existing_link.deltas = deltas
+        if resolved_at is not None:
+            existing_link.resolved_at = resolved_at
         existing_link.updated_at = datetime.now(timezone.utc)
 
         logger.debug(
@@ -167,6 +176,9 @@ def upsert_link(
         method=method,
         confidence=confidence,
         notes=notes,
+        match_reason=match_reason,
+        deltas=deltas,
+        resolved_at=resolved_at,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )

@@ -512,6 +512,23 @@ def _persist_pairing(
     confidence_score = 1.0 - duration_diff_pct  # Higher confidence = lower diff
     confidence_score = max(0.0, min(1.0, confidence_score))  # Clamp to [0, 1]
 
+    # PHASE 3: Populate match_reason with pairing rationale
+    match_reason = {
+        "same_day": True,  # Always true for auto-pairing
+        "sport_match": True,  # Always true (filtered before pairing)
+        "duration_delta_pct": duration_diff_pct,
+    }
+
+    # Add time overlap if available
+    if planned.starts_at and activity.starts_at:
+        planned_time = planned.starts_at.time()
+        activity_time = activity.starts_at.time()
+        time_diff_minutes = abs(
+            (activity_time.hour * 60 + activity_time.minute)
+            - (planned_time.hour * 60 + planned_time.minute)
+        )
+        match_reason["time_diff_minutes"] = time_diff_minutes
+
     upsert_link(
         session=session,
         user_id=activity.user_id,
@@ -521,6 +538,7 @@ def _persist_pairing(
         method="auto",
         confidence=confidence_score,
         notes=f"Auto-paired: duration diff {duration_diff_pct:.2%}",
+        match_reason=match_reason,
     )
 
     _log_decision(

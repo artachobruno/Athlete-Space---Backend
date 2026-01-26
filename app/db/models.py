@@ -723,7 +723,14 @@ class PlannedSession(Base):
 
     # Status tracking
     # CHECK: 'planned', 'completed', 'skipped', 'moved', 'cancelled'
+    # NOTE: Execution outcome (completed/missed) is derived via session_links + time.
+    # lifecycle_status ONLY reflects planning changes.
     status: Mapped[str] = mapped_column(String, nullable=False, default="planned")
+
+    # Lifecycle status (PHASE 1: separates planning intent from execution outcome)
+    # Tracks planning changes: scheduled, moved, cancelled
+    # Execution outcomes (completed, skipped, missed) are DERIVED, not stored here
+    lifecycle_status: Mapped[str] = mapped_column(String, nullable=False, default="scheduled")  # CHECK: 'scheduled', 'moved', 'cancelled'
 
     # Tags (JSONB array)
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)  # JSONB array of tags
@@ -865,6 +872,8 @@ class SessionLink(Base):
     Schema v2: Replaces direct foreign keys (planned_session_id, completed_activity_id).
     Enforces one-to-one relationships: one planned_session can link to one activity, vice versa.
 
+    PHASE 3: Elevated to reconciliation object with match_reason, deltas, resolved_at.
+
     Schema:
     - id: UUID primary key
     - user_id: Foreign key to users.id (UUID)
@@ -874,6 +883,9 @@ class SessionLink(Base):
     - confidence: Confidence score (0.0-1.0, nullable)
     - method: Pairing method ('auto', 'manual')
     - notes: Optional notes (nullable)
+    - match_reason: JSONB with pairing rationale (same_day, sport_match, duration_delta_pct, etc.)
+    - deltas: JSONB with planned vs actual differences (duration, distance, TSS)
+    - resolved_at: Timestamp when reconciliation was confirmed (nullable)
     - created_at: Record creation timestamp
     - updated_at: Last update timestamp
 
@@ -894,6 +906,11 @@ class SessionLink(Base):
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.0-1.0
     method: Mapped[str] = mapped_column(String, nullable=False, default="auto")  # CHECK: 'auto', 'manual'
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # PHASE 3: Reconciliation fields
+    match_reason: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # JSONB: pairing rationale
+    deltas: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # JSONB: planned vs actual differences
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # When reconciliation was confirmed
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(

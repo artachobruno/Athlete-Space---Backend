@@ -13,7 +13,10 @@ from fastapi import HTTPException, status
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from datetime import timezone
+
 from app.db.models import Activity, PairingDecision, PlannedSession
+from app.pairing.delta_computation import compute_link_deltas
 from app.pairing.session_links import get_link_for_activity, unlink_by_activity, upsert_link
 from app.plans.reconciliation.service import reconcile_activity_if_paired
 from app.workouts.execution_models import MatchType
@@ -113,6 +116,9 @@ def manual_pair(
         )
 
     with session.begin():
+        # PHASE 3: Compute deltas when confirming manual pairing
+        deltas = compute_link_deltas(plan, activity)
+        
         # Schema v2: Use SessionLink for pairing
         # upsert_link handles clearing existing links automatically
         upsert_link(
@@ -124,6 +130,9 @@ def manual_pair(
             method="manual",
             confidence=1.0,
             notes="Manually paired by user",
+            match_reason={"manual": True, "user_action": True},
+            deltas=deltas,
+            resolved_at=datetime.now(timezone.utc),
         )
 
         _log_decision(

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 from sqlalchemy import delete, select
+from sqlalchemy.exc import InternalError
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PlannedSession, SessionLink
@@ -28,9 +29,22 @@ def get_link_for_planned(session: Session, planned_session_id: str) -> SessionLi
     Returns:
         SessionLink if found, None otherwise
     """
-    return session.execute(
-        select(SessionLink).where(SessionLink.planned_session_id == planned_session_id)
-    ).scalar_one_or_none()
+    try:
+        return session.execute(
+            select(SessionLink).where(SessionLink.planned_session_id == planned_session_id)
+        ).scalar_one_or_none()
+    except InternalError as e:
+        # If transaction is aborted, rollback and return None
+        # This can happen if a previous query in the same transaction failed
+        error_str = str(e).lower()
+        if "current transaction is aborted" in error_str or "in failed sql transaction" in error_str:
+            logger.warning(
+                f"Transaction aborted when querying session link for planned_session_id={planned_session_id}, "
+                f"rolling back and returning None"
+            )
+            session.rollback()
+            return None
+        raise
 
 
 def get_link_for_activity(session: Session, activity_id: str) -> SessionLink | None:
@@ -43,9 +57,22 @@ def get_link_for_activity(session: Session, activity_id: str) -> SessionLink | N
     Returns:
         SessionLink if found, None otherwise
     """
-    return session.execute(
-        select(SessionLink).where(SessionLink.activity_id == activity_id)
-    ).scalar_one_or_none()
+    try:
+        return session.execute(
+            select(SessionLink).where(SessionLink.activity_id == activity_id)
+        ).scalar_one_or_none()
+    except InternalError as e:
+        # If transaction is aborted, rollback and return None
+        # This can happen if a previous query in the same transaction failed
+        error_str = str(e).lower()
+        if "current transaction is aborted" in error_str or "in failed sql transaction" in error_str:
+            logger.warning(
+                f"Transaction aborted when querying session link for activity_id={activity_id}, "
+                f"rolling back and returning None"
+            )
+            session.rollback()
+            return None
+        raise
 
 
 def upsert_link(

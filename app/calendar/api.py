@@ -561,18 +561,38 @@ def get_season(user_id: str = Depends(get_current_user_id)):
             execution_state_info = None
             if kind == "planned":
                 # Load PlannedSession and linked Activity to compute execution_state
-                planned_session = session.get(PlannedSession, item_id)
-                linked_activity = None
+                try:
+                    planned_session = session.get(PlannedSession, item_id)
+                    linked_activity = None
 
-                if item_id in pairing_map:
-                    activity_id = pairing_map[item_id]
-                    linked_activity = session.get(Activity, activity_id)
-                    payload = {**payload, "paired_activity_id": activity_id}
+                    if item_id in pairing_map:
+                        activity_id = pairing_map[item_id]
+                        try:
+                            linked_activity = session.get(Activity, activity_id)
+                            payload = {**payload, "paired_activity_id": activity_id}
+                        except InternalError as e:
+                            error_str = str(e).lower()
+                            if "current transaction is aborted" in error_str:
+                                logger.warning(
+                                    f"Transaction aborted when loading activity {activity_id}, skipping"
+                                )
+                                session.rollback()
+                                linked_activity = None
 
-                if planned_session:
-                    execution_state_info = _compute_execution_state_for_planned(
-                        session, planned_session, linked_activity, item_id, now_utc
-                    )
+                    if planned_session:
+                        execution_state_info = _compute_execution_state_for_planned(
+                            session, planned_session, linked_activity, item_id, now_utc
+                        )
+                except InternalError as e:
+                    error_str = str(e).lower()
+                    if "current transaction is aborted" in error_str:
+                        logger.warning(
+                            f"Transaction aborted when loading planned session {item_id}, skipping"
+                        )
+                        session.rollback()
+                        execution_state_info = None
+                    else:
+                        raise
             elif kind == "activity":
                 # For unpaired activities, execution_state is "executed_unplanned"
                 execution_state_info = _compute_execution_state_for_activity()

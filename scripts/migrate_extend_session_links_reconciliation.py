@@ -35,7 +35,7 @@ from app.config.settings import settings
 from app.db.session import get_session
 
 
-def migrate_extend_session_links() -> None:
+def migrate_extend_session_links_reconciliation() -> None:
     """Extend session_links table with reconciliation fields."""
     logger.info("Starting migration: extend session_links with reconciliation fields")
 
@@ -84,4 +84,4 @@ def migrate_extend_session_links() -> None:
 
 
 if __name__ == "__main__":
-    migrate_extend_session_links()
+    migrate_extend_session_links_reconciliation()

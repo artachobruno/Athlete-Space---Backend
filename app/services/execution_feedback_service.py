@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent
+from sqlalchemy.orm import Session
 
 from app.api.schemas.schemas import ExecutionStateInfo
 from app.coach.config.models import USER_FACING_MODEL
@@ -178,5 +179,49 @@ def _determine_tone(
     return "neutral"
 
 
-# Add helper method to CoachLLMClient for simple text generation
-# This will be added to llm_client.py
+async def generate_and_persist_feedback_async(
+    session: Session,
+    execution_summary: WorkoutExecutionSummary,
+    execution_state: ExecutionStateInfo,
+    athlete_level: str = "intermediate",
+) -> None:
+    """Generate and persist LLM feedback to execution summary.
+
+    This function generates feedback using the LLM and saves it to the
+    execution summary's llm_feedback field.
+
+    Args:
+        session: Database session
+        execution_summary: Workout execution summary to update
+        execution_state: Execution state information
+        athlete_level: Athlete level (low | intermediate | advanced)
+    """
+    try:
+        # Generate feedback
+        feedback = await generate_execution_feedback(
+            execution_state=execution_state,
+            execution_summary=execution_summary,
+            athlete_level=athlete_level,
+        )
+
+        if feedback:
+            # Convert to dict and persist
+            execution_summary.llm_feedback = feedback.model_dump()
+            session.commit()
+            logger.info(
+                "Persisted LLM feedback to execution summary",
+                execution_summary_id=execution_summary.id,
+                activity_id=execution_summary.activity_id,
+            )
+        else:
+            logger.debug(
+                "No feedback generated, skipping persistence",
+                execution_summary_id=execution_summary.id,
+            )
+    except Exception as e:
+        logger.warning(
+            f"Failed to generate and persist feedback: {e}",
+            execution_summary_id=execution_summary.id if execution_summary else None,
+        )
+        session.rollback()
+        # Don't raise - feedback generation is optional

@@ -15,7 +15,7 @@ from app.api.schemas.season import GoalRace, SeasonPhase, SeasonSummary, SeasonW
 from app.calendar.view_helper import calendar_session_from_view_row, get_calendar_items_from_view
 from app.coach.schemas.intent_schemas import SeasonPlan
 from app.coach.utils.llm_client import CoachLLMClient
-from app.db.models import User
+from app.db.models import RacePlan, User
 from app.db.session import get_session
 from app.pairing.session_links import get_link_for_activity, get_link_for_planned
 from app.services.intelligence.store import IntentStore
@@ -263,36 +263,92 @@ async def build_season_summary(
         plan_model = IntentStore.get_latest_season_plan(user_id=user_id, active_only=True)
         if not plan_model:
             plan_model = IntentStore.get_latest_season_plan(user_id=user_id, active_only=False)
+
+        # If no season plan, check for race plans
         if not plan_model:
-            raise ValueError("Season plan not available. The coach is still learning about your training patterns.")
+            # Get the next upcoming race (or most recent if all are in the past)
+            now_utc = datetime.now(timezone.utc)
+            race_plan = session.execute(
+                select(RacePlan)
+                .where(
+                    RacePlan.user_id == user_id,
+                    RacePlan.race_date >= now_utc
+                )
+                .order_by(RacePlan.race_date)
+            ).scalar_one_or_none()
 
-        # Handle case where plan_data might be None (missing column)
-        if not plan_model.plan_data:
-            raise ValueError("Season plan data not available (database schema mismatch)")
+            # If no future race, get the most recent race
+            if not race_plan:
+                race_plan = session.execute(
+                    select(RacePlan)
+                    .where(RacePlan.user_id == user_id)
+                    .order_by(RacePlan.race_date.desc())
+                ).scalar_one_or_none()
 
-        try:
-            plan = SeasonPlan(**plan_model.plan_data)
-        except Exception as e:
-            logger.error(f"Failed to parse season plan: {e}")
-            raise ValueError("Failed to parse season plan data") from e
+            if race_plan:
+                # Build season summary from race plan
+                # Convert datetime to date
+                if isinstance(race_plan.race_date, datetime):
+                    race_date = race_plan.race_date.date()
+                elif isinstance(race_plan.race_date, date):
+                    race_date = race_plan.race_date
+                else:
+                    # Fallback: try to extract date
+                    race_date = (
+                        race_plan.race_date.date()
+                        if hasattr(race_plan.race_date, "date")
+                        else datetime.now(timezone.utc).date()
+                    )
 
-        # Calculate season boundaries
-        season_start = plan.season_start
-        season_end = plan.season_end
-        total_weeks = (season_end - season_start).days // 7
+                # Calculate season start (16 weeks before race, or today if race is sooner)
+                season_start = max(
+                    now_local.date(),
+                    race_date - timedelta(weeks=16)
+                )
+                season_end = race_date
+                total_weeks = max(1, (season_end - season_start).days // 7)
 
-        # Get goal race if available
-        goal_race = None
-        if plan.target_races:
-            # Use first race as goal race
-            race_name = plan.target_races[0]
-            # Try to extract date from race name or use season_end
-            race_date = season_end  # Default to season end
-            goal_race = GoalRace(
-                name=race_name,
-                race_date=race_date,
-                weeks_to_race=max(0, (race_date - now_local.date()).days // 7),
-            )
+                # Create goal race
+                goal_race = GoalRace(
+                    name=race_plan.race_name or f"{race_plan.race_distance} Race",
+                    race_date=race_date,
+                    weeks_to_race=max(0, (race_date - now_local.date()).days // 7),
+                )
+
+                # Use a default plan focus for race plans
+                plan_focus = f"Training for {race_plan.race_distance} on {race_date.strftime('%B %d, %Y')}"
+            else:
+                raise ValueError("Season plan not available. The coach is still learning about your training patterns.")
+        else:
+            # Handle case where plan_data might be None (missing column)
+            if not plan_model.plan_data:
+                raise ValueError("Season plan data not available (database schema mismatch)")
+
+            try:
+                plan = SeasonPlan(**plan_model.plan_data)
+            except Exception as e:
+                logger.error(f"Failed to parse season plan: {e}")
+                raise ValueError("Failed to parse season plan data") from e
+
+            # Calculate season boundaries
+            season_start = plan.season_start
+            season_end = plan.season_end
+            total_weeks = (season_end - season_start).days // 7
+
+            # Get goal race if available
+            goal_race = None
+            if plan.target_races:
+                # Use first race as goal race
+                race_name = plan.target_races[0]
+                # Try to extract date from race name or use season_end
+                race_date = season_end  # Default to season end
+                goal_race = GoalRace(
+                    name=race_name,
+                    race_date=race_date,
+                    weeks_to_race=max(0, (race_date - now_local.date()).days // 7),
+                )
+
+            plan_focus = plan.focus if plan.focus else "Training progression"
 
         # Get calendar sessions for season period
         season_start_utc = to_utc(
@@ -372,12 +428,11 @@ async def build_season_summary(
             flags = _detect_week_flags(all_sessions, week_start_date)
 
             # Generate coach summary using LLM
-            plan_intent = plan.focus if plan.focus else "Training progression"
             coach_summary = await _generate_week_coach_summary(
                 week_index=week_num,
                 week_start=week_start_date,
                 week_sessions=week_sessions,
-                plan_intent=plan_intent,
+                plan_intent=plan_focus,
                 phase_name=phase_name,
             )
 

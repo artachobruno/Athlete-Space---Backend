@@ -13,6 +13,7 @@ Core invariants:
 """
 
 import json
+import time
 from datetime import datetime, timezone
 from typing import Literal, NoReturn
 
@@ -21,6 +22,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.coach.config.models import USER_FACING_MODEL
@@ -540,6 +542,7 @@ def persist_conversation_summary(
                 with get_session() as db:
                     _ensure_conversation_exists(db, db_conversation_id, conversation_id)
 
+                    # Recompute version on each attempt to handle concurrent inserts
                     version = get_next_summary_version(db, conversation_id)
                     created_at = datetime.now(timezone.utc)
 
@@ -552,12 +555,38 @@ def persist_conversation_summary(
                     db.add(row)
                     db.commit()
                     break  # Success, exit retry loop
+            except IntegrityError as e:
+                # Check if this is a unique constraint violation on conversation_id (primary key)
+                error_str = str(e.orig) if hasattr(e, "orig") else str(e)
+                is_pk_violation = "conversation_summaries_pkey" in error_str or "conversation_id" in error_str.lower()
+
+                if is_pk_violation and attempt < max_retries - 1:
+                    logger.warning(
+                        (
+                            f"Primary key violation detected in conversation summary persistence "
+                            f"(attempt {attempt + 1}/{max_retries}), retrying with recomputed version..."
+                        ),
+                        conversation_id=conversation_id,
+                        error=str(e),
+                    )
+                    # Reset version so it's recomputed on next attempt
+                    version = None
+                    created_at = None
+                    # Small delay to reduce contention
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
+                raise
             except Exception as e:
                 if _is_unique_violation(e) and attempt < max_retries - 1:
                     logger.warning(
                         f"Race condition detected in conversation summary persistence (attempt {attempt + 1}/{max_retries}), retrying...",
                         conversation_id=conversation_id,
                     )
+                    # Reset version so it's recomputed on next attempt
+                    version = None
+                    created_at = None
+                    # Small delay to reduce contention
+                    time.sleep(0.1 * (attempt + 1))
                     continue
                 raise
 

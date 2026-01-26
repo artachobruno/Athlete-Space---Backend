@@ -233,7 +233,7 @@ async def _generate_week_coach_summary(
 
 async def build_season_summary(
     user_id: str,
-    athlete_id: int,  # noqa: ARG001
+    athlete_id: int,
 ) -> SeasonSummary:
     """Build season narrative summary.
 
@@ -268,24 +268,27 @@ async def build_season_summary(
         if not plan_model:
             # Get the next upcoming race (or most recent if all are in the past)
             now_utc = datetime.now(timezone.utc)
+            
+            # Query by athlete_id (consistent with race_service.py)
             race_plan = session.execute(
                 select(RacePlan)
-                .where(
-                    RacePlan.user_id == user_id,
-                    RacePlan.race_date >= now_utc
-                )
+                .where(RacePlan.athlete_id == athlete_id)
                 .order_by(RacePlan.race_date)
             ).scalar_one_or_none()
-
-            # If no future race, get the most recent race
-            if not race_plan:
+            
+            # If we found a race but it's in the past, get the most recent one
+            if race_plan and race_plan.race_date < now_utc:
                 race_plan = session.execute(
                     select(RacePlan)
-                    .where(RacePlan.user_id == user_id)
+                    .where(RacePlan.athlete_id == athlete_id)
                     .order_by(RacePlan.race_date.desc())
                 ).scalar_one_or_none()
 
             if race_plan:
+                logger.info(
+                    f"Found race plan for athlete {athlete_id}: race_id={race_plan.id}, "
+                    f"race_date={race_plan.race_date}, distance={race_plan.race_distance}"
+                )
                 # Build season summary from race plan
                 # Convert datetime to date
                 if isinstance(race_plan.race_date, datetime):

@@ -79,7 +79,20 @@ def recompute_metrics_for_user(
         # Historical days (>14 days ago) are immutable to preserve EWMA integrity
         recent_cutoff = end_date - timedelta(days=14)
 
-        for date_val in daily_tss_loads:
+        # Ensure we process ALL dates in range (including rest days with 0.0 TSS)
+        # This guarantees we create/update entries for every day, including today
+        # Build a complete set of dates to process
+        all_dates_to_process = set(daily_tss_loads.keys())
+        # Also include any dates in the metrics dict that might not be in daily_tss_loads
+        all_dates_to_process.update(metrics.keys())
+        # Ensure we have all dates from since_date to end_date (inclusive)
+        current_date = since_date
+        while current_date <= end_date:
+            all_dates_to_process.add(current_date)
+            current_date += timedelta(days=1)
+
+        # Process all dates in sorted order
+        for date_val in sorted(all_dates_to_process):
             metrics_for_date = metrics.get(date_val, {"ctl": 0.0, "atl": 0.0, "fsb": 0.0})
 
             # Check if record exists

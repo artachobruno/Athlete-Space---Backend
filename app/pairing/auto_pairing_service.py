@@ -367,9 +367,49 @@ def _pair_from_activity(activity: Activity, session: Session) -> None:
         )
         return
 
-    matches.sort(key=lambda x: (x[0], x[1].created_at, x[1].id))
-    chosen_plan = matches[0][1]
-    chosen_diff_pct = matches[0][0]
+    # Sort matches by: duration diff (smallest first), then time proximity, then created_at
+    # Time proximity: prefer sessions closer to activity time
+    activity_time = activity.starts_at.time() if activity.starts_at else None
+    if activity_time:
+        matches_with_time = []
+        for diff_pct, plan in matches:
+            plan_time = plan.starts_at.time() if plan.starts_at else None
+            if plan_time:
+                # Calculate time difference in minutes
+                activity_minutes = activity_time.hour * 60 + activity_time.minute
+                plan_minutes = plan_time.hour * 60 + plan_time.minute
+                time_diff = abs(activity_minutes - plan_minutes)
+            else:
+                time_diff = 9999  # Large number if no time
+            matches_with_time.append((diff_pct, time_diff, plan))
+        matches_with_time.sort(key=lambda x: (x[0], x[1], x[2].created_at, x[2].id))
+        chosen_plan = matches_with_time[0][2]
+        chosen_diff_pct = matches_with_time[0][0]
+    else:
+        # Fallback: no time info, use original sorting
+    # Sort matches by: duration diff (smallest first), then time proximity, then created_at
+    # Time proximity: prefer sessions closer to activity time (better match)
+    activity_time = activity.starts_at.time() if activity.starts_at else None
+    if activity_time:
+        matches_with_time = []
+        for diff_pct, plan in matches:
+            plan_time = plan.starts_at.time() if plan.starts_at else None
+            if plan_time:
+                # Calculate time difference in minutes
+                activity_minutes = activity_time.hour * 60 + activity_time.minute
+                plan_minutes = plan_time.hour * 60 + plan_time.minute
+                time_diff = abs(activity_minutes - plan_minutes)
+            else:
+                time_diff = 9999  # Large number if no time
+            matches_with_time.append((diff_pct, time_diff, plan))
+        matches_with_time.sort(key=lambda x: (x[0], x[1], x[2].created_at, x[2].id))
+        chosen_plan = matches_with_time[0][2]
+        chosen_diff_pct = matches_with_time[0][0]
+    else:
+        # Fallback: no time info, use original sorting
+        matches.sort(key=lambda x: (x[0], x[1].created_at, x[1].id))
+        chosen_plan = matches[0][1]
+        chosen_diff_pct = matches[0][0]
 
     # Persist pairing
     _persist_pairing(chosen_plan, activity, session, chosen_diff_pct)

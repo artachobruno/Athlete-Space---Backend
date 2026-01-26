@@ -1527,8 +1527,19 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
             if hasattr(profile, "height_in") and profile.height_in is not None:
                 height_inches_int = round(float(profile.height_in))
 
+            # CRITICAL: Combine first_name and last_name into full_name for response
+            # The database model has first_name and last_name columns, not a name column
+            full_name = None
+            if profile.first_name:
+                if profile.last_name:
+                    full_name = f"{profile.first_name} {profile.last_name}"
+                else:
+                    full_name = profile.first_name
+            elif profile.last_name:
+                full_name = profile.last_name
+            
             return AthleteProfileResponse(
-                full_name=getattr(profile, "name", None),  # Map name -> full_name
+                full_name=full_name,  # Combine first_name and last_name
                 email=user_email,  # From auth user
                 gender=getattr(profile, "gender", None),
                 date_of_birth=date_of_birth_str,
@@ -1598,10 +1609,26 @@ def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdat
         profile.sources = {}
 
     # Full object overwrite - set all fields from request
-    if hasattr(profile, "name"):
-        profile.name = request.full_name  # Map full_name -> name
-    if hasattr(profile, "sources") and request.full_name is not None:
-        profile.sources["name"] = "user"
+    # CRITICAL: Store full_name by splitting into first_name and last_name
+    # The database model has first_name and last_name columns, not a name column
+    if request.full_name is not None:
+        # Split full_name into first_name and last_name
+        name_parts = request.full_name.strip().split(maxsplit=1)
+        if len(name_parts) == 2:
+            profile.first_name = name_parts[0]
+            profile.last_name = name_parts[1]
+        elif len(name_parts) == 1:
+            profile.first_name = name_parts[0]
+            profile.last_name = None
+        else:
+            profile.first_name = None
+            profile.last_name = None
+        if hasattr(profile, "sources"):
+            profile.sources["name"] = "user"
+    elif request.full_name is None and hasattr(request, "full_name"):
+        # Explicit None clears the field
+        profile.first_name = None
+        profile.last_name = None
 
     # Email is read-only - it comes from auth user, not profile
     # Do not update profile.email
@@ -1865,8 +1892,19 @@ def _build_response_from_profile(profile: AthleteProfile, session: Session, user
     # Check Strava connection from strava_accounts table (source of truth)
     strava_connected = _get_strava_connected_from_db(session, profile.user_id)
 
+    # CRITICAL: Combine first_name and last_name into full_name for response
+    # The database model has first_name and last_name columns, not a name column
+    full_name = None
+    if profile.first_name:
+        if profile.last_name:
+            full_name = f"{profile.first_name} {profile.last_name}"
+        else:
+            full_name = profile.first_name
+    elif profile.last_name:
+        full_name = profile.last_name
+    
     return AthleteProfileResponse(
-        full_name=getattr(profile, "name", None),  # Map name -> full_name
+        full_name=full_name,  # Combine first_name and last_name
         email=user_email or getattr(profile, "email", None),  # Prefer auth email
         gender=getattr(profile, "gender", None),
         date_of_birth=date_of_birth_str,

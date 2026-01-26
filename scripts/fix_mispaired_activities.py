@@ -37,13 +37,86 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity, PlannedSession
 from app.db.session import SessionLocal
-from app.pairing.auto_pairing_service import DURATION_TOLERANCE, _types_match
+from app.pairing.auto_pairing_service import DURATION_TOLERANCE
 from app.pairing.session_links import (
     get_link_for_activity,
     get_link_for_planned,
     unlink_by_activity,
     upsert_link,
 )
+
+
+def _normalize_activity_type(activity_type: str | None) -> str | None:
+    """Normalize activity type for comparison.
+
+    Handles case-insensitive matching and common variations.
+
+    Args:
+        activity_type: Activity type (may be None)
+
+    Returns:
+        Normalized type string or None
+    """
+    if not activity_type:
+        return None
+
+    normalized = activity_type.lower().strip()
+
+    # Common type mappings
+    type_mappings: dict[str, str] = {
+        "running": "run",
+        "run": "run",
+        "ride": "ride",
+        "bike": "ride",
+        "cycling": "ride",
+        "virtualride": "ride",
+        "ebikeride": "ride",
+        "swim": "swim",
+        "swimming": "swim",
+        "walk": "walk",
+        "walking": "walk",
+    }
+
+    return type_mappings.get(normalized, normalized)
+
+
+def _types_match(planned_type: str, activity_type: str | None) -> bool:
+    """Check if activity type matches planned type.
+
+    Handles cases where planned_type might be incorrectly set to a workout type
+    (easy, long, threshold) instead of a sport type (Run, Bike, Swim).
+
+    Args:
+        planned_type: Planned session type (may be sport type or workout type)
+        activity_type: Activity type (may be None)
+
+    Returns:
+        True if types match
+    """
+    if not activity_type:
+        return False
+
+    planned_normalized = _normalize_activity_type(planned_type)
+    activity_normalized = _normalize_activity_type(activity_type)
+
+    if not planned_normalized or not activity_normalized:
+        return False
+
+    # Direct match
+    if planned_normalized == activity_normalized:
+        return True
+
+    # If planned_type is a workout type (easy, long, threshold, etc.) instead of sport type,
+    # assume it's a Run and match against Run activities
+    # This handles backward compatibility with incorrectly set type fields
+    workout_types = {
+        "easy", "long", "threshold", "tempo", "interval", "vo2", "fartlek",
+        "recovery", "rest", "race", "moderate", "hard", "quality", "hills",
+        "strides", "aerobic", "steady", "marathon", "economy", "speed",
+    }
+
+    # Workout type likely means it's a Run - allow pairing
+    return planned_normalized in workout_types and activity_normalized == "run"
 
 
 def _calculate_time_diff(activity: Activity, plan: PlannedSession) -> int:
@@ -261,15 +334,16 @@ def main() -> None:
     if args.dates:
         for date_str in args.dates.split(","):
             try:
-                target_dates.append(datetime.strptime(date_str.strip(), "%Y-%m-%d").date())
+                # Parse date string directly to date (no timezone needed for date-only)
+                parsed_date = date.fromisoformat(date_str.strip())
+                target_dates.append(parsed_date)
             except ValueError as e:
                 logger.error(f"Invalid date format: {date_str.strip()} ({e})")
                 sys.exit(1)
     else:
         # Default: last 30 days
         today = datetime.now(UTC).date()
-        for i in range(30):
-            target_dates.append(today - timedelta(days=i))
+        target_dates.extend([today - timedelta(days=i) for i in range(30)])
 
     logger.info("=" * 80)
     logger.info("Fix Mis-Paired Activities")

@@ -1538,17 +1538,27 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
             elif profile.last_name:
                 full_name = profile.last_name
 
+            # CRITICAL: Map sex to gender for API response (database uses 'sex', API uses 'gender')
+            # Map database sex (male/female) to API gender (M/F)
+            gender_value = None
+            if profile.sex:
+                sex_to_gender = {"male": "M", "female": "F"}
+                gender_value = sex_to_gender.get(profile.sex.lower(), profile.sex.upper() if len(profile.sex) == 1 else None)
+                # Fallback to gender field if it exists and sex mapping fails
+                if not gender_value and hasattr(profile, "gender"):
+                    gender_value = profile.gender
+
             return AthleteProfileResponse(
                 full_name=full_name,  # Combine first_name and last_name
                 email=user_email,  # From auth user
-                gender=getattr(profile, "gender", None),
+                gender=gender_value,
                 date_of_birth=date_of_birth_str,
                 weight_kg=profile.weight_kg,
                 height_cm=profile.height_cm,
-                weight_lbs=getattr(profile, "weight_lbs", None),  # Raw float, no rounding
+                weight_lbs=profile.weight_lbs if hasattr(profile, "weight_lbs") else None,  # Raw float, no rounding
                 height_inches=height_inches_int,  # Converted to int
-                location=getattr(profile, "location", None),
-                unit_system=getattr(profile, "unit_system", None) or "imperial",
+                location=profile.location if hasattr(profile, "location") else None,
+                unit_system=(profile.unit_system or "imperial") if hasattr(profile, "unit_system") else "imperial",
                 strava_connected=strava_connected,
                 target_event=target_event_obj,
                 goals=_convert_goals_to_list(profile.goals) if profile.goals else [],
@@ -1633,10 +1643,23 @@ def _update_profile_fields(profile: AthleteProfile, request: AthleteProfileUpdat
     # Email is read-only - it comes from auth user, not profile
     # Do not update profile.email
 
-    if hasattr(profile, "gender"):
-        profile.gender = request.gender
-    if hasattr(profile, "sources") and request.gender is not None:
-        profile.sources["gender"] = "user"
+    # CRITICAL: Map gender to sex field (database uses 'sex', API uses 'gender')
+    # Store in both fields for compatibility
+    if request.gender is not None:
+        # Map API gender (M/F) to database sex (male/female)
+        gender_to_sex = {"M": "male", "F": "female"}
+        sex_value = gender_to_sex.get(request.gender, request.gender.lower() if request.gender else None)
+        profile.sex = sex_value
+        if hasattr(profile, "gender"):
+            profile.gender = request.gender
+        if hasattr(profile, "sources"):
+            profile.sources["gender"] = "user"
+            profile.sources["sex"] = "user"
+    elif request.gender is None and hasattr(request, "gender"):
+        # Explicit None clears the field
+        profile.sex = None
+        if hasattr(profile, "gender"):
+            profile.gender = None
 
     if request.date_of_birth is not None:
         try:
@@ -1903,17 +1926,26 @@ def _build_response_from_profile(profile: AthleteProfile, session: Session, user
     elif profile.last_name:
         full_name = profile.last_name
 
+    # CRITICAL: Map sex to gender for API response (database uses 'sex', API uses 'gender')
+    gender_value = None
+    if profile.sex:
+        sex_to_gender = {"male": "M", "female": "F"}
+        gender_value = sex_to_gender.get(profile.sex.lower(), profile.sex.upper() if len(profile.sex) == 1 else None)
+        # Fallback to gender field if it exists and sex mapping fails
+        if not gender_value and hasattr(profile, "gender"):
+            gender_value = profile.gender
+
     return AthleteProfileResponse(
         full_name=full_name,  # Combine first_name and last_name
         email=user_email or getattr(profile, "email", None),  # Prefer auth email
-        gender=getattr(profile, "gender", None),
+        gender=gender_value,
         date_of_birth=date_of_birth_str,
         weight_kg=profile.weight_kg,
         height_cm=profile.height_cm,
-        weight_lbs=getattr(profile, "weight_lbs", None),  # Raw float, no rounding
+        weight_lbs=profile.weight_lbs if hasattr(profile, "weight_lbs") else None,  # Raw float, no rounding
         height_inches=height_inches_int,  # Converted to int
-        location=getattr(profile, "location", None),
-        unit_system=getattr(profile, "unit_system", None) or "imperial",
+        location=profile.location if hasattr(profile, "location") else None,
+        unit_system=(profile.unit_system or "imperial") if hasattr(profile, "unit_system") else "imperial",
         strava_connected=strava_connected,
         target_event=target_event_obj,
         goals=_convert_goals_to_list(profile.goals) if profile.goals else [],
@@ -2043,6 +2075,14 @@ def get_training_preferences(user_id: str = Depends(get_current_user_id)):
 
             session.expunge(settings)
 
+            logger.info(f"[API] GET training preferences for user_id={user_id}: preferences={settings.preferences}")
+            logger.info(
+                f"[API] Returning values: years_of_training={settings.years_of_training}, "
+                f"primary_sports={settings.primary_sports}, available_days={settings.available_days}, "
+                f"weekly_hours={settings.weekly_hours}, training_focus={settings.training_focus}, "
+                f"injury_history={settings.injury_history}, consistency={settings.consistency}"
+            )
+
             # Return stored values exactly as persisted (no inference)
             return TrainingPreferencesResponse(
                 years_of_training=settings.years_of_training,
@@ -2095,6 +2135,16 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
                 settings = old_settings
 
             # Full object overwrite - set all fields from request
+            # CRITICAL: Always set fields, even if None (to clear them)
+            # The properties handle None values correctly
+            logger.info(
+                f"[API] Updating training preferences for user_id={user_id}: "
+                f"years_of_training={request.years_of_training}, primary_sports={request.primary_sports}, "
+                f"available_days={request.available_days}, weekly_hours={request.weekly_hours}, "
+                f"training_focus={request.training_focus}, injury_history={request.injury_history}, "
+                f"consistency={request.consistency}"
+            )
+
             settings.years_of_training = request.years_of_training
             settings.primary_sports = request.primary_sports
             settings.available_days = request.available_days
@@ -2111,6 +2161,9 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
             settings.injury_notes = request.injury_notes
 
             settings.consistency = request.consistency
+
+            # Log what we're saving to preferences
+            logger.info(f"[API] Preferences after update: {settings.preferences}")
 
             if request.goal is not None:
                 _validate_goal_text(request.goal)
@@ -2136,6 +2189,14 @@ def update_training_preferences(request: TrainingPreferencesUpdateRequest, user_
             session.expunge(settings)
 
             logger.info(f"[API] Training preferences updated for user_id={user_id}")
+            logger.info(f"[API] Preferences after refresh: {settings.preferences}")
+            logger.info(
+                f"[API] Returning values: years_of_training={settings.years_of_training}, "
+                f"primary_sports={settings.primary_sports}, available_days={settings.available_days}, "
+                f"weekly_hours={settings.weekly_hours}, training_focus={settings.training_focus}, "
+                f"injury_history={settings.injury_history}, consistency={settings.consistency}"
+            )
+
             # Return stored values exactly as persisted (no inference)
             return TrainingPreferencesResponse(
                 years_of_training=settings.years_of_training,

@@ -941,9 +941,15 @@ class AthleteProfile(Base):
     first_name: Mapped[str | None] = mapped_column(String, nullable=True)
     last_name: Mapped[str | None] = mapped_column(String, nullable=True)
     sex: Mapped[str | None] = mapped_column(String, nullable=True)  # CHECK: 'male','female','other'
+    gender: Mapped[str | None] = mapped_column(String, nullable=True)  # Alias for sex, used in API
     birthdate: Mapped[date | None] = mapped_column(Date, nullable=True)
     height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weight_lbs: Mapped[float | None] = mapped_column(Float, nullable=True)  # Imperial weight
+    height_in: Mapped[float | None] = mapped_column(Float, nullable=True)  # Imperial height (total inches)
+    location: Mapped[str | None] = mapped_column(String, nullable=True)
+    unit_system: Mapped[str | None] = mapped_column(String, nullable=True)  # 'imperial' or 'metric'
+    sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # Track data source for each field
 
     # Training metrics (schema v2)
     ftp_watts: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1017,11 +1023,17 @@ class UserSettings(Base):  # noqa: PLR0904
         return self.preferences.get(key, default)
 
     def _set_pref(self, key: str, value: object) -> None:
-        """Helper to set a preference value."""
+        """Helper to set a preference value.
+
+        CRITICAL: Always creates a new dict to trigger SQLAlchemy change detection.
+        This ensures JSONB fields are properly saved to the database.
+        """
         if self.preferences is None:
             self.preferences = {}
         # Create a new dict to trigger SQLAlchemy change detection
+        # This is required for JSONB fields - modifying in place doesn't trigger updates
         new_prefs = dict(self.preferences)
+        # Set the value (None is allowed to clear the field)
         new_prefs[key] = value
         self.preferences = new_prefs
 

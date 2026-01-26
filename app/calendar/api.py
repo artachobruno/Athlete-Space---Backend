@@ -495,14 +495,17 @@ def get_week(user_id: str = Depends(get_current_user_id)):
             monday_local = (now_local - timedelta(days=days_since_monday)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            sunday_local = monday_local + timedelta(days=6, hours=23, minutes=59, seconds=59)
+            # Set Sunday end to start of next Monday (exclusive) to include all of Sunday
+            next_monday_local = monday_local + timedelta(days=7)
 
             # Convert to UTC for database queries
             monday = to_utc(monday_local)
-            sunday = to_utc(sunday_local)
+            sunday = to_utc(next_monday_local)
 
+            # Calculate Sunday date for logging (last day of week)
+            sunday_date_local = (next_monday_local - timedelta(days=1)).date()
             logger.info(
-                f"[CALENDAR] user={user_id} tz={user.timezone} week={monday_local.date()}-{sunday_local.date()}"
+                f"[CALENDAR] user={user_id} tz={user.timezone} week={monday_local.date()}-{sunday_date_local}"
             )
 
             # Schema v2: Query calendar_items view directly (single unified query)
@@ -556,11 +559,11 @@ def get_week(user_id: str = Depends(get_current_user_id)):
             # Sort by date and time
             sessions.sort(key=lambda s: (s.date, s.time or ""))
 
-        return CalendarWeekResponse(
-            week_start=monday_local.strftime("%Y-%m-%d"),
-            week_end=sunday_local.strftime("%Y-%m-%d"),
-            sessions=sessions,
-        )
+            return CalendarWeekResponse(
+                week_start=monday_local.strftime("%Y-%m-%d"),
+                week_end=sunday_date_local.strftime("%Y-%m-%d"),
+                sessions=sessions,
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -1003,11 +1006,12 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
 
             # Get today boundaries in user's timezone
             today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-            today_end_local = today_local + timedelta(days=1) - timedelta(microseconds=1)
+            # Set end to start of next day (exclusive) to include all of today
+            tomorrow_local = today_local + timedelta(days=1)
 
             # Convert to UTC for database queries
             today = to_utc(today_local)
-            today_end = to_utc(today_end_local)
+            today_end = to_utc(tomorrow_local)
             today_str = today_local.strftime("%Y-%m-%d")
 
             logger.info(f"[CALENDAR] user={user_id} tz={user.timezone} today={today_local.date()}")

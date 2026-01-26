@@ -79,6 +79,9 @@ def upsert_link(
         method: Pairing method ('auto', 'manual')
         confidence: Confidence score (0.0-1.0, optional)
         notes: Optional notes
+        match_reason: Optional dictionary with match reason details
+        deltas: Optional dictionary with delta values between planned and actual
+        resolved_at: Optional timestamp when the link was resolved
 
     Returns:
         The created or updated SessionLink

@@ -92,7 +92,10 @@ async def execute_regeneration(
     replacement_note = f"[Replaced by regeneration {revision_id}]"
 
     for existing_session in existing_sessions:
-        existing_session.status = "deleted"
+        # PHASE 1.3: Use lifecycle_status for planning changes
+        # "deleted" is a lifecycle status indicating the session was replaced
+        existing_session.lifecycle_status = "cancelled"  # Use cancelled for replaced sessions
+        existing_session.status = "planned"  # Keep status for backward compatibility
         if existing_session.notes:
             existing_session.notes = f"{existing_session.notes}\n{replacement_note}"
         else:

@@ -12,7 +12,7 @@ from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.schemas.schemas import CalendarSession, WorkoutStepSchema
+from app.api.schemas.schemas import CalendarSession, ExecutionStateInfo, WorkoutStepSchema
 
 # Schema v2: Use calendar_items view for unified querying
 SQL_CALENDAR_ITEMS = text("""
@@ -191,9 +191,18 @@ def calendar_session_from_view_row(
         raw_activity_id = payload.get("paired_activity_id")
     completed_activity_id = _ensure_str_id(raw_activity_id)
 
-    # Determine completed flag and completed_at
-    # A planned session is completed if: status is "completed" OR it has a paired activity
-    completed = kind == "activity" or status == "completed" or completed_activity_id is not None
+    # PHASE 2.2: Execution state is derived centrally, not inferred here
+    # Get execution_state from enriched row (computed in calendar API)
+    execution_state_info = row.get("execution_state")
+
+    # PHASE 2.2: Determine completed flag from execution_state (backward compatibility)
+    # completed flag is derived from execution_state, not inferred
+    if execution_state_info:
+        completed = execution_state_info.state in {"executed_as_planned", "executed_unplanned"}
+    else:
+        # Fallback for backward compatibility (should not happen after Phase 2.2)
+        completed = kind == "activity" or status == "completed" or completed_activity_id is not None
+
     completed_at_str: str | None = None
     if completed and starts_at:
         if isinstance(starts_at, datetime):
@@ -279,6 +288,7 @@ def calendar_session_from_view_row(
         completed_activity_id=completed_activity_id,
         completed=completed,
         completed_at=completed_at_str,
+        execution_state=execution_state_info,  # PHASE 2.2: Execution state derived centrally
         instructions=final_instructions,
         steps=step_objects,
         coach_insight=final_coach_insight,

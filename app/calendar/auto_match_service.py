@@ -19,7 +19,10 @@ from sqlalchemy.orm import Session
 from app.calendar.reconciliation import ReconciliationResult, SessionStatus
 from app.db.models import Activity, PlannedSession
 from app.db.session import get_session
+from app.pairing.delta_computation import compute_link_deltas
 from app.pairing.session_links import get_link_for_planned, upsert_link
+from app.services.background_feedback_generator import trigger_feedback_generation
+from app.services.workout_execution_service import ensure_execution_summary
 from app.workouts.execution_models import MatchType, WorkoutExecution
 from app.workouts.models import Workout, WorkoutStep
 from app.workouts.workout_factory import WorkoutFactory
@@ -167,11 +170,16 @@ def auto_match_sessions(
                 elif result.status == SessionStatus.PARTIAL:
                     planned_workout.status = "matched"  # Still matched even if partial
 
-                # Schema v2: Update planned session status
-                if result.status == SessionStatus.COMPLETED:
-                    planned_session.status = "completed"
-                elif result.status == SessionStatus.PARTIAL:
-                    planned_session.status = "completed"  # Still mark as completed even if partial
+                # PHASE 1.3: Execution outcome is derived via execution_state helper, not stored
+                # Do not write execution state to planned_sessions.status
+                # Schema v2: Execution state is derived from session_links + time, not stored
+
+                # PHASE 3: Compute deltas when confirming auto-match
+                planned_session = session.get(PlannedSession, result.session_id)
+                activity = session.get(Activity, result.matched_activity_id)
+                deltas = None
+                if planned_session and activity:
+                    deltas = compute_link_deltas(planned_session, activity)
 
                 # Schema v2: Create/update SessionLink with 'confirmed' status (auto-match is final)
                 # Use reconciliation confidence if available, default to 0.9 for auto-match
@@ -185,7 +193,29 @@ def auto_match_sessions(
                     method="auto",
                     confidence=confidence_score,
                     notes=f"Auto-matched via reconciliation: {result.status.value}",
+                    deltas=deltas,
+                    resolved_at=datetime.now(timezone.utc),
                 )
+
+                # PHASE 5.2: Compute and store execution summary
+                try:
+                    ensure_execution_summary(
+                        session=session,
+                        planned_session_id=result.session_id,
+                        activity_id=result.matched_activity_id,
+                        user_id=user_id,
+                        force_recompute=True,  # Recompute on confirmation
+                    )
+
+                    # PHASE: Trigger LLM feedback generation in background (non-blocking)
+                    trigger_feedback_generation(
+                        activity_id=result.matched_activity_id,
+                        planned_session_id=result.session_id,
+                        athlete_level="intermediate",  # TODO: Get from user profile
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to compute execution summary after auto-match: {e}")
+                    # Don't fail auto-match if summary computation fails
 
                 matched_count += 1
 

@@ -90,6 +90,8 @@ from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracte
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
+from scripts.migrate_add_lifecycle_status_to_planned_sessions import migrate_add_lifecycle_status_to_planned_sessions
+from scripts.migrate_add_llm_feedback_to_execution_summaries import migrate_add_llm_feedback_to_execution_summaries
 from scripts.migrate_add_phase_to_planned_sessions import migrate_add_phase_to_planned_sessions
 from scripts.migrate_add_plan_revisions_table import migrate_add_plan_revisions_table
 from scripts.migrate_add_planned_session_completion_fields import migrate_add_planned_session_completion_fields
@@ -106,6 +108,7 @@ from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold
 from scripts.migrate_athlete_id_to_string import migrate_athlete_id_to_string
 from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_create_athlete_bios_table import migrate_create_athlete_bios_table
+from scripts.migrate_create_workout_execution_summaries import migrate_create_workout_execution_summaries
 from scripts.migrate_create_workout_execution_tables import migrate_create_workout_execution_tables
 from scripts.migrate_create_workout_exports_table import migrate_create_workout_exports_table
 from scripts.migrate_create_workouts_tables import migrate_create_workouts_tables
@@ -113,6 +116,7 @@ from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_daily_summary_user_id import migrate_daily_summary_user_id
 from scripts.migrate_drop_activity_id import migrate_drop_activity_id
 from scripts.migrate_drop_obsolete_activity_columns import migrate_drop_obsolete_activity_columns
+from scripts.migrate_extend_session_links_reconciliation import migrate_extend_session_links_reconciliation
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_llm_metadata_fields import migrate_llm_metadata_fields
 from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
@@ -325,6 +329,15 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_add_athlete_id_to_planned_sessions: {e}")
         logger.exception(f"✗ Migration failed: migrate_add_athlete_id_to_planned_sessions - {e}")
+
+    # PHASE 1.1: Add lifecycle_status to planned_sessions (must run early, before other planned_sessions migrations that might depend on it)
+    try:
+        logger.info("Running migration: add lifecycle_status to planned_sessions")
+        migrate_add_lifecycle_status_to_planned_sessions()
+        logger.info("✓ Migration completed: add lifecycle_status to planned_sessions")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_lifecycle_status_to_planned_sessions: {e}")
+        logger.exception(f"✗ Migration failed: migrate_add_lifecycle_status_to_planned_sessions - {e}")
 
     try:
         logger.info("Running migration: planned_sessions completion tracking columns")
@@ -573,6 +586,33 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_create_athlete_bios_table: {e}")
         logger.exception(f"Migration failed: migrate_create_athlete_bios_table - {e}")
+
+    # PHASE 3.1: Extend session_links with reconciliation fields
+    try:
+        logger.info("Running migration: extend session_links with reconciliation fields")
+        migrate_extend_session_links_reconciliation()
+        logger.info("✓ Migration completed: extend session_links with reconciliation fields")
+    except Exception as e:
+        migration_errors.append(f"migrate_extend_session_links_reconciliation: {e}")
+        logger.exception(f"Migration failed: migrate_extend_session_links_reconciliation - {e}")
+
+    # PHASE 5.1: Create workout_execution_summaries table
+    try:
+        logger.info("Running migration: create workout_execution_summaries table")
+        migrate_create_workout_execution_summaries()
+        logger.info("✓ Migration completed: create workout_execution_summaries table")
+    except Exception as e:
+        migration_errors.append(f"migrate_create_workout_execution_summaries: {e}")
+        logger.exception(f"Migration failed: migrate_create_workout_execution_summaries - {e}")
+
+    # PHASE: Add llm_feedback to workout_execution_summaries
+    try:
+        logger.info("Running migration: add llm_feedback to workout_execution_summaries")
+        migrate_add_llm_feedback_to_execution_summaries()
+        logger.info("✓ Migration completed: add llm_feedback to workout_execution_summaries")
+    except Exception as e:
+        migration_errors.append(f"migrate_add_llm_feedback_to_execution_summaries: {e}")
+        logger.exception(f"Migration failed: migrate_add_llm_feedback_to_execution_summaries - {e}")
 
     if migration_errors:
         logger.error(

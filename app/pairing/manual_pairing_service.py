@@ -13,12 +13,12 @@ from fastapi import HTTPException, status
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from datetime import timezone
-
 from app.db.models import Activity, PairingDecision, PlannedSession
 from app.pairing.delta_computation import compute_link_deltas
 from app.pairing.session_links import get_link_for_activity, unlink_by_activity, upsert_link
 from app.plans.reconciliation.service import reconcile_activity_if_paired
+from app.services.background_feedback_generator import trigger_feedback_generation
+from app.services.workout_execution_service import ensure_execution_summary
 from app.workouts.execution_models import MatchType
 from app.workouts.workout_factory import WorkoutFactory
 
@@ -118,7 +118,7 @@ def manual_pair(
     with session.begin():
         # PHASE 3: Compute deltas when confirming manual pairing
         deltas = compute_link_deltas(plan, activity)
-        
+
         # Schema v2: Use SessionLink for pairing
         # upsert_link handles clearing existing links automatically
         upsert_link(
@@ -190,6 +190,26 @@ def manual_pair(
             reconcile_activity_if_paired(session, activity)
         except Exception as e:
             logger.warning(f"Reconciliation failed after manual pairing {activity_id} with {planned_session_id}: {e}")
+
+        # PHASE 5.2: Compute and store execution summary
+        try:
+            ensure_execution_summary(
+                session=session,
+                planned_session_id=planned_session_id,
+                activity_id=activity_id,
+                user_id=user_id,
+                force_recompute=True,  # Recompute on confirmation
+            )
+
+            # PHASE: Trigger LLM feedback generation in background (non-blocking)
+            trigger_feedback_generation(
+                activity_id=activity_id,
+                planned_session_id=planned_session_id,
+                athlete_level="intermediate",  # TODO: Get from user profile
+            )
+        except Exception as e:
+            logger.warning(f"Failed to compute execution summary after manual pairing: {e}")
+            # Don't fail pairing if summary computation fails
 
 
 def manual_unpair(

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Activity, PairingDecision, PlannedSession
 from app.pairing.session_links import get_link_for_activity, get_link_for_planned, upsert_link
 from app.plans.reconciliation.service import reconcile_activity_if_paired
+from app.services.workout_execution_service import ensure_execution_summary
 from app.workouts.workout_factory import WorkoutFactory
 
 DURATION_TOLERANCE = 0.30
@@ -590,6 +591,21 @@ def _persist_pairing(
         reconcile_activity_if_paired(session, activity)
     except Exception as e:
         logger.warning(f"Reconciliation failed after pairing {activity.id} with {planned.id}: {e}")
+
+    # PHASE 5.2: Compute and store execution summary (async, non-blocking)
+    # Note: Auto-pairing creates 'proposed' links, summaries are computed on confirmation
+    # But we can pre-compute for faster calendar queries
+    try:
+        ensure_execution_summary(
+            session=session,
+            planned_session_id=planned.id,
+            activity_id=activity.id,
+            user_id=activity.user_id,
+            force_recompute=False,  # Use existing if available
+        )
+    except Exception as e:
+        logger.debug(f"Execution summary computation skipped (non-critical): {e}")
+        # Don't fail pairing if summary computation fails
 
 
 def try_auto_pair(

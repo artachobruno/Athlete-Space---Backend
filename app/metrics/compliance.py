@@ -140,7 +140,8 @@ def record_completion(
             # Use setattr to handle case where column doesn't exist in database (migration pending)
             if hasattr(planned[0], "completed_at"):
                 planned[0].completed_at = datetime.now(timezone.utc)
-            planned[0].status = "completed"
+            # PHASE 1.3: Execution outcome is derived via execution_state helper, not stored
+            # Do not write execution state to planned_sessions.status
             if completed_duration_min is not None:
                 planned[0].duration_minutes = completed_duration_min
             session.commit()
@@ -168,5 +169,7 @@ def record_skip(session_id: str, user_id: str) -> None:
         ).first()
 
         if planned:
-            planned[0].status = "skipped"
+            # PHASE 1.3: Execution outcome is derived via execution_state helper, not stored
+            # Do not write execution state to planned_sessions.status
+            # Lifecycle status remains 'scheduled' - skip is an execution outcome, not a planning change
             session.commit()

@@ -55,6 +55,38 @@ class WorkoutStepSchema(BaseModel):
     notes: str | None = Field(description="Optional step-specific notes", default=None)
 
 
+class LLMFeedback(BaseModel):
+    """LLM-generated coaching feedback (cached output)."""
+
+    text: str = Field(description="Feedback text (2 sentences max)")
+    tone: str = Field(description="Feedback tone: neutral | encouraging | corrective")
+    generated_at: str = Field(description="ISO 8601 timestamp when feedback was generated")
+
+
+class ExecutionStateInfo(BaseModel):
+    """Execution state information (PHASE 2.2: centralized execution state)."""
+
+    state: str = Field(
+        description="Execution state: unexecuted | executed_as_planned | executed_unplanned | missed"
+    )
+    reason: str | None = Field(
+        description="Reason for the execution state (e.g., 'matched_by_duration_and_time')",
+        default=None,
+    )
+    deltas: dict[str, float | int | None] | None = Field(
+        description="Planned vs actual differences (duration, distance, TSS)",
+        default=None,
+    )
+    resolved_at: str | None = Field(
+        description="ISO 8601 timestamp when reconciliation was confirmed",
+        default=None,
+    )
+    llm_feedback: LLMFeedback | None = Field(
+        description="LLM-generated coaching feedback (cached, optional)",
+        default=None,
+    )
+
+
 class CalendarSession(BaseModel):
     """A training session in the calendar."""
 
@@ -76,6 +108,10 @@ class CalendarSession(BaseModel):
     )
     completed: bool = Field(description="Completion flag (true if session was completed)", default=False)
     completed_at: str | None = Field(description="ISO 8601 datetime when session was completed", default=None)
+    execution_state: ExecutionStateInfo | None = Field(
+        description="PHASE 2.2: Execution state derived centrally via execution_state helper",
+        default=None,
+    )
     instructions: list[str] = Field(
         description="LLM-generated execution instructions (3-5 bullets max)",
         default_factory=list,
@@ -100,6 +136,30 @@ class CalendarWeekResponse(BaseModel):
     week_start: str = Field(description="ISO 8601 date of week start (Monday)")
     week_end: str = Field(description="ISO 8601 date of week end (Sunday)")
     sessions: list[CalendarSession] = Field(description="Sessions in this week")
+
+
+class WeeklySummaryCardResponse(BaseModel):
+    """Response for GET /calendar/week-summary.
+
+    PHASE A + B: Weekly summary card with templated narrative.
+    Derived from execution summaries - no LLM, deterministic.
+    """
+
+    narrative: str = Field(description="Templated narrative (1-2 sentences max)")
+    total_planned_sessions: int = Field(description="Total planned sessions for the week")
+    executed_as_planned_count: int = Field(description="Sessions executed as planned")
+    missed_sessions_count: int = Field(description="Missed sessions")
+    unplanned_sessions_count: int = Field(description="Unplanned activities")
+    strongest_session_id: str | None = Field(
+        description="ID of strongest session (activity_id) if available",
+        default=None,
+    )
+    strongest_session_narrative: str | None = Field(
+        description="Narrative for strongest session if available",
+        default=None,
+    )
+    week_start: str = Field(description="ISO 8601 date of Monday (YYYY-MM-DD)")
+    week_end: str = Field(description="ISO 8601 date of Sunday (YYYY-MM-DD)")
 
 
 class CalendarSeasonResponse(BaseModel):

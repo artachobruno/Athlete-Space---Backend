@@ -1918,3 +1918,68 @@ class AthleteClimateProfile(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class WorkoutExecutionSummary(Base):
+    """Workout execution summary - stable snapshot of execution outcome.
+
+    PHASE 5.2: Stores computed execution summaries to avoid repeated recomputation.
+    This table provides fast access to execution state, compliance, and narratives
+    without recalculating from raw data on every query.
+
+    Schema:
+    - id: UUID primary key
+    - activity_id: Foreign key to activities.id (unique, required)
+    - planned_session_id: Foreign key to planned_sessions.id (nullable)
+    - user_id: Foreign key to users.id (required)
+    - compliance_score: Overall compliance score (0.0-1.0, nullable)
+    - step_comparison: JSONB array of step-level compliance metrics
+    - narrative: Human-readable narrative of execution outcome
+    - computed_at: Timestamp when summary was computed
+    - created_at: Record creation timestamp
+    - updated_at: Last update timestamp
+
+    Constraints:
+    - Unique on activity_id (one summary per activity)
+    - Indexed on activity_id, planned_session_id, user_id for fast lookups
+    """
+
+    __tablename__ = "workout_execution_summaries"
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True
+    )
+    activity_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("activities.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    planned_session_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("planned_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+    compliance_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.0-1.0
+    step_comparison: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # JSONB array of step compliance metrics
+    narrative: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_feedback: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # LLM-generated coaching feedback (cached)
+
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("idx_workout_execution_summaries_activity", "activity_id"),
+        Index("idx_workout_execution_summaries_planned_session", "planned_session_id"),
+        Index("idx_workout_execution_summaries_user", "user_id"),
+    )

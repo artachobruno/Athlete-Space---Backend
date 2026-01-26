@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
@@ -22,6 +23,9 @@ from app.api.schemas.schemas import (
     CalendarSessionsResponse,
     CalendarTodayResponse,
     CalendarWeekResponse,
+    ExecutionStateInfo,
+    LLMFeedback,
+    WeeklySummaryCardResponse,
 )
 from app.calendar.auto_match_service import auto_match_sessions
 from app.calendar.reconciliation_service import reconcile_calendar
@@ -34,6 +38,9 @@ from app.pairing.session_links import (
     unlink_by_planned,
     upsert_link,
 )
+from app.services.execution_state import derive_execution_state
+from app.services.weekly_summary_builder import build_weekly_summary_card
+from app.services.workout_execution_service import get_execution_summary
 from app.utils.timezone import now_user, to_utc
 from app.workouts.execution_models import WorkoutExecution
 from app.workouts.llm.today_session_generator import generate_today_session_content
@@ -61,6 +68,104 @@ ORDER BY starts_at ASC
 def _raise_user_not_found() -> None:
     """Raise HTTPException for user not found."""
     raise HTTPException(status_code=404, detail="User not found")
+
+
+def _build_match_reason_string(match_reason: dict[str, Any] | None) -> str | None:
+    """Build reason string from match_reason dictionary.
+
+    Args:
+        match_reason: Dictionary with match reason details
+
+    Returns:
+        Reason string or None if no reasons found
+    """
+    if not match_reason:
+        return None
+    reasons = []
+    if match_reason.get("same_day"):
+        reasons.append("same_day")
+    if match_reason.get("sport_match"):
+        reasons.append("sport_match")
+    if "duration_delta_pct" in match_reason:
+        reasons.append(f"duration_delta_{match_reason['duration_delta_pct']:.2%}")
+    return "_".join(reasons) if reasons else None
+
+
+def _compute_execution_state_for_planned(
+    session: Session,
+    planned_session: PlannedSession,
+    linked_activity: Activity | None,
+    item_id: str,
+    now_utc: datetime,
+) -> ExecutionStateInfo:
+    """Compute execution_state_info for a planned session.
+
+    PHASE 5.2: Prefers execution summary if available (faster), otherwise derives on-the-fly.
+    Includes LLM feedback from execution summary if available.
+
+    Args:
+        session: Database session
+        planned_session: Planned session object
+        linked_activity: Linked activity if available
+        item_id: Item ID
+        now_utc: Current UTC time
+
+    Returns:
+        ExecutionStateInfo object
+    """
+    # PHASE 5.2: Try to get execution summary first (faster)
+    llm_feedback = None
+    if linked_activity:
+        summary = get_execution_summary(session, linked_activity.id)
+        if summary:
+            # Use summary data
+            execution_state = derive_execution_state(planned_session, linked_activity, now_utc)
+            session_link = get_link_for_planned(session, item_id) if item_id else None
+            resolved_at = session_link.resolved_at.isoformat() if session_link and session_link.resolved_at else None
+
+            # Extract LLM feedback if available
+            if summary.llm_feedback:
+                llm_feedback = LLMFeedback(
+                    text=summary.llm_feedback.get("text", ""),
+                    tone=summary.llm_feedback.get("tone", "neutral"),
+                    generated_at=summary.llm_feedback.get("generated_at", ""),
+                )
+
+            return ExecutionStateInfo(
+                state=execution_state,
+                reason=summary.narrative,  # Use narrative as reason
+                deltas=summary.step_comparison,  # Use step_comparison as deltas
+                resolved_at=resolved_at,
+                llm_feedback=llm_feedback,
+            )
+
+    # Fallback: derive execution_state on-the-fly if no summary
+    execution_state = derive_execution_state(planned_session, linked_activity, now_utc)
+    session_link = get_link_for_planned(session, item_id) if item_id else None
+    deltas = session_link.deltas if session_link else None
+    resolved_at = session_link.resolved_at.isoformat() if session_link and session_link.resolved_at else None
+    reason = _build_match_reason_string(session_link.match_reason if session_link else None)
+    return ExecutionStateInfo(
+        state=execution_state,
+        reason=reason,
+        deltas=deltas,
+        resolved_at=resolved_at,
+        llm_feedback=None,  # No LLM feedback without execution summary
+    )
+
+
+def _compute_execution_state_for_activity() -> ExecutionStateInfo:
+    """Compute execution_state_info for an unpaired activity.
+
+    Returns:
+        ExecutionStateInfo object for executed_unplanned state
+    """
+    return ExecutionStateInfo(
+        state="executed_unplanned",
+        reason="no_planned_session",
+        deltas=None,
+        resolved_at=None,
+    )
 
 
 def _get_athlete_id(session: Session, user_id: str) -> int | None:
@@ -238,12 +343,16 @@ def _run_reconciliation_safe(
 def _planned_session_to_calendar(
     planned: PlannedSession,
     reconciliation_status: str | None = None,
+    session: Session | None = None,
 ) -> CalendarSession:
     """Convert PlannedSession to CalendarSession.
+
+    PHASE 2.2: Execution state is derived centrally via execution_state helper.
 
     Args:
         planned: PlannedSession record
         reconciliation_status: Optional status from reconciliation (overrides planned.status)
+        session: Database session (required for execution_state computation)
 
     Returns:
         CalendarSession object
@@ -277,6 +386,26 @@ def _planned_session_to_calendar(
         if not execution_notes:
             execution_notes = None
 
+    # PHASE 2.2: Compute execution_state centrally
+    execution_state_info = None
+    if session:
+        # Get linked activity via session_links
+        session_link = get_link_for_planned(session, str(planned.id))
+        linked_activity = None
+        if session_link and session_link.status in ACTIVE_LINK_STATUSES:
+            linked_activity = session.get(Activity, session_link.activity_id)
+        execution_state_info = _compute_execution_state_for_planned(
+            session, planned, linked_activity, str(planned.id), datetime.now(timezone.utc)
+        )
+
+    # PHASE 2.2: completed flag derived from execution_state
+    completed = False
+    if execution_state_info:
+        completed = execution_state_info.state in {"executed_as_planned", "executed_unplanned"}
+    else:
+        # Fallback for backward compatibility
+        completed = status == "completed"
+
     return CalendarSession(
         id=str(planned.id),  # Convert UUID to string
         date=planned.starts_at.strftime("%Y-%m-%d") if planned.starts_at else "",
@@ -291,8 +420,9 @@ def _planned_session_to_calendar(
         execution_notes=execution_notes,
         workout_id=str(planned.workout_id) if planned.workout_id else None,  # Convert UUID to string if present
         completed_activity_id=None,  # Schema v2: removed, use session_links
-        completed=status == "completed",
+        completed=completed,
         completed_at=completed_at_str,
+        execution_state=execution_state_info,  # PHASE 2.2: Execution state derived centrally
         coach_insight=None,  # Not stored in PlannedSession - generated dynamically for today's sessions only
     )
 
@@ -413,9 +543,11 @@ def get_season(user_id: str = Depends(get_current_user_id)):
                 if link and link.status in ACTIVE_LINK_STATUSES:
                     activity_pairing_map[item_id] = link.planned_session_id
 
-        # Enrich view rows with pairing info before converting to CalendarSession
+        # PHASE 2.2: Enrich view rows with pairing info and compute execution_state
         # Filter out activities that are paired to a planned session (show only the planned session card)
         enriched_rows = []
+        now_utc = datetime.now(timezone.utc)
+
         for row in view_rows:
             item_id = str(row.get("item_id", ""))
             kind = str(row.get("kind", ""))
@@ -425,11 +557,27 @@ def get_season(user_id: str = Depends(get_current_user_id)):
             if kind == "activity" and item_id in activity_pairing_map:
                 continue
 
-            # Add pairing info to payload
-            if kind == "planned" and item_id in pairing_map:
-                payload = {**payload, "paired_activity_id": pairing_map[item_id]}
+            # PHASE 2.2: Compute execution_state for planned sessions
+            execution_state_info = None
+            if kind == "planned":
+                # Load PlannedSession and linked Activity to compute execution_state
+                planned_session = session.get(PlannedSession, item_id)
+                linked_activity = None
 
-            enriched_row = {**row, "payload": payload}
+                if item_id in pairing_map:
+                    activity_id = pairing_map[item_id]
+                    linked_activity = session.get(Activity, activity_id)
+                    payload = {**payload, "paired_activity_id": activity_id}
+
+                if planned_session:
+                    execution_state_info = _compute_execution_state_for_planned(
+                        session, planned_session, linked_activity, item_id, now_utc
+                    )
+            elif kind == "activity":
+                # For unpaired activities, execution_state is "executed_unplanned"
+                execution_state_info = _compute_execution_state_for_activity()
+
+            enriched_row = {**row, "payload": payload, "execution_state": execution_state_info}
             enriched_rows.append(enriched_row)
 
         all_sessions = [calendar_session_from_view_row(row) for row in enriched_rows]
@@ -535,9 +683,11 @@ def get_week(user_id: str = Depends(get_current_user_id)):
                     if link and link.status in ACTIVE_LINK_STATUSES:
                         activity_pairing_map[item_id] = link.planned_session_id
 
-            # Enrich view rows with pairing info before converting to CalendarSession
+            # PHASE 2.2: Enrich view rows with pairing info and compute execution_state
             # Filter out activities that are paired to a planned session (show only the planned session card)
             enriched_rows = []
+            now_utc = datetime.now(timezone.utc)
+
             for row in view_rows:
                 item_id = str(row.get("item_id", ""))
                 kind = str(row.get("kind", ""))
@@ -547,11 +697,27 @@ def get_week(user_id: str = Depends(get_current_user_id)):
                 if kind == "activity" and item_id in activity_pairing_map:
                     continue
 
-                # Add pairing info to payload
-                if kind == "planned" and item_id in pairing_map:
-                    payload = {**payload, "paired_activity_id": pairing_map[item_id]}
+                # PHASE 2.2: Compute execution_state for planned sessions
+                execution_state_info = None
+                if kind == "planned":
+                    # Load PlannedSession and linked Activity to compute execution_state
+                    planned_session = session.get(PlannedSession, item_id)
+                    linked_activity = None
 
-                enriched_row = {**row, "payload": payload}
+                    if item_id in pairing_map:
+                        activity_id = pairing_map[item_id]
+                        linked_activity = session.get(Activity, activity_id)
+                        payload = {**payload, "paired_activity_id": activity_id}
+
+                    if planned_session:
+                        execution_state_info = _compute_execution_state_for_planned(
+                            session, planned_session, linked_activity, item_id, now_utc
+                        )
+                elif kind == "activity":
+                    # For unpaired activities, execution_state is "executed_unplanned"
+                    execution_state_info = _compute_execution_state_for_activity()
+
+                enriched_row = {**row, "payload": payload, "execution_state": execution_state_info}
                 enriched_rows.append(enriched_row)
 
             sessions = [calendar_session_from_view_row(row) for row in enriched_rows]
@@ -585,6 +751,80 @@ def get_week(user_id: str = Depends(get_current_user_id)):
             )
         logger.exception(f"[CALENDAR] Error in /calendar/week: {e!r}")
         raise HTTPException(status_code=500, detail=f"Failed to get calendar week: {e!s}") from e
+
+
+@router.get("/week-summary", response_model=WeeklySummaryCardResponse)
+def get_week_summary(
+    user_id: str = Depends(get_current_user_id),
+    date: str | None = None,
+):
+    """Get weekly summary card with templated narrative.
+
+    PHASE A + B: Deterministic aggregation from execution summaries + templated narrative.
+    No LLM calls - pure derived data + templates.
+
+    Args:
+        user_id: Current authenticated user ID (from auth dependency)
+        date: Optional date string (YYYY-MM-DD) - any date in the week. Defaults to current week.
+
+    Returns:
+        WeeklySummaryCardResponse with narrative and execution metrics
+    """
+    logger.info(f"[CALENDAR] GET /calendar/week-summary called for user_id={user_id}, date={date}")
+    try:
+        with get_session() as session:
+            # Get user for timezone
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if not user_result:
+                _raise_user_not_found()
+            user = user_result[0]
+
+            # Get target date (provided or current)
+            if date:
+                try:
+                    # Parse date string to date object (avoiding naive datetime)
+                    if isinstance(date, str):
+                        target_date = date.fromisoformat(date)
+                    else:
+                        target_date = date
+                except (ValueError, AttributeError):
+                    logger.warning(f"Invalid date format: {date}, using current week")
+                    target_date = None
+            else:
+                target_date = None
+
+            if target_date:
+                # Use provided date - treat as date in user's timezone
+                # Create a datetime at start of day in user's timezone
+                user_tz = ZoneInfo(user.timezone) if user.timezone else ZoneInfo("UTC")
+                target_datetime = datetime.combine(target_date, datetime.min.time())
+                target_datetime = target_datetime.replace(tzinfo=user_tz)
+                target_local = target_datetime
+            else:
+                # Get current time in user's timezone
+                target_local = now_user(user)
+
+            # Get Monday of target week in user's timezone
+            days_since_monday = target_local.weekday()
+            monday_local = (target_local - timedelta(days=days_since_monday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            monday_date = monday_local.date()
+
+            logger.info(
+                f"[CALENDAR] user={user_id} tz={user.timezone} week_summary={monday_date}"
+            )
+
+            # PHASE A + B: Build weekly summary card
+            summary_data = build_weekly_summary_card(session, user_id, monday_date)
+
+            return WeeklySummaryCardResponse(**summary_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[CALENDAR] Error in /calendar/week-summary: {e!r}")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 def _convert_workout_step_to_schema(
@@ -1043,9 +1283,11 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                     if link and link.status in ACTIVE_LINK_STATUSES:
                         activity_pairing_map[item_id] = link.planned_session_id
 
-            # Enrich view rows with pairing info before processing
+            # PHASE 2.2: Enrich view rows with pairing info and compute execution_state
             # Filter out activities that are paired to a planned session (show only the planned session card)
             enriched_rows = []
+            now_utc = datetime.now(timezone.utc)
+
             for row in view_rows:
                 item_id = str(row.get("item_id", ""))
                 kind = str(row.get("kind", ""))
@@ -1055,11 +1297,27 @@ async def get_today(user_id: str = Depends(get_current_user_id)):
                 if kind == "activity" and item_id in activity_pairing_map:
                     continue
 
-                # Add pairing info to payload
-                if kind == "planned" and item_id in pairing_map:
-                    payload = {**payload, "paired_activity_id": pairing_map[item_id]}
+                # PHASE 2.2: Compute execution_state for planned sessions
+                execution_state_info = None
+                if kind == "planned":
+                    # Load PlannedSession and linked Activity to compute execution_state
+                    planned_session = session.get(PlannedSession, item_id)
+                    linked_activity = None
 
-                enriched_row = {**row, "payload": payload}
+                    if item_id in pairing_map:
+                        activity_id = pairing_map[item_id]
+                        linked_activity = session.get(Activity, activity_id)
+                        payload = {**payload, "paired_activity_id": activity_id}
+
+                    if planned_session:
+                        execution_state_info = _compute_execution_state_for_planned(
+                            session, planned_session, linked_activity, item_id, now_utc
+                        )
+                elif kind == "activity":
+                    # For unpaired activities, execution_state is "executed_unplanned"
+                    execution_state_info = _compute_execution_state_for_activity()
+
+                enriched_row = {**row, "payload": payload, "execution_state": execution_state_info}
                 enriched_rows.append(enriched_row)
 
             # Generate LLM content for planned sessions (both planned and completed)
@@ -1201,7 +1459,11 @@ def get_sessions(limit: int = 50, offset: int = 0, user_id: str = Depends(get_cu
         activity_sessions = [_activity_to_session(a) for a in activities if a.id not in matched_activity_ids]
 
         # Convert planned sessions with reconciliation status
-        planned_calendar_sessions = [_planned_session_to_calendar(p, reconciliation_map.get(p.id)) for p in planned_list]
+        # PHASE 2.2: Pass session for execution_state computation
+        planned_calendar_sessions = [
+            _planned_session_to_calendar(p, reconciliation_map.get(p.id), session=session)
+            for p in planned_list
+        ]
 
         # Combine and sort by date (most recent first)
         all_sessions = activity_sessions + planned_calendar_sessions
@@ -1274,16 +1536,20 @@ def get_session_by_id(
             except Exception as e:
                 logger.warning(f"[CALENDAR] Reconciliation failed for session {session_id}: {e!r}")
 
-        return _planned_session_to_calendar(planned_session, reconciliation_status)
+        return _planned_session_to_calendar(planned_session, reconciliation_status, session=db_session)
 
 
 class UpdateSessionStatusRequest(BaseModel):
-    """Request to update a planned session's status."""
+    """Request to update a planned session's lifecycle status.
 
-    status: str = Field(..., description="New status: planned | completed | skipped | deleted")
+    PHASE 1.3: Execution outcomes (completed, skipped) are derived, not stored.
+    Only lifecycle statuses are valid: planned, moved, cancelled, deleted.
+    """
+
+    status: str = Field(..., description="New lifecycle status: planned | moved | cancelled | deleted")
     completed_activity_id: str | None = Field(
         default=None,
-        description="ID of the completed activity if status is 'completed'",
+        description="ID of the completed activity for manual pairing (not used for status updates)",
     )
 
 
@@ -1650,15 +1916,30 @@ def _update_session_normal(
     if not planned_session:
         raise HTTPException(status_code=404, detail="Planned session not found")
 
+    # PHASE 1.3: Update lifecycle_status, not status
+    # Execution outcomes are derived via execution_state helper, not stored
+
+    # Map request.status to lifecycle_status
+    # "planned" -> "scheduled", "deleted" -> handled separately, others map directly
+    if request.status == "planned":
+        planned_session.lifecycle_status = "scheduled"
+        # Keep status for backward compatibility (read-only for execution)
+        planned_session.status = "planned"
+    elif request.status == "moved":
+        planned_session.lifecycle_status = "moved"
+        planned_session.status = "planned"  # Keep status as planned
+    elif request.status == "cancelled":
+        planned_session.lifecycle_status = "cancelled"
+        planned_session.status = "planned"  # Keep status as planned
+
     # If changing from completed to another status, unlink the session
+    # (This handles legacy data where status might still be "completed")
     _unlink_if_status_changed_from_completed(
         session, planned_session.status, request.status, session_id, user_id
     )
 
-    # Update status
-    planned_session.status = request.status
-
     # Schema v2: Create SessionLink if marking as completed with activity ID
+    # Note: This is now handled via manual pairing, not status updates
     _create_session_link_if_needed(session, request, session_id, user_id)
 
     session.refresh(planned_session)
@@ -1687,11 +1968,22 @@ def update_session_status(
     """
     logger.info(f"[CALENDAR] PATCH /calendar/sessions/{session_id}/status called for user_id={user_id}")
 
-    valid_statuses = {"planned", "completed", "skipped", "deleted"}
-    if request.status not in valid_statuses:
+    # PHASE 1.3: Execution outcomes (completed, skipped) are derived, not stored
+    # Only lifecycle statuses are valid: planned, moved, cancelled, deleted
+    valid_lifecycle_statuses = {"planned", "moved", "cancelled", "deleted"}
+    if request.status not in valid_lifecycle_statuses:
+        if request.status in {"completed", "skipped"}:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid status '{request.status}'. Execution outcomes (completed, skipped) "
+                    "are derived from session_links and cannot be set directly. "
+                    "Use lifecycle statuses: planned, moved, cancelled, deleted"
+                ),
+            )
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}",
+            detail=f"Invalid status. Must be one of: {', '.join(valid_lifecycle_statuses)}",
         )
 
     with get_session() as session:
@@ -1751,7 +2043,7 @@ def update_session_status(
                 raise HTTPException(status_code=404, detail="Planned session not found")
             planned_session = _update_session_normal(session, planned_session, request, session_id, user_id)
 
-        return _planned_session_to_calendar(planned_session)
+        return _planned_session_to_calendar(planned_session, session=session)
 
 
 # Separate router for planned-sessions endpoints (different prefix)
@@ -1868,7 +2160,7 @@ def update_planned_session(
         session.commit()
         session.refresh(planned_session)
 
-        return _planned_session_to_calendar(planned_session)
+        return _planned_session_to_calendar(planned_session, session=session)
 
 
 @planned_sessions_router.delete("/{planned_session_id}", status_code=status.HTTP_204_NO_CONTENT)

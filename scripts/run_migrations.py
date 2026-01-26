@@ -50,6 +50,8 @@ from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracte
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
+from scripts.migrate_add_lifecycle_status_to_planned_sessions import migrate_add_lifecycle_status_to_planned_sessions
+from scripts.migrate_add_llm_feedback_to_execution_summaries import migrate_add_llm_feedback_to_execution_summaries
 from scripts.migrate_add_llm_interpretation_fields import migrate_add_llm_interpretation_fields
 from scripts.migrate_add_must_dos_to_calendar_view import migrate_add_must_dos_to_calendar_view
 from scripts.migrate_add_must_dos_to_planned_sessions import migrate_add_must_dos_to_planned_sessions
@@ -65,11 +67,13 @@ from scripts.migrate_add_user_threshold_fields import migrate_add_user_threshold
 from scripts.migrate_add_workout_id_to_activities import migrate_add_workout_id_to_activities
 from scripts.migrate_add_workout_id_to_planned_sessions import migrate_add_workout_id_to_planned_sessions
 from scripts.migrate_create_athlete_bios_table import migrate_create_athlete_bios_table
+from scripts.migrate_create_workout_execution_summaries import migrate_create_workout_execution_summaries
 from scripts.migrate_create_workout_execution_tables import migrate_create_workout_execution_tables
 from scripts.migrate_create_workout_exports_table import migrate_create_workout_exports_table
 from scripts.migrate_create_workouts_tables import migrate_create_workouts_tables
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_drop_calendar_sessions_table import migrate_drop_calendar_sessions_table
+from scripts.migrate_extend_session_links_reconciliation import migrate_extend_session_links_reconciliation
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
 from scripts.migrate_set_workout_id_not_null import migrate_set_workout_id_not_null
@@ -127,6 +131,14 @@ def run_all_migrations() -> None:
         ("coach_feedback table", migrate_add_coach_feedback_table),
         ("add coach_feedback to calendar_items view", migrate_add_coach_feedback_to_calendar_view),
         ("athlete_bios table", migrate_create_athlete_bios_table),
+        # PHASE 1.1: Add lifecycle_status to planned_sessions
+        ("add lifecycle_status to planned_sessions", migrate_add_lifecycle_status_to_planned_sessions),
+        # PHASE 3.1: Extend session_links with reconciliation fields
+        ("extend session_links with reconciliation fields", migrate_extend_session_links_reconciliation),
+        # PHASE 5.1: Create workout_execution_summaries table
+        ("create workout_execution_summaries table", migrate_create_workout_execution_summaries),
+        # PHASE: Add llm_feedback to workout_execution_summaries
+        ("add llm_feedback to workout_execution_summaries", migrate_add_llm_feedback_to_execution_summaries),
         # NOTE: migrate_set_workout_id_not_null should be run AFTER backfill_workouts.py completes
         # It is NOT included here - run it manually after backfilling data
     ]

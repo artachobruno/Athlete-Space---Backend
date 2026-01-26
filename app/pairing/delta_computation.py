@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy.orm import Session
+
 from app.db.models import Activity, PlannedSession
+from app.pairing.session_links import get_link_for_planned, upsert_link
 
 
 def compute_link_deltas(
@@ -71,8 +74,6 @@ def confirm_link_with_deltas(
         planned_session: Planned session
         activity: Activity
     """
-    from app.pairing.session_links import get_link_for_planned, upsert_link
-
     link = get_link_for_planned(session, planned_session.id)
     if not link or link.id != link_id:
         raise ValueError(f"Link {link_id} not found for planned session {planned_session.id}")

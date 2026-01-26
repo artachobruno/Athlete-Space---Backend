@@ -7,7 +7,7 @@ me.py -> ingestion/tasks -> scheduler -> context_builder -> me.py
 
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from loguru import logger
@@ -303,12 +303,35 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
         atl_data: list[tuple[str, float]] = []
         tsb_data: list[tuple[str, float]] = []
 
+        # Create a map of existing data
+        data_map: dict[date, dict[str, float]] = {}
         for row in daily_load_rows:
             daily_load_record = row[0]
-            date_str = daily_load_record.day.isoformat()
-            ctl_data.append((date_str, daily_load_record.ctl or 0.0))
-            atl_data.append((date_str, daily_load_record.atl or 0.0))
-            tsb_data.append((date_str, daily_load_record.tsb or 0.0))
+            record_date = daily_load_record.day
+            data_map[record_date] = {
+                "ctl": daily_load_record.ctl or 0.0,
+                "atl": daily_load_record.atl or 0.0,
+                "tsb": daily_load_record.tsb or 0.0,
+            }
+
+        # Fill in all dates from start_date to end_date
+        # For missing dates, use the last known values (EWMA values persist on rest days)
+        last_ctl = 0.0
+        last_atl = 0.0
+        last_tsb = 0.0
+
+        current_date = start_date
+        while current_date <= end_date:
+            if current_date in data_map:
+                # Use actual data if available
+                last_ctl = data_map[current_date]["ctl"]
+                last_atl = data_map[current_date]["atl"]
+                last_tsb = data_map[current_date]["tsb"]
+            # For missing dates, use last known values (rest days maintain EWMA values)
+            ctl_data.append((current_date.isoformat(), last_ctl))
+            atl_data.append((current_date.isoformat(), last_atl))
+            tsb_data.append((current_date.isoformat(), last_tsb))
+            current_date += timedelta(days=1)
 
         metrics_result = {
             "ctl": ctl_data,

@@ -459,6 +459,41 @@ class CoachLLMClient:
 
         raise RuntimeError("Failed to generate weekly coach summary after all retries")
 
+    async def generate_text_feedback(self, prompt: str) -> str:
+        """Generate simple text feedback (no structured output).
+
+        Used for execution feedback where we want free-form text.
+
+        Args:
+            prompt: Formatted prompt text
+
+        Returns:
+            Generated text feedback
+
+        Raises:
+            RuntimeError: If LLM call fails
+        """
+        agent = Agent(
+            model=self.model,
+            system_prompt=prompt,
+        )
+
+        try:
+            result = await agent.run("Generate feedback based on the provided context.")
+            # Extract text from result
+            if hasattr(result, "output"):
+                if isinstance(result.output, str):
+                    return result.output
+                # If output is an object, try to get text field
+                if hasattr(result.output, "text"):
+                    return result.output.text
+                # Fallback: convert to string
+                return str(result.output)
+            return str(result)
+        except Exception as e:
+            logger.exception("Error generating text feedback")
+            raise RuntimeError(f"Failed to generate text feedback: {type(e).__name__}: {e}") from e
+
     @staticmethod
     def _raise_validation_error(error_msg: str) -> None:
         """Raise validation error for training plan."""

@@ -1537,7 +1537,7 @@ def get_profile(user_id: str = Depends(get_current_user_id)):
                     full_name = profile.first_name
             elif profile.last_name:
                 full_name = profile.last_name
-            
+
             return AthleteProfileResponse(
                 full_name=full_name,  # Combine first_name and last_name
                 email=user_email,  # From auth user
@@ -1902,7 +1902,7 @@ def _build_response_from_profile(profile: AthleteProfile, session: Session, user
             full_name = profile.first_name
     elif profile.last_name:
         full_name = profile.last_name
-    
+
     return AthleteProfileResponse(
         full_name=full_name,  # Combine first_name and last_name
         email=user_email or getattr(profile, "email", None),  # Prefer auth email

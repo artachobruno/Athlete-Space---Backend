@@ -36,10 +36,11 @@ if project_root_str not in sys.path:
     sys.path.insert(0, project_root_str)
 
 from loguru import logger
+
 from app.db.session import SessionLocal
 from scripts.backfill_unpaired_activities import (
-    process_unpaired_activities,
     process_relaxed_date_sport_1to1,
+    process_unpaired_activities,
 )
 
 
@@ -122,12 +123,12 @@ def main() -> None:
         logger.info("FINAL SUMMARY")
         logger.info("=" * 80)
         if dry_run:
-            total_would_pair = stats1['activities_found'] + stats2['pairs_found']
+            total_would_pair = stats1["activities_found"] + stats2["pairs_found"]
             logger.info(f"  Total would pair: {total_would_pair}")
             logger.info("  (Run with --no-dry-run to actually pair)")
         else:
-            total_paired = stats1['paired'] + stats2['paired']
-            total_failed = stats1['failed'] + stats2['failed']
+            total_paired = stats1["paired"] + stats2["paired"]
+            total_failed = stats1["failed"] + stats2["failed"]
             logger.info(f"  Total successfully paired: {total_paired}")
             logger.info(f"  Total failed: {total_failed}")
         logger.info("=" * 80)

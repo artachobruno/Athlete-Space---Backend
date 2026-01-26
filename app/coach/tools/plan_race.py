@@ -967,22 +967,37 @@ async def create_and_save_plan_new(
         )
 
         # Resolve race creation vs focus switching (multi-race season support)
-        race_plan, was_created = resolve_race_focus(
-            athlete_id=athlete_id,
-            user_id=user_id,
-            race_date=race_date,
-            race_distance=distance,
-            race_name=race_name,
-            target_time=target_time,
-            race_priority=race_priority,
-            conversation_id=conversation_id,
-        )
-        logger.info(
-            "Race resolved",
-            race_id=race_plan.id,
-            was_created=was_created,
-            priority=race_plan.priority,
-        )
+        try:
+            race_plan, was_created = resolve_race_focus(
+                athlete_id=athlete_id,
+                user_id=user_id,
+                race_date=race_date,
+                race_distance=distance,
+                race_name=race_name,
+                target_time=target_time,
+                race_priority=race_priority,
+                conversation_id=conversation_id,
+            )
+            logger.info(
+                "Race resolved",
+                race_id=race_plan.id,
+                was_created=was_created,
+                priority=race_plan.priority,
+                athlete_id=athlete_id,
+                user_id=user_id,
+                race_date=race_date.isoformat(),
+            )
+        except Exception as e:
+            logger.exception(
+                f"Failed to save race plan: {e}",
+                athlete_id=athlete_id,
+                user_id=user_id,
+                race_date=race_date.isoformat(),
+                race_distance=distance,
+            )
+            raise RuntimeError(
+                f"Failed to save race plan. Please try again. (Error: {type(e).__name__}: {e!s})"
+            ) from e
 
         # Create progress callback if conversation_id is provided
         async def progress_callback(week_number: int, total_weeks: int, phase: str) -> None:

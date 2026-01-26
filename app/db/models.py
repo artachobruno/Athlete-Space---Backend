@@ -941,12 +941,9 @@ class AthleteProfile(Base):
     first_name: Mapped[str | None] = mapped_column(String, nullable=True)
     last_name: Mapped[str | None] = mapped_column(String, nullable=True)
     sex: Mapped[str | None] = mapped_column(String, nullable=True)  # CHECK: 'male','female','other'
-    gender: Mapped[str | None] = mapped_column(String, nullable=True)  # Alias for sex, used in API
     birthdate: Mapped[date | None] = mapped_column(Date, nullable=True)
-    height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
-    weight_lbs: Mapped[float | None] = mapped_column(Float, nullable=True)  # Imperial weight
-    height_in: Mapped[float | None] = mapped_column(Float, nullable=True)  # Imperial height (total inches)
+    weight_lbs: Mapped[float | None] = mapped_column(Float, nullable=True)  # Weight in pounds (imperial)
+    height_in: Mapped[float | None] = mapped_column(Float, nullable=True)  # Height in inches (imperial)
     location: Mapped[str | None] = mapped_column(String, nullable=True)
     unit_system: Mapped[str | None] = mapped_column(String, nullable=True)  # 'imperial' or 'metric'
     sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # Track data source for each field
@@ -974,6 +971,17 @@ class AthleteProfile(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    # Property alias: gender maps to sex for API compatibility
+    @property
+    def gender(self) -> str | None:
+        """Alias for sex, used in API."""
+        return self.sex
+
+    @gender.setter
+    def gender(self, value: str | None) -> None:
+        """Set gender (maps to sex column)."""
+        self.sex = value
 
 
 class UserSettings(Base):  # noqa: PLR0904

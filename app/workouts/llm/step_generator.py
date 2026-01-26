@@ -66,7 +66,10 @@ RULES:
 - Use only these intensities:
   easy, tempo, lt2, threshold, vo2, flow, rest
 - Do NOT invent steps not implied by the notes
-- Distances must sum to the total distance when possible
+- CRITICAL: Total distance calculation: For each step with distance_meters, multiply by repeat count.
+  The sum of (step.distance_meters x step.repeat) for all steps must equal the total distance.
+  Example: If total distance is 5000m and you have a step with distance_meters=1000 and repeat=3,
+  that step contributes 3000m (1000 x 3) to the total.
 
 OUTPUT FORMAT:
 {{

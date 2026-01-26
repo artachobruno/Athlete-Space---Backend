@@ -294,6 +294,7 @@ def get_overview_data(user_id: str, days: int = 7) -> dict:
                 .where(
                     DailyTrainingLoad.user_id == user_id,
                     DailyTrainingLoad.day >= start_date,
+                    DailyTrainingLoad.day <= end_date,
                 )
                 .order_by(DailyTrainingLoad.day)
             ).all()

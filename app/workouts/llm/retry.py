@@ -74,11 +74,27 @@ async def generate_with_retry(
             current_prompt = keyerror_retry_prompt if keyerror_retry_prompt else prompt
             if attempt > 0 and validation_errors and not keyerror_retry_prompt:
                 error_context = "\n".join(f"- {e}" for e in validation_errors)
+
+                # Add specific guidance for distance validation errors
+                distance_error_hint = ""
+                if any("exceeds activity distance" in e.lower() for e in validation_errors):
+                    distance_error_hint = """
+
+CRITICAL FIX FOR DISTANCE ERROR:
+- The sum of (step.distance_meters x step.repeat) for ALL steps must equal the total distance.
+- If a step has repeat > 1, multiply the step's distance_meters by repeat when calculating total.
+- Example: If total distance is 5000m:
+  * Step 1: 2000m x 1 = 2000m
+  * Step 2: 1000m x 3 = 3000m
+  * Total = 5000m ✓
+- Reduce step distances or repeat counts to match the total distance exactly.
+"""
+
                 current_prompt = f"""{prompt}
 
 PREVIOUS ATTEMPT VALIDATION ERRORS:
 {error_context}
-
+{distance_error_hint}
 Please fix these errors and output valid JSON only."""
 
             # Log the actual prompt submitted to LLM

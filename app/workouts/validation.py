@@ -54,6 +54,7 @@ def validate_structured_workout(workout: StructuredWorkout, activity_distance: i
     # Validate each step
     seen_orders: set[int] = set()
     total_step_distance = 0
+    step_breakdown: list[str] = []
 
     for idx, step in enumerate(workout.steps):
         step_errors = _validate_step(step)
@@ -65,9 +66,13 @@ def validate_structured_workout(workout: StructuredWorkout, activity_distance: i
             errors.append(f"Step {idx + 1}: Duplicate order {step.order}")
         seen_orders.add(step.order)
 
-        # Accumulate distance
+        # Accumulate distance and track breakdown
         if step.distance_meters is not None:
-            total_step_distance += step.distance_meters * step.repeat
+            step_contribution = step.distance_meters * step.repeat
+            total_step_distance += step_contribution
+            step_breakdown.append(
+                f"Step {idx + 1} ({step.name}): {step.distance_meters}m x {step.repeat} = {step_contribution}m"
+            )
 
     # Validate order sequence
     if seen_orders:
@@ -77,8 +82,11 @@ def validate_structured_workout(workout: StructuredWorkout, activity_distance: i
 
     # Validate total distance consistency
     if activity_distance is not None and total_step_distance > activity_distance:
+        breakdown_text = "\n".join(step_breakdown) if step_breakdown else "No distance steps found"
         errors.append(
-            f"Total step distance ({total_step_distance}m) exceeds activity distance ({activity_distance}m)"
+            f"Total step distance ({total_step_distance}m) exceeds activity distance ({activity_distance}m). "
+            f"Breakdown: {breakdown_text}. "
+            f"Remember: each step's distance_meters x repeat count contributes to the total."
         )
 
     if errors:

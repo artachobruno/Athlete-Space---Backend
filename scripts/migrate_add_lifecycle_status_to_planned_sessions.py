@@ -35,7 +35,7 @@ from app.config.settings import settings
 from app.db.session import get_session
 
 
-def migrate_add_lifecycle_status() -> None:
+def migrate_add_lifecycle_status_to_planned_sessions() -> None:
     """Add lifecycle_status column to planned_sessions table."""
     logger.info("Starting migration: add lifecycle_status to planned_sessions")
 
@@ -94,4 +94,4 @@ def migrate_add_lifecycle_status() -> None:
 
 
 if __name__ == "__main__":
-    migrate_add_lifecycle_status()
+    migrate_add_lifecycle_status_to_planned_sessions()

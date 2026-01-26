@@ -73,6 +73,11 @@ def recompute_metrics_for_user(
         # Historical overwrites corrupt the entire EWMA series silently.
         daily_created = 0
         daily_skipped = 0
+        daily_updated = 0
+
+        # Allow updates for recent days (last 14 days) to keep data current
+        # Historical days (>14 days ago) are immutable to preserve EWMA integrity
+        recent_cutoff = end_date - timedelta(days=14)
 
         for date_val in daily_tss_loads:
             metrics_for_date = metrics.get(date_val, {"ctl": 0.0, "atl": 0.0, "fsb": 0.0})
@@ -85,19 +90,32 @@ def recompute_metrics_for_user(
                 )
             ).first()
 
-            # GUARD: Skip existing days to preserve EWMA integrity
-            if existing:
-                daily_skipped += 1
-                logger.debug(
-                    f"[METRICS] Skipping existing day {date_val.isoformat()} for user_id={user_id} "
-                    "(EWMA history must never change after write)"
-                )
-                continue
-
             # Note: TSB column stores Form (FSB) value
             form_value = metrics_for_date.get("fsb", 0.0)
             ctl_val = metrics_for_date["ctl"]
             atl_val = metrics_for_date["atl"]
+
+            if existing:
+                # For recent days (within last 14 days), allow updates to keep data current
+                if date_val >= recent_cutoff:
+                    existing_record = existing[0]
+                    existing_record.ctl = ctl_val
+                    existing_record.atl = atl_val
+                    existing_record.tsb = form_value
+                    existing_record.updated_at = datetime.now(timezone.utc)
+                    daily_updated += 1
+                    logger.debug(
+                        f"[METRICS] Updated recent day {date_val.isoformat()} for user_id={user_id} "
+                        "(within 14-day update window)"
+                    )
+                else:
+                    # For historical days, skip to preserve EWMA integrity
+                    daily_skipped += 1
+                    logger.debug(
+                        f"[METRICS] Skipping historical day {date_val.isoformat()} for user_id={user_id} "
+                        "(EWMA history must never change after write)"
+                    )
+                continue
 
             # Create new record (only for days that don't exist)
             daily_load = DailyTrainingLoad(
@@ -177,12 +195,13 @@ def recompute_metrics_for_user(
 
         logger.info(
             f"[METRICS] Metrics recomputation complete for user_id={user_id}: "
-            f"daily_created={daily_created}, daily_skipped={daily_skipped}, "
+            f"daily_created={daily_created}, daily_updated={daily_updated}, daily_skipped={daily_skipped}, "
             f"weekly_created={weekly_created}, weekly_updated={weekly_updated}"
         )
 
         return {
             "daily_created": daily_created,
+            "daily_updated": daily_updated,
             "daily_skipped": daily_skipped,
             "weekly_created": weekly_created,
             "weekly_updated": weekly_updated,

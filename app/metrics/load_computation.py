@@ -529,6 +529,8 @@ def compute_ctl_atl_form_from_tss(
     daily_tss_loads: dict[date, float],
     start_date: date,
     end_date: date,
+    initial_ctl: float | None = None,
+    initial_atl: float | None = None,
 ) -> dict[date, dict[str, float]]:
     """Compute CTL, ATL, and Form (FSB) from daily TSS loads.
 
@@ -541,6 +543,8 @@ def compute_ctl_atl_form_from_tss(
         daily_tss_loads: Dictionary mapping date -> daily TSS load
         start_date: Start date (inclusive)
         end_date: End date (inclusive)
+        initial_ctl: Initial CTL value from day before start_date (for continuity)
+        initial_atl: Initial ATL value from day before start_date (for continuity)
 
     Returns:
         Dictionary mapping date -> {"ctl": float, "atl": float, "fsb": float}
@@ -550,6 +554,7 @@ def compute_ctl_atl_form_from_tss(
         - Missing days are treated as rest days (Load_t = 0.0)
         - All dates in range are included (continuous series)
         - Deterministic and idempotent
+        - If initial_ctl/initial_atl are provided, EWMA continues from those values
     """
     # Build continuous series (fill gaps with 0.0 for rest days)
     continuous_dates: list[date] = []
@@ -565,8 +570,9 @@ def compute_ctl_atl_form_from_tss(
         return {}
 
     # Calculate EWMA for CTL (42-day) and ATL (7-day)
-    ctl_series = _calculate_ewma(daily_load_series, tau_days=TAU_CTL_DAYS)
-    atl_series = _calculate_ewma(daily_load_series, tau_days=TAU_ATL_DAYS)
+    # Use initial values if provided to maintain continuity
+    ctl_series = _calculate_ewma(daily_load_series, tau_days=TAU_CTL_DAYS, initial_value=initial_ctl)
+    atl_series = _calculate_ewma(daily_load_series, tau_days=TAU_ATL_DAYS, initial_value=initial_atl)
 
     # Build result dictionary
     result: dict[date, dict[str, float]] = {}
@@ -589,7 +595,7 @@ def compute_ctl_atl_form_from_tss(
     return result
 
 
-def _calculate_ewma(values: list[float], tau_days: float) -> list[float]:
+def _calculate_ewma(values: list[float], tau_days: float, initial_value: float | None = None) -> list[float]:
     """Calculate exponentially weighted moving average (EWMA).
 
     Implements the canonical EMA formula used in training load models.
@@ -609,12 +615,14 @@ def _calculate_ewma(values: list[float], tau_days: float) -> list[float]:
     Args:
         values: List of daily values (TSS loads)
         tau_days: Time constant in days (42 for CTL, 7 for ATL)
+        initial_value: Initial EWMA value from previous day (for continuity). If None, uses first value.
 
     Returns:
         List of EWMA values, one per input value
 
     Notes:
-        - First value initializes the EWMA
+        - If initial_value is provided, EWMA continues from that value (maintains continuity)
+        - Otherwise, first value initializes the EWMA
         - Missing days (0.0) are treated as rest days, not gaps
         - Uses specification formula: EWMA[t] = EWMA[t-1] + (value[t] - EWMA[t-1]) / tau
     """
@@ -622,7 +630,11 @@ def _calculate_ewma(values: list[float], tau_days: float) -> list[float]:
         return []
 
     result: list[float] = []
-    prev = values[0] if values else 0.0
+    # Use initial_value if provided (for continuity), otherwise start with first value
+    if initial_value is not None:
+        prev = initial_value
+    else:
+        prev = values[0] if values else 0.0
 
     for value in values:
         # Specification formula: EWMA[t] = EWMA[t-1] + (value[t] - EWMA[t-1]) / tau

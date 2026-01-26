@@ -61,11 +61,37 @@ def recompute_metrics_for_user(
             logger.info(f"[METRICS] No activities found for user_id={user_id}, skipping metrics computation")
             return {"daily_created": 0, "daily_skipped": 0, "weekly_created": 0, "weekly_updated": 0}
 
+        # Get last known CTL/ATL values from before since_date to maintain EWMA continuity
+        # This ensures the recomputation continues from existing values, not starting fresh
+        last_metrics = session.execute(
+            select(DailyTrainingLoad)
+            .where(
+                DailyTrainingLoad.user_id == user_id,
+                DailyTrainingLoad.day < since_date,
+            )
+            .order_by(DailyTrainingLoad.day.desc())
+            .limit(1)
+        ).first()
+
+        initial_ctl = None
+        initial_atl = None
+        if last_metrics:
+            last_record = last_metrics[0]
+            initial_ctl = last_record.ctl
+            initial_atl = last_record.atl
+            logger.info(
+                f"[METRICS] Using previous CTL={initial_ctl}, ATL={initial_atl} from {last_record.day.isoformat()} "
+                f"as initial values for EWMA continuity"
+            )
+
         # Compute daily TSS loads (unified metric from spec)
         daily_tss_loads = compute_daily_tss_load(activity_list, since_date, end_date)
 
         # Compute CTL, ATL, Form (FSB) from TSS
-        metrics = compute_ctl_atl_form_from_tss(daily_tss_loads, since_date, end_date)
+        # Pass initial values to maintain continuity with existing metrics
+        metrics = compute_ctl_atl_form_from_tss(
+            daily_tss_loads, since_date, end_date, initial_ctl=initial_ctl, initial_atl=initial_atl
+        )
 
         # Update daily_training_load table
         # CRITICAL: EWMA (CTL/ATL) depends on initial conditions and previous values.

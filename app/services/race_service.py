@@ -46,10 +46,15 @@ def resolve_race_focus(
     """
     with get_session() as db:
         # Check if race already exists (same date + distance)
+        # Compare dates only (ignore time component) by normalizing to start of day
+        race_date_start = race_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        race_date_end = race_date_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
         existing_race = db.execute(
             select(RacePlan).where(
                 RacePlan.athlete_id == athlete_id,
-                RacePlan.race_date == race_date,
+                RacePlan.race_date >= race_date_start,
+                RacePlan.race_date <= race_date_end,
                 RacePlan.race_distance == race_distance,
             )
         ).scalar_one_or_none()
@@ -82,26 +87,44 @@ def resolve_race_focus(
             priority = RacePriority.B.value
 
         # Create new race
+        # Normalize race_date to start of day for consistency
+        race_date_normalized = race_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        
         new_race = RacePlan(
             user_id=user_id,
             athlete_id=athlete_id,
-            race_date=race_date,
+            race_date=race_date_normalized,
             race_distance=race_distance,
             race_name=race_name,
             target_time=target_time,
             priority=priority,
         )
         db.add(new_race)
-        db.commit()
-        db.refresh(new_race)
-
-        logger.info(
-            "Created new race",
-            race_id=new_race.id,
-            athlete_id=athlete_id,
-            priority=priority,
-            conversation_id=conversation_id,
-        )
+        
+        try:
+            db.commit()
+            db.refresh(new_race)
+            
+            logger.info(
+                "Created new race",
+                race_id=new_race.id,
+                athlete_id=athlete_id,
+                user_id=user_id,
+                race_date=race_date_normalized.isoformat(),
+                race_distance=race_distance,
+                priority=priority,
+                conversation_id=conversation_id,
+            )
+        except Exception as e:
+            db.rollback()
+            logger.exception(
+                f"Failed to save race plan: {e}",
+                athlete_id=athlete_id,
+                user_id=user_id,
+                race_date=race_date_normalized.isoformat(),
+                race_distance=race_distance,
+            )
+            raise
 
         # If this is the first race (priority A), set it as active
         if priority == RacePriority.A.value and conversation_id:

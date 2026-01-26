@@ -22,7 +22,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, deferred, mapped_column, relationship, validates
 
 
@@ -404,7 +404,7 @@ class WeeklyTrainingSummary(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
     week_start: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
 
     total_duration: Mapped[int] = mapped_column(Integer, nullable=False)

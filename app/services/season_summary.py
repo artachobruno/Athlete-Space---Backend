@@ -269,6 +269,10 @@ async def build_season_summary(
             # Get the next upcoming race (or most recent if all are in the past)
             now_utc = datetime.now(timezone.utc)
             
+            logger.info(
+                f"Checking for race plans: user_id={user_id}, athlete_id={athlete_id}"
+            )
+            
             # Query by athlete_id (consistent with race_service.py)
             race_plan = session.execute(
                 select(RacePlan)
@@ -276,13 +280,36 @@ async def build_season_summary(
                 .order_by(RacePlan.race_date)
             ).scalar_one_or_none()
             
-            # If we found a race but it's in the past, get the most recent one
-            if race_plan and race_plan.race_date < now_utc:
+            # Fallback: if no race found by athlete_id, try user_id
+            if not race_plan:
+                logger.info(
+                    f"No race plan found by athlete_id={athlete_id}, trying user_id={user_id}"
+                )
                 race_plan = session.execute(
                     select(RacePlan)
-                    .where(RacePlan.athlete_id == athlete_id)
-                    .order_by(RacePlan.race_date.desc())
+                    .where(RacePlan.user_id == user_id)
+                    .order_by(RacePlan.race_date)
                 ).scalar_one_or_none()
+            
+            # If we found a race but it's in the past, get the most recent one
+            if race_plan and race_plan.race_date < now_utc:
+                logger.info(
+                    f"Found race plan in past, getting most recent: race_id={race_plan.id}, "
+                    f"race_date={race_plan.race_date}"
+                )
+                # Use the same filter that found the race
+                if race_plan.athlete_id == athlete_id:
+                    race_plan = session.execute(
+                        select(RacePlan)
+                        .where(RacePlan.athlete_id == athlete_id)
+                        .order_by(RacePlan.race_date.desc())
+                    ).scalar_one_or_none()
+                else:
+                    race_plan = session.execute(
+                        select(RacePlan)
+                        .where(RacePlan.user_id == user_id)
+                        .order_by(RacePlan.race_date.desc())
+                    ).scalar_one_or_none()
 
             if race_plan:
                 logger.info(
@@ -321,6 +348,15 @@ async def build_season_summary(
                 # Use a default plan focus for race plans
                 plan_focus = f"Training for {race_plan.race_distance} on {race_date.strftime('%B %d, %Y')}"
             else:
+                # Log all race plans for this user to help debug
+                all_races = session.execute(
+                    select(RacePlan)
+                    .where(RacePlan.user_id == user_id)
+                ).scalars().all()
+                logger.warning(
+                    f"No race plan found for athlete_id={athlete_id}, user_id={user_id}. "
+                    f"Found {len(all_races)} race plans for user_id: {[r.id for r in all_races]}"
+                )
                 raise ValueError("Season plan not available. The coach is still learning about your training patterns.")
         else:
             # Handle case where plan_data might be None (missing column)

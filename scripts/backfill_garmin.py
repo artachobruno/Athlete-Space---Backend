@@ -15,7 +15,7 @@ Examples:
 """
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -73,7 +73,7 @@ def main() -> int:
     from_date = None
     to_date = None
     if days:
-        to_date = datetime.now(timezone.utc)
+        to_date = datetime.now(UTC)
         from_date = to_date - timedelta(days=days)
         logger.info(f"Backfill window: {from_date.date()} to {to_date.date()} ({days} days)")
 
@@ -101,13 +101,12 @@ def main() -> int:
         if result.get("error_count", 0) > 0:
             logger.warning(f"Backfill completed with {result.get('error_count')} errors")
             return 1
-
-        return 0
-
     except Exception as e:
         logger.exception(f"Backfill failed: {e}")
         print(f"Error: {e}")
         return 1
+    else:
+        return 0
 
 
 if __name__ == "__main__":

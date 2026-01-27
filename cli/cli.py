@@ -11,7 +11,7 @@ import os
 import sys
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -703,7 +703,10 @@ def backfill_garmin(
         # Backfill last 30 days
         python cli/cli.py backfill-garmin <user_id> --days 30
     """
-    from datetime import datetime, timedelta, timezone
+    def exit_with_error(message: str, code: int = 1) -> None:
+        """Exit with error message."""
+        console.print(f"[red]Error:[/red] {message}")
+        raise typer.Exit(code)
 
     console.print(f"[bold cyan]Starting Garmin backfill for user_id={user_id}...[/bold cyan]\n")
 
@@ -719,8 +722,7 @@ def backfill_garmin(
             ).first()
 
             if not integration:
-                console.print(f"[red]Error:[/red] No active Garmin integration found for user_id={user_id}")
-                raise typer.Exit(1)
+                exit_with_error(f"No active Garmin integration found for user_id={user_id}")
 
             console.print(f"[green]✓ Found Garmin integration for user_id={user_id}[/green]\n")
     except Exception as e:
@@ -732,7 +734,7 @@ def backfill_garmin(
     from_date = None
     to_date = None
     if days:
-        to_date = datetime.now(timezone.utc)
+        to_date = datetime.now(UTC)
         from_date = to_date - timedelta(days=days)
         console.print(f"[cyan]Backfill window:[/cyan] {from_date.date()} to {to_date.date()} ({days} days)\n")
 
@@ -758,7 +760,7 @@ def backfill_garmin(
         if result.get("error_count", 0) > 0:
             console.print(f"\n[yellow]⚠️  Backfill completed with {result.get('error_count')} errors[/yellow]")
             console.print("[yellow]Check logs for details[/yellow]")
-            raise typer.Exit(1)
+            exit_with_error("Backfill completed with errors", code=1)
 
         console.print("\n[bold green]✓ Backfill completed successfully![/bold green]")
 

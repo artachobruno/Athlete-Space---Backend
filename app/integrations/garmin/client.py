@@ -30,6 +30,97 @@ GARMIN_API_BASE_URL = "https://apis.garmin.com/wellness-api/rest"
 GARMIN_ACTIVITIES_URL = f"{GARMIN_API_BASE_URL}/activities"
 
 
+def _parse_activity_date(activity_date_str: str | int | float) -> datetime | None:
+    """Parse activity date from various formats.
+
+    Args:
+        activity_date_str: Date string or timestamp
+
+    Returns:
+        Parsed datetime or None if parsing fails
+    """
+    try:
+        if isinstance(activity_date_str, str):
+            if "T" in activity_date_str:
+                return datetime.fromisoformat(activity_date_str.replace("Z", "+00:00"))
+            return datetime.strptime(activity_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return datetime.fromtimestamp(activity_date_str, tz=timezone.utc)
+    except Exception as e:
+        logger.debug(f"[GARMIN_CLIENT] Failed to parse activity date {activity_date_str}: {e}")
+        return None
+
+
+def _extract_activity_date(activity: dict[str, Any]) -> datetime | None:
+    """Extract and parse activity date from activity dict.
+
+    Args:
+        activity: Activity dictionary
+
+    Returns:
+        Parsed datetime or None if not found/invalid
+    """
+    activity_date_str = (
+        activity.get("startTimeGMT")
+        or activity.get("start_time_gmt")
+        or activity.get("startTime")
+        or activity.get("start_time")
+    )
+    if not activity_date_str:
+        return None
+    return _parse_activity_date(activity_date_str)
+
+
+def _filter_activities_by_date(
+    activities: list[dict[str, Any]],
+    start_date: datetime | None,
+    end_date: datetime | None,
+) -> list[dict[str, Any]]:
+    """Filter activities by date range.
+
+    Args:
+        activities: List of activity dictionaries
+        start_date: Start date filter (inclusive)
+        end_date: End date filter (inclusive)
+
+    Returns:
+        Filtered list of activities
+    """
+    if not start_date and not end_date:
+        return activities
+
+    filtered_activities = []
+    for activity in activities:
+        activity_date = _extract_activity_date(activity)
+        if not activity_date:
+            continue
+
+        if start_date and activity_date < start_date:
+            continue
+        if end_date and activity_date > end_date:
+            continue
+
+        filtered_activities.append(activity)
+
+    return filtered_activities
+
+
+def _find_oldest_activity_date(activities: list[dict[str, Any]]) -> datetime | None:
+    """Find the oldest activity date in a list.
+
+    Args:
+        activities: List of activity dictionaries
+
+    Returns:
+        Oldest datetime or None if no valid dates found
+    """
+    oldest_activity = None
+    for activity in activities:
+        activity_date = _extract_activity_date(activity)
+        if activity_date and (oldest_activity is None or activity_date < oldest_activity):
+            oldest_activity = activity_date
+    return oldest_activity
+
+
 class GarminClient:
     """Thin Garmin API client.
 
@@ -69,8 +160,8 @@ class GarminClient:
         Automatically refreshes token on 401 and retries once.
 
         Args:
-            start_date: Start date for activities (optional)
-            end_date: End date for activities (optional)
+            start_date: Start date for activities (required by API)
+            end_date: End date for activities (required by API)
             limit: Number of activities to fetch (max 100)
             offset: Pagination offset
 
@@ -80,30 +171,25 @@ class GarminClient:
         Raises:
             httpx.HTTPError: If API request fails after retry
             GarminTokenRefreshError: If token refresh fails
+            ValueError: If dates are not provided (API requires them)
         """
         params: dict[str, Any] = {
             "limit": min(limit, 100),  # Garmin max is typically 100
             "offset": offset,
         }
 
-        # Garmin API date parameters
-        # Try multiple formats: the API might expect different parameter names or formats
-        if start_date and end_date:
-            # Try ISO 8601 date format first (YYYY-MM-DD)
-            # Some Garmin API versions expect this format
-            params["startDate"] = start_date.strftime("%Y-%m-%d")
-            params["endDate"] = end_date.strftime("%Y-%m-%d")
-            
-            # Also try alternative parameter names (some API versions use these)
-            # params["start"] = start_date.strftime("%Y-%m-%d")
-            # params["end"] = end_date.strftime("%Y-%m-%d")
-        elif start_date or end_date:
-            # If only one is provided, don't send either (API requires both)
-            logger.warning(
-                "[GARMIN_CLIENT] Both startDate and endDate required by API, "
-                f"but only one provided (start={start_date}, end={end_date}). "
-                "Fetching without date filter."
+        # Garmin API REQUIRES date parameters - they must always be provided
+        # Try ISO 8601 format with time (YYYY-MM-DDTHH:mm:ssZ)
+        if not start_date or not end_date:
+            raise ValueError(
+                "Garmin API requires both start_date and end_date. "
+                f"Provided: start_date={start_date}, end_date={end_date}"
             )
+
+        # Try ISO 8601 format with time (Garmin API might expect this)
+        # Format: YYYY-MM-DDTHH:mm:ssZ
+        params["startDate"] = start_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        params["endDate"] = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         logger.debug(f"[GARMIN_CLIENT] Fetching activity summaries (limit={limit}, offset={offset})")
 
@@ -130,24 +216,8 @@ class GarminClient:
                     f"(params: {params})"
                 )
 
-            # If 400 error with date parameters, try without dates as fallback
-            if e.response.status_code == 400 and "startDate" in params:
-                logger.warning(
-                    "[GARMIN_CLIENT] Date parameters rejected by API, trying without date filter "
-                    "(will filter client-side)"
-                )
-                # Remove date parameters and retry
-                fallback_params = {k: v for k, v in params.items() if k not in ("startDate", "endDate")}
-                resp = httpx.get(
-                    GARMIN_ACTIVITIES_URL,
-                    headers=self._headers(),
-                    params=fallback_params,
-                    timeout=15,
-                )
-                resp.raise_for_status()
-                # Note: We'll filter by date client-side in yield_activity_summaries if needed
             # Auto-refresh on 401 and retry once
-            elif e.response.status_code == 401 and self._user_id:
+            if e.response.status_code == 401 and self._user_id:
                 logger.warning(f"[GARMIN_CLIENT] Token expired (401), refreshing for user_id={self._user_id}")
                 self._access_token = get_garmin_access_token(self._user_id)
                 # Retry once
@@ -279,49 +349,7 @@ class GarminClient:
 
                 # Filter by date client-side if date parameters were not used
                 # (API might not support date filtering, so we filter after fetching)
-                if start_date or end_date:
-                    filtered_activities = []
-                    for activity in activities:
-                        # Extract activity date from various possible fields
-                        activity_date_str = (
-                            activity.get("startTimeGMT")
-                            or activity.get("start_time_gmt")
-                            or activity.get("startTime")
-                            or activity.get("start_time")
-                        )
-                        if not activity_date_str:
-                            # Skip if no date found
-                            continue
-
-                        try:
-                            # Parse date (handle various formats)
-                            if isinstance(activity_date_str, str):
-                                # Try ISO format first
-                                if "T" in activity_date_str:
-                                    activity_date = datetime.fromisoformat(
-                                        activity_date_str.replace("Z", "+00:00")
-                                    )
-                                else:
-                                    # Try date-only format
-                                    activity_date = datetime.strptime(activity_date_str, "%Y-%m-%d").replace(
-                                        tzinfo=timezone.utc
-                                    )
-                            else:
-                                # Assume it's already a datetime or timestamp
-                                activity_date = datetime.fromtimestamp(activity_date_str, tz=timezone.utc)
-
-                            # Filter by date range
-                            if start_date and activity_date < start_date:
-                                continue
-                            if end_date and activity_date > end_date:
-                                continue
-
-                            filtered_activities.append(activity)
-                        except Exception as e:
-                            logger.warning(f"[GARMIN_CLIENT] Failed to parse activity date: {e}, skipping activity")
-                            continue
-
-                    activities = filtered_activities
+                activities = _filter_activities_by_date(activities, start_date, end_date)
 
                 total_fetched += len(activities)
                 logger.info(f"[GARMIN_CLIENT] Fetched {len(activities)} activities from page {page + 1}")
@@ -336,35 +364,7 @@ class GarminClient:
                 # If filtering by date client-side and we've gone past start_date, stop
                 # (activities are typically returned in reverse chronological order)
                 if start_date and activities:
-                    # Check the oldest activity in this batch
-                    oldest_activity = None
-                    for activity in activities:
-                        activity_date_str = (
-                            activity.get("startTimeGMT")
-                            or activity.get("start_time_gmt")
-                            or activity.get("startTime")
-                            or activity.get("start_time")
-                        )
-                        if activity_date_str:
-                            try:
-                                if isinstance(activity_date_str, str):
-                                    if "T" in activity_date_str:
-                                        activity_date = datetime.fromisoformat(
-                                            activity_date_str.replace("Z", "+00:00")
-                                        )
-                                    else:
-                                        activity_date = datetime.strptime(activity_date_str, "%Y-%m-%d").replace(
-                                            tzinfo=timezone.utc
-                                        )
-                                else:
-                                    activity_date = datetime.fromtimestamp(activity_date_str, tz=timezone.utc)
-
-                                if oldest_activity is None or activity_date < oldest_activity:
-                                    oldest_activity = activity_date
-                            except Exception:
-                                pass
-
-                    # If oldest activity is before start_date, we've gone too far back
+                    oldest_activity = _find_oldest_activity_date(activities)
                     if oldest_activity and oldest_activity < start_date:
                         logger.info(
                             f"[GARMIN_CLIENT] Reached start_date boundary "

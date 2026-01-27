@@ -17,7 +17,7 @@ Examples:
 """
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -81,7 +81,7 @@ def main() -> int:
     from_date = None
     to_date = None
     if days:
-        to_date = datetime.now(timezone.utc)
+        to_date = datetime.now(UTC)
         from_date = to_date - timedelta(days=days)
         print(f"Backfill window: {from_date.date()} to {to_date.date()} ({days} days)\n")
 
@@ -154,7 +154,7 @@ def main() -> int:
     print(f"Total users processed: {len(user_ids)}")
     print(f"  ✅ Successful: {successful_users}")
     print(f"  ❌ Failed: {failed_users}")
-    print(f"\nTotal activities:")
+    print("\nTotal activities:")
     print(f"  Imported: {total_imported}")
     print(f"  Skipped: {total_skipped}")
     print(f"  Errors: {total_errors}")

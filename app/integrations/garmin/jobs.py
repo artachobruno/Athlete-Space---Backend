@@ -244,7 +244,7 @@ def _process_activity_for_webhook(
 
         # PHASE 3: Enforce workout + execution creation (mandatory invariant)
         # Note: get_or_create_for_activity already creates the execution, so no need to call attach_activity
-        workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+        WorkoutFactory.get_or_create_for_activity(session, activity)
 
         # Update last_sync_at on integration
         integration = session.execute(

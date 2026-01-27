@@ -12,7 +12,7 @@ Examples:
 
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -80,7 +80,7 @@ def main() -> int:
     from_date = None
     to_date = None
     if days:
-        to_date = datetime.now(timezone.utc)
+        to_date = datetime.now(UTC)
         from_date = to_date - timedelta(days=days)
         print(f"Backfill window: {from_date.date()} to {to_date.date()} ({days} days)")
 
@@ -110,14 +110,13 @@ def main() -> int:
             print(f"\n⚠️  WARNING: Backfill completed with {result.get('error_count')} errors")
             print("Check logs for details")
             return 1
-
-        print("\n✅ SUCCESS: Backfill completed successfully!")
-        return 0
-
     except Exception as e:
         print(f"\n❌ ERROR: Backfill failed: {e}")
         logger.exception("Garmin backfill failed")
         return 1
+    else:
+        print("\n✅ SUCCESS: Backfill completed successfully!")
+        return 0
 
 
 if __name__ == "__main__":

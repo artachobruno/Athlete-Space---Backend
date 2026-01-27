@@ -93,7 +93,6 @@ def main() -> int:
 
                 result = backfill_garmin_history_chunk(user_id)
 
-                status = result.get("status", "unknown")
                 imported = result.get("ingested_count", 0)
                 skipped = result.get("skipped_count", 0)
                 errors = result.get("error_count", 0)
@@ -107,7 +106,7 @@ def main() -> int:
                 if complete:
                     print(f"✅ Complete (imported={imported}, skipped={skipped})")
                     break
-                elif errors > 0:
+                if errors > 0:
                     print(f"⚠️  Errors: {errors} (imported={imported}, skipped={skipped})")
                 else:
                     print(f"✓ (imported={imported}, skipped={skipped})")
@@ -166,7 +165,7 @@ def main() -> int:
     print(f"  ✅ Successful: {successful_users}")
     print(f"  ✅ Complete: {complete_users}")
     print(f"  ❌ Failed: {failed_users}")
-    print(f"\nTotal activities:")
+    print("\nTotal activities:")
     print(f"  Imported: {total_imported}")
     print(f"  Skipped: {total_skipped}")
     print(f"  Errors: {total_errors}")

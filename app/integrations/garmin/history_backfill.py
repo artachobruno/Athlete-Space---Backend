@@ -24,6 +24,7 @@ from app.db.session import get_session
 from app.integrations.garmin.backfill import check_garmin_activity_exists, check_strava_duplicate
 from app.integrations.garmin.client import get_garmin_client
 from app.integrations.garmin.normalize import normalize_garmin_activity
+from app.workouts.workout_factory import WorkoutFactory
 
 
 def _process_history_activity(
@@ -95,8 +96,13 @@ def _process_history_activity(
         )
 
         session.add(activity)
-        session.flush()
-        logger.debug(f"[GARMIN_HISTORY] Stored activity: {external_activity_id}")
+        session.flush()  # Ensure ID is generated
+
+        # PHASE 3: Enforce workout + execution creation (mandatory invariant)
+        workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+        WorkoutFactory.attach_activity(session, workout, activity)
+
+        logger.debug(f"[GARMIN_HISTORY] Stored activity with workout and execution: {external_activity_id}")
     except IntegrityError:
         # Race condition: activity was inserted between check and commit
         session.rollback()

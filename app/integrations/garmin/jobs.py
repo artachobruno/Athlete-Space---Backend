@@ -19,6 +19,7 @@ from app.db.session import get_session
 from app.integrations.garmin.backfill import check_garmin_activity_exists, check_strava_duplicate
 from app.integrations.garmin.client import get_garmin_client
 from app.integrations.garmin.normalize import normalize_garmin_activity
+from app.workouts.workout_factory import WorkoutFactory
 
 
 def process_garmin_activity_event(event_id: str) -> None:
@@ -239,9 +240,12 @@ def _process_activity_for_webhook(
         )
 
         session.add(activity)
-        session.flush()
+        session.flush()  # Ensure ID is generated
 
-        # TODO: Create workout and execution (like Strava sync)
+        # PHASE 3: Enforce workout + execution creation (mandatory invariant)
+        workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+        WorkoutFactory.attach_activity(session, workout, activity)
+
         # Update last_sync_at on integration
         integration = session.execute(
             select(UserIntegration).where(
@@ -252,7 +256,7 @@ def _process_activity_for_webhook(
         if integration:
             integration[0].last_sync_at = datetime.now(timezone.utc)
 
-        logger.debug(f"[GARMIN_SYNC] Stored activity: {external_activity_id}")
+        logger.debug(f"[GARMIN_SYNC] Stored activity with workout and execution: {external_activity_id}")
     except IntegrityError:
         # Race condition: activity was inserted between check and commit
         session.rollback()

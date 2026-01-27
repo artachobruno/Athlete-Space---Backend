@@ -115,7 +115,7 @@ class GarminClient:
                     f"[GARMIN_CLIENT] API error {e.response.status_code} (could not read response body) "
                     f"(params: {params})"
                 )
-            
+
             # Auto-refresh on 401 and retry once
             if e.response.status_code == 401 and self._user_id:
                 logger.warning(f"[GARMIN_CLIENT] Token expired (401), refreshing for user_id={self._user_id}")

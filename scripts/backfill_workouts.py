@@ -242,49 +242,14 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
             db.commit()
             logger.info(f"Step 1 complete: Created {stats['planned_sessions_created']} workouts for planned sessions")
 
-        # Step 2: Activities without workout
-        logger.info("Step 2: Processing activities without workout...")
-        activities_without_workout = db.execute(
-            select(Activity).where(Activity.workout_id.is_(None))
-        ).scalars().all()
-
-        logger.info(f"Found {len(activities_without_workout)} activities without workout")
-
-        for activity in activities_without_workout:
-            stats["activities_processed"] += 1
-            try:
-                if dry_run:
-                    logger.info(
-                        f"[DRY RUN] Would create workout for activity: "
-                        f"id={activity.id}, type={activity.type}, start_time={activity.start_time}"
-                    )
-                    stats["activities_workouts_created"] += 1
-                else:
-                    WorkoutFactory.get_or_create_for_activity(db, activity)
-                    stats["activities_workouts_created"] += 1
-                    logger.debug(
-                        f"Created workout for activity: id={activity.id}"
-                    )
-            except Exception as e:
-                stats["errors"] += 1
-                logger.error(
-                    f"Error creating workout for activity {activity.id}: {e}",
-                    exc_info=True,
-                )
-
-        if not dry_run:
-            db.commit()
-            logger.info(f"Step 2 complete: Created {stats['activities_workouts_created']} workouts for activities")
-
-        # Step 3: Activities without execution
-        logger.info("Step 3: Processing activities without execution...")
+        # Step 2: Activities without workout/execution (Schema v2 compatible)
+        logger.info("Step 2: Processing activities without workout/execution...")
         all_activities = db.execute(select(Activity)).scalars().all()
         activities_without_execution = []
 
+        # Schema v2: Check for executions through workout_executions table
+        # (not through activity.workout_id which doesn't exist in v2)
         for activity in all_activities:
-            if not activity.workout_id:
-                continue
-
             # Check if execution exists
             execution = db.execute(
                 select(WorkoutExecution).where(WorkoutExecution.activity_id == activity.id)
@@ -293,41 +258,42 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
             if not execution:
                 activities_without_execution.append(activity)
 
-        logger.info(f"Found {len(activities_without_execution)} activities without execution")
+        logger.info(f"Found {len(activities_without_execution)} activities without workout/execution")
 
         for activity in activities_without_execution:
+            stats["activities_processed"] += 1
             try:
-                workout = db.execute(
-                    select(Workout).where(Workout.id == activity.workout_id)
-                ).scalar_one_or_none()
-
-                if not workout:
-                    logger.warning(f"Activity {activity.id} has workout_id {activity.workout_id} but workout not found")
-                    stats["errors"] += 1
-                    continue
-
                 if dry_run:
                     logger.info(
-                        f"[DRY RUN] Would create execution for activity: "
-                        f"id={activity.id}, workout_id={workout.id}"
+                        f"[DRY RUN] Would create workout and execution for activity: "
+                        f"id={activity.id}, source={activity.source}, sport={activity.sport}, "
+                        f"start_time={activity.starts_at}"
                     )
+                    stats["activities_workouts_created"] += 1
                     stats["executions_created"] += 1
                 else:
+                    # get_or_create_for_activity creates both workout AND execution
+                    workout = WorkoutFactory.get_or_create_for_activity(db, activity)
+                    # attach_activity ensures execution is properly linked (idempotent)
                     WorkoutFactory.attach_activity(db, workout, activity)
+                    stats["activities_workouts_created"] += 1
                     stats["executions_created"] += 1
                     logger.debug(
-                        f"Created execution for activity: id={activity.id}, workout_id={workout.id}"
+                        f"Created workout and execution for activity: id={activity.id}, workout_id={workout.id}"
                     )
             except Exception as e:
                 stats["errors"] += 1
                 logger.error(
-                    f"Error creating execution for activity {activity.id}: {e}",
+                    f"Error creating workout/execution for activity {activity.id}: {e}",
                     exc_info=True,
                 )
 
         if not dry_run:
             db.commit()
-            logger.info(f"Step 3 complete: Created {stats['executions_created']} executions")
+            logger.info(
+                f"Step 2 complete: Created {stats['activities_workouts_created']} workouts "
+                f"and {stats['executions_created']} executions for activities"
+            )
 
         # Step 4: Generate compliance for all executions
         logger.info("Step 4: Generating compliance for executions...")

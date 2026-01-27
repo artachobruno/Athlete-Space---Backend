@@ -19,6 +19,7 @@ from app.db.session import get_session
 from app.integrations.garmin.backfill import check_garmin_activity_exists, check_strava_duplicate
 from app.integrations.garmin.client import get_garmin_client
 from app.integrations.garmin.normalize import normalize_garmin_activity
+from app.workouts.workout_factory import WorkoutFactory
 
 
 def sync_garmin_activities(user_id: str) -> dict[str, int | str]:
@@ -203,10 +204,13 @@ def _process_activity_for_sync(
         )
 
         session.add(activity)
-        session.flush()
+        session.flush()  # Ensure ID is generated
 
-        # TODO: Create workout and execution (like Strava sync)
-        logger.debug(f"[GARMIN_SYNC] Stored activity: {external_activity_id}")
+        # PHASE 3: Enforce workout + execution creation (mandatory invariant)
+        workout = WorkoutFactory.get_or_create_for_activity(session, activity)
+        WorkoutFactory.attach_activity(session, workout, activity)
+
+        logger.debug(f"[GARMIN_SYNC] Stored activity with workout and execution: {external_activity_id}")
     except IntegrityError:
         session.rollback()
         logger.debug("[GARMIN_SYNC] Duplicate detected during commit (race condition)")

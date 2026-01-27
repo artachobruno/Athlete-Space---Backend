@@ -20,6 +20,7 @@ from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_tok
 from app.db.models import Activity, StravaAccount
 from app.db.models import UserSettings as UserSettingsModel
 from app.db.session import get_session
+from app.integrations.garmin.backfill import check_garmin_duplicate
 from app.integrations.strava.client import StravaClient
 from app.integrations.strava.tokens import refresh_access_token
 from app.metrics.load_computation import AthleteThresholds, compute_activity_tss
@@ -262,6 +263,22 @@ def ingest_activities(
                 metrics_dict: dict = {}
                 if raw_json:
                     metrics_dict["raw_json"] = raw_json
+
+                # Check for Garmin duplicate (same activity synced from Garmin)
+                distance_meters = strava_activity_item.distance
+                existing_garmin = check_garmin_duplicate(session, user_id, start_time, distance_meters)
+
+                if existing_garmin:
+                    logger.info(
+                        f"[INGESTION] Garmin duplicate detected for Strava activity {strava_id}: "
+                        f"garmin_id={existing_garmin.external_activity_id or existing_garmin.source_activity_id}"
+                    )
+                    # Link Strava data to Garmin activity
+                    if existing_garmin.metrics and isinstance(existing_garmin.metrics, dict):
+                        existing_garmin.metrics["strava_activity_id"] = strava_id
+                        session.commit()
+                    skipped_count += 1
+                    continue
 
                 # Normalize sport type and title
                 sport = normalize_sport_type(strava_activity_item.type)

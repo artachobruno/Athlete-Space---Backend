@@ -9,18 +9,88 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import ClassVar
 
-from fit_tool.fit_file_builder import FitFileBuilder
-from fit_tool.profile.messages.file_id_message import FileIdMessage
-from fit_tool.profile.messages.workout_message import WorkoutMessage
-from fit_tool.profile.messages.workout_step_message import WorkoutStepMessage
-from fit_tool.profile.profile_type import (
-    FileType,
-    Intensity,
-    Manufacturer,
-    Sport,
-    WorkoutStepDuration,
-    WorkoutStepTarget,
-)
+try:
+    from fit_tool.fit_file_builder import FitFileBuilder
+    from fit_tool.profile.messages.file_id_message import FileIdMessage
+    from fit_tool.profile.messages.workout_message import WorkoutMessage
+    from fit_tool.profile.messages.workout_step_message import WorkoutStepMessage
+    from fit_tool.profile.profile_type import (
+        FileType,
+        Intensity,
+        Manufacturer,
+        Sport,
+        WorkoutStepDuration,
+        WorkoutStepTarget,
+    )
+    FIT_TOOL_AVAILABLE = True
+except ImportError:
+    FIT_TOOL_AVAILABLE = False
+    # Create stub classes for type annotations when fit-tool is not available
+    class FitFileBuilder:  # type: ignore[no-redef]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def add(self, *args: object) -> None:
+            pass
+
+        def build(self) -> object:
+            return object()
+
+    class FileIdMessage:  # type: ignore[no-redef]
+        type: object = None
+        manufacturer: object = None
+        product: int = 0
+        time_created: int = 0
+        serial_number: int = 0
+
+    class WorkoutMessage:  # type: ignore[no-redef]
+        sport: object = None
+        num_valid_steps: int = 0
+        workout_name: str = ""
+
+    class WorkoutStepMessage:  # type: ignore[no-redef]
+        message_index: int = 0
+        duration_type: object = None
+        duration_time: float = 0.0
+        duration_distance: float = 0.0
+        intensity: object = None
+        target_type: object = None
+        target_hr_zone: object = None
+        target_power_zone: object = None
+        custom_target_value_low: int = 0
+        custom_target_value_high: int = 0
+        workout_step_name: str = ""
+
+    class FileType:  # type: ignore[no-redef]
+        WORKOUT: object = None
+
+    class Intensity:  # type: ignore[no-redef]
+        WARMUP: object = None
+        ACTIVE: object = None
+        REST: object = None
+        COOLDOWN: object = None
+
+    class ManufacturerStub:  # type: ignore[no-redef]
+        value: int = 0
+
+    class Manufacturer:  # type: ignore[no-redef]
+        DEVELOPMENT: ManufacturerStub = ManufacturerStub()
+
+    class Sport:  # type: ignore[no-redef]
+        RUNNING: object = None
+        CYCLING: object = None
+        SWIMMING: object = None
+
+    class WorkoutStepDuration:  # type: ignore[no-redef]
+        TIME: object = None
+        DISTANCE: object = None
+
+    class WorkoutStepTarget:  # type: ignore[no-redef]
+        SPEED: object = None
+        HEART_RATE: object = None
+        POWER: object = None
+        OPEN: object = None
+
 from garmin_fit_sdk import Decoder
 from loguru import logger
 
@@ -74,7 +144,14 @@ class FitWorkoutExporter(WorkoutExporter):
 
         Raises:
             ValueError: If workout cannot be exported (e.g., distance-based steps)
+            ImportError: If fit-tool package is not installed
         """
+        if not FIT_TOOL_AVAILABLE:
+            raise ImportError(
+                "fit-tool package is not installed. "
+                "Install it with: pip install fit-tool "
+                "or from GitHub if available."
+            )
         # Validate steps
         if not steps:
             raise ValueError("Workout must have at least one step")

@@ -55,7 +55,7 @@ dependencies = [
     "gpxpy>=1.5.0",
     "lxml>=5.0.0",
     "garmin-fit-sdk>=21.140.0",
-    "fit-tool>=0.1.0",
+    # "fit-tool>=0.1.0",  # Package not available on PyPI - install manually if needed for FIT export
 ]
 
 [dependency-groups]

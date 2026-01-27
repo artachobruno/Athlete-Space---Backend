@@ -8,6 +8,8 @@ This module implements Garmin OAuth flow:
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -28,54 +30,78 @@ from app.integrations.garmin.oauth import exchange_code_for_token
 
 router = APIRouter(prefix="/integrations/garmin", tags=["integrations", "garmin"])
 
-# In-memory state storage for OAuth flow (CSRF protection)
-# state -> (user_id, timestamp)
-_oauth_states: dict[str, tuple[str, float]] = {}
+# In-memory state storage for OAuth flow (CSRF protection + PKCE)
+# state -> (user_id, code_verifier, timestamp)
+_oauth_states: dict[str, tuple[str, str, float]] = {}
 
 
-def _generate_oauth_state(user_id: str) -> str:
-    """Generate a secure OAuth state token tied to user session.
+def _generate_code_verifier() -> str:
+    """Generate PKCE code verifier (43-128 characters).
+
+    Returns:
+        Code verifier string
+    """
+    # Generate 43-128 character random string (using 64 for good security)
+    return base64.urlsafe_b64encode(secrets.token_bytes(48)).decode('utf-8').rstrip('=')
+
+
+def _generate_code_challenge(verifier: str) -> str:
+    """Generate PKCE code challenge from verifier using S256.
+
+    Args:
+        verifier: Code verifier string
+
+    Returns:
+        Code challenge (SHA256 hash, base64url encoded)
+    """
+    challenge = hashlib.sha256(verifier.encode('utf-8')).digest()
+    return base64.urlsafe_b64encode(challenge).decode('utf-8').rstrip('=')
+
+
+def _generate_oauth_state(user_id: str) -> tuple[str, str]:
+    """Generate OAuth state token and PKCE code verifier.
 
     Args:
         user_id: Current authenticated user ID
 
     Returns:
-        Secure random state token
+        Tuple of (state_token, code_verifier)
     """
     state = secrets.token_urlsafe(32)
+    code_verifier = _generate_code_verifier()
     import time
 
-    _oauth_states[state] = (user_id, time.time())
-    logger.debug(f"[GARMIN_OAUTH] Generated state for user_id={user_id}")
-    return state
+    _oauth_states[state] = (user_id, code_verifier, time.time())
+    logger.debug(f"[GARMIN_OAUTH] Generated state and PKCE verifier for user_id={user_id}")
+    return state, code_verifier
 
 
-def _validate_and_extract_state(state: str) -> tuple[bool, str | None]:
-    """Validate OAuth state and extract user_id.
+def _validate_and_extract_state(state: str) -> tuple[bool, str | None, str | None]:
+    """Validate OAuth state and extract user_id and code_verifier.
 
     Args:
         state: OAuth state token
 
     Returns:
-        Tuple of (is_valid, user_id)
+        Tuple of (is_valid, user_id, code_verifier)
     """
     import time
 
     if state not in _oauth_states:
         logger.warning(f"[GARMIN_OAUTH] Invalid state token: {state[:16]}...")
-        return False, None
+        return False, None, None
 
-    user_id, timestamp = _oauth_states[state]
+    user_id, code_verifier, timestamp = _oauth_states[state]
     # State expires after 10 minutes
     if time.time() - timestamp > 600:
         logger.warning(f"[GARMIN_OAUTH] Expired state token: {state[:16]}...")
         del _oauth_states[state]
-        return False, None
+        return False, None, None
 
     # Clean up used state
     del _oauth_states[state]
     logger.debug(f"[GARMIN_OAUTH] Validated state for user_id={user_id}")
-    return True, user_id
+    return True, user_id, code_verifier
 
 
 def _encrypt_and_store_tokens(
@@ -235,18 +261,21 @@ def garmin_connect(user_id: str = Depends(get_current_user_id)):
             detail="Garmin redirect URI must point to /integrations/garmin/callback",
         )
 
-    # Generate CSRF-protected state
-    state = _generate_oauth_state(user_id)
+    # Generate CSRF-protected state and PKCE verifier
+    state, code_verifier = _generate_oauth_state(user_id)
+    code_challenge = _generate_code_challenge(code_verifier)
 
-    # Build Garmin OAuth URL (update with actual Garmin OAuth endpoint)
-    oauth_url = (
-        "https://connect.garmin.com/oauthConfirm"
-        f"?client_id={settings.garmin_client_id}"
-        "&response_type=code"
-        f"&redirect_uri={settings.garmin_redirect_uri}"
-        "&scope=activity"  # Update with actual Garmin scopes
-        f"&state={state}"
-    )
+    # Build Garmin OAuth URL with PKCE (Garmin requires OAuth 2.0 PKCE)
+    # URL-encode all parameters to ensure exact match with registered redirect_uri
+    params = {
+        "response_type": "code",
+        "client_id": settings.garmin_client_id,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "redirect_uri": settings.garmin_redirect_uri,
+        "state": state,
+    }
+    oauth_url = "https://connect.garmin.com/oauth2Confirm?" + urlencode(params)
 
     logger.info(f"[GARMIN_OAUTH] OAuth URL generated for user_id={user_id}")
     logger.debug(f"[GARMIN_OAUTH] OAuth URL: {oauth_url[:100]}...")
@@ -294,9 +323,9 @@ def garmin_callback(
             detail="Missing authorization code or state",
         )
 
-    # Validate state
-    is_valid, user_id = _validate_and_extract_state(state)
-    if not is_valid or not user_id:
+    # Validate state and get code_verifier for PKCE
+    is_valid, user_id, code_verifier = _validate_and_extract_state(state)
+    if not is_valid or not user_id or not code_verifier:
         logger.error("[GARMIN_OAUTH] Invalid or expired state token")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -317,13 +346,14 @@ def garmin_callback(
         )
         return RedirectResponse(url=f"{settings.frontend_url}/settings?garmin=connected")
 
-    # Exchange code for tokens
+    # Exchange code for tokens (with PKCE code_verifier)
     try:
         token_data = exchange_code_for_token(
             client_id=settings.garmin_client_id,
             client_secret=settings.garmin_client_secret,
             code=code,
             redirect_uri=settings.garmin_redirect_uri,
+            code_verifier=code_verifier,
         )
     except Exception as e:
         logger.error(f"[GARMIN_OAUTH] Token exchange failed: {e}")

@@ -10,14 +10,16 @@ def exchange_code_for_token(
     client_secret: str,
     code: str,
     redirect_uri: str,
+    code_verifier: str,
 ) -> dict:
-    """Exchange Garmin authorization code for access token.
+    """Exchange Garmin authorization code for access token using PKCE.
 
     Args:
         client_id: Garmin application client ID
         client_secret: Garmin application client secret
         code: Authorization code from Garmin callback
         redirect_uri: Redirect URI used in authorization (must match exactly)
+        code_verifier: PKCE code verifier (from authorization request)
 
     Returns:
         Token response dictionary containing access_token, refresh_token, etc.
@@ -25,17 +27,18 @@ def exchange_code_for_token(
     Raises:
         requests.HTTPError: If token exchange fails
     """
-    logger.info("Exchanging Garmin authorization code for access token")
+    logger.info("Exchanging Garmin authorization code for access token (PKCE)")
     try:
-        # Garmin OAuth token endpoint (update with actual Garmin API endpoint)
+        # Garmin OAuth token endpoint (uses PKCE)
         resp = requests.post(
-            "https://connectapi.garmin.com/oauth-service/oauth/exchange/user/2.0",
+            "https://diauth.garmin.com/di-oauth2-service/oauth/token",
             data={
                 "client_id": client_id,
                 "client_secret": client_secret,
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": redirect_uri,
+                "code_verifier": code_verifier,  # PKCE required
             },
             timeout=10,
         )

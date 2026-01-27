@@ -34,6 +34,7 @@ from app.api.auth.auth_google import router as auth_google_router
 from app.api.auth.auth_strava import router as auth_strava_router
 from app.api.coach.athletes import router as coach_athletes_router
 from app.api.export.plan_export import router as export_router
+from app.api.integrations.integrations_garmin import router as integrations_garmin_router
 from app.api.integrations.integrations_strava import router as integrations_strava_router
 from app.api.intelligence.intelligence import router as intelligence_router
 from app.api.intelligence.risks import router as risks_router
@@ -75,6 +76,7 @@ from app.internal.ops.traffic import record_request
 from app.metrics.scheduled_recompute import recompute_metrics_for_all_users
 from app.services.intelligence.scheduler import generate_daily_decisions_for_all_users
 from app.services.intelligence.weekly_report_metrics import update_all_recent_weekly_reports_for_all_users
+from app.webhooks.garmin import router as webhooks_garmin_router
 from app.webhooks.strava import router as webhooks_router
 from app.workouts.routes import router as workouts_router
 from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
@@ -112,8 +114,11 @@ from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_create_athlete_bios_table import migrate_create_athlete_bios_table
 from scripts.migrate_create_workout_execution_summaries import migrate_create_workout_execution_summaries
 from scripts.migrate_create_workout_execution_tables import migrate_create_workout_execution_tables
+from scripts.migrate_activities_garmin_fields import migrate_activities_garmin_fields
 from scripts.migrate_create_workout_exports_table import migrate_create_workout_exports_table
 from scripts.migrate_create_workouts_tables import migrate_create_workouts_tables
+from scripts.migrate_garmin_webhook_events import migrate_garmin_webhook_events
+from scripts.migrate_user_integrations import migrate_user_integrations
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_daily_summary_user_id import migrate_daily_summary_user_id
 from scripts.migrate_drop_activity_id import migrate_drop_activity_id
@@ -588,6 +593,31 @@ def initialize_database() -> None:
     except Exception as e:
         migration_errors.append(f"migrate_create_athlete_bios_table: {e}")
         logger.exception(f"Migration failed: migrate_create_athlete_bios_table - {e}")
+
+    # GARMIN INTEGRATION: User integrations and webhook events tables
+    try:
+        logger.info("Running migration: user_integrations table")
+        migrate_user_integrations()
+        logger.info("✓ Migration completed: user_integrations table")
+    except Exception as e:
+        migration_errors.append(f"migrate_user_integrations: {e}")
+        logger.exception(f"Migration failed: migrate_user_integrations - {e}")
+
+    try:
+        logger.info("Running migration: garmin_webhook_events table")
+        migrate_garmin_webhook_events()
+        logger.info("✓ Migration completed: garmin_webhook_events table")
+    except Exception as e:
+        migration_errors.append(f"migrate_garmin_webhook_events: {e}")
+        logger.exception(f"Migration failed: migrate_garmin_webhook_events - {e}")
+
+    try:
+        logger.info("Running migration: activities Garmin fields")
+        migrate_activities_garmin_fields()
+        logger.info("✓ Migration completed: activities Garmin fields")
+    except Exception as e:
+        migration_errors.append(f"migrate_activities_garmin_fields: {e}")
+        logger.exception(f"Migration failed: migrate_activities_garmin_fields - {e}")
 
     # PHASE 3.1: Extend session_links with reconciliation fields
     try:
@@ -1077,6 +1107,7 @@ app.include_router(coach_athletes_router)
 app.include_router(coach_chat_router)
 app.include_router(export_router)
 app.include_router(ingestion_strava_router)
+app.include_router(integrations_garmin_router)
 app.include_router(integrations_strava_router)
 app.include_router(intelligence_router)
 app.include_router(risks_router)
@@ -1093,6 +1124,7 @@ app.include_router(ai_ops_router)
 app.include_router(state_router)
 app.include_router(training_router)
 app.include_router(plan_revisions_router)
+app.include_router(webhooks_garmin_router)
 app.include_router(webhooks_router)
 app.include_router(workouts_router)
 

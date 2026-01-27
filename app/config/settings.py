@@ -144,6 +144,24 @@ class Settings(BaseSettings):
         description="Email address to receive support requests",
     )
 
+    # Garmin Integration settings
+    garmin_enabled: bool = Field(
+        default=False,
+        validation_alias="GARMIN_ENABLED",
+        description="Enable Garmin OAuth and integration features",
+    )
+    garmin_webhooks_enabled: bool = Field(
+        default=False,
+        validation_alias="GARMIN_WEBHOOKS_ENABLED",
+        description="Enable Garmin webhook processing",
+    )
+    garmin_client_id: str = Field(default="", validation_alias="GARMIN_CLIENT_ID")
+    garmin_client_secret: str = Field(default="", validation_alias="GARMIN_CLIENT_SECRET")
+    garmin_redirect_uri: str = Field(
+        default="http://localhost:8000/integrations/garmin/callback",
+        validation_alias="GARMIN_REDIRECT_URI",
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, value: str) -> str:

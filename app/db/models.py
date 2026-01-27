@@ -156,6 +156,12 @@ class Activity(Base):
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     source: Mapped[str] = mapped_column(String, nullable=False, default="strava")  # CHECK: 'strava', 'manual', 'import'
     source_activity_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Provider's activity ID (text)
+    source_provider: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )  # Provider name ('garmin', 'strava', etc.)
+    external_activity_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )  # External activity ID for idempotent ingestion
     sport: Mapped[str] = mapped_column(String, nullable=False, index=True)  # CHECK: 'run', 'ride', 'swim', 'strength', 'walk', 'other'
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -198,6 +204,7 @@ class Activity(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "source", "source_activity_id", name="uq_activity_user_source_id"),
+        UniqueConstraint("source_provider", "external_activity_id", name="uq_activity_source_provider_external_id"),
         Index("idx_activities_user_time", "user_id", "starts_at"),  # Common query: user activities by date range
     )
 
@@ -334,6 +341,78 @@ class GoogleAccount(Base):
     refresh_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class UserIntegration(Base):
+    """Generic user integration table for OAuth providers (Garmin, etc.).
+
+    Supports idempotent ingestion and multiple integrations per user.
+    Stores encrypted OAuth tokens and integration metadata.
+
+    Fields:
+    - id: UUID primary key
+    - user_id: Foreign key to users.id
+    - provider: Provider name ('garmin', etc.)
+    - provider_user_id: Provider's user ID (string)
+    - access_token: Encrypted access token (encrypted at rest)
+    - refresh_token: Encrypted refresh token (encrypted at rest)
+    - token_expires_at: Token expiration timestamp (TIMESTAMPTZ)
+    - scopes: OAuth scopes granted (JSONB)
+    - connected_at: Connection timestamp
+    - revoked_at: Revocation timestamp (nullable)
+    - last_sync_at: Last successful sync timestamp (nullable)
+    """
+
+    __tablename__ = "user_integrations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String, nullable=False, index=True)  # 'garmin', etc.
+    provider_user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    access_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
+    refresh_token: Mapped[str] = mapped_column(String, nullable=False)  # Encrypted
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scopes: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # JSONB: OAuth scopes
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider", name="uq_user_integration_user_provider"),
+        Index("idx_user_integration_provider_user", "provider", "provider_user_id"),
+    )
+
+
+class GarminWebhookEvent(Base):
+    """Garmin webhook events storage.
+
+    Stores raw webhook payloads for processing.
+    Rules: always ACK < 1s, no logic inline.
+
+    Fields:
+    - id: UUID primary key
+    - event_type: Event type (e.g., 'activity.created')
+    - payload: Raw webhook payload (JSONB)
+    - received_at: When webhook was received
+    - processed_at: When event was processed (nullable)
+    - status: Processing status ('pending', 'processed', 'failed')
+    """
+
+    __tablename__ = "garmin_webhook_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    event_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)  # JSONB: Raw webhook payload
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="pending", index=True
+    )  # 'pending', 'processed', 'failed'
 
 
 class DailyTrainingLoad(Base):

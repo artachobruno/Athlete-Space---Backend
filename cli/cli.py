@@ -51,9 +51,10 @@ from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.services.chat_service import process_coach_chat
 from app.config.settings import settings
 from app.core.conversation_id import generate_conversation_id
-from app.db.models import Athlete, AthleteProfile, PlannedSession, StravaAccount, User
+from app.db.models import Athlete, AthleteProfile, PlannedSession, StravaAccount, User, UserIntegration
 from app.db.session import get_session
 from app.domains.training_plan.template_loader import initialize_template_library_from_cache
+from app.integrations.garmin.backfill import backfill_garmin_activities
 from scripts.migrate_activities_garmin_fields import migrate_activities_garmin_fields
 from scripts.migrate_garmin_webhook_events import migrate_garmin_webhook_events
 from scripts.migrate_user_integrations import migrate_user_integrations
@@ -682,6 +683,89 @@ async def _run_orchestrator_single(
         logger.exception(f"Orchestrator error: {e}")
         console.print(f"[red]Error:[/red] {e}", style="bold red")
         raise
+
+
+@app.command()
+def backfill_garmin(
+    user_id: str = typer.Argument(..., help="User ID (UUID) to backfill for"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force backfill even if recently synced"),
+    days: int = typer.Option(None, "--days", "-d", help="Number of days to backfill (default: GARMIN_BACKFILL_DAYS or 90)"),
+) -> None:
+    """Trigger Garmin activities backfill for a user.
+
+    Examples:
+        # Backfill last 90 days (default)
+        python cli/cli.py backfill-garmin <user_id>
+
+        # Force backfill even if recently synced
+        python cli/cli.py backfill-garmin <user_id> --force
+
+        # Backfill last 30 days
+        python cli/cli.py backfill-garmin <user_id> --days 30
+    """
+    from datetime import datetime, timedelta, timezone
+
+    console.print(f"[bold cyan]Starting Garmin backfill for user_id={user_id}...[/bold cyan]\n")
+
+    # Verify user has Garmin integration
+    try:
+        with get_session() as session:
+            integration = session.execute(
+                select(UserIntegration).where(
+                    UserIntegration.user_id == user_id,
+                    UserIntegration.provider == "garmin",
+                    UserIntegration.revoked_at.is_(None),
+                )
+            ).first()
+
+            if not integration:
+                console.print(f"[red]Error:[/red] No active Garmin integration found for user_id={user_id}")
+                raise typer.Exit(1)
+
+            console.print(f"[green]✓ Found Garmin integration for user_id={user_id}[/green]\n")
+    except Exception as e:
+        console.print(f"[red]Error checking integration:[/red] {e}")
+        logger.exception("Failed to check Garmin integration")
+        raise typer.Exit(1) from e
+
+    # Calculate date range if days specified
+    from_date = None
+    to_date = None
+    if days:
+        to_date = datetime.now(timezone.utc)
+        from_date = to_date - timedelta(days=days)
+        console.print(f"[cyan]Backfill window:[/cyan] {from_date.date()} to {to_date.date()} ({days} days)\n")
+
+    # Run backfill
+    try:
+        console.print("[yellow]Running backfill...[/yellow]")
+        result = backfill_garmin_activities(
+            user_id=user_id,
+            from_date=from_date,
+            to_date=to_date,
+            force=force,
+        )
+
+        console.print("\n[bold green]Backfill Results:[/bold green]")
+        console.print(f"  Status: {result.get('status', 'unknown')}")
+        console.print(f"  Imported: {result.get('ingested_count', 0)}")
+        console.print(f"  Skipped: {result.get('skipped_count', 0)}")
+        console.print(f"    - Duplicates: {result.get('duplicate_count', 0)}")
+        console.print(f"    - Strava duplicates: {result.get('strava_duplicate_count', 0)}")
+        console.print(f"  Errors: {result.get('error_count', 0)}")
+        console.print(f"  Total fetched: {result.get('total_fetched', 0)}")
+
+        if result.get("error_count", 0) > 0:
+            console.print(f"\n[yellow]⚠️  Backfill completed with {result.get('error_count')} errors[/yellow]")
+            console.print("[yellow]Check logs for details[/yellow]")
+            raise typer.Exit(1)
+
+        console.print("\n[bold green]✓ Backfill completed successfully![/bold green]")
+
+    except Exception as e:
+        console.print(f"[bold red]✗ Backfill failed:[/bold red] {e}")
+        logger.exception("Garmin backfill failed")
+        raise typer.Exit(1) from e
 
 
 @app.command()

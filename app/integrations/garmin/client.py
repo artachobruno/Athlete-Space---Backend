@@ -86,11 +86,17 @@ class GarminClient:
             "offset": offset,
         }
 
-        # Garmin API requires both startDate and endDate if either is provided
-        # Use epoch milliseconds format (Garmin API expects this)
+        # Garmin API date parameters
+        # Try multiple formats: the API might expect different parameter names or formats
         if start_date and end_date:
-            params["startDate"] = str(int(start_date.timestamp() * 1000))
-            params["endDate"] = str(int(end_date.timestamp() * 1000))
+            # Try ISO 8601 date format first (YYYY-MM-DD)
+            # Some Garmin API versions expect this format
+            params["startDate"] = start_date.strftime("%Y-%m-%d")
+            params["endDate"] = end_date.strftime("%Y-%m-%d")
+            
+            # Also try alternative parameter names (some API versions use these)
+            # params["start"] = start_date.strftime("%Y-%m-%d")
+            # params["end"] = end_date.strftime("%Y-%m-%d")
         elif start_date or end_date:
             # If only one is provided, don't send either (API requires both)
             logger.warning(
@@ -124,8 +130,24 @@ class GarminClient:
                     f"(params: {params})"
                 )
 
+            # If 400 error with date parameters, try without dates as fallback
+            if e.response.status_code == 400 and "startDate" in params:
+                logger.warning(
+                    "[GARMIN_CLIENT] Date parameters rejected by API, trying without date filter "
+                    "(will filter client-side)"
+                )
+                # Remove date parameters and retry
+                fallback_params = {k: v for k, v in params.items() if k not in ("startDate", "endDate")}
+                resp = httpx.get(
+                    GARMIN_ACTIVITIES_URL,
+                    headers=self._headers(),
+                    params=fallback_params,
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                # Note: We'll filter by date client-side in yield_activity_summaries if needed
             # Auto-refresh on 401 and retry once
-            if e.response.status_code == 401 and self._user_id:
+            elif e.response.status_code == 401 and self._user_id:
                 logger.warning(f"[GARMIN_CLIENT] Token expired (401), refreshing for user_id={self._user_id}")
                 self._access_token = get_garmin_access_token(self._user_id)
                 # Retry once
@@ -255,6 +277,52 @@ class GarminClient:
                     logger.info(f"[GARMIN_CLIENT] No more activities (page {page + 1} was empty)")
                     break
 
+                # Filter by date client-side if date parameters were not used
+                # (API might not support date filtering, so we filter after fetching)
+                if start_date or end_date:
+                    filtered_activities = []
+                    for activity in activities:
+                        # Extract activity date from various possible fields
+                        activity_date_str = (
+                            activity.get("startTimeGMT")
+                            or activity.get("start_time_gmt")
+                            or activity.get("startTime")
+                            or activity.get("start_time")
+                        )
+                        if not activity_date_str:
+                            # Skip if no date found
+                            continue
+
+                        try:
+                            # Parse date (handle various formats)
+                            if isinstance(activity_date_str, str):
+                                # Try ISO format first
+                                if "T" in activity_date_str:
+                                    activity_date = datetime.fromisoformat(
+                                        activity_date_str.replace("Z", "+00:00")
+                                    )
+                                else:
+                                    # Try date-only format
+                                    activity_date = datetime.strptime(activity_date_str, "%Y-%m-%d").replace(
+                                        tzinfo=timezone.utc
+                                    )
+                            else:
+                                # Assume it's already a datetime or timestamp
+                                activity_date = datetime.fromtimestamp(activity_date_str, tz=timezone.utc)
+
+                            # Filter by date range
+                            if start_date and activity_date < start_date:
+                                continue
+                            if end_date and activity_date > end_date:
+                                continue
+
+                            filtered_activities.append(activity)
+                        except Exception as e:
+                            logger.warning(f"[GARMIN_CLIENT] Failed to parse activity date: {e}, skipping activity")
+                            continue
+
+                    activities = filtered_activities
+
                 total_fetched += len(activities)
                 logger.info(f"[GARMIN_CLIENT] Fetched {len(activities)} activities from page {page + 1}")
 
@@ -264,6 +332,45 @@ class GarminClient:
                 if len(activities) < per_page:
                     logger.info(f"[GARMIN_CLIENT] Reached end of activities (got {len(activities)} < {per_page})")
                     break
+
+                # If filtering by date client-side and we've gone past start_date, stop
+                # (activities are typically returned in reverse chronological order)
+                if start_date and activities:
+                    # Check the oldest activity in this batch
+                    oldest_activity = None
+                    for activity in activities:
+                        activity_date_str = (
+                            activity.get("startTimeGMT")
+                            or activity.get("start_time_gmt")
+                            or activity.get("startTime")
+                            or activity.get("start_time")
+                        )
+                        if activity_date_str:
+                            try:
+                                if isinstance(activity_date_str, str):
+                                    if "T" in activity_date_str:
+                                        activity_date = datetime.fromisoformat(
+                                            activity_date_str.replace("Z", "+00:00")
+                                        )
+                                    else:
+                                        activity_date = datetime.strptime(activity_date_str, "%Y-%m-%d").replace(
+                                            tzinfo=timezone.utc
+                                        )
+                                else:
+                                    activity_date = datetime.fromtimestamp(activity_date_str, tz=timezone.utc)
+
+                                if oldest_activity is None or activity_date < oldest_activity:
+                                    oldest_activity = activity_date
+                            except Exception:
+                                pass
+
+                    # If oldest activity is before start_date, we've gone too far back
+                    if oldest_activity and oldest_activity < start_date:
+                        logger.info(
+                            f"[GARMIN_CLIENT] Reached start_date boundary "
+                            f"(oldest activity: {oldest_activity.date()} < {start_date.date()})"
+                        )
+                        break
 
                 page += 1
 

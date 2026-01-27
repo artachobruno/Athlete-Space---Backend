@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,12 +45,13 @@ except ImportError:
         sys.path.insert(0, str(_project_root))
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.coach.agents.orchestrator_deps import CoachDeps
 from app.coach.services.chat_service import process_coach_chat
 from app.config.settings import settings
 from app.core.conversation_id import generate_conversation_id
-from app.db.models import AthleteProfile, StravaAccount, User
+from app.db.models import Athlete, AthleteProfile, PlannedSession, StravaAccount, User
 from app.db.session import get_session
 from app.domains.training_plan.template_loader import initialize_template_library_from_cache
 
@@ -109,6 +111,7 @@ def _setup_logging(debug: bool = False) -> None:
     )
 
     # File handler with rotation
+    # Note: All log messages (including full prompts and responses) are captured in the message field
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)
 
@@ -122,6 +125,7 @@ def _setup_logging(debug: bool = False) -> None:
         rotation="10 MB",
         retention="7 days",
         compression="zip",
+        encoding="utf-8",  # Ensure UTF-8 encoding for proper character support
     )
 
     logger.info(f"Logging initialized (level={log_level}, file={log_file})")
@@ -305,6 +309,61 @@ def check_db() -> None:
         raise typer.Exit(1)
 
 
+def _resolve_user_id(session: Session, user_id: str) -> str:
+    """Resolve user_id from various identifiers.
+
+    Tries multiple strategies:
+    1. Email lookup
+    2. If "cli-user", lookup by athlete_id=1
+
+    Args:
+        session: Database session
+        user_id: User identifier (email, "cli-user", etc.)
+
+    Returns:
+        Resolved user_id (UUID string)
+
+    Raises:
+        typer.Exit: If user_id cannot be resolved
+    """
+    # Strategy 1: Try to look it up by email
+    console.print(f"[yellow]Looking up user_id for: {user_id}[/yellow]")
+    user = session.execute(select(User).where(User.email == user_id)).scalar_one_or_none()
+    if user:
+        resolved_user_id = user.id
+        console.print(f"[green]Found user_id: {resolved_user_id}[/green]")
+        return resolved_user_id
+
+    # Strategy 2: If "cli-user", try to find user_id from athlete_id=1
+    if user_id in {"cli-user", DEFAULT_USER_ID}:
+        console.print("[yellow]Looking up user_id for athlete_id=1 (cli-user)...[/yellow]")
+        # Try StravaAccount first (athlete_id is stored as string)
+        strava_account = session.execute(
+            select(StravaAccount).where(StravaAccount.athlete_id == "1")
+        ).scalar_one_or_none()
+        if strava_account:
+            resolved_user_id = str(strava_account.user_id)
+            console.print(f"[green]Found user_id from StravaAccount: {resolved_user_id}[/green]")
+            return resolved_user_id
+
+        # If no StravaAccount, try to find any user with planned sessions
+        # This is a fallback for cli-user
+        console.print("[yellow]Trying to find user_id from planned sessions...[/yellow]")
+        planned_session = session.execute(select(PlannedSession)).scalar_one_or_none()
+        if planned_session:
+            resolved_user_id = str(planned_session.user_id)
+            console.print(f"[green]Found user_id from PlannedSession: {resolved_user_id}[/green]")
+            return resolved_user_id
+
+    # If we get here, couldn't resolve
+    console.print(
+        f"[red]Error:[/red] Could not find user_id for '{user_id}'. "
+        f"Please provide a valid UUID or email address.",
+        style="bold red"
+    )
+    raise typer.Exit(1) from None
+
+
 def _get_athlete_id_from_user_id(user_id: str) -> tuple[int | None, bool]:
     """Get athlete_id from user_id via AthleteProfile or StravaAccount.
 
@@ -336,6 +395,65 @@ def _get_athlete_id_from_user_id(user_id: str) -> tuple[int | None, bool]:
     except Exception as e:
         logger.warning(f"Failed to look up athlete_id from user_id: {e}")
         return (None, False)
+
+
+@app.command()
+def delete_planned_sessions(
+    user_id: str = typer.Option(DEFAULT_USER_ID, "--user-id", help="User ID (UUID) or email"),
+    confirm: bool = typer.Option(False, "--confirm", help="Confirm deletion (required for safety)"),
+) -> None:
+    """Delete all planned sessions for a user.
+
+    This will permanently delete all planned training sessions for the specified user.
+    Use with caution as this action cannot be undone.
+
+    The user_id can be either:
+    - A UUID (e.g., "805f6d98-c1eb-4fef-8531-410fd4879979")
+    - An email address (will look up the user_id)
+    """
+    if not confirm:
+        console.print("[red]Error:[/red] --confirm flag is required for safety", style="bold red")
+        console.print("Usage: delete-planned-sessions --user-id <user_id> --confirm")
+        raise typer.Exit(1)
+
+    try:
+        with get_session() as session:
+            # Resolve user_id: if not a UUID, try to look it up by email or athlete_id
+            resolved_user_id = user_id
+            try:
+                # Try to validate as UUID
+                uuid.UUID(user_id)
+            except ValueError:
+                # Not a UUID, try different lookup strategies
+                resolved_user_id = _resolve_user_id(session, user_id)
+
+            # Count planned sessions before deletion
+            count_query = select(PlannedSession).where(PlannedSession.user_id == resolved_user_id)
+            planned_sessions = session.scalars(count_query).all()
+            count = len(planned_sessions)
+
+            if count == 0:
+                console.print(f"[yellow]No planned sessions found for user_id: {resolved_user_id}[/yellow]")
+                return
+
+            console.print(f"[yellow]Found {count} planned sessions for user_id: {resolved_user_id}[/yellow]")
+            console.print("[red]Deleting all planned sessions...[/red]")
+
+            # Delete all planned sessions
+            delete_query = select(PlannedSession).where(PlannedSession.user_id == resolved_user_id)
+            deleted_count = 0
+            for planned_session in session.scalars(delete_query).all():
+                session.delete(planned_session)
+                deleted_count += 1
+
+            session.commit()
+            console.print(f"[green]Successfully deleted {deleted_count} planned sessions[/green]")
+            logger.info(f"Deleted {deleted_count} planned sessions for user_id={resolved_user_id}")
+
+    except Exception as e:
+        logger.exception(f"Error deleting planned sessions: {e}")
+        console.print(f"[red]Error:[/red] {e}", style="bold red")
+        raise typer.Exit(1) from e
 
 
 @app.command()

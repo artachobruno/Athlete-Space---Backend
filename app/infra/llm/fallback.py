@@ -77,6 +77,32 @@ def _get_recovery_duration(params: dict[str, str | int | float | list[str | int 
     return 2
 
 
+def _get_median_from_range(
+    params: dict[str, str | int | float | list[str | int | float]],
+    key: str,
+    default: float,
+) -> float:
+    """Get median value from a range parameter.
+
+    Args:
+        params: Template parameters
+        key: Parameter key (e.g., "warmup_mi_range")
+        default: Default value if not found
+
+    Returns:
+        Median value from range (default if not found)
+    """
+    value = params.get(key)
+    if isinstance(value, list) and len(value) >= 2:
+        sorted_values = sorted([float(v) for v in value if isinstance(v, (int, float))])
+        if sorted_values:
+            mid = len(sorted_values) // 2
+            return sorted_values[mid]
+    if isinstance(value, (int, float)):
+        return float(value)
+    return default
+
+
 def _estimate_warmup_cooldown(allocated_distance: float) -> tuple[float, float]:
     """Estimate warmup and cooldown distances.
 
@@ -134,17 +160,69 @@ def generate_fallback_session_text(
     work_duration = _get_median_duration(input_data.params)
     recovery_duration = _get_recovery_duration(input_data.params)
 
-    # Estimate warmup/cooldown
-    warmup_mi, cooldown_mi = _estimate_warmup_cooldown(input_data.allocated_distance_mi)
-
     # Build main workout description based on template kind
     template_kind = input_data.template_kind.lower()
 
-    if "interval" in template_kind or "cruise" in template_kind:
-        # Interval-style workout
+    # Initialize variables that will be set in each branch
+    total_distance_mi = input_data.allocated_distance_mi
+    warmup_mi = 0.0
+    cooldown_mi = 0.0
+
+    if "race" in template_kind:
+        # Race day - extract race distance and warmup/cooldown from params
+        race_distance_km = input_data.params.get("race_distance_km", 5.0)
+        if isinstance(race_distance_km, (int, float)):
+            race_distance_mi = float(race_distance_km) * 0.621371
+        else:
+            race_distance_mi = 5.0 * 0.621371
+
+        warmup_mi = _get_median_from_range(input_data.params, "warmup_mi_range", 1.5)
+        cooldown_mi = _get_median_from_range(input_data.params, "cooldown_mi_range", 1.0)
+
         description = (
             f"{warmup_mi:.1f} mi warm up. "
-            f"{reps} x {work_duration} min at threshold pace with {recovery_duration} min float jog recoveries. "
+            f"{race_distance_mi:.1f} mi race effort. "
+            f"{cooldown_mi:.1f} mi cool down."
+        )
+        main_sets = [
+            {
+                "type": "race",
+                "distance_mi": race_distance_mi,
+            }
+        ]
+        # Race effort is high intensity - estimate based on race distance
+        # 5K ~20 min, 10K ~40 min, half ~90 min, full ~180 min
+        if isinstance(race_distance_km, (int, float)):
+            race_km = float(race_distance_km)
+        else:
+            race_km = 5.0
+        if race_km <= 5.0:
+            hard_minutes = 20
+        elif race_km <= 10.0:
+            hard_minutes = 40
+        elif race_km <= 21.1:
+            hard_minutes = 90
+        else:
+            hard_minutes = 180
+        intensity_minutes = {"R": hard_minutes}
+        total_distance_mi = warmup_mi + race_distance_mi + cooldown_mi
+
+    elif "interval" in template_kind or "cruise" in template_kind:
+        # Interval-style workout - check intensity zone
+        # Estimate warmup/cooldown for intervals
+        warmup_mi, cooldown_mi = _estimate_warmup_cooldown(input_data.allocated_distance_mi)
+
+        intensity = input_data.params.get("intensity", "T")
+        if isinstance(intensity, str) and intensity.upper() == "I":
+            pace_description = "at VO2 max pace"
+            intensity_key = "I"
+        else:
+            pace_description = "at threshold pace"
+            intensity_key = "T"
+
+        description = (
+            f"{warmup_mi:.1f} mi warm up. "
+            f"{reps} x {work_duration} min {pace_description} with {recovery_duration} min float jog recoveries. "
             f"{cooldown_mi:.1f} mi cool down."
         )
         main_sets = [
@@ -156,10 +234,12 @@ def generate_fallback_session_text(
             }
         ]
         hard_minutes = reps * work_duration
-        intensity_minutes = {"T": hard_minutes}
+        intensity_minutes = {intensity_key: hard_minutes}
+        total_distance_mi = input_data.allocated_distance_mi
 
     elif "tempo" in template_kind or "steady" in template_kind:
         # Tempo/steady workout
+        warmup_mi, cooldown_mi = _estimate_warmup_cooldown(input_data.allocated_distance_mi)
         main_distance = input_data.allocated_distance_mi - warmup_mi - cooldown_mi
         description = (
             f"{warmup_mi:.1f} mi warm up. "
@@ -175,47 +255,60 @@ def generate_fallback_session_text(
         # Estimate tempo pace as ~7 min/mi for hard minutes calculation
         hard_minutes = int(main_distance * 7)
         intensity_minutes = {"T": hard_minutes}
+        total_distance_mi = input_data.allocated_distance_mi
 
     elif "easy" in template_kind or "recovery" in template_kind:
         # Easy/recovery run
-        total_distance = input_data.allocated_distance_mi
-        description = f"{total_distance:.1f} mi easy run."
+        total_distance_mi = input_data.allocated_distance_mi
+        description = f"{total_distance_mi:.1f} mi easy run."
         main_sets = [
             {
                 "type": "easy",
-                "distance_mi": total_distance,
+                "distance_mi": total_distance_mi,
             }
         ]
         hard_minutes = 0
         intensity_minutes = {}
+        warmup_mi = 0.0
+        cooldown_mi = 0.0
 
     elif "long" in template_kind:
         # Long run
-        total_distance = input_data.allocated_distance_mi
-        description = f"{total_distance:.1f} mi long run at easy pace."
+        total_distance_mi = input_data.allocated_distance_mi
+        description = f"{total_distance_mi:.1f} mi long run at easy pace."
         main_sets = [
             {
                 "type": "long",
-                "distance_mi": total_distance,
+                "distance_mi": total_distance_mi,
             }
         ]
         hard_minutes = 0
         intensity_minutes = {}
+        warmup_mi = 0.0
+        cooldown_mi = 0.0
 
     else:
-        # Generic workout
-        main_distance = input_data.allocated_distance_mi - warmup_mi - cooldown_mi
-        description = (
-            f"{warmup_mi:.1f} mi warm up. "
-            f"{main_distance:.1f} mi main work. "
-            f"{cooldown_mi:.1f} mi cool down."
-        )
-        main_sets = [
-            {
-                "type": "main",
-                "distance_mi": main_distance,
-            }
-        ]
+        # Generic workout (fallback for unknown template kinds)
+        warmup_mi, cooldown_mi = _estimate_warmup_cooldown(input_data.allocated_distance_mi)
+        if input_data.allocated_distance_mi > 0:
+            main_distance = input_data.allocated_distance_mi - warmup_mi - cooldown_mi
+            description = (
+                f"{warmup_mi:.1f} mi warm up. "
+                f"{main_distance:.1f} mi main work. "
+                f"{cooldown_mi:.1f} mi cool down."
+            )
+            main_sets = [
+                {
+                    "type": "main",
+                    "distance_mi": main_distance,
+                }
+            ]
+            total_distance_mi = input_data.allocated_distance_mi
+        else:
+            # Zero distance - likely a race day or rest day
+            description = "Rest day or race day."
+            main_sets = []
+            total_distance_mi = 0.0
         hard_minutes = 0
         intensity_minutes = {}
 
@@ -228,7 +321,7 @@ def generate_fallback_session_text(
 
     # Build computed metrics
     computed = {
-        "total_distance_mi": input_data.allocated_distance_mi,
+        "total_distance_mi": total_distance_mi,
         "hard_minutes": hard_minutes,
         "intensity_minutes": intensity_minutes,
     }
@@ -248,7 +341,9 @@ def generate_fallback_session_text(
 
     # Map template_kind to intent
     intent = "easy"  # Default intent
-    if "interval" in template_kind_lower or "cruise" in template_kind_lower:
+    if "race" in template_kind_lower:
+        intent = "race"
+    elif "interval" in template_kind_lower or "cruise" in template_kind_lower:
         intent = "intervals"
     elif "tempo" in template_kind_lower or "steady" in template_kind_lower:
         intent = "tempo"

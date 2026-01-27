@@ -47,6 +47,18 @@ class TemplateSelectionError(PlannerError):
     pass
 
 
+class PlannerInvariantError(PlannerError):
+    """Raised when a planning invariant is violated between stages."""
+
+    pass
+
+
+class PlannerAbort(PlannerError):
+    """Raised when plan generation must be aborted (e.g., zero sessions created)."""
+
+    pass
+
+
 class TemplateValidationError(PlannerError):
     """Raised when template validation fails (e.g., missing templates or insufficient coverage)."""
 

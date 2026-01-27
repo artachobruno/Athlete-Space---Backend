@@ -17,6 +17,7 @@ No recursion. No repair. No retries. No mutations after generation.
 """
 
 import asyncio
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
@@ -56,6 +57,123 @@ from app.domains.training_plan.session_template_selector import select_templates
 from app.domains.training_plan.session_text_generator import generate_session_text
 from app.domains.training_plan.volume_allocator import allocate_week_volume
 from app.planner.calendar_persistence import PersistResult, persist_plan
+from app.planner.errors import PlannerAbort, PlannerInvariantError
+from app.planner.enums import DayType
+from app.planner.plan_validator import validate_plan_integrity
+
+
+def _log_plan_summary(
+    ctx: PlanContext,
+    runtime_ctx: PlanRuntimeContext,
+    macro_weeks: list[MacroWeek],
+    week_structures: list[WeekStructure],
+    planned_weeks: list[PlannedWeek],
+    persist_result: PersistResult,
+    plan_id: str,
+) -> None:
+    """Log comprehensive plan generation summary.
+
+    Args:
+        ctx: Plan context
+        runtime_ctx: Runtime context with philosophy
+        macro_weeks: Macro weeks from B2
+        week_structures: Week structures from B3
+        planned_weeks: Planned weeks with sessions
+        persist_result: Persistence result
+        plan_id: Plan ID
+    """
+    # Build summary dictionary
+    summary: dict[str, object] = {
+        "plan_id": plan_id,
+        "plan_type": ctx.plan_type.value,
+        "intent": ctx.intent.value,
+        "weeks": ctx.weeks,
+        "race_distance": ctx.race_distance.value if ctx.race_distance else None,
+        "target_date": ctx.target_date,
+        "philosophy": {
+            "philosophy_id": runtime_ctx.philosophy.philosophy_id,
+            "domain": runtime_ctx.philosophy.domain,
+            "audience": runtime_ctx.philosophy.audience,
+        },
+        "persistence": {
+            "created": persist_result.created,
+            "updated": persist_result.updated,
+            "skipped": persist_result.skipped,
+        },
+        "weeks_detail": [],
+    }
+
+    # Add week-by-week details
+    for week_idx, (macro_week, week_structure, planned_week) in enumerate(
+        zip(macro_weeks, week_structures, planned_weeks, strict=False)
+    ):
+        # Calculate total weekly mileage
+        total_mileage = sum(
+            session.distance
+            for session in planned_week.sessions
+            if isinstance(session, PlannedSession) and session.distance > 0
+        )
+
+        # Build day details
+        days_detail: list[dict[str, object]] = []
+        for session in planned_week.sessions:
+            if isinstance(session, PlannedSession):
+                day_detail: dict[str, object] = {
+                    "day_index": session.day_index,
+                    "day_type": session.day_type.value,
+                    "distance": session.distance,
+                    "template": {
+                        "template_id": session.template.template_id,
+                        "kind": session.template.kind,
+                        "description_key": session.template.description_key,
+                        "params": session.template.params,
+                        "constraints": session.template.constraints,
+                        "tags": session.template.tags,
+                    },
+                }
+
+                # Add text output if present
+                if session.text_output:
+                    day_detail["text_output"] = {
+                        "title": session.text_output.title,
+                        "description": session.text_output.description,
+                        "structure": session.text_output.structure,
+                        "computed": session.text_output.computed,
+                    }
+
+                days_detail.append(day_detail)
+
+        week_detail: dict[str, object] = {
+            "week_index": planned_week.week_index,
+            "focus": planned_week.focus.value,
+            "macro_focus": macro_week.focus.value,
+            "macro_total_distance": macro_week.total_distance,
+            "total_mileage": total_mileage,
+            "structure_id": week_structure.structure_id,
+            "structure_philosophy": week_structure.philosophy_id,
+            "days": days_detail,
+        }
+
+        summary["weeks_detail"].append(week_detail)
+
+    # Log as JSON for easy parsing
+    summary_json = json.dumps(summary, indent=2, default=str)
+    # Use opt(raw=True) to prevent loguru from interpreting curly braces in JSON as format placeholders
+    logger.opt(raw=True).debug(
+        f"Plan Generation Summary (plan_id={plan_id})\n{summary_json}"
+    )
+    logger.debug(
+        "Plan Generation Summary metadata",
+        plan_id=plan_id,
+        plan_type=ctx.plan_type.value,
+        race_distance=ctx.race_distance.value if ctx.race_distance else None,
+        target_date=ctx.target_date,
+        weeks=ctx.weeks,
+        philosophy_id=runtime_ctx.philosophy.philosophy_id,
+        created=persist_result.created,
+        summary=summary,
+        summary_json=summary_json,
+    )
 
 
 async def _generate_week_with_text(
@@ -90,6 +208,7 @@ async def _generate_week_with_text(
                 "race_distance": runtime_ctx.plan.race_distance.value if runtime_ctx.plan.race_distance else "season",
                 "phase": phase,
                 "week_index": week_idx + 1,
+                "is_plan_creation": True,  # Fix 2: Mark as plan creation (fail hard on LLM errors)
             }
 
             # Parallelize session text generation within the week
@@ -102,6 +221,13 @@ async def _generate_week_with_text(
             sessions_with_text = await asyncio.gather(
                 *[generate_session_with_text(session) for session in planned_sessions]
             )
+            
+            # Fix 1: Hard invariant after B6 - all sessions must have text_output
+            for session in sessions_with_text:
+                if session.text_output is None:
+                    raise PlannerInvariantError(
+                        f"Session text generation failed for week {week_idx + 1}, day {session.day_index}"
+                    )
 
             planned_week = PlannedWeek(
                 week_index=week_idx + 1,
@@ -167,7 +293,7 @@ async def execute_canonical_pipeline(
 
     # B2 → B2.5 → B3: Build plan structure
     logger.debug("B2-B3: Building plan structure")
-    runtime_ctx, week_structures = await build_plan_structure(
+    runtime_ctx, week_structures, macro_weeks = await build_plan_structure(
         ctx=ctx,
         athlete_state=athlete_state,
         user_preference=None,
@@ -209,6 +335,20 @@ async def execute_canonical_pipeline(
                     for week_idx, structure in enumerate(week_structures)
                 ]
             )
+            
+            # Fix 1: Hard invariant after B4 - if weekly distance > 0, must have allocated distance
+            for week_idx, (structure, distributed_days) in enumerate(zip(week_structures, distributed_weeks, strict=False)):
+                # Calculate the weekly volume that was used
+                if base_volume_calculator:
+                    week_volume = base_volume_calculator(week_idx)
+                else:
+                    base_volume = 40.0
+                    week_volume = base_volume + (week_idx * 2.0)
+                
+                if week_volume > 0 and all(day.distance == 0 for day in distributed_days):
+                    raise PlannerInvariantError(
+                        f"Week {week_idx + 1} has weekly_distance={week_volume} but all days allocated zero distance"
+                    )
         log_stage_event(PlannerStage.VOLUME, "success", plan_id, {"week_count": len(distributed_weeks)})
         log_stage_metric(PlannerStage.VOLUME, True)
         log_event("volume_allocated", week_count=len(distributed_weeks), plan_id=plan_id)
@@ -261,6 +401,13 @@ async def execute_canonical_pipeline(
                         distributed_days,
                         structure.day_index_to_session_type,
                     )
+                    
+                    # Fix 1: Hard invariant after B5 - all sessions must have templates
+                    for session in planned_sessions:
+                        if session.template is None:
+                            raise PlannerInvariantError(
+                                f"No template selected for week {week_idx + 1}, day {session.day_index}"
+                            )
 
                     # Emit INSTRUCTIONS progress before text generation
                     if conversation_id and week_idx == 0:
@@ -300,6 +447,19 @@ async def execute_canonical_pipeline(
             )
             # Sort by week_index to maintain order
             planned_weeks = sorted(planned_weeks, key=lambda w: w.week_index)
+            
+            # Fix 2: Check for B6 failures (sessions without text_output) and fail hard for plan creation
+            b6_failures = []
+            for week in planned_weeks:
+                for session in week.sessions:
+                    if isinstance(session, PlannedSession) and session.distance > 0 and session.text_output is None:
+                        b6_failures.append(f"week {week.week_index}, day {session.day_index}")
+            
+            if b6_failures and ctx.plan_type == PlanType.RACE:
+                raise PlannerAbort(
+                    f"Session generation incomplete for plan creation: {len(b6_failures)} sessions failed. "
+                    f"Failures: {', '.join(b6_failures[:10])}"
+                )
         log_stage_event(PlannerStage.TEMPLATE, "success", plan_id, {"week_count": len(planned_weeks)})
         log_stage_metric(PlannerStage.TEMPLATE, True)
         log_event("template_selected", week_count=len(planned_weeks), plan_id=plan_id)
@@ -319,8 +479,36 @@ async def execute_canonical_pipeline(
             if isinstance(session, PlannedSession) and session.distance > 0
         )
 
+    # Fix 3: Enforce minimum output before B7
+    if len(all_planned_sessions) == 0:
+        raise PlannerInvariantError(
+            "Plan creation produced zero sessions"
+        )
+    
+    # Calculate expected sessions (all days with distance > 0)
+    expected_sessions = sum(
+        1
+        for week in planned_weeks
+        for session in week.sessions
+        if isinstance(session, PlannedSession) and session.distance > 0
+    )
+    
+    if len(all_planned_sessions) < expected_sessions:
+        raise PlannerInvariantError(
+            f"Expected {expected_sessions} sessions, got {len(all_planned_sessions)}"
+        )
+
     # Note: macro_weeks check is skipped if list is empty (will be added when available from build_plan_structure)
     guard_invariants([], all_planned_sessions)
+
+    # Plan Integrity Check: Comprehensive validation before B7
+    validate_plan_integrity(
+        ctx=ctx,
+        macro_weeks=macro_weeks,
+        week_structures=week_structures,
+        distributed_weeks=distributed_weeks,
+        planned_weeks=planned_weeks,
+    )
 
     # B7: Persist to calendar
     log_stage_event(PlannerStage.PERSIST, "start", plan_id)
@@ -342,6 +530,12 @@ async def execute_canonical_pipeline(
                 athlete_id=athlete_id,
                 plan_id=plan_id,
             )
+            
+            # Fix 4: Make B7 loud - fail if nothing was created or updated
+            if persist_result.created == 0 and persist_result.updated == 0:
+                raise PlannerAbort(
+                    f"Plan created but nothing persisted — aborting (created=0, updated={persist_result.updated}, skipped={persist_result.skipped})"
+                )
         log_stage_event(
             PlannerStage.PERSIST,
             "success",
@@ -364,6 +558,17 @@ async def execute_canonical_pipeline(
         log_stage_event(PlannerStage.PERSIST, "fail", plan_id, {"error": str(e)})
         log_stage_metric(PlannerStage.PERSIST, False)
         raise
+
+    # Log comprehensive plan summary
+    _log_plan_summary(
+        ctx=ctx,
+        runtime_ctx=runtime_ctx,
+        macro_weeks=macro_weeks,
+        week_structures=week_structures,
+        planned_weeks=planned_weeks,
+        persist_result=persist_result,
+        plan_id=plan_id,
+    )
 
     return planned_weeks, persist_result
 

@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from loguru import logger
 
 from app.coach.schemas.athlete_state import AthleteState
+from app.planner.errors import PlannerInvariantError
 from app.planner.macro_plan import generate_macro_plan
 from app.planner.models import MacroWeek, PlanContext, PlanRuntimeContext, WeekStructure
 from app.planner.observability import PlannerStage, log_stage_event, log_stage_metric, timing
@@ -162,6 +163,12 @@ async def build_plan_structure(
                     focus=week.focus.value,
                     structure_id=structure.structure_id,
                 )
+                
+                # Fix 1: Hard invariant after B3 - each week must have runnable days
+                if not any(day.day_type.value != "rest" for day in structure.days):
+                    raise PlannerInvariantError(
+                        f"Week {week.week_index} has no runnable days (all rest days)"
+                    )
         log_stage_event(
             PlannerStage.STRUCTURE,
             "success",
@@ -180,4 +187,4 @@ async def build_plan_structure(
         week_count=len(week_structures),
     )
 
-    return runtime_ctx, week_structures
+    return runtime_ctx, week_structures, macro_weeks

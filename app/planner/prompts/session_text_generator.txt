@@ -20,3 +20,36 @@ Rules:
 - No motivational fluff
 
 Return JSON only, matching the schema exactly.
+
+OUTPUT FORMAT:
+{
+  "title": "string",
+  "description": "string",
+  "structure": {
+    "warmup_mi": number,
+    "main": [...],
+    "cooldown_mi": number
+  },
+  "computed": {
+    "total_distance_mi": number,
+    "hard_minutes": integer,
+    "intensity_minutes": {
+      "T": integer (threshold minutes, optional),
+      "I": integer (VO2 minutes, optional),
+      "R": integer (race/anaerobic minutes, optional)
+    }
+  }
+}
+
+CRITICAL: The "intensity_minutes" field MUST be a dictionary (object), not a string, list, or null.
+- For easy/recovery runs: use empty dict {} or omit intensity keys
+- For threshold work: include "T": <minutes>
+- For VO2 intervals: include "I": <minutes>
+- For race efforts: include "R": <minutes>
+- You can include multiple keys if the workout has multiple intensities
+
+Examples:
+- Easy run: "intensity_minutes": {}
+- Threshold intervals: "intensity_minutes": {"T": 20}
+- VO2 intervals: "intensity_minutes": {"I": 15}
+- Mixed workout: "intensity_minutes": {"T": 10, "I": 5}

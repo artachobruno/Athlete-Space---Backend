@@ -61,7 +61,7 @@ async def test_pipeline_selects_philosophy_and_structure(
     intermediate_runner: AthleteState,
 ) -> None:
     """Test that pipeline selects philosophy and loads structures."""
-    runtime_ctx, structures = await build_plan_structure(
+    runtime_ctx, structures, _macro_weeks = await build_plan_structure(
         ctx=ctx_5k_build,
         athlete_state=intermediate_runner,
     )
@@ -88,7 +88,7 @@ async def test_pipeline_philosophy_locked_before_b3(
     intermediate_runner: AthleteState,
 ) -> None:
     """Test that philosophy is locked before B3 execution."""
-    runtime_ctx, structures = await build_plan_structure(
+    runtime_ctx, structures, _macro_weeks = await build_plan_structure(
         ctx=ctx_5k_build,
         athlete_state=intermediate_runner,
     )
@@ -107,7 +107,7 @@ async def test_pipeline_one_structure_per_week(
     intermediate_runner: AthleteState,
 ) -> None:
     """Test that pipeline produces exactly one structure per macro week."""
-    _runtime_ctx, structures = await build_plan_structure(
+    _runtime_ctx, structures, _macro_weeks = await build_plan_structure(
         ctx=ctx_5k_build,
         athlete_state=intermediate_runner,
     )
@@ -124,7 +124,7 @@ async def test_pipeline_user_preference_override(
     intermediate_runner: AthleteState,
 ) -> None:
     """Test that user preference overrides automatic selection."""
-    runtime_ctx, structures = await build_plan_structure(
+    runtime_ctx, structures, _macro_weeks = await build_plan_structure(
         ctx=ctx_5k_build,
         athlete_state=intermediate_runner,
         user_preference="hansons",
@@ -150,7 +150,7 @@ async def test_pipeline_ultra_distance(
         target_date="2025-08-01",
     )
 
-    runtime_ctx, structures = await build_plan_structure(
+    runtime_ctx, structures, _macro_weeks = await build_plan_structure(
         ctx=ctx,
         athlete_state=intermediate_runner,
     )
@@ -194,7 +194,7 @@ async def test_pipeline_fails_on_invalid_combo(
 
     # Should either succeed (if compatible) or fail with clear error
     try:
-        _runtime_ctx, structures = await build_plan_structure(
+        _runtime_ctx, structures, _macro_weeks = await build_plan_structure(
             ctx=ctx,
             athlete_state=incompatible_state,
         )
@@ -211,7 +211,7 @@ async def test_pipeline_taper_week_structure(
     intermediate_runner: AthleteState,
 ) -> None:
     """Test that taper week structures are loaded correctly."""
-    _runtime_ctx, structures = await build_plan_structure(
+    _runtime_ctx, structures, _macro_weeks = await build_plan_structure(
         ctx=ctx_5k_build,
         athlete_state=intermediate_runner,
     )

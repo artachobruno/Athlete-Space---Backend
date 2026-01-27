@@ -216,6 +216,37 @@ def _calculate_backoff_delay(attempt: int, base_delay: float = 1.0, max_delay: f
     return min(delay, max_delay)
 
 
+def _extract_raw_response(result) -> str | None:
+    """Extract raw response text from pydantic_ai result object.
+
+    Args:
+        result: Result object from agent.run()
+
+    Returns:
+        Raw response text if found, None otherwise
+    """
+    # Try to extract from result.messages
+    if hasattr(result, "messages") and result.messages:
+        for msg in reversed(result.messages):
+            if hasattr(msg, "role") and hasattr(msg, "content"):
+                if msg.role == "assistant":
+                    return str(msg.content)
+            elif isinstance(msg, dict) and msg.get("role") == "assistant":
+                return str(msg.get("content", ""))
+
+    # Try result.data if available
+    if hasattr(result, "data"):
+        data = result.data
+        if hasattr(data, "text"):
+            return str(data.text)
+        if isinstance(data, dict) and "text" in data:
+            return str(data["text"])
+        if isinstance(data, str):
+            return data
+
+    return None
+
+
 async def generate_session_text_llm(
     input_data: SessionTextInput,
     retry_on_violation: bool = True,
@@ -265,19 +296,82 @@ async def generate_session_text_llm(
     for attempt in range(max_attempts_transient):
         try:
             logger.debug("Calling LLM for session text", attempt=attempt + 1, template_id=input_data.template_id)
-            logger.debug(
-                f"LLM Prompt: Session Text Generation (attempt {attempt + 1}, template_id={input_data.template_id})\n"
-                f"System Prompt:\n{system_prompt}\n\n"
-                f"User Prompt:\n{user_message}",
-                system_prompt=system_prompt,
-                user_prompt=user_message,
+
+            # Log full prompt (system + user) after all variables are substituted
+            full_prompt = f"System Prompt:\n{system_prompt}\n\nUser Prompt:\n{user_message}"
+            # Use opt(raw=True) to prevent loguru from interpreting curly braces in JSON as format placeholders
+            logger.opt(raw=True).info(
+                f"LLM Prompt: Session Text Generation (attempt {attempt + 1}, template_id={input_data.template_id})\n{full_prompt}"
+            )
+            logger.info(
+                "LLM Prompt: Session Text Generation metadata",
                 attempt=attempt + 1,
                 template_id=input_data.template_id,
+                system_prompt=system_prompt,
+                user_prompt=user_message,
+                full_prompt=full_prompt,
             )
+
             result = await agent.run(user_message)
+
+            # Extract raw response from result
+            raw_response_text = _extract_raw_response(result)
+
+            # Log raw response
+            if raw_response_text:
+                raw_log_msg = (
+                    f"LLM Response: Session Text Generation - RAW "
+                    f"(attempt {attempt + 1}, template_id={input_data.template_id}, length={len(raw_response_text)})\n"
+                    f"{raw_response_text}"
+                )
+                # Use opt(raw=True) to prevent loguru from interpreting curly braces in JSON as format placeholders
+                logger.opt(raw=True).info(raw_log_msg)
+                logger.info(
+                    "LLM Response: Session Text Generation - RAW metadata",
+                    attempt=attempt + 1,
+                    template_id=input_data.template_id,
+                    raw_response=raw_response_text,
+                    raw_response_length=len(raw_response_text),
+                )
+            else:
+                logger.warning(
+                    "LLM Response: Could not extract raw response from result",
+                    attempt=attempt + 1,
+                    template_id=input_data.template_id,
+                    result_type=type(result).__name__,
+                    result_attrs=dir(result),
+                )
 
             # Parse schema output
             parsed = result.output
+
+            # Log parsed/extracted response
+            parsed_dict = parsed.model_dump() if hasattr(parsed, "model_dump") else {
+                "title": parsed.title,
+                "description": parsed.description,
+                "structure": parsed.structure,
+                "computed": parsed.computed,
+            }
+            parsed_json = json.dumps(parsed_dict, indent=2, default=str)
+            intensity_minutes = parsed_dict.get("computed", {}).get("intensity_minutes")
+            intensity_minutes_type = type(intensity_minutes).__name__ if intensity_minutes is not None else "NoneType"
+            parsed_log_msg = (
+                f"LLM Response: Session Text Generation - PARSED (attempt {attempt + 1}, template_id={input_data.template_id})\n"
+                f"intensity_minutes type: {intensity_minutes_type}\n"
+                f"intensity_minutes value: {intensity_minutes}\n"
+                f"Full parsed output:\n{parsed_json}"
+            )
+            # Use opt(raw=True) to prevent loguru from interpreting curly braces in JSON as format placeholders
+            logger.opt(raw=True).info(parsed_log_msg)
+            logger.info(
+                "LLM Response: Session Text Generation - PARSED metadata",
+                attempt=attempt + 1,
+                template_id=input_data.template_id,
+                parsed_output=parsed_dict,
+                parsed_computed=parsed_dict.get("computed", {}),
+                parsed_intensity_minutes=intensity_minutes,
+                parsed_intensity_minutes_type=intensity_minutes_type,
+            )
 
             # Convert to domain model
             output = SessionTextOutput(

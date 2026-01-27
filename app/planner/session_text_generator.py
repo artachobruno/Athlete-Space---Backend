@@ -215,13 +215,23 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
         constraints=session.template.constraints,
     )
 
-    # Check cache
+    # Fix 2: Check if this is plan creation (fail hard) vs recommend_next_session (allow fallback)
+    is_plan_creation = context.get("is_plan_creation", False)
+
+    # Check cache - but skip cached fallback results for plan creation
     cache_key = _generate_cache_key(input_data)
     cached = _get_cached_output(cache_key)
     if cached:
-        logger.debug("Using cached session text", template_id=session.template.template_id)
-        return _session_text_output_from_dict(cached)
-
+        # For plan creation, skip cached fallback results (force LLM generation)
+        if is_plan_creation and cached.get("computed", {}).get("generated_by") == "fallback":
+            logger.debug(
+                "Skipping cached fallback text for plan creation - forcing LLM generation",
+                template_id=session.template.template_id,
+            )
+        else:
+            logger.debug("Using cached session text", template_id=session.template.template_id)
+            return _session_text_output_from_dict(cached)
+    
     # Try LLM generation (with semaphore to limit concurrent calls)
     try:
         semaphore = _get_llm_semaphore()
@@ -235,12 +245,42 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
             status="success",
         )
     except Exception as e:
+        # For plan creation, allow fallback only for constraint violations after retries
+        # (indicates LLM can't produce valid output, so fallback is acceptable)
+        # Fail hard for other errors (network, API, etc.)
+        error_str = str(e).lower()
+        # Check both the exception and its cause (RuntimeError wraps ValueError)
+        cause_str = str(e.__cause__).lower() if e.__cause__ else ""
+        is_constraint_violation = (
+            isinstance(e, (ValueError, RuntimeError))
+            and ("constraint" in error_str or "violates" in error_str or "constraint" in cause_str or "violates" in cause_str)
+        )
+        
+        if is_plan_creation and not is_constraint_violation:
+            logger.error(
+                "LLM generation failed for plan creation - aborting (no fallback allowed)",
+                template_id=session.template.template_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            raise
+        
+        # Allow fallback for constraint violations (even in plan creation) or for recommend_next_session
+        logger.warning(
+            "LLM generation failed, using fallback",
+            template_id=session.template.template_id,
+            error=str(e),
+            error_type=type(e).__name__,
+            is_plan_creation=is_plan_creation,
+            is_constraint_violation=is_constraint_violation,
+        )
+        
         logger.warning(
             "LLM generation failed, using fallback",
             template_id=session.template.template_id,
             error=str(e),
         )
-        # Fallback to deterministic generation
+        # Fallback to deterministic generation (only for recommend_next_session)
         # Get vocabulary level from context if available
         vocabulary_level = context.get("vocabulary_level")
         domain_output = generate_fallback_session_text(input_data, vocabulary_level)

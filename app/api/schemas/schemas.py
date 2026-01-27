@@ -211,10 +211,10 @@ class ConflictResponse(BaseModel):
 
 
 class CalendarSessionsResponse(BaseModel):
-    """Response for GET /calendar/sessions."""
+    """Response for GET /calendar/sessions and GET /calendar/range."""
 
     sessions: list[CalendarSession] = Field(description="List of sessions")
-    total: int = Field(description="Total number of sessions")
+    total: int | None = Field(description="Total number of sessions (optional for range endpoint)", default=None)
 
 
 # ============================================================================

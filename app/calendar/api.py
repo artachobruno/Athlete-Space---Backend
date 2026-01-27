@@ -802,6 +802,160 @@ def get_week(user_id: str = Depends(get_current_user_id)):
         raise HTTPException(status_code=500, detail=f"Failed to get calendar week: {e!s}") from e
 
 
+@router.get("/range", response_model=CalendarSessionsResponse)
+def get_range(
+    start: str,
+    end: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Get calendar data for a specific date range.
+
+    **CRITICAL**: This endpoint enforces a maximum range of 45 days to prevent OOM.
+    Use this instead of /calendar/season for UI rendering.
+
+    Args:
+        start: Start date in YYYY-MM-DD format
+        end: End date in YYYY-MM-DD format (inclusive)
+        user_id: Current authenticated user ID (from auth dependency)
+
+    Returns:
+        CalendarSessionsResponse with sessions in the specified range
+
+    Raises:
+        HTTPException: If date range exceeds 45 days or dates are invalid
+    """
+    logger.info(f"[CALENDAR] GET /calendar/range called for user_id={user_id}, start={start}, end={end}")
+    
+    try:
+        # Parse and validate dates
+        start_date = datetime.strptime(start, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end, "%Y-%m-%d").date()
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format. Use YYYY-MM-DD. Error: {e!s}"
+        ) from e
+    
+    # Enforce maximum range (45 days)
+    range_days = (end_date - start_date).days
+    if range_days < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"End date must be after start date. start={start}, end={end}"
+        )
+    if range_days > 45:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Date range exceeds maximum of 45 days. Requested: {range_days} days. "
+                   f"Use smaller ranges for UI rendering. start={start}, end={end}"
+        )
+    
+    # Log warning if near memory threshold (large range)
+    if range_days > 35:
+        logger.warning(
+            f"[CALENDAR] Large date range requested: {range_days} days for user_id={user_id}. "
+            f"Consider using smaller ranges for better performance."
+        )
+    
+    try:
+        with get_session() as session:
+            # Get user for timezone
+            user_result = session.execute(select(User).where(User.id == user_id)).first()
+            if not user_result:
+                _raise_user_not_found()
+            user = user_result[0]
+            
+            # Convert dates to datetime in user's timezone, then to UTC
+            user_tz = ZoneInfo(user.timezone)
+            start_local = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=user_tz)
+            end_local = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=user_tz)
+            
+            # Convert to UTC for database queries
+            start_utc = to_utc(start_local)
+            end_utc = to_utc(end_local)
+            
+            logger.info(
+                f"[CALENDAR] user={user_id} tz={user.timezone} range={start_date}-{end_date} "
+                f"(days={range_days})"
+            )
+            
+            # Schema v2: Query calendar_items view directly (single unified query)
+            view_rows = get_calendar_items_from_view(session, user_id, start_utc, end_utc)
+            logger.info(
+                "[calendar_view] endpoint=/range user=%s start=%s end=%s rows=%s",
+                user_id,
+                start_utc.isoformat() if start_utc else None,
+                end_utc.isoformat() if end_utc else None,
+                len(view_rows),
+            )
+            
+            # Build pairing maps for efficient lookup
+            pairing_map: dict[str, str] = {}  # planned_session_id -> activity_id
+            activity_pairing_map: dict[str, str] = {}  # activity_id -> planned_session_id
+            
+            for row in view_rows:
+                item_id = str(row.get("item_id", ""))
+                kind = str(row.get("kind", ""))
+                
+                if kind == "planned":
+                    link = get_link_for_planned(session, item_id)
+                    if link and link.status in ACTIVE_LINK_STATUSES:
+                        pairing_map[item_id] = link.activity_id
+                elif kind == "activity":
+                    link = get_link_for_activity(session, item_id)
+                    if link and link.status in ACTIVE_LINK_STATUSES:
+                        activity_pairing_map[item_id] = link.planned_session_id
+            
+            # PHASE 2.2: Enrich view rows with pairing info and compute execution_state
+            # Filter out activities that are paired to a planned session (show only the planned session card)
+            enriched_rows = []
+            now_utc = datetime.now(timezone.utc)
+            
+            for row in view_rows:
+                item_id = str(row.get("item_id", ""))
+                kind = str(row.get("kind", ""))
+                payload = row.get("payload") or {}
+                
+                # Skip activities that are paired to a planned session (they'll be shown via the planned session card)
+                if kind == "activity" and item_id in activity_pairing_map:
+                    continue
+                
+                # PHASE 2.2: Compute execution_state for planned sessions
+                execution_state_info = None
+                if kind == "planned":
+                    # Load PlannedSession and linked Activity to compute execution_state
+                    if item_id in pairing_map:
+                        activity_id = pairing_map[item_id]
+                        payload = {**payload, "paired_activity_id": activity_id}
+                    execution_state_info = _load_planned_session_with_activity(
+                        session, item_id, pairing_map, now_utc
+                    )
+                elif kind == "activity":
+                    # For unpaired activities, execution_state is "executed_unplanned"
+                    execution_state_info = _compute_execution_state_for_activity()
+                
+                enriched_row = {**row, "payload": payload, "execution_state": execution_state_info}
+                enriched_rows.append(enriched_row)
+            
+            sessions = [calendar_session_from_view_row(row) for row in enriched_rows]
+            
+            # Sort by date and time
+            sessions.sort(key=lambda s: (s.date, s.time or ""))
+            
+            return CalendarSessionsResponse(sessions=sessions, total=len(sessions))
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "undefinedcolumn" in error_msg or "no such column" in error_msg:
+            logger.exception(
+                f"[CALENDAR] Database schema error in /calendar/range. Missing column. Returning empty range: {e!r}"
+            )
+            return CalendarSessionsResponse(sessions=[])
+        logger.exception(f"[CALENDAR] Error in /calendar/range: {e!r}")
+        raise HTTPException(status_code=500, detail=f"Failed to get calendar range: {e!s}") from e
+
+
 @router.get("/week-summary", response_model=WeeklySummaryCardResponse)
 def get_week_summary(
     user_id: str = Depends(get_current_user_id),

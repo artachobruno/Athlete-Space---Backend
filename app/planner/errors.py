@@ -45,3 +45,15 @@ class TemplateSelectionError(PlannerError):
     """Raised when template selection fails (e.g., no matching templates)."""
 
     pass
+
+
+class PlannerInvariantError(PlannerError):
+    """Raised when a planning invariant is violated between stages."""
+
+    pass
+
+
+class PlannerAbort(PlannerError):
+    """Raised when plan generation must be aborted (e.g., zero sessions created)."""
+
+    pass

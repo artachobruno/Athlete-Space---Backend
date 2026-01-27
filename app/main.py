@@ -816,30 +816,9 @@ async def deferred_heavy_init():
     else:
         logger.warning("[SCHEDULER] Skipping scheduler startup - database not ready")
 
-    # Step 3: Initialize template library (required for planner)
-    try:
-        logger.info("[TEMPLATE_LIBRARY] Initializing template library from cache")
-        try:
-            from app.core.system_memory import log_memory_snapshot
-            log_memory_snapshot("template_library_before")
-        except Exception:
-            pass
-        initialize_template_library_from_cache()
-        try:
-            from app.core.system_memory import log_memory_snapshot
-            log_memory_snapshot("template_library_after")
-        except Exception:
-            pass
-        logger.info("[TEMPLATE_LIBRARY] Template library initialized successfully")
-    except Exception as e:
-        logger.exception("[TEMPLATE_LIBRARY] Failed to initialize template library: {}", e)
-        # This is a critical failure - planner will not work without templates
-        # But we don't want to crash the entire server, so we log the error
-        # The planner will fail with a clear error message if templates aren't loaded
-        logger.error(
-            "[TEMPLATE_LIBRARY] Planner will not work until template library is initialized. "
-            "Run: python scripts/precompute_embeddings.py --templates"
-        )
+    # Step 3: Initialize template library (LAZY - only load when needed to save memory)
+    # Skip pre-loading to save memory - will load on first use via ensure_template_library_from_cache()
+    logger.info("[TEMPLATE_LIBRARY] Skipping pre-loading to save memory (will load on-demand)")
 
     # Log memory after database initialization
     try:

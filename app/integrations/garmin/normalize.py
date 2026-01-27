@@ -6,7 +6,7 @@ Pure mapper function with no side effects.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
@@ -105,9 +105,7 @@ def normalize_garmin_activity(payload: dict[str, Any]) -> dict[str, Any]:
     # Calculate end time
     ends_at = start_time.replace(microsecond=0) if duration_seconds else None
     if ends_at and duration_seconds:
-        from datetime import timedelta
-
-        ends_at = ends_at + timedelta(seconds=duration_seconds)
+        ends_at += timedelta(seconds=duration_seconds)
 
     # Build metrics dict
     metrics: dict[str, Any] = {

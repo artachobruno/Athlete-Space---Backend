@@ -19,6 +19,14 @@ from scripts.migrate_user_integrations import migrate_user_integrations
 router = APIRouter(prefix="/admin/migrations", tags=["admin-migrations"])
 
 
+def _raise_migration_error(errors: list[str], migrations_run: list[str]) -> None:
+    """Raise HTTPException for migration errors."""
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"Some migrations failed: {', '.join(errors)}. Migrations run: {', '.join(migrations_run)}",
+    )
+
+
 class MigrationResponse(BaseModel):
     """Response model for migration execution."""
 
@@ -107,10 +115,7 @@ def run_garmin_migrations(
                 errors.append(error_msg)
 
         if errors:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Some migrations failed: {', '.join(errors)}. Migrations run: {', '.join(migrations_run)}",
-            )
+            _raise_migration_error(errors, migrations_run)
 
         logger.info(f"[ADMIN_MIGRATIONS] All Garmin migrations completed successfully: {migrations_run}")
 

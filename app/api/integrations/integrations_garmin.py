@@ -12,20 +12,22 @@ import base64
 import hashlib
 import os
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 
 from app.api.dependencies.auth import get_current_user_id
 from app.config.settings import settings
 from app.core.encryption import EncryptionError, encrypt_token
 from app.db.models import User, UserIntegration
-from app.db.session import get_session
+from app.db.session import get_engine, get_session
 from app.integrations.garmin.backfill import backfill_garmin_activities
+from app.integrations.garmin.history_backfill import backfill_garmin_history_chunk
 from app.integrations.garmin.oauth import exchange_code_for_token
 
 router = APIRouter(prefix="/integrations/garmin", tags=["integrations", "garmin"])
@@ -42,7 +44,7 @@ def _generate_code_verifier() -> str:
         Code verifier string
     """
     # Generate 43-128 character random string (using 64 for good security)
-    return base64.urlsafe_b64encode(secrets.token_bytes(48)).decode('utf-8').rstrip('=')
+    return base64.urlsafe_b64encode(secrets.token_bytes(48)).decode("utf-8").rstrip("=")
 
 
 def _generate_code_challenge(verifier: str) -> str:
@@ -54,8 +56,8 @@ def _generate_code_challenge(verifier: str) -> str:
     Returns:
         Code challenge (SHA256 hash, base64url encoded)
     """
-    challenge = hashlib.sha256(verifier.encode('utf-8')).digest()
-    return base64.urlsafe_b64encode(challenge).decode('utf-8').rstrip('=')
+    challenge = hashlib.sha256(verifier.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(challenge).decode("utf-8").rstrip("=")
 
 
 def _generate_oauth_state(user_id: str) -> tuple[str, str]:
@@ -69,7 +71,6 @@ def _generate_oauth_state(user_id: str) -> tuple[str, str]:
     """
     state = secrets.token_urlsafe(32)
     code_verifier = _generate_code_verifier()
-    import time
 
     _oauth_states[state] = (user_id, code_verifier, time.time())
     logger.debug(f"[GARMIN_OAUTH] Generated state and PKCE verifier for user_id={user_id}")
@@ -85,8 +86,6 @@ def _validate_and_extract_state(state: str) -> tuple[bool, str | None, str | Non
     Returns:
         Tuple of (is_valid, user_id, code_verifier)
     """
-    import time
-
     if state not in _oauth_states:
         logger.warning(f"[GARMIN_OAUTH] Invalid state token: {state[:16]}...")
         return False, None, None
@@ -102,6 +101,24 @@ def _validate_and_extract_state(state: str) -> tuple[bool, str | None, str | Non
     del _oauth_states[state]
     logger.debug(f"[GARMIN_OAUTH] Validated state for user_id={user_id}")
     return True, user_id, code_verifier
+
+
+def _check_table_exists(table_name: str) -> bool:
+    """Check if a database table exists.
+
+    Args:
+        table_name: Name of the table to check
+
+    Returns:
+        True if table exists, False otherwise
+    """
+    try:
+        engine = get_engine()
+        inspector = inspect(engine)
+        return inspector.has_table(table_name)  # pyright: ignore[reportOptionalMemberAccess]
+    except Exception as e:
+        logger.warning(f"[GARMIN_OAUTH] Failed to check if table {table_name} exists: {e}")
+        return False
 
 
 def _encrypt_and_store_tokens(
@@ -121,7 +138,18 @@ def _encrypt_and_store_tokens(
         refresh_token: Refresh token to encrypt
         expires_at: Token expiration timestamp (TIMESTAMPTZ, nullable)
         scopes: OAuth scopes granted
+
+    Raises:
+        HTTPException: If table doesn't exist (migrations not run) or other errors
     """
+    # Check if table exists before trying to use it
+    if not _check_table_exists("user_integrations"):
+        logger.error("[GARMIN_OAUTH] user_integrations table does not exist. Migrations need to be run.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database migrations not completed. Please run migrations: POST /admin/migrations/garmin?all=true",
+        )
+
     try:
         encrypted_access_token = encrypt_token(access_token)
         encrypted_refresh_token = encrypt_token(refresh_token)
@@ -339,8 +367,8 @@ def garmin_callback(
         _encrypt_and_store_tokens(
             user_id=user_id,
             provider_user_id="mock_garmin_user_id",
-            access_token="mock_access_token",
-            refresh_token="mock_refresh_token",
+            access_token="mock_access_token",  # noqa: S106
+            refresh_token="mock_refresh_token",  # noqa: S106
             expires_at=datetime.now(timezone.utc).replace(hour=23, minute=59, second=59),
             scopes=["activity"],
         )
@@ -437,3 +465,85 @@ def garmin_disconnect(user_id: str = Depends(get_current_user_id)):
         logger.info(f"[GARMIN_OAUTH] Garmin integration disconnected for user_id={user_id}")
 
         return {"status": "disconnected", "provider": "garmin"}
+
+
+@router.post("/history-backfill")
+def trigger_history_backfill(
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Manually trigger historical backfill chunk for Garmin activities.
+
+    Processes one 90-day chunk going backwards in time.
+    Safe to call multiple times - will resume from cursor position.
+    Respects rate limits and memory constraints.
+
+    Args:
+        background_tasks: FastAPI background tasks
+        user_id: Current authenticated user ID (required)
+
+    Returns:
+        Success response with status
+    """
+    logger.info(f"[GARMIN_HISTORY] Manual history backfill triggered for user_id={user_id}")
+
+    with get_session() as session:
+        integration = session.execute(
+            select(UserIntegration).where(
+                UserIntegration.user_id == user_id,
+                UserIntegration.provider == "garmin",
+                UserIntegration.revoked_at.is_(None),
+            )
+        ).first()
+
+        if not integration:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Garmin integration not found",
+            )
+
+        integration_obj = integration[0]
+
+        # Check if already complete
+        if integration_obj.historical_backfill_complete:
+            cursor_date_str = (
+                integration_obj.historical_backfill_cursor_date.isoformat()
+                if integration_obj.historical_backfill_cursor_date
+                else None
+            )
+            return {
+                "status": "complete",
+                "message": "Historical backfill already complete",
+                "cursor_date": cursor_date_str,
+            }
+
+        # Check last run time (once per day max)
+        # Use a simple check: if last_sync_at was updated today, skip
+        if integration_obj.last_sync_at:
+            time_since_sync = datetime.now(timezone.utc) - integration_obj.last_sync_at
+            if time_since_sync < timedelta(hours=23):
+                logger.info(
+                    f"[GARMIN_HISTORY] History backfill run recently ({time_since_sync}), "
+                    "skipping to respect once-per-day limit"
+                )
+                return {
+                    "status": "rate_limited",
+                    "message": "History backfill can run once per day. Please try again later.",
+                    "next_run_available": (integration_obj.last_sync_at + timedelta(hours=24)).isoformat(),
+                }
+
+    # Run in background
+    def history_backfill_task():
+        try:
+            result = backfill_garmin_history_chunk(user_id)
+            logger.info(f"[GARMIN_HISTORY] History backfill completed for user_id={user_id}: {result}")
+        except Exception as e:
+            logger.exception(f"[GARMIN_HISTORY] History backfill failed for user_id={user_id}: {e}")
+
+    background_tasks.add_task(history_backfill_task)
+
+    return {
+        "status": "scheduled",
+        "message": "Historical backfill chunk scheduled. Processing in background.",
+        "user_id": user_id,
+    }

@@ -144,6 +144,13 @@ class Settings(BaseSettings):
         description="Email address to receive support requests",
     )
 
+    # Strava Integration settings
+    strava_enabled: bool = Field(
+        default=False,
+        validation_alias="STRAVA_ENABLED",
+        description="Enable Strava OAuth and integration features (disabled for Garmin-first strategy)",
+    )
+
     # Garmin Integration settings
     garmin_enabled: bool = Field(
         default=False,
@@ -160,6 +167,11 @@ class Settings(BaseSettings):
     garmin_redirect_uri: str = Field(
         default="http://localhost:8000/integrations/garmin/callback",
         validation_alias="GARMIN_REDIRECT_URI",
+    )
+    garmin_backfill_days: int = Field(
+        default=90,
+        validation_alias="GARMIN_BACKFILL_DAYS",
+        description="Number of days to backfill from Garmin (max 90, bounded for safety)",
     )
 
     @field_validator("log_level")

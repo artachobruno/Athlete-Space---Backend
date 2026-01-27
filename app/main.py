@@ -57,9 +57,10 @@ from app.coach.api import router as coach_router
 from app.coach.api_chat import router as coach_chat_router
 from app.config.settings import settings
 from app.core.conversation_id import conversation_id_middleware
-from app.core.memory_middleware import memory_monitoring_middleware
 from app.core.logger import setup_logger
+from app.core.memory_middleware import memory_monitoring_middleware
 from app.core.observe import init as observe_init
+from app.core.system_memory import log_connection_pool_status, log_memory_snapshot
 from app.db.models import Base
 from app.db.schema_check import verify_schema
 from app.db.session import get_engine
@@ -67,7 +68,6 @@ from app.domains.training_plan.philosophy_selector_semantic import initialize_ph
 from app.domains.training_plan.template_loader import initialize_template_library_from_cache
 from app.domains.training_plan.week_structure_selector_semantic import initialize_week_structure_vector_store
 from app.ingestion.api import router as ingestion_strava_router
-from app.core.system_memory import log_connection_pool_status, log_memory_snapshot
 from app.ingestion.scheduler import ingestion_tick
 from app.ingestion.sync_scheduler import sync_tick
 from app.internal.ai_ops.router import router as ai_ops_router
@@ -81,6 +81,7 @@ from app.services.intelligence.weekly_report_metrics import update_all_recent_we
 from app.webhooks.garmin import router as webhooks_garmin_router
 from app.webhooks.strava import router as webhooks_router
 from app.workouts.routes import router as workouts_router
+from scripts.migrate_activities_garmin_fields import migrate_activities_garmin_fields
 from scripts.migrate_activities_id_to_uuid import migrate_activities_id_to_uuid
 from scripts.migrate_activities_schema import migrate_activities_schema
 from scripts.migrate_activities_source_default import migrate_activities_source_default
@@ -116,22 +117,22 @@ from scripts.migrate_coach_messages_schema import migrate_coach_messages_schema
 from scripts.migrate_create_athlete_bios_table import migrate_create_athlete_bios_table
 from scripts.migrate_create_workout_execution_summaries import migrate_create_workout_execution_summaries
 from scripts.migrate_create_workout_execution_tables import migrate_create_workout_execution_tables
-from scripts.migrate_activities_garmin_fields import migrate_activities_garmin_fields
 from scripts.migrate_create_workout_exports_table import migrate_create_workout_exports_table
 from scripts.migrate_create_workouts_tables import migrate_create_workouts_tables
-from scripts.migrate_garmin_webhook_events import migrate_garmin_webhook_events
-from scripts.migrate_user_integrations import migrate_user_integrations
 from scripts.migrate_daily_summary import migrate_daily_summary
 from scripts.migrate_daily_summary_user_id import migrate_daily_summary_user_id
 from scripts.migrate_drop_activity_id import migrate_drop_activity_id
 from scripts.migrate_drop_obsolete_activity_columns import migrate_drop_obsolete_activity_columns
 from scripts.migrate_extend_session_links_reconciliation import migrate_extend_session_links_reconciliation
+from scripts.migrate_garmin_history_cursor import migrate_garmin_history_cursor
+from scripts.migrate_garmin_webhook_events import migrate_garmin_webhook_events
 from scripts.migrate_history_cursor import migrate_history_cursor
 from scripts.migrate_llm_metadata_fields import migrate_llm_metadata_fields
 from scripts.migrate_onboarding_data_fields import migrate_onboarding_data_fields
 from scripts.migrate_strava_accounts import migrate_strava_accounts
 from scripts.migrate_strava_accounts_sync_tracking import migrate_strava_accounts_sync_tracking
 from scripts.migrate_user_auth_fields import migrate_user_auth_fields
+from scripts.migrate_user_integrations import migrate_user_integrations
 from scripts.migrate_user_settings_fields import migrate_user_settings_fields
 
 # Initialize logger with level from settings (defaults to INFO, can be overridden via LOG_LEVEL env var)
@@ -606,6 +607,14 @@ def initialize_database() -> None:
         logger.exception(f"Migration failed: migrate_user_integrations - {e}")
 
     try:
+        logger.info("Running migration: Garmin historical backfill cursor fields")
+        migrate_garmin_history_cursor()
+        logger.info("✓ Migration completed: Garmin historical backfill cursor fields")
+    except Exception as e:
+        migration_errors.append(f"migrate_garmin_history_cursor: {e}")
+        logger.exception(f"Migration failed: migrate_garmin_history_cursor - {e}")
+
+    try:
         logger.info("Running migration: garmin_webhook_events table")
         migrate_garmin_webhook_events()
         logger.info("✓ Migration completed: garmin_webhook_events table")
@@ -700,11 +709,9 @@ async def lifespan(_app: FastAPI):
     # Initialize ops metrics (process start time) - lightweight, safe to do here
     set_process_start_time(time.time())
     logger.info("[OPS] Initialized ops metrics tracking")
-    
+
     # Log initial memory snapshot (baseline before any heavy initialization)
     try:
-        from app.core.system_memory import log_memory_snapshot
-        
         log_memory_snapshot("startup_baseline")
     except Exception as e:
         logger.warning(f"Failed to log startup memory snapshot: {e}")
@@ -854,8 +861,6 @@ async def deferred_heavy_init():
 
     # Log memory after database initialization
     try:
-        from app.core.system_memory import log_memory_snapshot, log_connection_pool_status
-        
         log_memory_snapshot("after_db_init")
         log_connection_pool_status()
     except Exception as e:
@@ -898,8 +903,6 @@ async def deferred_heavy_init():
 
     # Log final memory snapshot after all initialization
     try:
-        from app.core.system_memory import log_memory_snapshot, log_connection_pool_status
-        
         log_memory_snapshot("after_all_init")
         log_connection_pool_status()
     except Exception as e:

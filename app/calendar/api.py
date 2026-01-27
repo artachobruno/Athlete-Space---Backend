@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
 from pydantic import BaseModel, Field
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, inspect, quoted_name, select, text
 from sqlalchemy.exc import InternalError, ProgrammingError
 from sqlalchemy.orm import Session
@@ -30,6 +31,7 @@ from app.api.schemas.schemas import (
 from app.calendar.auto_match_service import auto_match_sessions
 from app.calendar.reconciliation_service import reconcile_calendar
 from app.calendar.view_helper import calendar_session_from_view_row, get_calendar_items_from_view
+from app.core.system_memory import log_memory_snapshot
 from app.db.models import Activity, CoachFeedback, PlannedSession, StravaAccount, User
 from app.db.session import get_session
 from app.pairing.session_links import (
@@ -825,17 +827,17 @@ def get_range(
         HTTPException: If date range exceeds 45 days or dates are invalid
     """
     logger.info(f"[CALENDAR] GET /calendar/range called for user_id={user_id}, start={start}, end={end}")
-    
+
     try:
         # Parse and validate dates
-        start_date = datetime.strptime(start, "%Y-%m-%d").date()
-        end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        start_date = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
+        end_date = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
     except ValueError as e:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid date format. Use YYYY-MM-DD. Error: {e!s}"
         ) from e
-    
+
     # Enforce maximum range (45 days)
     range_days = (end_date - start_date).days
     if range_days < 0:
@@ -849,14 +851,14 @@ def get_range(
             detail=f"Date range exceeds maximum of 45 days. Requested: {range_days} days. "
                    f"Use smaller ranges for UI rendering. start={start}, end={end}"
         )
-    
+
     # Log warning if near memory threshold (large range)
     if range_days > 35:
         logger.warning(
             f"[CALENDAR] Large date range requested: {range_days} days for user_id={user_id}. "
             f"Consider using smaller ranges for better performance."
         )
-    
+
     try:
         with get_session() as session:
             # Get user for timezone
@@ -864,21 +866,21 @@ def get_range(
             if not user_result:
                 _raise_user_not_found()
             user = user_result[0]
-            
+
             # Convert dates to datetime in user's timezone, then to UTC
             user_tz = ZoneInfo(user.timezone)
             start_local = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=user_tz)
             end_local = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=user_tz)
-            
+
             # Convert to UTC for database queries
             start_utc = to_utc(start_local)
             end_utc = to_utc(end_local)
-            
+
             logger.info(
                 f"[CALENDAR] user={user_id} tz={user.timezone} range={start_date}-{end_date} "
                 f"(days={range_days})"
             )
-            
+
             # Schema v2: Query calendar_items view directly (single unified query)
             view_rows = get_calendar_items_from_view(session, user_id, start_utc, end_utc)
             logger.info(
@@ -888,15 +890,15 @@ def get_range(
                 end_utc.isoformat() if end_utc else None,
                 len(view_rows),
             )
-            
+
             # Build pairing maps for efficient lookup
             pairing_map: dict[str, str] = {}  # planned_session_id -> activity_id
             activity_pairing_map: dict[str, str] = {}  # activity_id -> planned_session_id
-            
+
             for row in view_rows:
                 item_id = str(row.get("item_id", ""))
                 kind = str(row.get("kind", ""))
-                
+
                 if kind == "planned":
                     link = get_link_for_planned(session, item_id)
                     if link and link.status in ACTIVE_LINK_STATUSES:
@@ -905,21 +907,21 @@ def get_range(
                     link = get_link_for_activity(session, item_id)
                     if link and link.status in ACTIVE_LINK_STATUSES:
                         activity_pairing_map[item_id] = link.planned_session_id
-            
+
             # PHASE 2.2: Enrich view rows with pairing info and compute execution_state
             # Filter out activities that are paired to a planned session (show only the planned session card)
             enriched_rows = []
             now_utc = datetime.now(timezone.utc)
-            
+
             for row in view_rows:
                 item_id = str(row.get("item_id", ""))
                 kind = str(row.get("kind", ""))
                 payload = row.get("payload") or {}
-                
+
                 # Skip activities that are paired to a planned session (they'll be shown via the planned session card)
                 if kind == "activity" and item_id in activity_pairing_map:
                     continue
-                
+
                 # PHASE 2.2: Compute execution_state for planned sessions
                 execution_state_info = None
                 if kind == "planned":
@@ -933,15 +935,15 @@ def get_range(
                 elif kind == "activity":
                     # For unpaired activities, execution_state is "executed_unplanned"
                     execution_state_info = _compute_execution_state_for_activity()
-                
+
                 enriched_row = {**row, "payload": payload, "execution_state": execution_state_info}
                 enriched_rows.append(enriched_row)
-            
+
             sessions = [calendar_session_from_view_row(row) for row in enriched_rows]
-            
+
             # Sort by date and time
             sessions.sort(key=lambda s: (s.date, s.time or ""))
-            
+
             return CalendarSessionsResponse(sessions=sessions, total=len(sessions))
     except HTTPException:
         raise
@@ -1780,7 +1782,6 @@ def _delete_workout_if_orphaned(
         # Only delete workout if it's not referenced elsewhere
         if activity_count == 0 and other_planned_count == 0:
             # Delete workout_steps first (cascade order) - use bulk delete to avoid loading all into memory
-            from sqlalchemy import delete as sql_delete
             deleted_steps = session.execute(
                 sql_delete(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
             )
@@ -2403,10 +2404,9 @@ def delete_planned_session(
 
     # Memory monitoring for deletion operation
     try:
-        from app.core.system_memory import log_memory_snapshot
         log_memory_snapshot("delete_planned_session_start")
-    except Exception:
-        pass  # Don't fail if memory monitoring fails
+    except Exception as e:
+        logger.debug(f"Memory monitoring failed: {e}")
 
     with get_session() as session:
         # STRICT VALIDATION: Only query PlannedSession table
@@ -2465,7 +2465,6 @@ def delete_planned_session(
             # Only delete workout if it's not referenced elsewhere
             if activity_count == 0 and other_planned_count == 0:
                 # Delete workout_steps first (cascade order) - use bulk delete to avoid loading all into memory
-                from sqlalchemy import delete as sql_delete
                 deleted_steps = session.execute(
                     sql_delete(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
                 )
@@ -2500,7 +2499,6 @@ def delete_planned_session(
 
     # Memory monitoring after deletion
     try:
-        from app.core.system_memory import log_memory_snapshot
         log_memory_snapshot("delete_planned_session_end")
-    except Exception:
-        pass  # Don't fail if memory monitoring fails
+    except Exception as e:
+        logger.debug(f"Memory monitoring failed: {e}")

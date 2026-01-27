@@ -30,6 +30,11 @@ from app.domains.training_plan.philosophy_selector_semantic import select_philos
 from app.domains.training_plan.week_structure_selector_semantic import load_week_structure_semantic as load_week_structure
 
 
+def _raise_no_runnable_days_error(week_index: int) -> None:
+    """Raise error when week has no runnable days."""
+    raise PlannerInvariantError(f"Week {week_index} has no runnable days (all rest days)")
+
+
 def _compute_days_to_race(ctx: PlanContext, week: MacroWeek, race_priority: str | None = None) -> int:
     """Compute days to race for a given week, adjusted by priority for taper logic.
 
@@ -76,7 +81,7 @@ async def build_plan_structure(
     user_preference: str | None = None,
     *,
     race_priority: str | None = None,
-) -> tuple[PlanRuntimeContext, list[WeekStructure]]:
+) -> tuple[PlanRuntimeContext, list[WeekStructure], list[MacroWeek]]:
     """Execute B2 → B2.5 → B3 pipeline.
 
     This function:
@@ -186,12 +191,10 @@ async def build_plan_structure(
                     focus=week.focus.value,
                     structure_id=structure.structure_id,
                 )
-                
+
                 # Fix 1: Hard invariant after B3 - each week must have runnable days
                 if not any(day.day_type.value != "rest" for day in structure.days):
-                    raise PlannerInvariantError(
-                        f"Week {week.week_index} has no runnable days (all rest days)"
-                    )
+                    _raise_no_runnable_days_error(week.week_index)
         log_stage_event(
             PlannerStage.STRUCTURE,
             "success",

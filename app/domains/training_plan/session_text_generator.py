@@ -208,7 +208,7 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
         else:
             logger.debug("Using cached session text", template_id=session.template.template_id)
             return _session_text_output_from_dict(cached)
-    
+
     # Try LLM generation (with semaphore to limit concurrent calls)
     try:
         semaphore = _get_llm_semaphore()
@@ -231,7 +231,7 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
             isinstance(e, (ValueError, RuntimeError))
             and ("constraint" in error_str or "violates" in error_str or "constraint" in cause_str or "violates" in cause_str)
         )
-        
+
         if is_plan_creation and not is_constraint_violation:
             logger.error(
                 "LLM generation failed for plan creation - aborting (no fallback allowed)",
@@ -240,7 +240,7 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
                 error_type=type(e).__name__,
             )
             raise
-        
+
         # Allow fallback for constraint violations (even in plan creation) or for recommend_next_session
         logger.warning(
             "LLM generation failed, using fallback",
@@ -250,7 +250,7 @@ async def generate_session_text(session: PlannedSession, context: dict) -> Sessi
             is_plan_creation=is_plan_creation,
             is_constraint_violation=is_constraint_violation,
         )
-        
+
         logger.warning(
             "LLM generation failed, using fallback",
             template_id=session.template.template_id,

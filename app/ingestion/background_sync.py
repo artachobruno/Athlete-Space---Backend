@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
+from app.core.system_memory import log_memory_snapshot
 from app.db.models import Activity, StravaAccount, UserSettings
 from app.db.session import get_session
 from app.integrations.strava.client import StravaClient
@@ -185,10 +186,9 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
 
     # Memory monitoring for sync operations
     try:
-        from app.core.system_memory import log_memory_snapshot
         log_memory_snapshot("sync_start")
-    except Exception:
-        pass  # Don't fail if memory monitoring fails
+    except Exception as e:
+        logger.debug(f"Memory monitoring failed: {e}")
 
     # Get access token (with refresh if needed)
     try:
@@ -515,10 +515,9 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
 
     # Memory monitoring after sync
     try:
-        from app.core.system_memory import log_memory_snapshot
         log_memory_snapshot("sync_end")
-    except Exception:
-        pass  # Don't fail if memory monitoring fails
+    except Exception as e:
+        logger.debug(f"Memory monitoring failed: {e}")
 
     # Trigger metrics recomputation if new activities were imported
     if imported_count > 0:

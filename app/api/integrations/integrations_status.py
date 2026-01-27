@@ -56,13 +56,28 @@ def integrations_status(user_id: str = Depends(get_current_user_id)):
             )
         ).first()
 
-        integrations.append(
-            {
-                "provider": "garmin",
-                "connected": garmin_integration is not None,
-                "last_sync_at": garmin_integration[0].last_sync_at.isoformat() if garmin_integration and garmin_integration[0].last_sync_at else None,
-            }
+        last_sync_str = (
+            garmin_integration[0].last_sync_at.isoformat()
+            if garmin_integration and garmin_integration[0].last_sync_at
+            else None
         )
+        garmin_data: dict[str, str | bool | None] = {
+            "provider": "garmin",
+            "connected": garmin_integration is not None,
+            "last_sync_at": last_sync_str,
+        }
+
+        # Add historical backfill progress for Garmin
+        if garmin_integration:
+            integration_obj = garmin_integration[0]
+            garmin_data["historical_backfill_complete"] = integration_obj.historical_backfill_complete
+            garmin_data["historical_backfill_cursor_date"] = (
+                integration_obj.historical_backfill_cursor_date.isoformat()
+                if integration_obj.historical_backfill_cursor_date
+                else None
+            )
+
+        integrations.append(garmin_data)
 
     logger.debug(f"[INTEGRATIONS_STATUS] Found {sum(1 for i in integrations if i['connected'])} connected integrations")
 

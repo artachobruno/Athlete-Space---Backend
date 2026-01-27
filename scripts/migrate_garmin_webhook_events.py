@@ -15,7 +15,12 @@ def migrate_garmin_webhook_events() -> None:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='garmin_webhook_events'"))
         else:
             # PostgreSQL
-            result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'garmin_webhook_events'"))
+            result = conn.execute(
+                text(
+                    "SELECT tablename FROM pg_tables "
+                    "WHERE schemaname = 'public' AND tablename = 'garmin_webhook_events'"
+                )
+            )
         table_exists = result.fetchone() is not None
 
         if table_exists:

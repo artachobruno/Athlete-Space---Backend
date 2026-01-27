@@ -292,19 +292,18 @@ def get_execution_summary(
         WorkoutExecutionSummary if found, None otherwise
     """
     try:
-        summary = session.execute(
+        return session.execute(
             select(WorkoutExecutionSummary).where(
                 WorkoutExecutionSummary.activity_id == activity_id
             )
         ).scalar_one_or_none()
-        return summary
     except ProgrammingError as e:
         # Handle missing column gracefully (migration may not have run yet)
         error_str = str(e).lower()
         if "llm_feedback" in error_str or "undefinedcolumn" in error_str or "does not exist" in error_str:
             logger.warning(
-                f"workout_execution_summaries.llm_feedback column missing - migration may not have run. "
-                f"Returning None to avoid transaction abort. Run migration: migrate_add_llm_feedback_to_execution_summaries"
+                "workout_execution_summaries.llm_feedback column missing - migration may not have run. "
+                "Returning None to avoid transaction abort. Run migration: migrate_add_llm_feedback_to_execution_summaries"
             )
             # Rollback the transaction to avoid cascading errors
             session.rollback()

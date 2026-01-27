@@ -19,6 +19,7 @@ from app.api.dependencies.auth import get_current_user_id
 from app.coach.utils.climate_expectation import generate_climate_expectation
 from app.config.settings import settings
 from app.core.encryption import EncryptionError, EncryptionKeyError, decrypt_token, encrypt_token
+from app.core.system_memory import log_memory_snapshot
 from app.db.models import Activity, PairingDecision, PlannedSession, StravaAccount
 from app.db.session import get_session
 from app.ingestion.fetch_streams import fetch_and_save_streams
@@ -167,10 +168,9 @@ def get_activities(
 
     # Memory monitoring for this endpoint
     try:
-        from app.core.system_memory import log_memory_snapshot
         log_memory_snapshot("activities_endpoint_start")
-    except Exception:
-        pass  # Don't fail if memory monitoring fails
+    except Exception as e:
+        logger.debug(f"Memory monitoring failed: {e}")
 
     with get_session() as session:
         # Build base query
@@ -289,14 +289,13 @@ def get_activities(
             })
 
         logger.info(f"[ACTIVITIES] Returning {len(activities)} activities (total: {total})")
-        
+
         # Memory monitoring after query
         try:
-            from app.core.system_memory import log_memory_snapshot
             log_memory_snapshot("activities_endpoint_end")
-        except Exception:
-            pass  # Don't fail if memory monitoring fails
-        
+        except Exception as e:
+            logger.debug(f"Memory monitoring failed: {e}")
+
         return {
             "activities": activities,
             "total": total,

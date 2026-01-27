@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from app.db.session import get_engine
+
 
 @dataclass
 class MemorySnapshot:
@@ -31,12 +33,12 @@ def get_memory_snapshot() -> MemorySnapshot:
     try:
         # Get process memory usage
         usage = resource.getrusage(resource.RUSAGE_SELF)
-        
+
         # RSS (Resident Set Size) - actual physical memory used
         # getrusage returns RSS in kilobytes on Linux, bytes on macOS
         # ru_maxrss is the peak RSS since process start
         rss_raw = usage.ru_maxrss
-        
+
         # Detect platform: macOS returns bytes, Linux returns kilobytes
         # Use platform detection for accuracy
         system = platform.system()
@@ -46,15 +48,15 @@ def get_memory_snapshot() -> MemorySnapshot:
         else:
             # Linux and other Unix systems return kilobytes
             rss_mb = rss_raw / 1024.0
-        
+
         # For peak RSS, we use ru_maxrss which is the maximum RSS since process start
         peak_rss_mb = rss_mb
-        
+
         # Virtual memory size (not available from getrusage, approximate)
         # On Linux, we could read /proc/self/status, but for cross-platform
         # we'll just use RSS as approximation
         vms_mb = rss_mb
-        
+
         return MemorySnapshot(
             rss_mb=rss_mb,
             vms_mb=vms_mb,
@@ -73,14 +75,14 @@ def log_memory_snapshot(component: str = "system") -> None:
         component: Component name for logging context
     """
     snapshot = get_memory_snapshot()
-    
+
     # Warn if memory usage is high (> 350MB for 512MB limit - more aggressive warning)
     memory_warning = ""
     if snapshot.rss_mb > 350:
         memory_warning = f" [WARNING: High memory usage - {snapshot.rss_mb:.1f}MB / 512MB limit]"
     if snapshot.rss_mb > 450:
         memory_warning = f" [CRITICAL: Very high memory usage - {snapshot.rss_mb:.1f}MB / 512MB limit - OOM risk!]"
-    
+
     logger.info(
         f"[MEMORY] {component}: RSS={snapshot.rss_mb:.1f}MB, VMS={snapshot.vms_mb:.1f}MB, Peak={snapshot.peak_rss_mb:.1f}MB{memory_warning}"
     )
@@ -93,11 +95,9 @@ def get_connection_pool_status() -> dict[str, int | str]:
         Dictionary with pool status metrics
     """
     try:
-        from app.db.session import get_engine
-        
         engine = get_engine()
         pool = engine.pool
-        
+
         return {
             "pool_size": pool.size(),
             "checked_in": pool.checkedin(),

@@ -53,7 +53,7 @@ class PlannerInvariantError(PlannerError):
     pass
 
 
-class PlannerAbort(PlannerError):
+class PlannerAbortError(PlannerError):
     """Raised when plan generation must be aborted (e.g., zero sessions created)."""
 
     pass

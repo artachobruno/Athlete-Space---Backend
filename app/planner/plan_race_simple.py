@@ -57,9 +57,42 @@ from app.domains.training_plan.session_template_selector import select_templates
 from app.domains.training_plan.session_text_generator import generate_session_text
 from app.domains.training_plan.volume_allocator import allocate_week_volume
 from app.planner.calendar_persistence import PersistResult, persist_plan
-from app.planner.errors import PlannerAbort, PlannerInvariantError
 from app.planner.enums import DayType
+from app.planner.errors import PlannerAbortError, PlannerInvariantError
 from app.planner.plan_validator import validate_plan_integrity
+
+
+def _raise_text_generation_error(week_idx: int, day_index: int) -> None:
+    """Raise error when session text generation fails."""
+    raise PlannerInvariantError(f"Session text generation failed for week {week_idx + 1}, day {day_index}")
+
+
+def _raise_zero_distance_error(week_idx: int, week_volume: float) -> None:
+    """Raise error when week has volume but all days have zero distance."""
+    raise PlannerInvariantError(
+        f"Week {week_idx + 1} has weekly_distance={week_volume} but all days allocated zero distance"
+    )
+
+
+def _raise_no_template_error(week_idx: int, day_index: int) -> None:
+    """Raise error when no template is selected for a session."""
+    raise PlannerInvariantError(f"No template selected for week {week_idx + 1}, day {day_index}")
+
+
+def _raise_session_generation_error(b6_failures: list[str]) -> None:
+    """Raise error when session generation is incomplete."""
+    raise PlannerAbortError(
+        f"Session generation incomplete for plan creation: {len(b6_failures)} sessions failed. "
+        f"Failures: {', '.join(b6_failures[:10])}"
+    )
+
+
+def _raise_persist_error(created: int, updated: int, skipped: int) -> None:
+    """Raise error when plan persistence fails."""
+    raise PlannerAbortError(
+        f"Plan created but nothing persisted — aborting "
+        f"(created={created}, updated={updated}, skipped={skipped})"
+    )
 
 
 def _log_plan_summary(
@@ -104,7 +137,7 @@ def _log_plan_summary(
     }
 
     # Add week-by-week details
-    for week_idx, (macro_week, week_structure, planned_week) in enumerate(
+    for _week_idx, (macro_week, week_structure, planned_week) in enumerate(
         zip(macro_weeks, week_structures, planned_weeks, strict=False)
     ):
         # Calculate total weekly mileage
@@ -221,13 +254,11 @@ async def _generate_week_with_text(
             sessions_with_text = await asyncio.gather(
                 *[generate_session_with_text(session) for session in planned_sessions]
             )
-            
+
             # Fix 1: Hard invariant after B6 - all sessions must have text_output
             for session in sessions_with_text:
                 if session.text_output is None:
-                    raise PlannerInvariantError(
-                        f"Session text generation failed for week {week_idx + 1}, day {session.day_index}"
-                    )
+                    _raise_text_generation_error(week_idx, session.day_index)
 
             planned_week = PlannedWeek(
                 week_index=week_idx + 1,
@@ -335,20 +366,18 @@ async def execute_canonical_pipeline(
                     for week_idx, structure in enumerate(week_structures)
                 ]
             )
-            
+
             # Fix 1: Hard invariant after B4 - if weekly distance > 0, must have allocated distance
-            for week_idx, (structure, distributed_days) in enumerate(zip(week_structures, distributed_weeks, strict=False)):
+            for week_idx, (_structure, distributed_days) in enumerate(zip(week_structures, distributed_weeks, strict=False)):
                 # Calculate the weekly volume that was used
                 if base_volume_calculator:
                     week_volume = base_volume_calculator(week_idx)
                 else:
                     base_volume = 40.0
                     week_volume = base_volume + (week_idx * 2.0)
-                
+
                 if week_volume > 0 and all(day.distance == 0 for day in distributed_days):
-                    raise PlannerInvariantError(
-                        f"Week {week_idx + 1} has weekly_distance={week_volume} but all days allocated zero distance"
-                    )
+                    _raise_zero_distance_error(week_idx, week_volume)
         log_stage_event(PlannerStage.VOLUME, "success", plan_id, {"week_count": len(distributed_weeks)})
         log_stage_metric(PlannerStage.VOLUME, True)
         log_event("volume_allocated", week_count=len(distributed_weeks), plan_id=plan_id)
@@ -401,13 +430,11 @@ async def execute_canonical_pipeline(
                         distributed_days,
                         structure.day_index_to_session_type,
                     )
-                    
+
                     # Fix 1: Hard invariant after B5 - all sessions must have templates
                     for session in planned_sessions:
                         if session.template is None:
-                            raise PlannerInvariantError(
-                                f"No template selected for week {week_idx + 1}, day {session.day_index}"
-                            )
+                            _raise_no_template_error(week_idx, session.day_index)
 
                     # Emit INSTRUCTIONS progress before text generation
                     if conversation_id and week_idx == 0:
@@ -447,19 +474,19 @@ async def execute_canonical_pipeline(
             )
             # Sort by week_index to maintain order
             planned_weeks = sorted(planned_weeks, key=lambda w: w.week_index)
-            
+
             # Fix 2: Check for B6 failures (sessions without text_output) and fail hard for plan creation
-            b6_failures = []
-            for week in planned_weeks:
-                for session in week.sessions:
-                    if isinstance(session, PlannedSession) and session.distance > 0 and session.text_output is None:
-                        b6_failures.append(f"week {week.week_index}, day {session.day_index}")
-            
+            b6_failures = [
+                f"week {week.week_index}, day {session.day_index}"
+                for week in planned_weeks
+                for session in week.sessions
+                if isinstance(session, PlannedSession)
+                and session.distance > 0
+                and session.text_output is None
+            ]
+
             if b6_failures and ctx.plan_type == PlanType.RACE:
-                raise PlannerAbort(
-                    f"Session generation incomplete for plan creation: {len(b6_failures)} sessions failed. "
-                    f"Failures: {', '.join(b6_failures[:10])}"
-                )
+                _raise_session_generation_error(b6_failures)
         log_stage_event(PlannerStage.TEMPLATE, "success", plan_id, {"week_count": len(planned_weeks)})
         log_stage_metric(PlannerStage.TEMPLATE, True)
         log_event("template_selected", week_count=len(planned_weeks), plan_id=plan_id)
@@ -484,7 +511,7 @@ async def execute_canonical_pipeline(
         raise PlannerInvariantError(
             "Plan creation produced zero sessions"
         )
-    
+
     # Calculate expected sessions (all days with distance > 0)
     expected_sessions = sum(
         1
@@ -492,7 +519,7 @@ async def execute_canonical_pipeline(
         for session in week.sessions
         if isinstance(session, PlannedSession) and session.distance > 0
     )
-    
+
     if len(all_planned_sessions) < expected_sessions:
         raise PlannerInvariantError(
             f"Expected {expected_sessions} sessions, got {len(all_planned_sessions)}"
@@ -530,12 +557,10 @@ async def execute_canonical_pipeline(
                 athlete_id=athlete_id,
                 plan_id=plan_id,
             )
-            
+
             # Fix 4: Make B7 loud - fail if nothing was created or updated
             if persist_result.created == 0 and persist_result.updated == 0:
-                raise PlannerAbort(
-                    f"Plan created but nothing persisted — aborting (created=0, updated={persist_result.updated}, skipped={persist_result.skipped})"
-                )
+                _raise_persist_error(persist_result.created, persist_result.updated, persist_result.skipped)
         log_stage_event(
             PlannerStage.PERSIST,
             "success",

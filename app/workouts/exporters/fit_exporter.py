@@ -7,89 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from typing import ClassVar
-
-try:
-    from fit_tool.fit_file_builder import FitFileBuilder
-    from fit_tool.profile.messages.file_id_message import FileIdMessage
-    from fit_tool.profile.messages.workout_message import WorkoutMessage
-    from fit_tool.profile.messages.workout_step_message import WorkoutStepMessage
-    from fit_tool.profile.profile_type import (
-        FileType,
-        Intensity,
-        Manufacturer,
-        Sport,
-        WorkoutStepDuration,
-        WorkoutStepTarget,
-    )
-    FIT_TOOL_AVAILABLE = True
-except ImportError:
-    FIT_TOOL_AVAILABLE = False
-    # Create stub classes for type annotations when fit-tool is not available
-    class FitFileBuilder:  # type: ignore[no-redef]
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        def add(self, *args: object) -> None:
-            pass
-
-        def build(self) -> object:
-            return object()
-
-    class FileIdMessage:  # type: ignore[no-redef]
-        type: object = None
-        manufacturer: object = None
-        product: int = 0
-        time_created: int = 0
-        serial_number: int = 0
-
-    class WorkoutMessage:  # type: ignore[no-redef]
-        sport: object = None
-        num_valid_steps: int = 0
-        workout_name: str = ""
-
-    class WorkoutStepMessage:  # type: ignore[no-redef]
-        message_index: int = 0
-        duration_type: object = None
-        duration_time: float = 0.0
-        duration_distance: float = 0.0
-        intensity: object = None
-        target_type: object = None
-        target_hr_zone: object = None
-        target_power_zone: object = None
-        custom_target_value_low: int = 0
-        custom_target_value_high: int = 0
-        workout_step_name: str = ""
-
-    class FileType:  # type: ignore[no-redef]
-        WORKOUT: object = None
-
-    class Intensity:  # type: ignore[no-redef]
-        WARMUP: object = None
-        ACTIVE: object = None
-        REST: object = None
-        COOLDOWN: object = None
-
-    class ManufacturerStub:  # type: ignore[no-redef]
-        value: int = 0
-
-    class Manufacturer:  # type: ignore[no-redef]
-        DEVELOPMENT: ManufacturerStub = ManufacturerStub()
-
-    class Sport:  # type: ignore[no-redef]
-        RUNNING: object = None
-        CYCLING: object = None
-        SWIMMING: object = None
-
-    class WorkoutStepDuration:  # type: ignore[no-redef]
-        TIME: object = None
-        DISTANCE: object = None
-
-    class WorkoutStepTarget:  # type: ignore[no-redef]
-        SPEED: object = None
-        HEART_RATE: object = None
-        POWER: object = None
-        OPEN: object = None
+from typing import ClassVar, cast
 
 from garmin_fit_sdk import Decoder
 from loguru import logger
@@ -98,13 +16,141 @@ from app.workouts.exporters.base import WorkoutExporter
 from app.workouts.models import Workout, WorkoutStep
 
 
+# Define stub classes first (for type checking when fit_tool is not available)
+class _FitFileBuilderStub:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def add(self, *args: object) -> None:
+        pass
+
+    @staticmethod
+    def build() -> object:
+        return object()
+
+
+class _FileIdMessageStub:
+    type: object = None
+    manufacturer: object = None
+    product: int = 0
+    time_created: int = 0
+    serial_number: int = 0
+
+
+class _WorkoutMessageStub:
+    sport: object = None
+    num_valid_steps: int = 0
+    workout_name: str = ""
+
+
+class _WorkoutStepMessageStub:
+    message_index: int = 0
+    duration_type: object = None
+    duration_time: float = 0.0
+    duration_distance: float = 0.0
+    intensity: object = None
+    target_type: object = None
+    target_hr_zone: object = None
+    target_power_zone: object = None
+    custom_target_value_low: int = 0
+    custom_target_value_high: int = 0
+    workout_step_name: str = ""
+
+
+class _FileTypeStub:
+    WORKOUT: object = None
+
+
+class _IntensityStub:
+    WARMUP: object = None
+    ACTIVE: object = None
+    REST: object = None
+    COOLDOWN: object = None
+
+
+class _ManufacturerStubInner:
+    value: int = 0
+
+
+class _ManufacturerStub:
+    DEVELOPMENT: _ManufacturerStubInner = _ManufacturerStubInner()
+
+
+class _SportStub:
+    RUNNING: object = None
+    CYCLING: object = None
+    SWIMMING: object = None
+
+
+class _WorkoutStepDurationStub:
+    TIME: object = None
+    DISTANCE: object = None
+
+
+class _WorkoutStepTargetStub:
+    SPEED: object = None
+    HEART_RATE: object = None
+    POWER: object = None
+    OPEN: object = None
+
+
+try:
+    from fit_tool.fit_file_builder import FitFileBuilder as _RealFitFileBuilder
+    from fit_tool.profile.messages.file_id_message import FileIdMessage as _RealFileIdMessage
+    from fit_tool.profile.messages.workout_message import WorkoutMessage as _RealWorkoutMessage
+    from fit_tool.profile.messages.workout_step_message import WorkoutStepMessage as _RealWorkoutStepMessage
+    from fit_tool.profile.profile_type import (
+        FileType as _RealFileType,
+    )
+    from fit_tool.profile.profile_type import (
+        Intensity as _RealIntensity,
+    )
+    from fit_tool.profile.profile_type import (
+        Manufacturer as _RealManufacturer,
+    )
+    from fit_tool.profile.profile_type import (
+        Sport as _RealSport,
+    )
+    from fit_tool.profile.profile_type import (
+        WorkoutStepDuration as _RealWorkoutStepDuration,
+    )
+    from fit_tool.profile.profile_type import (
+        WorkoutStepTarget as _RealWorkoutStepTarget,
+    )
+    # Assign to module-level names for use throughout the file
+    FitFileBuilder = _RealFitFileBuilder
+    FileIdMessage = _RealFileIdMessage
+    WorkoutMessage = _RealWorkoutMessage
+    WorkoutStepMessage = _RealWorkoutStepMessage
+    FileType = _RealFileType
+    Intensity = _RealIntensity
+    Manufacturer = _RealManufacturer
+    Sport = _RealSport
+    WorkoutStepDuration = _RealWorkoutStepDuration
+    WorkoutStepTarget = _RealWorkoutStepTarget
+    FIT_TOOL_AVAILABLE = True
+except ImportError:
+    FIT_TOOL_AVAILABLE = False
+    # Use stub classes when fit-tool is not available
+    FitFileBuilder = _FitFileBuilderStub
+    FileIdMessage = _FileIdMessageStub
+    WorkoutMessage = _WorkoutMessageStub
+    WorkoutStepMessage = _WorkoutStepMessageStub
+    FileType = _FileTypeStub
+    Intensity = _IntensityStub
+    Manufacturer = _ManufacturerStub
+    Sport = _SportStub
+    WorkoutStepDuration = _WorkoutStepDurationStub
+    WorkoutStepTarget = _WorkoutStepTargetStub
+
+
 class FitWorkoutExporter(WorkoutExporter):
     """FIT file exporter for Garmin workouts."""
 
     export_type = "fit"
 
     # Sport type mapping
-    SPORT_MAP: ClassVar[dict[str, Sport]] = {
+    SPORT_MAP: ClassVar[dict[str, object]] = {
         "run": Sport.RUNNING,
         "running": Sport.RUNNING,
         "bike": Sport.CYCLING,
@@ -115,7 +161,7 @@ class FitWorkoutExporter(WorkoutExporter):
     }
 
     # Step type to intensity mapping
-    INTENSITY_MAP: ClassVar[dict[str, Intensity]] = {
+    INTENSITY_MAP: ClassVar[dict[str, object]] = {
         "warmup": Intensity.WARMUP,
         "steady": Intensity.ACTIVE,
         "interval": Intensity.ACTIVE,
@@ -125,7 +171,7 @@ class FitWorkoutExporter(WorkoutExporter):
     }
 
     # Target metric to FIT target type mapping
-    TARGET_METRIC_MAP: ClassVar[dict[str, WorkoutStepTarget]] = {
+    TARGET_METRIC_MAP: ClassVar[dict[str, object]] = {
         "pace": WorkoutStepTarget.SPEED,
         "hr": WorkoutStepTarget.HEART_RATE,
         "power": WorkoutStepTarget.POWER,
@@ -152,6 +198,8 @@ class FitWorkoutExporter(WorkoutExporter):
                 "Install it with: pip install fit-tool "
                 "or from GitHub if available."
             )
+        # After the check above, we know FIT_TOOL_AVAILABLE is True
+        # This means we're using real fit_tool types, not stubs
         # Validate steps
         if not steps:
             raise ValueError("Workout must have at least one step")
@@ -185,7 +233,9 @@ class FitWorkoutExporter(WorkoutExporter):
         sorted_steps = valid_steps
 
         # Create FIT file builder
-        builder = FitFileBuilder(auto_define=True, min_string_size=50)
+        # After FIT_TOOL_AVAILABLE check, we know we're using real types
+        # Use cast to help pyright understand we're using real types (not stubs)
+        builder = cast(type[_RealFitFileBuilder], FitFileBuilder)(auto_define=True, min_string_size=50)
 
         # Create File ID message
         # FIT epoch is UTC 00:00:00 December 31, 1989
@@ -193,7 +243,7 @@ class FitWorkoutExporter(WorkoutExporter):
         now = datetime.now(timezone.utc)
         time_since_fit_epoch = (now - fit_epoch).total_seconds()
 
-        file_id_message = FileIdMessage()
+        file_id_message = cast(type[_RealFileIdMessage], FileIdMessage)()
         file_id_message.type = FileType.WORKOUT
         file_id_message.manufacturer = Manufacturer.DEVELOPMENT.value
         file_id_message.product = 0
@@ -206,7 +256,7 @@ class FitWorkoutExporter(WorkoutExporter):
         fit_sport = self.SPORT_MAP.get(sport_lower, Sport.RUNNING)
 
         # Create workout message
-        workout_msg = WorkoutMessage()
+        workout_msg = cast(type[_RealWorkoutMessage], WorkoutMessage)()
         workout_msg.sport = fit_sport
         workout_msg.num_valid_steps = len(sorted_steps)  # Use filtered list length
         if workout.source_ref:
@@ -215,7 +265,7 @@ class FitWorkoutExporter(WorkoutExporter):
 
         # Create workout steps
         for step_idx, step in enumerate(sorted_steps):
-            step_msg = WorkoutStepMessage()
+            step_msg = cast(type[_RealWorkoutStepMessage], WorkoutStepMessage)()
             step_msg.message_index = step_idx
 
             # Set duration
@@ -281,6 +331,7 @@ class FitWorkoutExporter(WorkoutExporter):
                 # FIT workout step names are limited, truncate if needed
                 step_msg.workout_step_name = step_name[:50]  # Reasonable limit
 
+            # Type narrowing ensures we're using real types here
             builder.add(step_msg)
 
         # Build FIT file

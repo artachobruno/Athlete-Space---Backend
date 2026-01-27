@@ -296,7 +296,7 @@ async def generate_session_text_llm(
     for attempt in range(max_attempts_transient):
         try:
             logger.debug("Calling LLM for session text", attempt=attempt + 1, template_id=input_data.template_id)
-            
+
             # Log full prompt (system + user) after all variables are substituted
             full_prompt = f"System Prompt:\n{system_prompt}\n\nUser Prompt:\n{user_message}"
             # Use opt(raw=True) to prevent loguru from interpreting curly braces in JSON as format placeholders
@@ -311,7 +311,7 @@ async def generate_session_text_llm(
                 user_prompt=user_message,
                 full_prompt=full_prompt,
             )
-            
+
             result = await agent.run(user_message)
 
             # Extract raw response from result
@@ -344,7 +344,7 @@ async def generate_session_text_llm(
 
             # Parse schema output
             parsed = result.output
-            
+
             # Log parsed/extracted response
             parsed_dict = parsed.model_dump() if hasattr(parsed, "model_dump") else {
                 "title": parsed.title,

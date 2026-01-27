@@ -293,6 +293,14 @@ def strava_connect(user_id: str = Depends(get_current_user_id)):
     """
     logger.info(f"[STRAVA_OAUTH] Connect initiated for authenticated user_id={user_id}")
 
+    # Feature flag guard: Strava disabled for Garmin-first strategy
+    if not settings.strava_enabled:
+        logger.warning(f"[STRAVA_OAUTH] Strava integration disabled (STRAVA_ENABLED=false) for user_id={user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"status": "coming_soon", "message": "Strava integration is coming soon"},
+        )
+
     # Validate Strava credentials are configured
     if not settings.strava_client_id or not settings.strava_client_secret:
         logger.error("[STRAVA_OAUTH] Strava credentials not configured")
@@ -354,6 +362,12 @@ def strava_callback(
         HTMLResponse with error message on failure
     """
     logger.info(f"[STRAVA_OAUTH] Callback received with state: {state[:16]}...")
+
+    # Feature flag guard: Strava disabled for Garmin-first strategy
+    if not settings.strava_enabled:
+        logger.warning("[STRAVA_OAUTH] Strava integration disabled (STRAVA_ENABLED=false)")
+        redirect_url = settings.frontend_url
+        return _create_error_html(redirect_url, "Strava integration is coming soon")
 
     # Determine frontend URL for redirect
     redirect_url = settings.frontend_url
@@ -495,6 +509,14 @@ def strava_disconnect(user_id: str = Depends(get_current_user_id)):
         Success response with status
     """
     logger.info(f"[STRAVA_OAUTH] Disconnect requested for user_id={user_id}")
+
+    # Feature flag guard: Strava disabled for Garmin-first strategy
+    if not settings.strava_enabled:
+        logger.warning(f"[STRAVA_OAUTH] Strava integration disabled (STRAVA_ENABLED=false) for user_id={user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"status": "coming_soon", "message": "Strava integration is coming soon"},
+        )
 
     with get_session() as session:
         account = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()

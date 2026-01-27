@@ -87,7 +87,7 @@ def _get_engine():
         # This handles fan-out concurrency: 1 UI interaction → multiple DB queries
         pool_size = 5  # Base pool
         max_overflow = 5  # Overflow connections (total max: 10 connections)
-        
+
         _engine = create_engine(
             settings.database_url,
             connect_args=connect_args,

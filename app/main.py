@@ -54,6 +54,7 @@ from app.coach.api import router as coach_router
 from app.coach.api_chat import router as coach_chat_router
 from app.config.settings import settings
 from app.core.conversation_id import conversation_id_middleware
+from app.core.memory_middleware import memory_monitoring_middleware
 from app.core.logger import setup_logger
 from app.core.observe import init as observe_init
 from app.db.models import Base
@@ -818,7 +819,17 @@ async def deferred_heavy_init():
     # Step 3: Initialize template library (required for planner)
     try:
         logger.info("[TEMPLATE_LIBRARY] Initializing template library from cache")
+        try:
+            from app.core.system_memory import log_memory_snapshot
+            log_memory_snapshot("template_library_before")
+        except Exception:
+            pass
         initialize_template_library_from_cache()
+        try:
+            from app.core.system_memory import log_memory_snapshot
+            log_memory_snapshot("template_library_after")
+        except Exception:
+            pass
         logger.info("[TEMPLATE_LIBRARY] Template library initialized successfully")
     except Exception as e:
         logger.exception("[TEMPLATE_LIBRARY] Failed to initialize template library: {}", e)
@@ -944,6 +955,14 @@ app.add_middleware(
 async def conversation_id_middleware_wrapper(request: Request, call_next):
     """Wrapper to register conversation_id_middleware."""
     return await conversation_id_middleware(request, call_next)
+
+
+# Memory monitoring middleware (after conversation_id)
+# Tracks memory usage for requests to identify memory-intensive endpoints
+@app.middleware("http")
+async def memory_monitoring_middleware_wrapper(request: Request, call_next):
+    """Wrapper to register memory_monitoring_middleware."""
+    return await memory_monitoring_middleware(request, call_next)
 
 
 # Request latency tracking middleware (after conversation_id)

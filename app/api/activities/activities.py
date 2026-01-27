@@ -165,6 +165,13 @@ def get_activities(
     """
     logger.info(f"[ACTIVITIES] GET /activities called for user_id={user_id}, limit={limit}, offset={offset}, start={start}, end={end}")
 
+    # Memory monitoring for this endpoint
+    try:
+        from app.core.system_memory import log_memory_snapshot
+        log_memory_snapshot("activities_endpoint_start")
+    except Exception:
+        pass  # Don't fail if memory monitoring fails
+
     with get_session() as session:
         # Build base query
         query = select(Activity).where(Activity.user_id == user_id)
@@ -282,6 +289,14 @@ def get_activities(
             })
 
         logger.info(f"[ACTIVITIES] Returning {len(activities)} activities (total: {total})")
+        
+        # Memory monitoring after query
+        try:
+            from app.core.system_memory import log_memory_snapshot
+            log_memory_snapshot("activities_endpoint_end")
+        except Exception:
+            pass  # Don't fail if memory monitoring fails
+        
         return {
             "activities": activities,
             "total": total,

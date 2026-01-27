@@ -82,11 +82,7 @@ def log_memory_snapshot(component: str = "system") -> None:
         memory_warning = f" [CRITICAL: Very high memory usage - {snapshot.rss_mb:.1f}MB / 512MB limit - OOM risk!]"
     
     logger.info(
-        f"memory_snapshot{memory_warning}",
-        component=component,
-        rss_mb=round(snapshot.rss_mb, 2),
-        vms_mb=round(snapshot.vms_mb, 2),
-        peak_rss_mb=round(snapshot.peak_rss_mb, 2),
+        f"[MEMORY] {component}: RSS={snapshot.rss_mb:.1f}MB, VMS={snapshot.vms_mb:.1f}MB, Peak={snapshot.peak_rss_mb:.1f}MB{memory_warning}"
     )
 
 
@@ -117,4 +113,10 @@ def get_connection_pool_status() -> dict[str, int | str]:
 def log_connection_pool_status() -> None:
     """Log database connection pool status."""
     status = get_connection_pool_status()
-    logger.info("connection_pool_status", **status)
+    if "error" in status:
+        logger.warning(f"[DB_POOL] Error getting pool status: {status['error']}")
+    else:
+        logger.info(
+            f"[DB_POOL] size={status['pool_size']}, checked_in={status['checked_in']}, "
+            f"checked_out={status['checked_out']}, overflow={status['overflow']}, invalid={status['invalid']}"
+        )

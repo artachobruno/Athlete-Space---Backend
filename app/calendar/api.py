@@ -1621,24 +1621,29 @@ def _delete_workout_if_orphaned(
 
         # Only delete workout if it's not referenced elsewhere
         if activity_count == 0 and other_planned_count == 0:
-            # Delete workout_steps first (cascade order)
-            workout_steps = session.execute(
-                select(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
-            ).scalars().all()
-            for step in workout_steps:
-                session.delete(step)
+            # Delete workout_steps first (cascade order) - use bulk delete to avoid loading all into memory
+            from sqlalchemy import delete as sql_delete
+            deleted_steps = session.execute(
+                sql_delete(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
+            )
+            logger.debug(
+                f"[PLANNED-SESSIONS] Deleted {deleted_steps.rowcount} workout steps for workout_id={workout_id}"
+            )
 
-            # Delete workout
-            workout = session.execute(
-                select(Workout).where(Workout.id == workout_id)
-            ).scalar_one_or_none()
-            if workout:
-                session.delete(workout)
+            # Delete workout using bulk delete to avoid loading into memory
+            deleted_workout = session.execute(
+                sql_delete(Workout).where(Workout.id == workout_id)
+            )
+            if deleted_workout.rowcount > 0:
                 logger.info(
                     "Deleted orphaned workout during session cancellation",
                     workout_id=workout_id,
                     session_id=session_id,
                     user_id=user_id,
+                )
+            else:
+                logger.warning(
+                    f"[PLANNED-SESSIONS] Workout {workout_id} not found for deletion (may have been already deleted)"
                 )
         else:
             logger.info(
@@ -2238,6 +2243,13 @@ def delete_planned_session(
         f"[PLANNED-SESSIONS] DELETE /planned-sessions/{planned_session_id} called for user_id={user_id}"
     )
 
+    # Memory monitoring for deletion operation
+    try:
+        from app.core.system_memory import log_memory_snapshot
+        log_memory_snapshot("delete_planned_session_start")
+    except Exception:
+        pass  # Don't fail if memory monitoring fails
+
     with get_session() as session:
         # STRICT VALIDATION: Only query PlannedSession table
         # This ensures we ONLY accept planned_sessions.id
@@ -2294,21 +2306,26 @@ def delete_planned_session(
 
             # Only delete workout if it's not referenced elsewhere
             if activity_count == 0 and other_planned_count == 0:
-                # Delete workout_steps first (cascade order)
-                workout_steps = session.execute(
-                    select(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
-                ).scalars().all()
-                for step in workout_steps:
-                    session.delete(step)
+                # Delete workout_steps first (cascade order) - use bulk delete to avoid loading all into memory
+                from sqlalchemy import delete as sql_delete
+                deleted_steps = session.execute(
+                    sql_delete(WorkoutStep).where(WorkoutStep.workout_id == workout_id)
+                )
+                logger.debug(
+                    f"[PLANNED-SESSIONS] Deleted {deleted_steps.rowcount} workout steps for workout_id={workout_id}"
+                )
 
-                # Delete workout
-                workout = session.execute(
-                    select(Workout).where(Workout.id == workout_id)
-                ).scalar_one_or_none()
-                if workout:
-                    session.delete(workout)
+                # Delete workout using bulk delete to avoid loading into memory
+                deleted_workout = session.execute(
+                    sql_delete(Workout).where(Workout.id == workout_id)
+                )
+                if deleted_workout.rowcount > 0:
                     logger.info(
                         f"[PLANNED-SESSIONS] Deleted orphaned workout: workout_id={workout_id}, user_id={user_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"[PLANNED-SESSIONS] Workout {workout_id} not found for deletion (may have been already deleted)"
                     )
             else:
                 logger.info(
@@ -2322,3 +2339,10 @@ def delete_planned_session(
         logger.info(
             f"[PLANNED-SESSIONS] Deleted planned session: id={planned_session_id}, user_id={user_id}"
         )
+
+    # Memory monitoring after deletion
+    try:
+        from app.core.system_memory import log_memory_snapshot
+        log_memory_snapshot("delete_planned_session_end")
+    except Exception:
+        pass  # Don't fail if memory monitoring fails

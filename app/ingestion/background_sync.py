@@ -183,6 +183,13 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
     """
     logger.info(f"[SYNC] Starting sync for user_id={user_id}")
 
+    # Memory monitoring for sync operations
+    try:
+        from app.core.system_memory import log_memory_snapshot
+        log_memory_snapshot("sync_start")
+    except Exception:
+        pass  # Don't fail if memory monitoring fails
+
     # Get access token (with refresh if needed)
     try:
         access_token = _get_access_token_from_account(account, session)
@@ -505,6 +512,13 @@ def _sync_user_activities(user_id: str, account: StravaAccount, session) -> dict
         f"imported={imported_count}, skipped={skipped_count}, duplicates={duplicate_count}, "
         f"total_fetched={total_fetched}"
     )
+
+    # Memory monitoring after sync
+    try:
+        from app.core.system_memory import log_memory_snapshot
+        log_memory_snapshot("sync_end")
+    except Exception:
+        pass  # Don't fail if memory monitoring fails
 
     # Trigger metrics recomputation if new activities were imported
     if imported_count > 0:

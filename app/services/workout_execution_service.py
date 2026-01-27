@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.api.schemas.schemas import ExecutionStateInfo
@@ -292,11 +293,23 @@ def get_execution_summary(
                 WorkoutExecutionSummary.activity_id == activity_id
             )
         ).scalar_one_or_none()
+        return summary
+    except ProgrammingError as e:
+        # Handle missing column gracefully (migration may not have run yet)
+        error_str = str(e).lower()
+        if "llm_feedback" in error_str or "undefinedcolumn" in error_str or "does not exist" in error_str:
+            logger.warning(
+                f"workout_execution_summaries.llm_feedback column missing - migration may not have run. "
+                f"Returning None to avoid transaction abort. Run migration: migrate_add_llm_feedback_to_execution_summaries"
+            )
+            # Rollback the transaction to avoid cascading errors
+            session.rollback()
+            return None
+        # Re-raise if it's a different ProgrammingError
+        raise
     except Exception as e:
         logger.debug(f"Execution summary not found or table doesn't exist: {e}")
         return None
-    else:
-        return summary
 
 
 async def ensure_execution_summary_async(

@@ -20,6 +20,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from loguru import logger
 from sqlalchemy import inspect, select, text
+from sqlalchemy.exc import ProgrammingError
 
 from app.api.dependencies.auth import get_current_user_id
 from app.config.settings import settings
@@ -162,11 +163,28 @@ def _encrypt_and_store_tokens(
         ) from e
 
     with get_session() as session:
-        existing = session.execute(
-            select(UserIntegration).where(
-                UserIntegration.user_id == user_id, UserIntegration.provider == "garmin"
-            )
-        ).first()
+        # Check if integration exists, handling schema mismatch gracefully
+        existing = None
+        try:
+            existing = session.execute(
+                select(UserIntegration).where(
+                    UserIntegration.user_id == user_id, UserIntegration.provider == "garmin"
+                )
+            ).first()
+        except ProgrammingError as e:
+            # Check if this is a schema mismatch error (missing column)
+            error_str = str(e.orig) if hasattr(e, "orig") else str(e)
+            if "historical_backfill_cursor_date" in error_str or "does not exist" in error_str:
+                logger.error(
+                    f"[GARMIN_OAUTH] Database schema mismatch - missing column. "
+                    f"Migration must be run before connecting Garmin. Error: {error_str}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Database schema mismatch: Migration required. Please contact support or run migrations.",
+                ) from e
+            # Re-raise if it's a different error
+            raise
 
         if existing:
             integration = existing[0]

@@ -13,6 +13,7 @@ from app.api.admin.utils import require_admin
 from app.api.dependencies.auth import get_current_user_id
 from app.db.session import get_session
 from scripts.migrate_activities_garmin_fields import migrate_activities_garmin_fields
+from scripts.migrate_garmin_history_cursor import migrate_garmin_history_cursor
 from scripts.migrate_garmin_webhook_events import migrate_garmin_webhook_events
 from scripts.migrate_user_integrations import migrate_user_integrations
 
@@ -41,6 +42,7 @@ def run_garmin_migrations(
     user_integrations: bool = Query(False, description="Run user_integrations migration only"),
     webhook_events: bool = Query(False, description="Run garmin_webhook_events migration only"),
     activities: bool = Query(False, description="Run activities Garmin fields migration only"),
+    history_cursor: bool = Query(False, description="Run garmin_history_cursor migration only"),
     user_id: str = Depends(get_current_user_id),
 ) -> MigrationResponse:
     """Run Garmin integration database migrations.
@@ -52,6 +54,7 @@ def run_garmin_migrations(
         user_integrations: Run user_integrations migration only
         webhook_events: Run garmin_webhook_events migration only
         activities: Run activities Garmin fields migration only
+        history_cursor: Run garmin_history_cursor migration only (adds historical_backfill_cursor_date column)
         user_id: Current admin user ID (from require_admin dependency)
 
     Returns:
@@ -70,8 +73,9 @@ def run_garmin_migrations(
         user_integrations = True
         webhook_events = True
         activities = True
+        history_cursor = True
 
-    if not (user_integrations or webhook_events or activities):
+    if not (user_integrations or webhook_events or activities or history_cursor):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No migrations selected. Set all=true or specify individual migrations.",
@@ -111,6 +115,17 @@ def run_garmin_migrations(
                 logger.info("[ADMIN_MIGRATIONS] ✓ activities Garmin fields migration completed")
             except Exception as e:
                 error_msg = f"activities_garmin_fields migration failed: {e}"
+                logger.exception(f"[ADMIN_MIGRATIONS] {error_msg}")
+                errors.append(error_msg)
+
+        if history_cursor:
+            logger.info("[ADMIN_MIGRATIONS] Running migration: garmin_history_cursor")
+            try:
+                migrate_garmin_history_cursor()
+                migrations_run.append("garmin_history_cursor")
+                logger.info("[ADMIN_MIGRATIONS] ✓ garmin_history_cursor migration completed")
+            except Exception as e:
+                error_msg = f"garmin_history_cursor migration failed: {e}"
                 logger.exception(f"[ADMIN_MIGRATIONS] {error_msg}")
                 errors.append(error_msg)
 

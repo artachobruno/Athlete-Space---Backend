@@ -86,10 +86,18 @@ class GarminClient:
             "offset": offset,
         }
 
-        if start_date:
-            params["startDate"] = start_date.strftime("%Y-%m-%d")
-        if end_date:
-            params["endDate"] = end_date.strftime("%Y-%m-%d")
+        # Garmin API requires both startDate and endDate if either is provided
+        # Use epoch milliseconds format (Garmin API expects this)
+        if start_date and end_date:
+            params["startDate"] = str(int(start_date.timestamp() * 1000))
+            params["endDate"] = str(int(end_date.timestamp() * 1000))
+        elif start_date or end_date:
+            # If only one is provided, don't send either (API requires both)
+            logger.warning(
+                "[GARMIN_CLIENT] Both startDate and endDate required by API, "
+                f"but only one provided (start={start_date}, end={end_date}). "
+                "Fetching without date filter."
+            )
 
         logger.debug(f"[GARMIN_CLIENT] Fetching activity summaries (limit={limit}, offset={offset})")
 

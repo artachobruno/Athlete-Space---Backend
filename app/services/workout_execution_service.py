@@ -205,9 +205,13 @@ async def generate_and_persist_feedback_async(
         execution_state_info: ExecutionStateInfo for feedback generation
         athlete_level: Athlete level (low | intermediate | advanced)
     """
-    # Check if feedback already exists
-    if summary.llm_feedback:
-        return
+    # Check if feedback already exists (safely handle missing column)
+    try:
+        if summary.llm_feedback:
+            return
+    except (AttributeError, KeyError):
+        # Column may not exist in database (migration not run)
+        logger.debug("llm_feedback column not available, will generate new feedback")
 
     # Generate feedback
     feedback = await generate_execution_feedback(

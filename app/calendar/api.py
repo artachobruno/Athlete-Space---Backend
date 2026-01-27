@@ -123,13 +123,17 @@ def _compute_execution_state_for_planned(
             session_link = get_link_for_planned(session, item_id) if item_id else None
             resolved_at = session_link.resolved_at.isoformat() if session_link and session_link.resolved_at else None
 
-            # Extract LLM feedback if available
-            if summary.llm_feedback:
-                llm_feedback = LLMFeedback(
-                    text=summary.llm_feedback.get("text", ""),
-                    tone=summary.llm_feedback.get("tone", "neutral"),
-                    generated_at=summary.llm_feedback.get("generated_at", ""),
-                )
+            # Extract LLM feedback if available (safely handle missing column)
+            try:
+                if summary.llm_feedback:
+                    llm_feedback = LLMFeedback(
+                        text=summary.llm_feedback.get("text", ""),
+                        tone=summary.llm_feedback.get("tone", "neutral"),
+                        generated_at=summary.llm_feedback.get("generated_at", ""),
+                    )
+            except (AttributeError, KeyError):
+                # Column may not exist in database (migration not run)
+                llm_feedback = None
 
             return ExecutionStateInfo(
                 state=execution_state,

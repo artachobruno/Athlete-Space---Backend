@@ -82,24 +82,25 @@ def _get_engine():
                 "application_name": "virtus-ai",
             }
 
-        # Connection pool settings optimized for 512MB memory limit
-        # Very small pool size to minimize memory usage
-        pool_size = 1  # Minimal base pool
-        max_overflow = 2  # Minimal overflow (total max: 3 connections)
+        # Connection pool settings for alpha (1-20 users, high concurrency)
+        # Each PostgreSQL connection uses ~8-10MB, so 10 connections = ~80-100MB
+        # This handles fan-out concurrency: 1 UI interaction → multiple DB queries
+        pool_size = 5  # Base pool
+        max_overflow = 5  # Overflow connections (total max: 10 connections)
         
         _engine = create_engine(
             settings.database_url,
             connect_args=connect_args,
             echo=False,  # Set to True for SQL query logging
             pool_pre_ping=True,  # Verify connections before using (important for cloud DBs)
-            pool_recycle=1800,  # Recycle connections after 30 minutes (reduced from 1 hour)
-            pool_size=pool_size,  # Limit base pool size
-            max_overflow=max_overflow,  # Limit overflow connections
-            pool_timeout=10,  # Timeout after 10 seconds waiting for connection
+            pool_recycle=1800,  # Recycle connections after 30 minutes
+            pool_size=pool_size,  # Base pool size
+            max_overflow=max_overflow,  # Overflow connections
+            pool_timeout=30,  # Timeout after 30 seconds waiting for connection
         )
         logger.info(
             f"Database engine initialized with pool_size={pool_size}, max_overflow={max_overflow} "
-            f"(max connections: {pool_size + max_overflow})"
+            f"(max connections: {pool_size + max_overflow}), pool_timeout={30}s"
         )
     return _engine
 
@@ -189,6 +190,7 @@ def get_session() -> Generator[Session, None, None]:
     Handles database errors vs HTTP exceptions separately:
     - HTTPException: Re-raised without logging (expected API responses)
     - NoTrainingDataError: Re-raised without logging (business logic error, not DB error)
+    - TimeoutError: Connection pool exhausted - logged and re-raised
     - Other exceptions: Logged as database errors and rolled back
 
     For FastAPI route dependencies, use get_db() instead.
@@ -204,6 +206,16 @@ def get_session() -> Generator[Session, None, None]:
         session.rollback()
         raise
     except Exception as e:
+        # Handle connection pool timeout specifically
+        from sqlalchemy.exc import TimeoutError
+        if isinstance(e, TimeoutError):
+            logger.error(
+                f"Database connection pool exhausted - all connections in use. "
+                f"Pool status: size={_engine.pool.size()}, checked_in={_engine.pool.checkedin()}, "
+                f"checked_out={_engine.pool.checkedout()}, overflow={_engine.pool.overflow()}"
+            )
+            session.rollback()
+            raise
         # Check if this is a business logic error (not a database error)
         # Import here to avoid circular imports
         from app.state.errors import NoTrainingDataError

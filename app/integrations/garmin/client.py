@@ -178,18 +178,18 @@ class GarminClient:
             "offset": offset,
         }
 
-        # Garmin API REQUIRES date parameters - they must always be provided
-        # Try ISO 8601 format with time (YYYY-MM-DDTHH:mm:ssZ)
+        # Garmin API REQUIRES time range parameters - they must always be provided
+        # Garmin Wellness API expects epoch milliseconds, NOT ISO date strings
+        # Parameter names: startTimeInMilliseconds, endTimeInMilliseconds (NOT startDate/endDate)
         if not start_date or not end_date:
             raise ValueError(
                 "Garmin API requires both start_date and end_date. "
                 f"Provided: start_date={start_date}, end_date={end_date}"
             )
 
-        # Try ISO 8601 format with time (Garmin API might expect this)
-        # Format: YYYY-MM-DDTHH:mm:ssZ
-        params["startDate"] = start_date.strftime("%Y-%m-%dT%H:%M:%SZ")
-        params["endDate"] = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Convert to epoch milliseconds (Garmin API expects this format)
+        params["startTimeInMilliseconds"] = int(start_date.timestamp() * 1000)
+        params["endTimeInMilliseconds"] = int(end_date.timestamp() * 1000)
 
         logger.debug(f"[GARMIN_CLIENT] Fetching activity summaries (limit={limit}, offset={offset})")
 

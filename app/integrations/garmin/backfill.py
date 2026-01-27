@@ -532,17 +532,20 @@ def _process_activity_for_backfill(
         session.flush()  # Ensure ID is generated
 
         # PHASE 3: Enforce workout + execution creation (mandatory invariant)
+        # Note: get_or_create_for_activity already creates the execution, so no need to call attach_activity
         workout = WorkoutFactory.get_or_create_for_activity(session, activity)
-        WorkoutFactory.attach_activity(session, workout, activity)
 
         logger.debug(f"[GARMIN_BACKFILL] Stored activity with workout and execution: {external_activity_id}")
-    except IntegrityError:
+    except IntegrityError as e:
         # Race condition: activity was inserted between check and commit
         session.rollback()
-        logger.debug("[GARMIN_BACKFILL] Duplicate detected during commit (race condition)")
+        logger.debug(f"[GARMIN_BACKFILL] Duplicate detected during commit (race condition): {e}")
         return "skipped_duplicate"
     except Exception as e:
-        logger.exception(f"[GARMIN_BACKFILL] Error processing activity: {e}")
+        logger.exception(
+            f"[GARMIN_BACKFILL] Error processing activity {external_activity_id if 'external_activity_id' in locals() else 'unknown'}: {e}",
+            exc_info=True,
+        )
         session.rollback()
         return "error"
     else:

@@ -53,41 +53,44 @@ from app.workouts.workout_factory import WorkoutFactory
 
 
 def _check_schema(db) -> tuple[bool, bool]:
-    """Check if required columns exist in the database.
+    """Check if required columns/tables exist in the database.
+
+    Schema v2: activities.workout_id doesn't exist - relationships are through workout_executions table.
+    Only planned_sessions.workout_id is required.
 
     Returns:
-        Tuple of (planned_sessions_has_workout_id, activities_has_workout_id)
+        Tuple of (planned_sessions_has_workout_id, workout_executions_table_exists)
     """
     try:
         inspector = inspect(db.bind) if hasattr(db, "bind") and db.bind else None
         if not inspector:
-            logger.warning("Could not inspect database schema - assuming columns exist")
+            logger.warning("Could not inspect database schema - assuming schema is valid")
             return True, True
 
         planned_sessions_columns = [col["name"] for col in inspector.get_columns("planned_sessions")]
-        activities_columns = [col["name"] for col in inspector.get_columns("activities")]
+        tables = inspector.get_table_names()
 
         planned_has_workout_id = "workout_id" in planned_sessions_columns
-        activities_has_workout_id = "workout_id" in activities_columns
+        workout_executions_exists = "workout_executions" in tables
 
         logger.info(
             "Schema check complete",
             planned_sessions_has_workout_id=planned_has_workout_id,
-            activities_has_workout_id=activities_has_workout_id,
+            workout_executions_table_exists=workout_executions_exists,
         )
     except Exception as e:
-        logger.warning(f"Could not check schema: {e} - assuming columns exist")
+        logger.warning(f"Could not check schema: {e} - assuming schema is valid")
         return True, True
     else:
-        return planned_has_workout_id, activities_has_workout_id
+        return planned_has_workout_id, workout_executions_exists
 
 
-def _raise_missing_columns_error(planned_has_workout_id: bool, activities_has_workout_id: bool) -> None:
-    """Raise error for missing workout_id columns."""
+def _raise_missing_columns_error(planned_has_workout_id: bool, workout_executions_exists: bool) -> None:
+    """Raise error for missing required schema elements."""
     raise ValueError(
-        f"Missing workout_id columns. "
+        f"Missing required schema elements. "
         f"planned_sessions.workout_id exists: {planned_has_workout_id}, "
-        f"activities.workout_id exists: {activities_has_workout_id}. "
+        f"workout_executions table exists: {workout_executions_exists}. "
         f"Run migrations first."
     )
 
@@ -121,19 +124,19 @@ def backfill_workouts(dry_run: bool = True) -> dict[str, int]:
     try:
         logger.info(f"Starting workout backfill (dry_run={dry_run})")
 
-        # Check schema first
-        planned_has_workout_id, activities_has_workout_id = _check_schema(db)
+        # Check schema first (Schema v2: activities.workout_id doesn't exist)
+        planned_has_workout_id, workout_executions_exists = _check_schema(db)
 
-        if not planned_has_workout_id or not activities_has_workout_id:
+        if not planned_has_workout_id or not workout_executions_exists:
             logger.error(
-                "Required columns missing in database schema!",
+                "Required schema elements missing!",
                 planned_sessions_has_workout_id=planned_has_workout_id,
-                activities_has_workout_id=activities_has_workout_id,
+                workout_executions_table_exists=workout_executions_exists,
             )
             logger.error(
                 "Please run migrations first: python scripts/run_migrations.py"
             )
-            _raise_missing_columns_error(planned_has_workout_id, activities_has_workout_id)
+            _raise_missing_columns_error(planned_has_workout_id, workout_executions_exists)
 
         # Step 1: Planned sessions without workout
         logger.info("Step 1: Processing planned sessions without workout...")

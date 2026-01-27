@@ -114,46 +114,126 @@ def backfill_garmin_activities(
         strava_duplicate_count = 0
         total_fetched = 0
         max_pages = 50  # Safety limit: max 50 pages (5000 activities)
+        
+        # Split large date ranges into smaller chunks to avoid API 400 errors
+        # Garmin API may have limits on date range size, so we'll use 30-day chunks
+        chunk_days = 30
+        date_range_days = (to_date - from_date).days
+        use_chunks = date_range_days > chunk_days
 
         try:
-            # Fetch activities page by page
-            for page_num, activities_page in enumerate(
-                client.yield_activity_summaries(
-                    start_date=from_date,
-                    end_date=to_date,
-                    per_page=100,
-                    max_pages=max_pages,
-                    sleep_seconds=0.5,  # Rate limit safety
+            if use_chunks:
+                # Process in chunks
+                logger.info(
+                    f"[GARMIN_BACKFILL] Large date range ({date_range_days} days), "
+                    f"splitting into {chunk_days}-day chunks"
                 )
-            ):
-                if page_num >= max_pages:
-                    logger.warning(f"[GARMIN_BACKFILL] Reached max pages limit ({max_pages}), stopping")
-                    break
+                current_start = from_date
+                chunk_num = 0
+                
+                while current_start < to_date:
+                    chunk_num += 1
+                    current_end = min(current_start + timedelta(days=chunk_days), to_date)
+                    logger.info(
+                        f"[GARMIN_BACKFILL] Processing chunk {chunk_num}: "
+                        f"{current_start.date()} to {current_end.date()}"
+                    )
+                    
+                    try:
+                        # Fetch activities for this chunk
+                        for page_num, activities_page in enumerate(
+                            client.yield_activity_summaries(
+                                start_date=current_start,
+                                end_date=current_end,
+                                per_page=100,
+                                max_pages=max_pages,
+                                sleep_seconds=0.5,  # Rate limit safety
+                            )
+                        ):
+                            if page_num >= max_pages:
+                                logger.warning(f"[GARMIN_BACKFILL] Reached max pages limit ({max_pages}), stopping")
+                                break
 
-                total_fetched += len(activities_page)
+                            total_fetched += len(activities_page)
 
-                # Process each activity
-                page_ingested, page_skipped, page_errors, page_duplicates, page_strava = (
-                    _process_backfill_activities_page(session, user_id, activities_page)
-                )
-                ingested_count += page_ingested
-                skipped_count += page_skipped
-                error_count += page_errors
-                duplicate_count += page_duplicates
-                strava_duplicate_count += page_strava
+                            # Process each activity
+                            page_ingested, page_skipped, page_errors, page_duplicates, page_strava = (
+                                _process_backfill_activities_page(session, user_id, activities_page)
+                            )
+                            ingested_count += page_ingested
+                            skipped_count += page_skipped
+                            error_count += page_errors
+                            duplicate_count += page_duplicates
+                            strava_duplicate_count += page_strava
 
-                # Check for early exit: >70% overlap
-                if total_fetched > 10:  # Need at least 10 activities to check overlap
-                    overlap_rate = (duplicate_count + strava_duplicate_count) / total_fetched
-                    if overlap_rate > 0.7:
-                        logger.info(
-                            f"[GARMIN_BACKFILL] High overlap detected ({overlap_rate:.1%}), "
-                            f"stopping early to avoid unnecessary API calls"
+                            # Commit after each page to avoid memory bloat
+                            session.commit()
+                            
+                            # Check for early exit: >70% overlap
+                            if total_fetched > 10:  # Need at least 10 activities to check overlap
+                                overlap_rate = (duplicate_count + strava_duplicate_count) / total_fetched
+                                if overlap_rate > 0.7:
+                                    logger.info(
+                                        f"[GARMIN_BACKFILL] High overlap detected ({overlap_rate:.1%}), "
+                                        f"stopping early to avoid unnecessary API calls"
+                                    )
+                                    break
+                        
+                        # Move to next chunk
+                        current_start = current_end
+                        
+                        # Small delay between chunks to respect rate limits
+                        if current_start < to_date:
+                            time.sleep(1.0)
+                            
+                    except Exception as chunk_error:
+                        logger.error(
+                            f"[GARMIN_BACKFILL] Error processing chunk {chunk_num} "
+                            f"({current_start.date()} to {current_end.date()}): {chunk_error}"
                         )
+                        error_count += 1
+                        # Continue with next chunk instead of failing completely
+                        current_start = current_end
+                        continue
+            else:
+                # Small date range, process normally
+                for page_num, activities_page in enumerate(
+                    client.yield_activity_summaries(
+                        start_date=from_date,
+                        end_date=to_date,
+                        per_page=100,
+                        max_pages=max_pages,
+                        sleep_seconds=0.5,  # Rate limit safety
+                    )
+                ):
+                    if page_num >= max_pages:
+                        logger.warning(f"[GARMIN_BACKFILL] Reached max pages limit ({max_pages}), stopping")
                         break
 
-                # Commit after each page to avoid memory bloat
-                session.commit()
+                    total_fetched += len(activities_page)
+
+                    # Process each activity
+                    page_ingested, page_skipped, page_errors, page_duplicates, page_strava = (
+                        _process_backfill_activities_page(session, user_id, activities_page)
+                    )
+                    ingested_count += page_ingested
+                    skipped_count += page_skipped
+                    error_count += page_errors
+                    duplicate_count += page_duplicates
+                    strava_duplicate_count += page_strava
+
+                    # Check for early exit: >70% overlap
+                    if total_fetched > 10:  # Need at least 10 activities to check overlap
+                        overlap_rate = (duplicate_count + strava_duplicate_count) / total_fetched
+                        if overlap_rate > 0.7:
+                            logger.info(
+                                f"[GARMIN_BACKFILL] High overlap detected ({overlap_rate:.1%}), "
+                                f"stopping early to avoid unnecessary API calls"
+                            )
+                            break
+
+                    # Commit after each page to avoid memory bloat
+                    session.commit()
 
         except Exception as e:
             logger.exception(f"[GARMIN_BACKFILL] Backfill failed: {e}")

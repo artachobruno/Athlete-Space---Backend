@@ -63,6 +63,7 @@ from app.domains.training_plan.philosophy_selector_semantic import initialize_ph
 from app.domains.training_plan.template_loader import initialize_template_library_from_cache
 from app.domains.training_plan.week_structure_selector_semantic import initialize_week_structure_vector_store
 from app.ingestion.api import router as ingestion_strava_router
+from app.core.system_memory import log_connection_pool_status, log_memory_snapshot
 from app.ingestion.scheduler import ingestion_tick
 from app.ingestion.sync_scheduler import sync_tick
 from app.internal.ai_ops.router import router as ai_ops_router
@@ -777,6 +778,14 @@ async def deferred_heavy_init():
                 name="Daily Training Load Metrics Recomputation",
                 replace_existing=True,
             )
+            # Log memory and connection pool status every 5 minutes for OOM debugging
+            scheduler.add_job(
+                lambda: (log_memory_snapshot("scheduled"), log_connection_pool_status()),
+                trigger=IntervalTrigger(minutes=5),
+                id="memory_monitoring",
+                name="Memory and Connection Pool Monitoring",
+                replace_existing=True,
+            )
             scheduler.start()
             app.state.scheduler = scheduler
             app.state.scheduler_ready = True
@@ -813,11 +822,21 @@ async def deferred_heavy_init():
             "Run: python scripts/precompute_embeddings.py --templates"
         )
 
+    # Log memory after database initialization
+    try:
+        from app.core.system_memory import log_memory_snapshot, log_connection_pool_status
+        
+        log_memory_snapshot("after_db_init")
+        log_connection_pool_status()
+    except Exception as e:
+        logger.warning(f"Failed to log memory snapshot: {e}")
+
     # Step 3b: Initialize philosophy vector store (cache to reduce memory usage)
     try:
         logger.info("[PHILOSOPHY_VECTOR_STORE] Initializing philosophy vector store cache")
         initialize_philosophy_vector_store()
         logger.info("[PHILOSOPHY_VECTOR_STORE] Philosophy vector store initialized successfully")
+        log_memory_snapshot("after_philosophy_vector_store")
     except Exception as e:
         logger.exception("[PHILOSOPHY_VECTOR_STORE] Failed to initialize philosophy vector store: {}", e)
         # Non-critical - will fall back to loading on-demand, but less efficient
@@ -831,6 +850,7 @@ async def deferred_heavy_init():
         logger.info("[WEEK_STRUCTURE_VECTOR_STORE] Initializing week structure vector store cache")
         initialize_week_structure_vector_store()
         logger.info("[WEEK_STRUCTURE_VECTOR_STORE] Week structure vector store initialized successfully")
+        log_memory_snapshot("after_week_structure_vector_store")
     except Exception as e:
         logger.exception("[WEEK_STRUCTURE_VECTOR_STORE] Failed to initialize week structure vector store: {}", e)
         # Non-critical - will fall back to loading on-demand, but less efficient
@@ -865,6 +885,15 @@ async def deferred_heavy_init():
             # Don't fail if deferred init fails
     else:
         logger.warning("[DEFERRED INIT] Skipping initial sync/ingestion ticks - database not ready")
+
+    # Log final memory snapshot after all initialization
+    try:
+        from app.core.system_memory import log_memory_snapshot, log_connection_pool_status
+        
+        log_memory_snapshot("after_all_init")
+        log_connection_pool_status()
+    except Exception as e:
+        logger.warning(f"Failed to log final memory snapshot: {e}")
 
     logging.info(">>> deferred_heavy_init: heavy initialization complete <<<")
     print("DEFERRED INIT DONE", flush=True)

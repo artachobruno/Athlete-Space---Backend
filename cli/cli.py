@@ -54,6 +54,9 @@ from app.core.conversation_id import generate_conversation_id
 from app.db.models import Athlete, AthleteProfile, PlannedSession, StravaAccount, User
 from app.db.session import get_session
 from app.domains.training_plan.template_loader import initialize_template_library_from_cache
+from scripts.migrate_activities_garmin_fields import migrate_activities_garmin_fields
+from scripts.migrate_garmin_webhook_events import migrate_garmin_webhook_events
+from scripts.migrate_user_integrations import migrate_user_integrations
 
 # Initialize Rich console for output
 console = Console()
@@ -679,6 +682,57 @@ async def _run_orchestrator_single(
         logger.exception(f"Orchestrator error: {e}")
         console.print(f"[red]Error:[/red] {e}", style="bold red")
         raise
+
+
+@app.command()
+def migrate_garmin(
+    all: bool = typer.Option(False, "--all", "-a", help="Run all Garmin migrations"),
+    user_integrations: bool = typer.Option(False, "--user-integrations", help="Run user_integrations migration"),
+    webhook_events: bool = typer.Option(False, "--webhook-events", help="Run garmin_webhook_events migration"),
+    activities: bool = typer.Option(False, "--activities", help="Run activities Garmin fields migration"),
+) -> None:
+    """Run Garmin integration database migrations.
+
+    Examples:
+        # Run all Garmin migrations
+        python cli/cli.py migrate-garmin --all
+
+        # Run specific migration
+        python cli/cli.py migrate-garmin --user-integrations
+    """
+    console.print("[bold cyan]Running Garmin migrations...[/bold cyan]\n")
+
+    if all:
+        user_integrations = True
+        webhook_events = True
+        activities = True
+
+    if not (user_integrations or webhook_events or activities):
+        console.print("[yellow]No migrations selected. Use --all or specify individual migrations.[/yellow]")
+        return
+
+    try:
+        if user_integrations:
+            console.print("[cyan]Running migration: user_integrations table...[/cyan]")
+            migrate_user_integrations()
+            console.print("[green]✓ user_integrations migration completed[/green]\n")
+
+        if webhook_events:
+            console.print("[cyan]Running migration: garmin_webhook_events table...[/cyan]")
+            migrate_garmin_webhook_events()
+            console.print("[green]✓ garmin_webhook_events migration completed[/green]\n")
+
+        if activities:
+            console.print("[cyan]Running migration: activities Garmin fields...[/cyan]")
+            migrate_activities_garmin_fields()
+            console.print("[green]✓ activities Garmin fields migration completed[/green]\n")
+
+        console.print("[bold green]✓ All selected Garmin migrations completed successfully![/bold green]")
+
+    except Exception as e:
+        console.print(f"[bold red]✗ Migration failed:[/bold red] {e}")
+        logger.exception("Garmin migration failed")
+        raise typer.Exit(code=1) from e
 
 
 if __name__ == "__main__":

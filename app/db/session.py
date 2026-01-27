@@ -83,18 +83,19 @@ def _get_engine():
             }
 
         # Connection pool settings optimized for 512MB memory limit
-        # Smaller pool size to reduce memory usage
-        pool_size = 2  # Reduced from default 5 to save memory
-        max_overflow = 3  # Reduced from default 10 to save memory (total max: 5 connections)
+        # Very small pool size to minimize memory usage
+        pool_size = 1  # Minimal base pool
+        max_overflow = 2  # Minimal overflow (total max: 3 connections)
         
         _engine = create_engine(
             settings.database_url,
             connect_args=connect_args,
             echo=False,  # Set to True for SQL query logging
             pool_pre_ping=True,  # Verify connections before using (important for cloud DBs)
-            pool_recycle=3600,  # Recycle connections after 1 hour
+            pool_recycle=1800,  # Recycle connections after 30 minutes (reduced from 1 hour)
             pool_size=pool_size,  # Limit base pool size
             max_overflow=max_overflow,  # Limit overflow connections
+            pool_timeout=10,  # Timeout after 10 seconds waiting for connection
         )
         logger.info(
             f"Database engine initialized with pool_size={pool_size}, max_overflow={max_overflow} "

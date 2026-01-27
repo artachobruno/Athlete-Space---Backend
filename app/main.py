@@ -667,6 +667,14 @@ async def lifespan(_app: FastAPI):
     # Initialize ops metrics (process start time) - lightweight, safe to do here
     set_process_start_time(time.time())
     logger.info("[OPS] Initialized ops metrics tracking")
+    
+    # Log initial memory snapshot (baseline before any heavy initialization)
+    try:
+        from app.core.system_memory import log_memory_snapshot
+        
+        log_memory_snapshot("startup_baseline")
+    except Exception as e:
+        logger.warning(f"Failed to log startup memory snapshot: {e}")
 
     # CRITICAL: Yield control to FastAPI IMMEDIATELY - this allows the server to bind to the port
     # Render's port scanner requires the server to bind quickly. Heavy initialization
@@ -778,10 +786,10 @@ async def deferred_heavy_init():
                 name="Daily Training Load Metrics Recomputation",
                 replace_existing=True,
             )
-            # Log memory and connection pool status every 5 minutes for OOM debugging
+            # Log memory and connection pool status every 2 minutes for OOM debugging (more frequent)
             scheduler.add_job(
                 lambda: (log_memory_snapshot("scheduled"), log_connection_pool_status()),
-                trigger=IntervalTrigger(minutes=5),
+                trigger=IntervalTrigger(minutes=2),
                 id="memory_monitoring",
                 name="Memory and Connection Pool Monitoring",
                 replace_existing=True,
@@ -831,33 +839,13 @@ async def deferred_heavy_init():
     except Exception as e:
         logger.warning(f"Failed to log memory snapshot: {e}")
 
-    # Step 3b: Initialize philosophy vector store (cache to reduce memory usage)
-    try:
-        logger.info("[PHILOSOPHY_VECTOR_STORE] Initializing philosophy vector store cache")
-        initialize_philosophy_vector_store()
-        logger.info("[PHILOSOPHY_VECTOR_STORE] Philosophy vector store initialized successfully")
-        log_memory_snapshot("after_philosophy_vector_store")
-    except Exception as e:
-        logger.exception("[PHILOSOPHY_VECTOR_STORE] Failed to initialize philosophy vector store: {}", e)
-        # Non-critical - will fall back to loading on-demand, but less efficient
-        logger.warning(
-            "[PHILOSOPHY_VECTOR_STORE] Philosophy selection will work but may be slower. "
-            "Run: python scripts/precompute_embeddings.py --philosophies"
-        )
+    # Step 3b: Initialize philosophy vector store (LAZY - only load when needed to save memory)
+    # Skip pre-loading to save memory - will load on first use
+    logger.info("[PHILOSOPHY_VECTOR_STORE] Skipping pre-loading to save memory (will load on-demand)")
 
-    # Step 3c: Initialize week structure vector store (cache to reduce memory usage)
-    try:
-        logger.info("[WEEK_STRUCTURE_VECTOR_STORE] Initializing week structure vector store cache")
-        initialize_week_structure_vector_store()
-        logger.info("[WEEK_STRUCTURE_VECTOR_STORE] Week structure vector store initialized successfully")
-        log_memory_snapshot("after_week_structure_vector_store")
-    except Exception as e:
-        logger.exception("[WEEK_STRUCTURE_VECTOR_STORE] Failed to initialize week structure vector store: {}", e)
-        # Non-critical - will fall back to loading on-demand, but less efficient
-        logger.warning(
-            "[WEEK_STRUCTURE_VECTOR_STORE] Week structure selection will work but may be slower. "
-            "Run: python scripts/precompute_embeddings.py --week-structures"
-        )
+    # Step 3c: Initialize week structure vector store (LAZY - only load when needed to save memory)
+    # Skip pre-loading to save memory - will load on first use
+    logger.info("[WEEK_STRUCTURE_VECTOR_STORE] Skipping pre-loading to save memory (will load on-demand)")
 
     # Step 4: Run initial sync/ingestion ticks (non-blocking - don't wait for completion)
     db_ready = getattr(app.state, "db_ready", False)

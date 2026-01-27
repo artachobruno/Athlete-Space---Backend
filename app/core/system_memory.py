@@ -4,6 +4,7 @@ This module provides system-level memory monitoring to help diagnose
 OOM (Out of Memory) issues in production.
 """
 
+import platform
 import resource
 import sys
 from dataclasses import dataclass
@@ -37,13 +38,13 @@ def get_memory_snapshot() -> MemorySnapshot:
         rss_raw = usage.ru_maxrss
         
         # Detect platform: macOS returns bytes, Linux returns kilobytes
-        # We check if the value is suspiciously large (> 1GB in KB would be > 1M KB)
-        # If > 1M, assume it's bytes, otherwise assume KB
-        if rss_raw > 1_000_000:
-            # Likely bytes (macOS)
+        # Use platform detection for accuracy
+        system = platform.system()
+        if system == "Darwin":  # macOS
+            # macOS returns bytes
             rss_mb = rss_raw / (1024.0 * 1024.0)
         else:
-            # Likely kilobytes (Linux)
+            # Linux and other Unix systems return kilobytes
             rss_mb = rss_raw / 1024.0
         
         # For peak RSS, we use ru_maxrss which is the maximum RSS since process start
@@ -73,10 +74,12 @@ def log_memory_snapshot(component: str = "system") -> None:
     """
     snapshot = get_memory_snapshot()
     
-    # Warn if memory usage is high (> 400MB for 512MB limit)
+    # Warn if memory usage is high (> 350MB for 512MB limit - more aggressive warning)
     memory_warning = ""
-    if snapshot.rss_mb > 400:
+    if snapshot.rss_mb > 350:
         memory_warning = f" [WARNING: High memory usage - {snapshot.rss_mb:.1f}MB / 512MB limit]"
+    if snapshot.rss_mb > 450:
+        memory_warning = f" [CRITICAL: Very high memory usage - {snapshot.rss_mb:.1f}MB / 512MB limit - OOM risk!]"
     
     logger.info(
         f"memory_snapshot{memory_warning}",

@@ -150,50 +150,31 @@ class GarminClient:
     def fetch_activity_summaries(
         self,
         *,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
+        start_date: datetime,
+        end_date: datetime,
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Fetch activity summaries (no samples).
 
-        Automatically refreshes token on 401 and retries once.
+        if not start_date or not end_date:
+            raise ValueError("Garmin API requires start_date and end_date")
 
-        Args:
-            start_date: Start date for activities (required by API)
-            end_date: End date for activities (required by API)
-            limit: Number of activities to fetch (max 100)
-            offset: Pagination offset
-
-        Returns:
-            API response with activities list
-
-        Raises:
-            httpx.HTTPError: If API request fails after retry
-            GarminTokenRefreshError: If token refresh fails
-            ValueError: If dates are not provided (API requires them)
-        """
-        params: dict[str, Any] = {
-            "limit": min(limit, 100),  # Garmin max is typically 100
+        params = {
+            "limit": min(limit, 100),
             "offset": offset,
+            "startTimeInMilliseconds": int(start_date.timestamp() * 1000),
+            "endTimeInMilliseconds": int(end_date.timestamp() * 1000),
         }
 
-        # Garmin API REQUIRES time range parameters - they must always be provided
-        # Garmin Wellness API activities endpoint expects date-only strings (YYYY-MM-DD)
-        # NOT timestamps (neither seconds nor milliseconds)
-        # Parameter names: startDate, endDate (date-only, no time components)
-        if not start_date or not end_date:
-            raise ValueError(
-                "Garmin API requires both start_date and end_date. "
-                f"Provided: start_date={start_date}, end_date={end_date}"
-            )
+        logger.info("[GARMIN_CLIENT] FINAL params=%s", params)
 
-        # Convert to date-only strings (YYYY-MM-DD format)
-        # Garmin does NOT accept timestamps for this endpoint
-        params["startDate"] = start_date.strftime("%Y-%m-%d")
-        params["endDate"] = end_date.strftime("%Y-%m-%d")
-
-        logger.debug(f"[GARMIN_CLIENT] Fetching activity summaries (limit={limit}, offset={offset})")
+        # Hard safety checks (leave these in until stable)
+        if "startDate" in params:
+            raise ValueError("Invalid parameter 'startDate' found in params")
+        if "endDate" in params:
+            raise ValueError("Invalid parameter 'endDate' found in params")
+        if "startTimeInSeconds" in params:
+            raise ValueError("Invalid parameter 'startTimeInSeconds' found in params")
 
         try:
             resp = httpx.get(
@@ -204,25 +185,9 @@ class GarminClient:
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            # Log error response for debugging
-            error_body = ""
-            try:
-                error_body = e.response.text
-                logger.error(
-                    f"[GARMIN_CLIENT] API error {e.response.status_code}: {error_body[:500]} "
-                    f"(params: {params})"
-                )
-            except Exception:
-                logger.error(
-                    f"[GARMIN_CLIENT] API error {e.response.status_code} (could not read response body) "
-                    f"(params: {params})"
-                )
-
-            # Auto-refresh on 401 and retry once
             if e.response.status_code == 401 and self._user_id:
-                logger.warning(f"[GARMIN_CLIENT] Token expired (401), refreshing for user_id={self._user_id}")
+                logger.warning("[GARMIN_CLIENT] Token expired, refreshing")
                 self._access_token = get_garmin_access_token(self._user_id)
-                # Retry once
                 resp = httpx.get(
                     GARMIN_ACTIVITIES_URL,
                     headers=self._headers(),
@@ -231,12 +196,15 @@ class GarminClient:
                 )
                 resp.raise_for_status()
             else:
+                logger.error(
+                    "[GARMIN_CLIENT] API error %s: %s (params=%s)",
+                    e.response.status_code,
+                    e.response.text[:500],
+                    params,
+                )
                 raise
 
-        data = resp.json()
-
-        logger.info(f"[GARMIN_CLIENT] Fetched {len(data.get('activities', []))} activity summaries")
-        return data
+        return resp.json()
 
     def fetch_activity_detail(
         self,

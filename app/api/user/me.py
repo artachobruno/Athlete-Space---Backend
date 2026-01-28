@@ -826,7 +826,7 @@ def get_strava_account(user_id: str) -> StravaAccount:
         result = session.execute(select(StravaAccount).where(StravaAccount.user_id == user_id)).first()
         if not result:
             logger.info(f"Strava already disconnected for user_id={user_id}")
-            raise HTTPException(status_code=404, detail="No Strava account connected. Please complete OAuth at /auth/strava")
+            raise HTTPException(status_code=400, detail="No Strava account connected. Please complete OAuth at /auth/strava")
         account = result[0]
         # Detach object from session so it can be used after session closes
         session.expunge(account)

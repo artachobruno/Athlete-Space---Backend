@@ -134,7 +134,8 @@ def _try_provider_user_id_from_jwt(access_token: str | None) -> str | None:
         keys = list(payload.keys()) if isinstance(payload, dict) else []
         logger.debug("[GARMIN_OAUTH] JWT payload keys: {}", keys)
         uid = (
-            payload.get("sub")
+            payload.get("garmin_guid")  # Garmin JWT uses this (observed in token payload)
+            or payload.get("sub")
             or payload.get("user_id")
             or payload.get("userId")
             or payload.get("garmin_user_id")

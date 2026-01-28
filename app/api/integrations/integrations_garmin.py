@@ -37,6 +37,11 @@ router = APIRouter(prefix="/integrations/garmin", tags=["integrations", "garmin"
 # state -> (user_id, code_verifier, timestamp)
 _oauth_states: dict[str, tuple[str, str, float]] = {}
 
+# Permissions webhook often arrives before/during callback with userId. Store for callback fallback.
+# (userId, timestamp); cleared when used or after 120s.
+# Note: in-memory only. Multi-worker deployments may need Redis/DB for cross-process sharing.
+_last_permissions_user_id: tuple[str, float] | None = None
+
 
 def _generate_code_verifier() -> str:
     """Generate PKCE code verifier (43-128 characters).
@@ -118,6 +123,7 @@ def _try_provider_user_id_from_jwt(access_token: str | None) -> str | None:
     try:
         parts = access_token.split(".")
         if len(parts) != 3:
+            logger.debug("[GARMIN_OAUTH] JWT decode: not exactly 3 segments")
             return None
         payload_b64 = parts[1]
         pad = 4 - len(payload_b64) % 4
@@ -125,11 +131,17 @@ def _try_provider_user_id_from_jwt(access_token: str | None) -> str | None:
             payload_b64 += "=" * pad
         raw = base64.urlsafe_b64decode(payload_b64)
         payload = json.loads(raw)
+        keys = list(payload.keys()) if isinstance(payload, dict) else []
+        logger.debug("[GARMIN_OAUTH] JWT payload keys: {}", keys)
         uid = (
             payload.get("sub")
             or payload.get("user_id")
             or payload.get("userId")
             or payload.get("garmin_user_id")
+            or payload.get("userAccountId")
+            or payload.get("accountId")
+            or payload.get("garminId")
+            or payload.get("uat")
         )
         if uid is None:
             return None
@@ -137,8 +149,28 @@ def _try_provider_user_id_from_jwt(access_token: str | None) -> str | None:
         if not s or s.lower() == "unknown":
             return None
         return s
-    except Exception:
+    except Exception as e:
+        logger.debug("[GARMIN_OAUTH] JWT decode failed: {}", e)
         return None
+
+
+def _store_permissions_user_id(user_id: str) -> None:
+    """Store userId from permissions webhook for callback fallback."""
+    global _last_permissions_user_id
+    _last_permissions_user_id = (user_id, time.time())
+
+
+def _take_recent_permissions_user_id(max_age_seconds: int = 120) -> str | None:
+    """Take and clear stored permissions userId if present and recent."""
+    global _last_permissions_user_id
+    if _last_permissions_user_id is None:
+        return None
+    uid, ts = _last_permissions_user_id
+    if time.time() - ts > max_age_seconds:
+        _last_permissions_user_id = None
+        return None
+    _last_permissions_user_id = None
+    return uid
 
 
 def _sanitize_token_response(token_data: dict) -> dict:
@@ -490,8 +522,15 @@ def garmin_callback(
             logger.info("[GARMIN_OAUTH] Resolved provider_user_id from JWT access token payload")
 
     if not provider_user_id:
+        provider_user_id = _take_recent_permissions_user_id()
+        if provider_user_id:
+            logger.info(
+                "[GARMIN_OAUTH] Resolved provider_user_id from recent permissions webhook"
+            )
+
+    if not provider_user_id:
         logger.error(
-            "[GARMIN_OAUTH] No provider_user_id in token response or JWT payload. "
+            "[GARMIN_OAUTH] No provider_user_id in token response, JWT payload, or permissions webhook. "
             "Available token keys: {}",
             list(token_data.keys()),
         )
@@ -671,8 +710,24 @@ async def garmin_webhook_deregister(request: Request):
 
 @router.post("/permissions")
 async def garmin_webhook_permissions(request: Request):
-    """Garmin COMMON User Permissions Change callback. ACK fast; log payload."""
+    """Garmin COMMON User Permissions Change callback. ACK fast; log payload.
+
+    Extracts userId and stores for OAuth callback fallback (token response often
+    omits user ID; permissions webhook arrives before/during callback).
+    """
     body = await request.body()
     snippet = body.decode(errors="replace")[:500]
     logger.info("[GARMIN_WEBHOOK] Permissions callback: {}", snippet)
+    try:
+        data = json.loads(body)
+        changes = data.get("userPermissionsChange") or []
+        if changes and isinstance(changes, list):
+            first = changes[0]
+            if isinstance(first, dict):
+                uid = first.get("userId") or first.get("user_id")
+                if uid:
+                    _store_permissions_user_id(str(uid).strip())
+                    logger.debug("[GARMIN_WEBHOOK] Stored permissions userId for callback fallback")
+    except Exception as e:
+        logger.debug("[GARMIN_WEBHOOK] Could not parse permissions userId: {}", e)
     return JSONResponse(status_code=200, content={"status": "acknowledged"})

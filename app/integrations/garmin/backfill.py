@@ -173,6 +173,51 @@ def check_garmin_activity_exists(
     return existing[0] if existing else None
 
 
+def check_garmin_duplicate(
+    session,
+    user_id: str,
+    start_time: datetime,
+    distance_meters: float | None,
+) -> Activity | None:
+    """Check if a Garmin activity exists that matches this Strava activity.
+
+    Duplicate criteria:
+    - Same start_time ± 2 minutes
+    - Same distance ± 1% (if distance available)
+
+    Args:
+        session: Database session
+        user_id: User ID
+        start_time: Activity start time
+        distance_meters: Activity distance in meters (optional)
+
+    Returns:
+        Matching Garmin Activity if found, None otherwise
+    """
+    # Time window: ± 2 minutes
+    time_window_start = start_time - timedelta(seconds=120)
+    time_window_end = start_time + timedelta(seconds=120)
+
+    query = select(Activity).where(
+        Activity.user_id == user_id,
+        Activity.source == "garmin",
+        Activity.starts_at >= time_window_start,
+        Activity.starts_at <= time_window_end,
+    )
+
+    # If distance available, check ± 1%
+    if distance_meters is not None and distance_meters > 0:
+        distance_tolerance = distance_meters * 0.01  # 1%
+        query = query.where(
+            Activity.distance_meters.is_not(None),
+            Activity.distance_meters >= distance_meters - distance_tolerance,
+            Activity.distance_meters <= distance_meters + distance_tolerance,
+        )
+
+    existing = session.execute(query).first()
+    return existing[0] if existing else None
+
+
 def check_strava_duplicate(
     session,
     user_id: str,

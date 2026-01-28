@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from loguru import logger
 from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import ProgrammingError
@@ -30,6 +29,7 @@ from app.db.session import get_engine, get_session
 from app.integrations.garmin.backfill import backfill_garmin_activities
 from app.integrations.garmin.history_backfill import backfill_garmin_history_chunk
 from app.integrations.garmin.oauth import exchange_code_for_token
+from app.integrations.garmin.webhook_handlers import handle_activities_webhook
 
 router = APIRouter(prefix="/integrations/garmin", tags=["integrations", "garmin"])
 
@@ -565,3 +565,55 @@ def trigger_history_backfill(
         "message": "Historical backfill chunk scheduled. Processing in background.",
         "user_id": user_id,
     }
+
+
+# ----- Garmin webhook / ping endpoints (configured in Garmin Developer Portal) -----
+
+
+@router.get("/activities/ping")
+def garmin_activities_ping():
+    """Ping endpoint for Garmin Activities subscription verification."""
+    return JSONResponse(status_code=200, content={"status": "ok", "message": "pong"})
+
+
+@router.get("/activity-details/ping")
+def garmin_activity_details_ping():
+    """Ping endpoint for Garmin Activity Details subscription verification."""
+    return JSONResponse(status_code=200, content={"status": "ok", "message": "pong"})
+
+
+@router.post("/activities")
+async def garmin_webhook_activities(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """Garmin Activities webhook callback. Same behavior as /webhooks/garmin/activities."""
+    body = await request.body()
+    return handle_activities_webhook(body, background_tasks)
+
+
+@router.post("/activity-details")
+async def garmin_webhook_activity_details(request: Request):
+    """Garmin Activity Details webhook callback. ACK fast; log for now."""
+    body = await request.body()
+    snippet = body.decode(errors="replace")[:500]
+    logger.info("[GARMIN_WEBHOOK] Activity-details callback: {}", snippet)
+    return JSONResponse(status_code=200, content={"status": "acknowledged"})
+
+
+@router.post("/deregister")
+async def garmin_webhook_deregister(request: Request):
+    """Garmin COMMON Deregistrations callback. ACK fast; log payload."""
+    body = await request.body()
+    snippet = body.decode(errors="replace")[:500]
+    logger.info("[GARMIN_WEBHOOK] Deregister callback: {}", snippet)
+    return JSONResponse(status_code=200, content={"status": "acknowledged"})
+
+
+@router.post("/permissions")
+async def garmin_webhook_permissions(request: Request):
+    """Garmin COMMON User Permissions Change callback. ACK fast; log payload."""
+    body = await request.body()
+    snippet = body.decode(errors="replace")[:500]
+    logger.info("[GARMIN_WEBHOOK] Permissions callback: {}", snippet)
+    return JSONResponse(status_code=200, content={"status": "acknowledged"})

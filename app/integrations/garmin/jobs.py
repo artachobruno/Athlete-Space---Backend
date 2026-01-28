@@ -108,6 +108,9 @@ def process_garmin_activity_event(event_id: str) -> None:
             integration_obj = integration[0]
             user_id = integration_obj.user_id
 
+            # Update garmin_last_webhook_received_at (for history completion heuristic)
+            integration_obj.garmin_last_webhook_received_at = datetime.now(timezone.utc)
+
             # Extract activity ID from webhook payload
             activity_id = payload.get("activityId") or payload.get("activity_id") or payload.get("object_id")
 
@@ -246,7 +249,7 @@ def _process_activity_for_webhook(
         # Note: get_or_create_for_activity already creates the execution, so no need to call attach_activity
         WorkoutFactory.get_or_create_for_activity(session, activity)
 
-        # Update last_sync_at on integration
+        # Update last_sync_at and garmin_last_webhook_received_at on integration
         integration = session.execute(
             select(UserIntegration).where(
                 UserIntegration.user_id == user_id,
@@ -254,7 +257,9 @@ def _process_activity_for_webhook(
             )
         ).first()
         if integration:
-            integration[0].last_sync_at = datetime.now(timezone.utc)
+            integration_obj = integration[0]
+            integration_obj.last_sync_at = datetime.now(timezone.utc)
+            integration_obj.garmin_last_webhook_received_at = datetime.now(timezone.utc)
 
         logger.debug(f"[GARMIN_SYNC] Stored activity with workout and execution: {external_activity_id}")
     except IntegrityError:
@@ -319,3 +324,62 @@ def _update_activity_metadata(activity: Activity, normalized: dict[str, Any]) ->
         activity.ends_at = datetime.fromisoformat(normalized["ends_at"].replace("Z", "+00:00"))
 
     logger.debug(f"[GARMIN_SYNC] Updated activity metadata: {activity.id}")
+
+
+def check_and_mark_history_complete() -> None:
+    """Check and mark Garmin history as complete using heuristic.
+
+    Heuristic: If backfill was requested and no webhook received in last 6 hours,
+    mark history as complete.
+
+    This should be called periodically (e.g., via cron job or scheduled task).
+    """
+    logger.info("[GARMIN_HISTORY] Checking history completion status")
+
+    with get_session() as session:
+        # Find all Garmin integrations with pending history
+        integrations = session.execute(
+            select(UserIntegration).where(
+                UserIntegration.provider == "garmin",
+                UserIntegration.revoked_at.is_(None),
+                UserIntegration.garmin_history_requested_at.is_not(None),
+                UserIntegration.garmin_history_complete.is_(False),
+            )
+        ).all()
+
+        if not integrations:
+            logger.debug("[GARMIN_HISTORY] No pending history backfills found")
+            return
+
+        now = datetime.now(timezone.utc)
+        marked_complete = 0
+
+        for integration_tuple in integrations:
+            integration = integration_tuple[0]
+
+            # Heuristic: If no webhook received in last 6 hours, mark complete
+            if integration.garmin_last_webhook_received_at:
+                time_since_webhook = now - integration.garmin_last_webhook_received_at
+                if time_since_webhook > timedelta(hours=6):
+                    integration.garmin_history_complete = True
+                    marked_complete += 1
+                    logger.info(
+                        f"[GARMIN_HISTORY] Marked history complete for user_id={integration.user_id}: "
+                        f"no webhook in {time_since_webhook}"
+                    )
+            elif integration.garmin_history_requested_at:
+                # If backfill was requested but no webhook ever received, check time since request
+                time_since_request = now - integration.garmin_history_requested_at
+                if time_since_request > timedelta(hours=6):
+                    integration.garmin_history_complete = True
+                    marked_complete += 1
+                    logger.info(
+                        f"[GARMIN_HISTORY] Marked history complete for user_id={integration.user_id}: "
+                        f"no webhook received since request ({time_since_request})"
+                    )
+
+        if marked_complete > 0:
+            session.commit()
+            logger.info(f"[GARMIN_HISTORY] Marked {marked_complete} integration(s) as complete")
+        else:
+            logger.debug("[GARMIN_HISTORY] No integrations ready to mark as complete")

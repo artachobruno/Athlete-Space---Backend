@@ -107,9 +107,9 @@ def main() -> int:
             )
 
             status = result.get("status", "unknown")
-            imported = result.get("ingested_count", 0)
-            skipped = result.get("skipped_count", 0)
-            errors = result.get("error_count", 0)
+            imported = int(result.get("ingested_count", 0))
+            skipped = int(result.get("skipped_count", 0))
+            errors = int(result.get("error_count", 0))
 
             total_imported += imported
             total_skipped += skipped

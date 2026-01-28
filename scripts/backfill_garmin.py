@@ -98,7 +98,7 @@ def main() -> int:
         print(f"Total fetched: {result.get('total_fetched', 0)}")
         print("=" * 60)
 
-        if result.get("error_count", 0) > 0:
+        if int(result.get("error_count", 0)) > 0:
             logger.warning(f"Backfill completed with {result.get('error_count')} errors")
             return 1
     except Exception as e:

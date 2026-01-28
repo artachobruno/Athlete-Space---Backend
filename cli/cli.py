@@ -757,7 +757,7 @@ def backfill_garmin(
         console.print(f"  Errors: {result.get('error_count', 0)}")
         console.print(f"  Total fetched: {result.get('total_fetched', 0)}")
 
-        if result.get("error_count", 0) > 0:
+        if int(result.get("error_count", 0)) > 0:
             console.print(f"\n[yellow]⚠️  Backfill completed with {result.get('error_count')} errors[/yellow]")
             console.print("[yellow]Check logs for details[/yellow]")
             exit_with_error("Backfill completed with errors", code=1)

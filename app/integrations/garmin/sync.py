@@ -1,7 +1,9 @@
-"""Ongoing incremental sync for Garmin activities.
+"""DEPRECATED: Ongoing incremental sync for Garmin activities.
 
-Webhook-driven sync with fallback incremental polling.
-Fetches activity summaries only (no samples).
+This module is deprecated. History fetching via /activities endpoint is disabled.
+Use Summary Backfill API and webhooks instead.
+
+All activity data should arrive via webhooks after triggering Summary Backfill.
 """
 
 from __future__ import annotations
@@ -23,112 +25,34 @@ from app.workouts.workout_factory import WorkoutFactory
 
 
 def sync_garmin_activities(user_id: str) -> dict[str, int | str]:
-    """Incremental sync for Garmin activities (webhook fallback).
+    """DEPRECATED: Incremental sync for Garmin activities.
 
-    Fetches activities since last_sync_at.
-    Only fetches summaries (no samples).
+    This function is deprecated. History fetching via /activities endpoint is disabled.
+    Use Summary Backfill API and webhooks instead.
 
     Args:
         user_id: User ID to sync
 
     Returns:
-        Sync results: {imported_count, skipped_count, error_count}
+        Sync results with error status
     """
-    logger.info(f"[GARMIN_SYNC] Starting incremental sync for user_id={user_id}")
+    logger.warning(
+        f"[GARMIN_SYNC] DEPRECATED: sync_garmin_activities called for user_id={user_id}. "
+        "History fetching is disabled. Use Summary Backfill API and webhooks instead."
+    )
 
     if not settings.garmin_enabled:
         logger.warning(f"[GARMIN_SYNC] Garmin integration disabled, skipping sync for user_id={user_id}")
         return {"imported_count": 0, "skipped_count": 0, "error_count": 0, "status": "disabled"}
 
-    with get_session() as session:
-        # Get user's Garmin integration
-        integration = session.execute(
-            select(UserIntegration).where(
-                UserIntegration.user_id == user_id,
-                UserIntegration.provider == "garmin",
-                UserIntegration.revoked_at.is_(None),
-            )
-        ).first()
-
-        if not integration:
-            logger.warning(f"[GARMIN_SYNC] No active Garmin integration for user_id={user_id}")
-            return {"imported_count": 0, "skipped_count": 0, "error_count": 0, "status": "no_integration"}
-
-        integration_obj = integration[0]
-
-        # Determine sync window: since last_sync_at, or last 7 days if never synced
-        if integration_obj.last_sync_at:
-            from_date = integration_obj.last_sync_at
-        else:
-            from_date = datetime.now(timezone.utc) - timedelta(days=7)
-
-        to_date = datetime.now(timezone.utc)
-
-        logger.info(f"[GARMIN_SYNC] Syncing activities from {from_date.date()} to {to_date.date()}")
-
-        try:
-            client = get_garmin_client(user_id)
-        except ValueError as e:
-            logger.error(f"[GARMIN_SYNC] Failed to get Garmin client: {e}")
-            return {"imported_count": 0, "skipped_count": 0, "error_count": 0, "status": "client_error", "error": str(e)}
-
-        imported_count = 0
-        skipped_count = 0
-        error_count = 0
-
-        try:
-            # Fetch activities page by page (memory-efficient)
-            for activities_page in client.yield_activity_summaries(
-                start_date=from_date,
-                end_date=to_date,
-                per_page=100,
-                max_pages=10,  # Limit incremental sync to 10 pages (1000 activities)
-                sleep_seconds=0.5,
-            ):
-                # Process each activity
-                for activity_item in activities_page:
-                    activity_payload: dict[str, Any] = activity_item
-                    try:
-                        normalized = normalize_garmin_activity(activity_payload)
-                        result = _process_activity_for_sync(
-                            session=session,
-                            user_id=user_id,
-                            normalized=normalized,
-                            is_update=False,
-                        )
-                    except Exception as e:
-                        logger.exception(f"[GARMIN_SYNC] Error normalizing activity: {e}")
-                        result = "error"
-
-                    if result == "ingested":
-                        imported_count += 1
-                    elif result in {"skipped_duplicate", "skipped_strava_duplicate"}:
-                        skipped_count += 1
-                    else:
-                        error_count += 1
-
-                # Commit after each page
-                session.commit()
-
-        except Exception as e:
-            logger.exception(f"[GARMIN_SYNC] Sync failed: {e}")
-            error_count += 1
-
-        # Update last_sync_at
-        integration_obj.last_sync_at = datetime.now(timezone.utc)
-        session.commit()
-
-        logger.info(
-            f"[GARMIN_SYNC] Sync complete for user_id={user_id}: "
-            f"imported={imported_count}, skipped={skipped_count}, errors={error_count}"
-        )
-
-        return {
-            "imported_count": imported_count,
-            "skipped_count": skipped_count,
-            "error_count": error_count,
-            "status": "completed",
-        }
+    # Return error - this method should not be used
+    return {
+        "imported_count": 0,
+        "skipped_count": 0,
+        "error_count": 1,
+        "status": "deprecated",
+        "error": "History fetching via /activities endpoint is disabled. Use Summary Backfill API and webhooks instead.",
+    }
 
 
 def _process_activity_for_sync(

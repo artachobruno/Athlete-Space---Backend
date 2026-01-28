@@ -1,10 +1,9 @@
-"""Historical backfill for Garmin activities (chunked, cursor-based, resumable).
+"""DEPRECATED: Historical backfill for Garmin activities.
 
-This module implements safe historical backfill that:
-- Processes 90-day chunks going backwards in time
-- Uses cursor-based tracking (resumable if interrupted)
-- Respects rate limits and memory constraints
-- Stops when reaching account creation date or no activities found
+This module is deprecated. History fetching via /activities endpoint is disabled.
+Use Summary Backfill API (app/integrations/garmin/summary_backfill.py) instead.
+
+All activity data should arrive via webhooks after triggering Summary Backfill.
 """
 
 from __future__ import annotations

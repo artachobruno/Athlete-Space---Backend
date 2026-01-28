@@ -106,7 +106,7 @@ def main() -> int:
         print(f"Total fetched: {result.get('total_fetched', 0)}")
         print("=" * 70)
 
-        if result.get("error_count", 0) > 0:
+        if int(result.get("error_count", 0)) > 0:
             print(f"\n⚠️  WARNING: Backfill completed with {result.get('error_count')} errors")
             print("Check logs for details")
             return 1

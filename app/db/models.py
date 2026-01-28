@@ -383,6 +383,15 @@ class UserIntegration(Base):
     )
     historical_backfill_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Garmin-specific backfill tracking (for Summary Backfill API)
+    garmin_history_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    garmin_history_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    garmin_last_webhook_received_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
     __table_args__ = (
         UniqueConstraint("user_id", "provider", name="uq_user_integration_user_provider"),
         Index("idx_user_integration_provider_user", "provider", "provider_user_id"),

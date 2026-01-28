@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -101,6 +102,43 @@ def _validate_and_extract_state(state: str) -> tuple[bool, str | None, str | Non
     del _oauth_states[state]
     logger.debug(f"[GARMIN_OAUTH] Validated state for user_id={user_id}")
     return True, user_id, code_verifier
+
+
+def _try_provider_user_id_from_jwt(access_token: str | None) -> str | None:
+    """Try to extract Garmin user ID from JWT access token payload.
+
+    Garmin token response often omits user_id; the access token may be a JWT
+    with sub or user_id in the payload. Decode without verification.
+
+    Returns:
+        User ID string if found, None otherwise.
+    """
+    if not access_token or not isinstance(access_token, str):
+        return None
+    try:
+        parts = access_token.split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        pad = 4 - len(payload_b64) % 4
+        if pad != 4:
+            payload_b64 += "=" * pad
+        raw = base64.urlsafe_b64decode(payload_b64)
+        payload = json.loads(raw)
+        uid = (
+            payload.get("sub")
+            or payload.get("user_id")
+            or payload.get("userId")
+            or payload.get("garmin_user_id")
+        )
+        if uid is None:
+            return None
+        s = str(uid).strip()
+        if not s or s.lower() == "unknown":
+            return None
+        return s
+    except Exception:
+        return None
 
 
 def _sanitize_token_response(token_data: dict) -> dict:
@@ -437,8 +475,7 @@ def garmin_callback(
     expires_in = token_data.get("expires_in")  # seconds
     scopes = token_data.get("scope", "").split() if token_data.get("scope") else []
     
-    # Extract Garmin User ID (UAT) - check all possible field names
-    # Garmin may use: user_id, userId, sub, subject, or other variations
+    # Extract Garmin User ID (UAT). Token response often omits it; fall back to JWT payload.
     provider_user_id = (
         token_data.get("user_id")
         or token_data.get("userId")
@@ -447,12 +484,16 @@ def garmin_callback(
         or token_data.get("garmin_user_id")
         or token_data.get("garminUserId")
     )
-    
-    # CRITICAL: Validate that we have the Garmin User ID
+    if not provider_user_id and access_token:
+        provider_user_id = _try_provider_user_id_from_jwt(access_token)
+        if provider_user_id:
+            logger.info("[GARMIN_OAUTH] Resolved provider_user_id from JWT access token payload")
+
     if not provider_user_id:
         logger.error(
-            f"[GARMIN_OAUTH] Garmin OAuth succeeded but no provider_user_id (UAT) found in token response. "
-            f"Available keys: {list(token_data.keys())}"
+            "[GARMIN_OAUTH] No provider_user_id in token response or JWT payload. "
+            "Available token keys: {}",
+            list(token_data.keys()),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -1,16 +1,14 @@
 """Garmin Connect API client.
 
-DEPRECATED: History fetching via /activities endpoint is disabled.
-Use Summary Backfill API (app/integrations/garmin/summary_backfill.py) instead.
+Garmin is NOT a pull API. All activity data must arrive via Push or Ping callbacks.
+The system MUST NEVER rely on polling Garmin for activities.
 
-This client is kept for:
-- Activity detail fetching (when needed)
-- Future use cases that don't involve history fetching
+- History fetch: DISABLED. Use Summary Backfill API (summary_backfill.py) + webhooks.
+- This client is for: Activity **detail** fetch only (lazy, when user needs GPS/samples).
 """
 
 from __future__ import annotations
 
-import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from typing import Any
@@ -21,112 +19,17 @@ from loguru import logger
 from app.config.settings import settings
 from app.integrations.garmin.token_service import GarminTokenRefreshError, get_garmin_access_token
 
-# Garmin API endpoints
-# NOTE: History fetching via /activities is DISABLED.
-# Use Summary Backfill API instead (app/integrations/garmin/summary_backfill.py).
-# This endpoint is kept only for activity detail fetching when needed.
+# Garmin API endpoints. /activities is for detail fetch ONLY (lazy). Never for history.
 GARMIN_API_BASE_URL = "https://apis.garmin.com/wellness-api/rest"
-GARMIN_ACTIVITIES_URL = f"{GARMIN_API_BASE_URL}/activities"  # DEPRECATED for history fetching
-
-
-def _parse_activity_date(activity_date_str: str | int | float) -> datetime | None:
-    """Parse activity date from various formats.
-
-    Args:
-        activity_date_str: Date string or timestamp
-
-    Returns:
-        Parsed datetime or None if parsing fails
-    """
-    try:
-        if isinstance(activity_date_str, str):
-            if "T" in activity_date_str:
-                return datetime.fromisoformat(activity_date_str.replace("Z", "+00:00"))
-            return datetime.strptime(activity_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        return datetime.fromtimestamp(activity_date_str, tz=timezone.utc)
-    except Exception as e:
-        logger.debug(f"[GARMIN_CLIENT] Failed to parse activity date {activity_date_str}: {e}")
-        return None
-
-
-def _extract_activity_date(activity: dict[str, Any]) -> datetime | None:
-    """Extract and parse activity date from activity dict.
-
-    Args:
-        activity: Activity dictionary
-
-    Returns:
-        Parsed datetime or None if not found/invalid
-    """
-    activity_date_str = (
-        activity.get("startTimeGMT")
-        or activity.get("start_time_gmt")
-        or activity.get("startTime")
-        or activity.get("start_time")
-    )
-    if not activity_date_str:
-        return None
-    return _parse_activity_date(activity_date_str)
-
-
-def _filter_activities_by_date(
-    activities: list[dict[str, Any]],
-    start_date: datetime | None,
-    end_date: datetime | None,
-) -> list[dict[str, Any]]:
-    """Filter activities by date range.
-
-    Args:
-        activities: List of activity dictionaries
-        start_date: Start date filter (inclusive)
-        end_date: End date filter (inclusive)
-
-    Returns:
-        Filtered list of activities
-    """
-    if not start_date and not end_date:
-        return activities
-
-    filtered_activities = []
-    for activity in activities:
-        activity_date = _extract_activity_date(activity)
-        if not activity_date:
-            continue
-
-        if start_date and activity_date < start_date:
-            continue
-        if end_date and activity_date > end_date:
-            continue
-
-        filtered_activities.append(activity)
-
-    return filtered_activities
-
-
-def _find_oldest_activity_date(activities: list[dict[str, Any]]) -> datetime | None:
-    """Find the oldest activity date in a list.
-
-    Args:
-        activities: List of activity dictionaries
-
-    Returns:
-        Oldest datetime or None if no valid dates found
-    """
-    oldest_activity = None
-    for activity in activities:
-        activity_date = _extract_activity_date(activity)
-        if activity_date and (oldest_activity is None or activity_date < oldest_activity):
-            oldest_activity = activity_date
-    return oldest_activity
+GARMIN_ACTIVITIES_URL = f"{GARMIN_API_BASE_URL}/activities"
 
 
 class GarminClient:
-    """Thin Garmin API client.
+    """Garmin API client for **detail fetch only** (lazy).
 
-    - Paginated fetch
-    - Rate-limit aware
-    - Summary-only (no samples)
-    - Automatic token refresh on 401
+    - fetch_activity_detail: Fetch GPS/samples when user opens activity. No history fetch.
+    - fetch_activity_summaries / yield_activity_summaries: DISABLED (raise). Use backfill + webhooks.
+    - Token refresh on 401.
     """
 
     def __init__(self, access_token: str, user_id: str | None = None):

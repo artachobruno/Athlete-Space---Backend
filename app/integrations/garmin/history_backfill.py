@@ -1,9 +1,10 @@
-"""DEPRECATED: Historical backfill for Garmin activities.
+"""DEPRECATED: Pull-based historical backfill for Garmin activities.
 
-This module is deprecated. History fetching via /activities endpoint is disabled.
-Use Summary Backfill API (app/integrations/garmin/summary_backfill.py) instead.
+DO NOT USE. Garmin is not a pull API. This module used yield_activity_summaries
+(polling /activities) which is disabled.
 
-All activity data should arrive via webhooks after triggering Summary Backfill.
+Use Summary Backfill (summary_backfill.py) + webhooks instead. Trigger backfill,
+then ingest from webhook payloads. See app/integrations/garmin/README.md.
 """
 
 from __future__ import annotations

@@ -1,9 +1,7 @@
-"""Lazy sample fetching for Garmin activities.
+"""Lazy detail/sample fetching for Garmin activities.
 
-Guardrails:
-- Cache samples_fetched_at per activity
-- Never fetch samples more than once unless explicitly requested
-- Size cap (max N points per stream)
+Fetch details ONLY when user opens activity or needs GPS/HR samples. Never during
+bulk ingest. Guardrails: cache samples_fetched_at, size cap per stream.
 """
 
 from __future__ import annotations

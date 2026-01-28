@@ -1,10 +1,11 @@
 """Backfill logic for Garmin activities.
 
-Uses Summary Backfill API (async, webhook-driven):
-- Triggers Summary Backfill requests (30-day chunks)
-- Updates database state (garmin_history_requested_at, garmin_history_complete)
-- Does NOT fetch activities (data arrives via webhooks)
-- Idempotent (duplicate requests return HTTP 409, ignored)
+Garmin is NOT a pull API. Activities enter only via webhooks.
+
+- Triggers GET /wellness-api/rest/backfill/activities (30-day chunks). Never fetches.
+- Expects 202 Accepted; data arrives later via webhooks.
+- Updates garmin_history_requested_at, garmin_history_complete.
+- Handles HTTP 409 (duplicate window). Max 30 days per request.
 """
 
 from __future__ import annotations

@@ -1358,22 +1358,13 @@ def trigger_sync_now(
     background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Trigger immediate sync of activities from Garmin or Strava.
+    """Trigger sync: Garmin = trigger backfill (event-driven); Strava = fetch now (pull).
 
-    User-initiated sync that fetches activities from the connected provider.
-    Prefers Garmin if connected, otherwise falls back to Strava.
-    Runs in background to avoid blocking the request.
-
-    Args:
-        background_tasks: FastAPI background tasks
-        user_id: Current authenticated user ID (from auth dependency)
-
-    Returns:
-        Dictionary with sync status and message
+    Garmin: Triggers summary backfill only. Data arrives via webhooks; no fetch.
+    Strava: Fetches activities from last 48h or since last sync (pull-based).
     """
     logger.info(f"[API] /me/sync/now endpoint called for user_id={user_id}")
     try:
-        # Check for Garmin integration first
         with get_session() as session:
             garmin_integration = session.execute(
                 select(UserIntegration).where(
@@ -1387,22 +1378,9 @@ def trigger_sync_now(
                 integration_obj = garmin_integration[0]
                 logger.info(f"[API] Garmin integration found for user_id={user_id}, triggering Garmin sync")
 
-                # Trigger Garmin sync in background
                 def garmin_sync_task():
                     try:
-                        # Sync last 48 hours (or since last sync)
-                        from_date = None
-                        if integration_obj.last_sync_at:
-                            from_date = integration_obj.last_sync_at
-                        else:
-                            from_date = datetime.now(timezone.utc) - timedelta(days=2)
-
-                        result = backfill_garmin_activities(
-                            user_id=user_id,
-                            from_date=from_date,
-                            to_date=datetime.now(timezone.utc),
-                            force=False,
-                        )
+                        result = backfill_garmin_activities(user_id=user_id, force=False)
                         if result.get("status") in {"no_integration", "disabled"}:
                             logger.warning(f"[API] Garmin sync failed for user_id={user_id}: {result.get('status')}")
                         else:
@@ -1421,8 +1399,8 @@ def trigger_sync_now(
                 return {
                     "success": True,
                     "message": (
-                        "Garmin sync started in background. "
-                        "This will fetch activities from the last 48 hours or since your last sync."
+                        "Garmin sync requested. Activities will arrive via webhooks; "
+                        "this may take a few minutes. Refresh to see new activities."
                     ),
                     "user_id": user_id,
                     "provider": "garmin",

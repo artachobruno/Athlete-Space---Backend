@@ -27,7 +27,6 @@ from app.core.encryption import EncryptionError, encrypt_token
 from app.db.models import User, UserIntegration
 from app.db.session import get_engine, get_session
 from app.integrations.garmin.backfill import backfill_garmin_activities
-from app.integrations.garmin.history_backfill import backfill_garmin_history_chunk
 from app.integrations.garmin.oauth import exchange_code_for_token
 from app.integrations.garmin.webhook_handlers import handle_activities_webhook
 
@@ -102,6 +101,26 @@ def _validate_and_extract_state(state: str) -> tuple[bool, str | None, str | Non
     del _oauth_states[state]
     logger.debug(f"[GARMIN_OAUTH] Validated state for user_id={user_id}")
     return True, user_id, code_verifier
+
+
+def _sanitize_token_response(token_data: dict) -> dict:
+    """Sanitize token response for logging (remove sensitive tokens).
+    
+    Args:
+        token_data: Raw token response dictionary
+        
+    Returns:
+        Sanitized dictionary with tokens masked
+    """
+    sanitized = token_data.copy()
+    # Mask sensitive tokens but keep structure
+    if "access_token" in sanitized:
+        token = sanitized["access_token"]
+        sanitized["access_token"] = f"{token[:10]}...{token[-4:]}" if len(token) > 14 else "***"
+    if "refresh_token" in sanitized:
+        token = sanitized["refresh_token"]
+        sanitized["refresh_token"] = f"{token[:10]}...{token[-4:]}" if len(token) > 14 else "***"
+    return sanitized
 
 
 def _check_table_exists(table_name: str) -> bool:
@@ -408,12 +427,50 @@ def garmin_callback(
             detail="Failed to exchange authorization code",
         ) from e
 
+    # Log full token response to identify user ID field (temporary debugging)
+    logger.info(f"[GARMIN_OAUTH] Token response keys: {list(token_data.keys())}")
+    logger.debug(f"[GARMIN_OAUTH] Full token response (sanitized): {_sanitize_token_response(token_data)}")
+
     # Extract token data (adjust based on actual Garmin API response)
     access_token = token_data.get("access_token")
     refresh_token = token_data.get("refresh_token")
     expires_in = token_data.get("expires_in")  # seconds
     scopes = token_data.get("scope", "").split() if token_data.get("scope") else []
-    provider_user_id = token_data.get("user_id") or token_data.get("userId") or "unknown"
+    
+    # Extract Garmin User ID (UAT) - check all possible field names
+    # Garmin may use: user_id, userId, sub, subject, or other variations
+    provider_user_id = (
+        token_data.get("user_id")
+        or token_data.get("userId")
+        or token_data.get("sub")
+        or token_data.get("subject")
+        or token_data.get("garmin_user_id")
+        or token_data.get("garminUserId")
+    )
+    
+    # CRITICAL: Validate that we have the Garmin User ID
+    if not provider_user_id:
+        logger.error(
+            f"[GARMIN_OAUTH] Garmin OAuth succeeded but no provider_user_id (UAT) found in token response. "
+            f"Available keys: {list(token_data.keys())}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Garmin OAuth succeeded but user ID not found in token response. This is a critical error.",
+        )
+    
+    # Prevent storing "unknown" as provider_user_id
+    if provider_user_id == "unknown" or provider_user_id.lower() == "unknown":
+        logger.error(
+            f"[GARMIN_OAUTH] Invalid provider_user_id: 'unknown'. "
+            f"Token response keys: {list(token_data.keys())}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Garmin OAuth succeeded but user ID is invalid. This is a critical error.",
+        )
+    
+    logger.info(f"[GARMIN_OAUTH] Extracted Garmin provider_user_id: {provider_user_id}")
 
     if not access_token or not refresh_token:
         logger.error("[GARMIN_OAUTH] Missing tokens in token response")
@@ -490,20 +547,12 @@ def trigger_history_backfill(
     background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Manually trigger historical backfill chunk for Garmin activities.
+    """Trigger Garmin summary backfill (event-driven). Same as /me/sync/now for Garmin.
 
-    Processes one 90-day chunk going backwards in time.
-    Safe to call multiple times - will resume from cursor position.
-    Respects rate limits and memory constraints.
-
-    Args:
-        background_tasks: FastAPI background tasks
-        user_id: Current authenticated user ID (required)
-
-    Returns:
-        Success response with status
+    Triggers GET /wellness-api/rest/backfill/activities only. Data arrives via webhooks.
+    No pull. Use force=True to bypass recent-request skip.
     """
-    logger.info(f"[GARMIN_HISTORY] Manual history backfill triggered for user_id={user_id}")
+    logger.info(f"[GARMIN_HISTORY] Summary backfill triggered for user_id={user_id}")
 
     with get_session() as session:
         integration = session.execute(
@@ -520,49 +569,18 @@ def trigger_history_backfill(
                 detail="Garmin integration not found",
             )
 
-        integration_obj = integration[0]
-
-        # Check if already complete
-        if integration_obj.historical_backfill_complete:
-            cursor_date_str = (
-                integration_obj.historical_backfill_cursor_date.isoformat()
-                if integration_obj.historical_backfill_cursor_date
-                else None
-            )
-            return {
-                "status": "complete",
-                "message": "Historical backfill already complete",
-                "cursor_date": cursor_date_str,
-            }
-
-        # Check last run time (once per day max)
-        # Use a simple check: if last_sync_at was updated today, skip
-        if integration_obj.last_sync_at:
-            time_since_sync = datetime.now(timezone.utc) - integration_obj.last_sync_at
-            if time_since_sync < timedelta(hours=23):
-                logger.info(
-                    f"[GARMIN_HISTORY] History backfill run recently ({time_since_sync}), "
-                    "skipping to respect once-per-day limit"
-                )
-                return {
-                    "status": "rate_limited",
-                    "message": "History backfill can run once per day. Please try again later.",
-                    "next_run_available": (integration_obj.last_sync_at + timedelta(hours=24)).isoformat(),
-                }
-
-    # Run in background
-    def history_backfill_task():
+    def run_backfill():
         try:
-            result = backfill_garmin_history_chunk(user_id)
-            logger.info(f"[GARMIN_HISTORY] History backfill completed for user_id={user_id}: {result}")
+            result = backfill_garmin_activities(user_id=user_id, force=True)
+            logger.info(f"[GARMIN_HISTORY] Summary backfill completed for user_id={user_id}: {result}")
         except Exception as e:
-            logger.exception(f"[GARMIN_HISTORY] History backfill failed for user_id={user_id}: {e}")
+            logger.exception(f"[GARMIN_HISTORY] Summary backfill failed for user_id={user_id}: {e}")
 
-    background_tasks.add_task(history_backfill_task)
+    background_tasks.add_task(run_backfill)
 
     return {
         "status": "scheduled",
-        "message": "Historical backfill chunk scheduled. Processing in background.",
+        "message": "Summary backfill triggered. Activities will arrive via webhooks.",
         "user_id": user_id,
     }
 

@@ -48,6 +48,7 @@ from scripts.migrate_add_execution_notes_to_calendar_view import migrate_add_exe
 from scripts.migrate_add_execution_notes_to_planned_sessions import migrate_add_execution_notes_to_planned_sessions
 from scripts.migrate_add_extracted_injury_attributes import migrate_add_extracted_injury_attributes
 from scripts.migrate_add_extracted_race_attributes import migrate_add_extracted_race_attributes
+from scripts.migrate_add_garmin_history_fields import migrate_add_garmin_history_fields
 from scripts.migrate_add_google_oauth_fields import migrate_add_google_oauth_fields
 from scripts.migrate_add_imperial_profile_fields import migrate_add_imperial_profile_fields
 from scripts.migrate_add_lifecycle_status_to_planned_sessions import migrate_add_lifecycle_status_to_planned_sessions
@@ -115,6 +116,7 @@ def run_all_migrations() -> None:
         ("history cursor fields", migrate_history_cursor),
         ("strava_accounts sync tracking columns", migrate_strava_accounts_sync_tracking),
         ("user_settings fields (units, timezone, notifications_enabled)", migrate_user_settings_fields),
+        ("user_integrations Garmin history tracking fields", migrate_add_garmin_history_fields),
         ("conversation summary columns (B34)", migrate_add_conversation_summary),
         ("conversation_summaries table (B35)", migrate_add_conversation_summaries_table),
         ("workouts and workout_steps tables", migrate_create_workouts_tables),

@@ -20,6 +20,12 @@ from app.db.session import get_session
 from app.integrations.garmin.summary_backfill import trigger_full_history_backfill
 
 
+def _validate_int_value(key: str, value: object) -> None:
+    """Validate that a value is an int, raising TypeError if not."""
+    if not isinstance(value, int):
+        raise TypeError(f"Expected int for {key}, got {type(value)}")
+
+
 def backfill_garmin_activities(
     user_id: str,
     from_date: datetime | None = None,
@@ -122,21 +128,21 @@ def backfill_garmin_activities(
 
             # Type narrowing: these keys are always ints, not lists
             if not isinstance(total_requests_val, int):
-                raise TypeError(f"Expected int for total_requests, got {type(total_requests_val)}")
-            if not isinstance(accepted_count_val, int):
-                raise TypeError(f"Expected int for accepted_count, got {type(accepted_count_val)}")
-            if not isinstance(duplicate_count_val, int):
-                raise TypeError(f"Expected int for duplicate_count, got {type(duplicate_count_val)}")
-            if not isinstance(error_count_val, int):
-                raise TypeError(f"Expected int for error_count, got {type(error_count_val)}")
-
-            return {
-                "total_requests": total_requests_val,
-                "accepted_count": accepted_count_val,
-                "duplicate_count": duplicate_count_val,
-                "error_count": error_count_val,
-                "status": "completed",
-            }
+                _validate_int_value("total_requests", total_requests_val)
+            elif not isinstance(accepted_count_val, int):
+                _validate_int_value("accepted_count", accepted_count_val)
+            elif not isinstance(duplicate_count_val, int):
+                _validate_int_value("duplicate_count", duplicate_count_val)
+            elif not isinstance(error_count_val, int):
+                _validate_int_value("error_count", error_count_val)
+            else:
+                return {
+                    "total_requests": total_requests_val,
+                    "accepted_count": accepted_count_val,
+                    "duplicate_count": duplicate_count_val,
+                    "error_count": error_count_val,
+                    "status": "completed",
+                }
 
         except Exception as e:
             logger.exception(f"[GARMIN_BACKFILL] Summary backfill failed: {e}")

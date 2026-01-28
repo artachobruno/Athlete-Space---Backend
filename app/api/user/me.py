@@ -48,12 +48,14 @@ from app.db.models import (
     DailyTrainingLoad,
     StravaAccount,
     User,
+    UserIntegration,
     UserSettings,
 )
 from app.db.session import get_session
 from app.ingestion.background_sync import sync_user_activities
 from app.ingestion.sla import SYNC_SLA_SECONDS
 from app.ingestion.tasks import history_backfill_task
+from app.integrations.garmin.backfill import backfill_garmin_activities
 from app.metrics.daily_aggregation import aggregate_daily_training, get_daily_rows
 from app.metrics.data_quality import assess_data_quality
 from app.metrics.training_load import compute_training_load
@@ -1356,9 +1358,10 @@ def trigger_sync_now(
     background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Trigger immediate sync of activities from Strava.
+    """Trigger immediate sync of activities from Garmin or Strava.
 
-    User-initiated sync that fetches all activities since last sync (or last 48 hours).
+    User-initiated sync that fetches activities from the connected provider.
+    Prefers Garmin if connected, otherwise falls back to Strava.
     Runs in background to avoid blocking the request.
 
     Args:
@@ -1370,11 +1373,68 @@ def trigger_sync_now(
     """
     logger.info(f"[API] /me/sync/now endpoint called for user_id={user_id}")
     try:
-        # Verify user has Strava account
+        # Check for Garmin integration first
+        with get_session() as session:
+            garmin_integration = session.execute(
+                select(UserIntegration).where(
+                    UserIntegration.user_id == user_id,
+                    UserIntegration.provider == "garmin",
+                    UserIntegration.revoked_at.is_(None),
+                )
+            ).first()
+
+            if garmin_integration:
+                integration_obj = garmin_integration[0]
+                logger.info(f"[API] Garmin integration found for user_id={user_id}, triggering Garmin sync")
+
+                # Trigger Garmin sync in background
+                def garmin_sync_task():
+                    try:
+                        # Sync last 48 hours (or since last sync)
+                        from_date = None
+                        if integration_obj.last_sync_at:
+                            from_date = integration_obj.last_sync_at
+                        else:
+                            from_date = datetime.now(timezone.utc) - timedelta(days=2)
+
+                        result = backfill_garmin_activities(
+                            user_id=user_id,
+                            from_date=from_date,
+                            to_date=datetime.now(timezone.utc),
+                            force=False,
+                        )
+                        if result.get("status") in {"no_integration", "disabled"}:
+                            logger.warning(f"[API] Garmin sync failed for user_id={user_id}: {result.get('status')}")
+                        else:
+                            logger.info(
+                                f"[API] Garmin sync completed for user_id={user_id}: "
+                                f"accepted={result.get('accepted_count', 0)}, "
+                                f"duplicates={result.get('duplicate_count', 0)}, "
+                                f"errors={result.get('error_count', 0)}"
+                            )
+                    except Exception as e:
+                        logger.exception(f"[API] Error in Garmin sync task for user_id={user_id}: {e}")
+
+                background_tasks.add_task(garmin_sync_task)
+
+                logger.info(f"[API] Garmin sync scheduled for user_id={user_id}")
+                return {
+                    "success": True,
+                    "message": (
+                        "Garmin sync started in background. "
+                        "This will fetch activities from the last 48 hours or since your last sync."
+                    ),
+                    "user_id": user_id,
+                    "provider": "garmin",
+                    "last_sync": integration_obj.last_sync_at.isoformat() if integration_obj.last_sync_at else None,
+                }
+
+        # Fall back to Strava if Garmin not connected
+        logger.info(f"[API] No Garmin integration found for user_id={user_id}, checking Strava")
         account = get_strava_account(user_id)
 
-        # Trigger sync in background
-        def sync_task():
+        # Trigger Strava sync in background
+        def strava_sync_task():
             try:
                 result = sync_user_activities(user_id)
                 if "error" in result:
@@ -1388,13 +1448,14 @@ def trigger_sync_now(
             except Exception as e:
                 logger.exception(f"[API] Error in manual sync task for user_id={user_id}: {e}")
 
-        background_tasks.add_task(sync_task)
+        background_tasks.add_task(strava_sync_task)
 
-        logger.info(f"[API] Manual sync scheduled for user_id={user_id}")
+        logger.info(f"[API] Strava sync scheduled for user_id={user_id}")
         return {
             "success": True,
             "message": "Sync started in background. This will fetch activities from the last 48 hours or since your last sync.",
             "user_id": user_id,
+            "provider": "strava",
             "last_sync": account.last_sync_at.isoformat() if account.last_sync_at else None,
         }
     except HTTPException:

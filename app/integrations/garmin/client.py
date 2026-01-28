@@ -179,17 +179,17 @@ class GarminClient:
         }
 
         # Garmin API REQUIRES time range parameters - they must always be provided
-        # Garmin Wellness API expects epoch milliseconds, NOT ISO date strings
-        # Parameter names: startTimeInMilliseconds, endTimeInMilliseconds (NOT startDate/endDate)
+        # Garmin Wellness API expects epoch seconds, NOT ISO date strings
+        # Parameter names: startTimeInSeconds, endTimeInSeconds (NOT startDate/endDate)
         if not start_date or not end_date:
             raise ValueError(
                 "Garmin API requires both start_date and end_date. "
                 f"Provided: start_date={start_date}, end_date={end_date}"
             )
 
-        # Convert to epoch milliseconds (Garmin API expects this format)
-        params["startTimeInMilliseconds"] = int(start_date.timestamp() * 1000)
-        params["endTimeInMilliseconds"] = int(end_date.timestamp() * 1000)
+        # Convert to epoch seconds (Garmin API expects this format)
+        params["startTimeInSeconds"] = int(start_date.timestamp())
+        params["endTimeInSeconds"] = int(end_date.timestamp())
 
         logger.debug(f"[GARMIN_CLIENT] Fetching activity summaries (limit={limit}, offset={offset})")
 
